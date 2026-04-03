@@ -1,0 +1,1450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LATERALUS Tutorial — Learn by Example</title>
+  <link rel="stylesheet" href="ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="./index.ltlml">Home</a>
+    <a href="./tutorial.ltlml">Tutorial</a>
+    <a href="./cookbook.ltlml">Cookbook</a>
+    <a href="./language-spec.ltlml">Spec</a>
+    <a href="./quick-reference.ltlml">Quick Ref</a>
+    <a href="./architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: LATERALUS Tutorial — Learn by Example
+subtitle: From Zero to Spiral
+author: bad-antics
+date: 2026-03-30
+abstract: A comprehensive hands-on guide to the LATERALUS programming language, covering all features from basic syntax through v1.4 comprehensions and error propagation to v1.5 Result/Option types, match expressions, and Hindley-Milner type inference.
+---
+
+# LATERALUS Tutorial
+
+Welcome to LATERALUS! This tutorial will take you from your first program
+to advanced topics like pipelines, pattern matching, scientific computing,
+Result/Option types, and the powerful v1.5 ADT features.
+
+::: note Prerequisites
+You should be comfortable with basic programming concepts (variables,
+functions, loops). No prior knowledge of functional or systems programming
+is required.
+:::
+
+## Chapter 1: Hello, World
+
+```lateralus
+fn main() {
+    println("Hello, LATERALUS!")
+}
+```
+
+Run it:
+
+```bash
+lateralus run hello.ltl
+```
+
+The `println` function is built into every LATERALUS program. It writes a
+line to standard output, followed by a newline character.
+
+## Chapter 2: Variables and Types
+
+```lateralus
+// Immutable by default with 'let'
+let name = "LATERALUS"
+let version = 1.3
+let active = true
+let items = [1, 2, 3, 4, 5]
+let config = { "debug": true, "level": 3 }
+
+// Type annotations (optional but recommended)
+let count: int = 42
+let ratio: float = 3.14159
+let message: str = "Spiral outward"
+
+// Mutable variable — use 'let mut'
+let mut counter = 0
+counter = counter + 1   // OK
+
+// Constants — compile-time immutable
+const MAX_SIZE = 1024
+const PI = 3.14159265358979
+```
+
+::: note Type Inference
+LATERALUS infers the type of every variable. You only need to annotate
+when the inference is ambiguous or you want extra safety.
+:::
+
+### 2.1 Numeric Literals
+
+```lateralus
+let decimal   = 42
+let hex       = 0xFF
+let binary    = 0b1010_1010   // underscores for readability
+let octal     = 0o755
+let float_val = 3.14_159_265
+let scientific = 6.022e23
+```
+
+### 2.2 String Interpolation
+
+```lateralus
+let name = "World"
+let greeting = "Hello, {name}!"       // → "Hello, World!"
+let calc = "2 + 2 = {2 + 2}"         // → "2 + 2 = 4"
+let nested = "PI ≈ {3.14159:.4}"      // format specifiers
+```
+
+## Chapter 3: Functions
+
+```lateralus
+// Basic function
+fn greet(name: str) -> str {
+    return "Hello, " + name + "!"
+}
+
+// Lambda expressions (short-form)
+let double  = (x) => x * 2
+let add     = (a, b) => a + b
+let clamp   = (x, lo, hi) => x < lo ? lo : (x > hi ? hi : x)
+
+// Lambda with block body
+let format_price = (amount: float, symbol: str) => {
+    let rounded = (amount * 100.0 |> int) / 100.0
+    return symbol + str(rounded)
+}
+
+// Functions are first-class
+let apply   = (f, x) => f(x)
+println(apply(double, 21))   // 42
+
+// Default parameters
+fn power(base: float, exp: float) -> float {
+    return base ** exp
+}
+
+// Variadic params
+fn sum_all(*nums) -> int {
+    let total = 0
+    for n in nums { total += n }
+    return total
+}
+println(sum_all(1, 2, 3, 4, 5))  // 15
+```
+
+### 3.1 Named Arguments
+
+```lateralus
+fn create_user(name: str, age: int, active: bool) -> str {
+    return "{name} (age {age}, active={active})"
+}
+
+// Call with named args in any order
+let info = create_user(age: 30, name: "Alice", active: true)
+```
+
+### 3.2 Higher-Order Functions
+
+```lateralus
+fn compose(f, g) {
+    return (x) => f(g(x))
+}
+
+let double_then_inc = compose((x) => x + 1, (x) => x * 2)
+println(double_then_inc(5))  // 11
+
+fn memoize(f) {
+    let cache = {}
+    return (x) => {
+        if cache[x] == nil {
+            cache[x] = f(x)
+        }
+        return cache[x]
+    }
+}
+
+let fib = memoize(fn(n) {
+    if n <= 1 { return n }
+    return fib(n - 1) + fib(n - 2)
+})
+```
+
+## Chapter 4: Pipelines — The Heart of LATERALUS
+
+Pipelines are what make LATERALUS special. Data flows left to right
+through a chain of transformations. The `|>` operator passes the result
+of the left side as the _first_ argument to the right side.
+
+```lateralus
+// Basic pipeline
+let result = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    |> filter((x) => x % 2 == 0)    // Keep evens: [2,4,6,8,10]
+    |> map((x) => x ** 2)            // Square them: [4,16,36,64,100]
+    |> foldl((a, b) => a + b, 0)     // Sum: 220
+
+println(result)  // 220
+```
+
+### 4.1 String Processing Pipelines
+
+```lateralus
+let words = "the quick brown fox jumps over the lazy dog"
+let result = words
+    |> (s) => s.split(" ")
+    |> filter((w) => len(w) > 3)
+    |> map((w) => upper(w))
+    |> (lst) => join(lst, ", ")
+
+println(result)  // "QUICK, BROWN, JUMPS, OVER, LAZY"
+```
+
+### 4.2 Optional Pipeline `|?`
+
+The `|?` operator short-circuits when the value is `nil`, propagating
+`nil` through the rest of the chain safely.
+
+```lateralus
+let safe_sqrt = (x) => x >= 0.0 ? sqrt(x) : nil
+
+let result = user_input
+    |? parse_float
+    |? safe_sqrt
+    |? (v) => v * 100.0
+
+// result is nil if any step returns nil
+```
+
+### 4.3 Pipeline Assignment `|>=`
+
+Use `|>=` to update a variable through a pipeline:
+
+```lateralus
+let mut data = [5, 2, 8, 1, 9, 3, 7]
+
+// Instead of: data = data |> sort |> reverse
+data |>= sort
+data |>= reverse
+println(data)  // [9, 8, 7, 5, 3, 2, 1]
+
+// Or chain them in one step
+data |>= sort |> reverse |> (lst) => lst[0..3]
+println(data)  // [9, 8, 7]
+```
+
+## Chapter 5: Control Flow
+
+### 5.1 If-Elif-Else
+
+```lateralus
+if temperature > 100.0 {
+    println("Boiling!")
+} elif temperature > 0.0 {
+    println("Liquid")
+} else {
+    println("Frozen")
+}
+```
+
+### 5.2 For Loops
+
+```lateralus
+// Over a list
+for item in ["a", "b", "c"] {
+    println(item)
+}
+
+// Over a range
+for i in 0..<10 {          // exclusive: 0,1,...,9
+    println(i)
+}
+for i in 1..=10 {           // inclusive: 1,2,...,10
+    println(i)
+}
+
+// Enumerate
+for i, item in enumerate(["x", "y", "z"]) {
+    println("{i}: {item}")
+}
+```
+
+### 5.3 While and Loop
+
+```lateralus
+let mut count = 0
+while count < 5 {
+    println(count)
+    count += 1
+}
+
+// Infinite loop with break
+loop {
+    let input = read_line()
+    if input == "quit" { break }
+    println("You said: {input}")
+}
+```
+
+### 5.4 Match Expressions
+
+Match is exhaustive pattern matching — the compiler warns if you miss a case:
+
+```lateralus
+let description = match status_code {
+    200 => "OK",
+    201 => "Created",
+    204 => "No Content",
+    301 | 302 => "Redirect",
+    404 => "Not Found",
+    500 => "Internal Server Error",
+    code if code >= 400 and code < 500 => "Client Error {code}",
+    code if code >= 500 => "Server Error {code}",
+    _ => "Unknown status",
+}
+
+// Match on type constructors
+let result = match response {
+    Ok(value) => "Got: {value}",
+    Err(e)    => "Error: {e}",
+    Pending   => "Still waiting...",
+}
+```
+
+## Chapter 6: Structs and Types
+
+```lateralus
+struct Point {
+    x: float,
+    y: float,
+}
+
+struct Circle {
+    center: Point,
+    radius: float,
+}
+
+fn distance(p1: Point, p2: Point) -> float {
+    let dx = p1.x - p2.x
+    let dy = p1.y - p2.y
+    return sqrt(dx ** 2 + dy ** 2)
+}
+
+fn area(c: Circle) -> float {
+    return 3.14159 * c.radius ** 2
+}
+
+let origin      = Point { x: 0.0, y: 0.0 }
+let unit_circle = Circle { center: origin, radius: 1.0 }
+println("Area: {area(unit_circle)}")
+```
+
+### 6.1 Impl Blocks (Methods)
+
+```lateralus
+impl Point {
+    fn new(x: float, y: float) -> Point {
+        return Point { x: x, y: y }
+    }
+
+    fn magnitude(self) -> float {
+        return sqrt(self.x ** 2 + self.y ** 2)
+    }
+
+    fn translate(self, dx: float, dy: float) -> Point {
+        return Point { x: self.x + dx, y: self.y + dy }
+    }
+
+    fn to_str(self) -> str {
+        return "({self.x}, {self.y})"
+    }
+}
+
+let p = Point.new(3.0, 4.0)
+println("Magnitude: {p.magnitude()}")   // 5.0
+let q = p.translate(1.0, -1.0)
+println(q.to_str())                     // (4.0, 3.0)
+```
+
+### 6.2 Enums with Variants
+
+```lateralus
+enum Shape {
+    Circle(radius: float),
+    Rectangle(width: float, height: float),
+    Triangle(base: float, height: float),
+}
+
+fn area_of(shape: Shape) -> float {
+    return match shape {
+        Shape.Circle(r)       => 3.14159 * r * r,
+        Shape.Rectangle(w, h) => w * h,
+        Shape.Triangle(b, h)  => 0.5 * b * h,
+    }
+}
+
+let shapes = [
+    Shape.Circle(5.0),
+    Shape.Rectangle(4.0, 6.0),
+    Shape.Triangle(3.0, 8.0),
+]
+
+for shape in shapes {
+    println("Area: {area_of(shape):.2f}")
+}
+```
+
+### 6.3 Interfaces
+
+```lateralus
+interface Drawable {
+    fn draw(self) -> str
+    fn bounding_box(self) -> (float, float, float, float)
+}
+
+interface Serializable {
+    fn to_json(self) -> str
+    fn from_json(data: str) -> Self
+}
+
+struct Rect {
+    x: float, y: float,
+    width: float, height: float,
+}
+
+impl Drawable for Rect {
+    fn draw(self) -> str {
+        return "Rect at ({self.x},{self.y}) size {self.width}×{self.height}"
+    }
+
+    fn bounding_box(self) -> (float, float, float, float) {
+        return (self.x, self.y, self.x + self.width, self.y + self.height)
+    }
+}
+```
+
+## Chapter 7: Error Handling
+
+### 7.1 Try / Recover / Ensure
+
+```lateralus
+fn parse_and_double(s: str) -> int {
+    let n = parse_int(s)
+    return n * 2
+}
+
+try {
+    let result = parse_and_double("21")
+    println("Success: {result}")   // 42
+} recover ParseError(e) {
+    println("Bad input: {e}")
+} recover * (e) {
+    println("Unknown error: {e}")
+} ensure {
+    println("Always runs (like finally)")
+}
+```
+
+### 7.2 Throw
+
+```lateralus
+fn divide(a: float, b: float) -> float {
+    if b == 0.0 {
+        throw DivisionError("Division by zero: {a} / {b}")
+    }
+    return a / b
+}
+
+fn safe_sqrt(x: float) -> float {
+    if x < 0.0 {
+        throw MathError("Cannot take sqrt of negative number {x}")
+    }
+    return sqrt(x)
+}
+```
+
+### 7.3 Try as Expression
+
+```lateralus
+// Default value on failure
+let value = try parse_int(user_input) recover _ => 0
+
+// Recover with transformation
+let data = try load_file("config.json") recover IOError(e) {
+    println("Using defaults: {e}")
+    return "{}"
+}
+```
+
+### 7.4 Error Propagation with `?`
+
+The `?` operator propagates errors upward — if the expression produces an
+error, the current function returns that error immediately.
+
+```lateralus
+fn read_config(path: str) -> Config {
+    let text    = read_file(path)?          // propagate IOError
+    let json    = parse_json(text)?         // propagate ParseError
+    let config  = Config.from_json(json)?   // propagate ValidationError
+    return config
+}
+
+// Equivalent (verbose) version without ?:
+fn read_config_verbose(path: str) -> Config {
+    let text = try read_file(path) recover IOError(e) {
+        throw e
+    }
+    let json = try parse_json(text) recover ParseError(e) {
+        throw e
+    }
+    return Config.from_json(json)
+}
+```
+
+### 7.5 Error Chaining
+
+```lateralus
+fn load_dataset(path: str) -> Dataset {
+    let raw = try read_file(path)?
+    let csv = try parse_csv(raw)?
+    return Dataset.from_csv(csv)
+        |> validate
+        |? normalize
+}
+```
+
+## Chapter 8: List Comprehensions (v1.4)
+
+List comprehensions provide a concise way to create lists from iterables.
+
+```lateralus
+// Basic: [expr for var in iter]
+let squares = [x * x for x in range(10)]
+// → [0, 1, 4, 9, 16, 25, 36, 49, 64, 81]
+
+// With filter: [expr for var in iter if condition]
+let even_squares = [x * x for x in range(10) if x % 2 == 0]
+// → [0, 4, 16, 36, 64]
+
+// String processing
+let names = ["alice", "bob", "carol", "david"]
+let initials = [upper(n[0]) for n in names]
+// → ["A", "B", "C", "D"]
+
+// Nested comprehension
+let matrix = [[i * j for j in range(1, 4)] for i in range(1, 4)]
+// → [[1,2,3], [2,4,6], [3,6,9]]
+
+// With complex expressions
+let words   = ["hello", "world", "foo", "bar", "lateralus"]
+let long_upper = [upper(w) for w in words if len(w) > 4]
+// → ["HELLO", "WORLD", "LATERALUS"]
+
+// Map comprehension: {key: val for ...}
+let word_lengths = {w: len(w) for w in words}
+// → {"hello": 5, "world": 5, "foo": 3, "bar": 3, "lateralus": 9}
+
+// Set comprehension: {expr for ...}
+let unique_lengths = {len(w) for w in words}
+// → {3, 5, 9}  (set — no duplicates)
+```
+
+::: tip Performance
+Comprehensions are lazily evaluated in most cases. They are generally
+faster than the equivalent `map` + `filter` pipeline for tight loops.
+:::
+
+## Chapter 9: Ternary Expressions and Spread (v1.4)
+
+### 9.1 Ternary
+
+```lateralus
+// condition ? then_val : else_val
+let abs_val = x >= 0 ? x : -x
+let label   = score > 90 ? "A" : (score > 75 ? "B" : "C")
+
+// In pipelines
+let data = raw_values
+    |> map((x) => x > 0.0 ? x : 0.0)    // clamp negatives to zero
+    |> filter((x) => x != 0.0)            // remove zeros
+```
+
+### 9.2 Spread Operator
+
+The `...` spread operator expands a list into individual elements:
+
+```lateralus
+let first  = [1, 2, 3]
+let second = [4, 5, 6]
+let merged = [...first, ...second, 7, 8, 9]
+// → [1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+// Spread into function call
+fn sum3(a, b, c) { return a + b + c }
+let args = [10, 20, 30]
+let result = sum3(...args)   // → 60
+
+// Spread in struct construction
+let base_config = { "debug": false, "level": 1 }
+let dev_config  = { ...base_config, "debug": true, "profile": true }
+// → { "debug": true, "level": 1, "profile": true }
+```
+
+## Chapter 10: Guard and Where Clauses (v1.4)
+
+### 10.1 Guard Clauses
+
+`guard` enforces a precondition at the top of a function or block.
+If the condition is false, the else-block runs (typically a return or throw):
+
+```lateralus
+fn process(items: list, limit: int) -> list {
+    guard len(items) > 0 else {
+        return []
+    }
+    guard limit > 0 else {
+        throw ValueError("limit must be positive, got {limit}")
+    }
+
+    return items
+        |> filter((x) => x != nil)
+        |> (lst) => lst[0..<limit]
+        |> map(transform)
+}
+
+// Guards in loops
+fn find_valid(data: list) -> any {
+    for item in data {
+        guard item != nil else { continue }
+        guard item.is_valid() else { continue }
+        return item
+    }
+    return nil
+}
+```
+
+### 10.2 Where Clauses
+
+`where` provides local scoped bindings that make complex expressions
+readable without polluting the outer scope:
+
+```lateralus
+// Volume of a frustum (truncated cone)
+let frustum_volume = pi * h * (r1**2 + r1*r2 + r2**2) / 3.0 where {
+    let pi = 3.14159265358979
+    let r1 = 5.0
+    let r2 = 3.0
+    let h  = 10.0
+}
+println("Volume: {frustum_volume:.4f}")
+
+// Readable Gaussian function
+let gaussian = A * exp(-((x - mu)**2) / (2.0 * sigma**2)) where {
+    let A     = 1.0
+    let mu    = 0.0
+    let sigma = 1.0
+    let x     = 2.5
+}
+```
+
+## Chapter 11: The Event System (v1.3+)
+
+### 11.1 Emit Events
+
+`emit` publishes named events on the built-in reactive EventBus:
+
+```lateralus
+// Emit events for logging, monitoring, and reactive systems
+emit user_logged_in("alice", "2026-03-30T12:00:00Z")
+emit data_processed(row_count: 1000, errors: 0)
+emit pipeline_complete(duration_ms: 423)
+
+// Downstream handlers receive these automatically
+// (set up with on() in reactive.ltl)
+```
+
+### 11.2 Probe
+
+`probe` returns a runtime inspection dict for any value:
+
+```lateralus
+let data = [1, 2, 3, 4, 5]
+let info = probe data
+// info → { "type": "list", "len": 5, "value": [1,2,3,4,5] }
+
+let n = 42
+let n_info = probe n
+// n_info → { "type": "int", "value": 42, "size_bytes": 8 }
+```
+
+### 11.3 Measure Blocks
+
+`measure` times a block and prints elapsed time:
+
+```lateralus
+measure "fibonacci(40)" {
+    let result = fib(40)
+    println("fib(40) = {result}")
+}
+// [measure] fibonacci(40): 12.34 ms
+
+measure "matrix multiply" {
+    let C = matrix_mul(A, B)
+}
+// [measure] matrix multiply: 0.87 ms
+```
+
+## Chapter 12: Decorators (v1.1+)
+
+```lateralus
+// Built-in decorators
+@test
+fn test_addition() {
+    assert_eq(1 + 1, 2, "basic addition")
+    assert_eq(-1 + 1, 0, "zero sum")
+}
+
+@bench
+fn bench_sort() {
+    let data = [5, 2, 8, 1, 9, 3, 7, 4, 6]
+    let _sorted = merge_sort(data)
+}
+
+@memo
+fn fib(n: int) -> int {
+    if n <= 1 { return n }
+    return fib(n-1) + fib(n-2)
+}
+
+@deprecated("Use new_api() instead — removed in v2.0")
+fn old_api() {
+    // ...
+}
+
+@inline
+fn fast_abs(x: float) -> float {
+    return x < 0.0 ? -x : x
+}
+
+// Struct-level decorators
+@derive(Debug, Clone, Eq)
+struct Color {
+    r: int,
+    g: int,
+    b: int,
+}
+```
+
+## Chapter 13: Scientific Computing
+
+```lateralus
+import "math"
+import "science"
+
+// Physical constants
+let c    = 299792458.0           // Speed of light (m/s)
+let h    = 6.62607015e-34        // Planck constant (J·s)
+let k_B  = 1.380649e-23          // Boltzmann constant (J/K)
+let N_A  = 6.02214076e23         // Avogadro's number
+
+// Relativistic energy
+fn relativistic_energy(m: float, v: float) -> float {
+    let gamma = 1.0 / sqrt(1.0 - (v / c) ** 2)
+    return gamma * m * c ** 2
+}
+
+// Numerical integration — composite Simpson's rule
+fn simpson(f, a: float, b: float, n: int) -> float {
+    guard n % 2 == 0 else {
+        throw ValueError("n must be even for Simpson's rule")
+    }
+    let h = (b - a) / float(n)
+    let s = f(a) + f(b)
+    for i in 1..<n {
+        let x = a + float(i) * h
+        s += (i % 2 == 0 ? 2.0 : 4.0) * f(x)
+    }
+    return s * h / 3.0
+}
+
+let integral = simpson((x) => exp(-x**2), -3.0, 3.0, 1000)
+println("∫ e^(-x²) dx ≈ {integral:.6f}")  // ≈ 1.772454
+
+// Root finding — Newton-Raphson
+fn newton(f, df, x0: float, tol: float) -> float {
+    let mut x = x0
+    loop {
+        let fx = f(x)
+        if abs(fx) < tol { return x }
+        x -= fx / df(x)
+    }
+}
+
+let g   = (x) => x**3 - 2.0*x - 5.0
+let dg  = (x) => 3.0*x**2 - 2.0
+let root = newton(g, dg, 2.0, 1e-10)
+println("Root of x³-2x-5 ≈ {root:.10f}")  // ≈ 2.0945514815
+```
+
+### 13.1 Matrix Algebra
+
+```lateralus
+import "linalg"
+
+// Matrix operations
+let A = matrix([[1.0, 2.0], [3.0, 4.0]])
+let B = matrix([[5.0, 6.0], [7.0, 8.0]])
+
+let C      = mat_mul(A, B)        // matrix product
+let At     = transpose(A)         // transpose
+let det_A  = determinant(A)       // -2.0
+let inv_A  = inverse(A)           // if det ≠ 0
+
+// Solve linear system Ax = b
+let b = vector([1.0, 2.0])
+let x = solve(A, b)
+println("Solution: {x}")
+
+// SVD decomposition
+let (U, S, Vt) = svd(A)
+println("Singular values: {S}")
+
+// Eigenvalues
+let (eigenvals, eigenvecs) = eig(A)
+println("Eigenvalues: {eigenvals}")
+```
+
+## Chapter 14: Data Structures (stdlib)
+
+```lateralus
+import "data"
+
+// Stack (LIFO)
+let mut s = Stack.new()
+s.push("first")
+s.push("second")
+s.push("third")
+println(s.peek())   // "third"
+println(s.pop())    // "third"
+println(s.size())   // 2
+
+// Queue (FIFO)
+let mut q = Queue.new()
+q.enqueue("task-1")
+q.enqueue("task-2")
+q.enqueue("task-3")
+println(q.dequeue())  // "task-1"
+
+// Priority Queue
+let mut pq = PriorityQueue.new()
+pq.push(30, "low priority")
+pq.push(90, "high priority")
+pq.push(60, "medium priority")
+println(pq.pop())  // "high priority" (highest value first)
+
+// Deque (double-ended queue)
+let mut dq = Deque.new()
+dq.push_front("a")
+dq.push_back("b")
+dq.push_front("c")   // [c, a, b]
+println(dq.pop_front())  // "c"
+
+// Ordered Set
+let mut s2 = TreeSet.new()
+for x in [5, 2, 8, 1, 9, 3] {
+    s2.insert(x)
+}
+println(s2.to_list())  // [1, 2, 3, 5, 8, 9]
+
+// Hash Map with default
+let mut word_count = HashMap.new(default: 0)
+for word in text.split(" ") {
+    word_count[word] += 1
+}
+```
+
+## Chapter 15: Testing
+
+```lateralus
+import "testing"
+
+describe("Math operations", () => {
+    it("adds numbers correctly", () => {
+        assert_eq(2 + 2, 4, "basic addition")
+        assert_eq(-1 + -1, -2, "negative addition")
+    })
+
+    it("handles division edge cases", () => {
+        assert_approx(1.0 / 3.0, 0.333333, 1e-5)
+        assert_throws(() => divide(5.0, 0.0), DivisionError)
+    })
+
+    it("pipeline produces correct results", () => {
+        let result = [1, 2, 3, 4, 5]
+            |> filter((x) => x % 2 != 0)
+            |> map((x) => x ** 2)
+            |> foldl((a, b) => a + b, 0)
+        assert_eq(result, 35, "sum of squares of odds = 1+9+25")
+    })
+})
+
+describe("Struct methods", () => {
+    it("Point.magnitude computes correctly", () => {
+        let p = Point { x: 3.0, y: 4.0 }
+        assert_approx(p.magnitude(), 5.0, 1e-9)
+    })
+
+    it("Circle area is correct", () => {
+        let c = Circle { center: Point {x:0.0,y:0.0}, radius: 2.0 }
+        assert_approx(area(c), 12.566, 0.001)
+    })
+})
+```
+
+## Chapter 16: Algorithms (stdlib)
+
+```lateralus
+import "algorithms"
+
+// Sorting
+let data   = [5, 2, 8, 1, 9, 3, 7, 4, 6]
+let sorted = merge_sort(data)             // [1, 2, 3, 4, 5, 6, 7, 8, 9]
+let rev    = quick_sort(data, descending: true)
+
+// Searching
+let idx  = binary_search(sorted, 7)      // 6
+let lidx = lower_bound(sorted, 5)        // first index ≥ 5
+let uidx = upper_bound(sorted, 5)        // first index > 5
+
+// Number theory
+let primes  = sieve_of_eratosthenes(100)
+let fib_seq = fibonacci_sequence(15)
+let g       = gcd(48, 18)                // 6
+let l       = lcm(4, 6)                  // 12
+
+println("Primes under 100: {primes}")
+println("First 15 Fibonacci: {fib_seq}")
+
+// Graph algorithms
+let g2 = Graph.from_edges([
+    (0, 1, 4.0), (0, 2, 2.0), (1, 3, 5.0),
+    (2, 1, 1.0), (2, 3, 8.0), (3, 4, 2.0),
+])
+
+let (dist, path) = dijkstra(g2, source: 0, target: 4)
+println("Shortest path cost: {dist}")
+println("Path: {path}")
+
+// String algorithms
+let edit_dist = levenshtein("kitten", "sitting")   // 3
+let lcs       = longest_common_subsequence("ABCBDAB", "BDCAB")
+println("LCS: {lcs}")
+```
+
+## Chapter 17: Concurrency and Async (spawn/async)
+
+```lateralus
+// Async functions — mark with 'async'
+async fn fetch_data(url: str) -> str {
+    let response = await http_get(url)
+    return response.body
+}
+
+async fn process_all(urls: list) -> list {
+    // Launch all fetches concurrently
+    let tasks = [spawn fetch_data(url) for url in urls]
+
+    // Wait for all to complete
+    let results = []
+    for task in tasks {
+        let data = await task
+        results = [...results, data]
+    }
+    return results
+}
+
+// Running async functions
+fn main() {
+    let urls = [
+        "https://api.example.com/data/1",
+        "https://api.example.com/data/2",
+        "https://api.example.com/data/3",
+    ]
+    let all_data = await process_all(urls)
+    println("Fetched {len(all_data)} results")
+}
+```
+
+### 17.1 Concurrent Pipelines
+
+```lateralus
+// Parallel map — processes items concurrently
+let results = parallel_map(expensive_computation, large_dataset)
+
+// Async pipeline with await
+let pipeline_result = raw_data
+    |> await fetch_enrichment
+    |> await validate_schema
+    |> transform
+    |> await store_result
+```
+
+## Chapter 18: Polyglot / Foreign Blocks (v1.2)
+
+LATERALUS can embed code from other languages using `foreign` blocks:
+
+```lateralus
+// Call Python
+foreign "python" (data: values, n: count) {
+    r"""
+import json, statistics
+params = json.loads(input())
+vals = params['data']
+print(json.dumps({
+    'mean': statistics.mean(vals),
+    'stdev': statistics.stdev(vals)
+}))
+"""
+}
+
+// Call JavaScript
+foreign "javascript" (x: value) {
+    """
+const params = JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf8'));
+const v = params.x;
+console.log(JSON.stringify({ sin: Math.sin(v), cos: Math.cos(v) }));
+"""
+}
+
+// Call R for statistical analysis
+foreign "r" (samples: data) {
+    """
+params <- jsonlite::fromJSON(readLines("stdin", n=1))
+v <- params$samples
+cat(jsonlite::toJSON(list(
+  shapiro_p = shapiro.test(v)$p.value,
+  ks_normal = ks.test(v, "pnorm")$p.value
+)))
+"""
+}
+```
+
+## Chapter 19: Generics and Type Constraints (v1.4+)
+
+```lateralus
+// Generic functions
+fn identity<T>(x: T) -> T {
+    return x
+}
+
+fn first<T>(items: list<T>) -> T? {
+    if len(items) == 0 { return nil }
+    return items[0]
+}
+
+fn zip_with<A, B, C>(f: fn(A, B) -> C, xs: list<A>, ys: list<B>) -> list<C> {
+    return [f(x, y) for (x, y) in zip(xs, ys)]
+}
+
+// Generic with interface constraint
+fn max_of<T: Comparable>(a: T, b: T) -> T {
+    return a > b ? a : b
+}
+
+// Generic struct
+struct Pair<A, B> {
+    first:  A,
+    second: B,
+}
+
+impl<A, B> Pair<A, B> {
+    fn new(first: A, second: B) -> Pair<A, B> {
+        return Pair { first: first, second: second }
+    }
+
+    fn swap(self) -> Pair<B, A> {
+        return Pair { first: self.second, second: self.first }
+    }
+}
+
+let p = Pair.new("hello", 42)
+let q = p.swap()
+println("{q.first}, {q.second}")  // 42, hello
+```
+
+## Chapter 20: The LATERALUS Assembly Language (.ltasm)
+
+LATERALUS includes a low-level assembly language that compiles to
+the LATERALUS VM bytecode:
+
+```lateralus-asm
+; fibonacci.ltasm — compute Fibonacci(n)
+; Register conventions:
+;   r0 = n (input)
+;   r1 = a (fib result accumulator)
+;   r2 = b
+;   r3 = temp
+
+.section .text
+.global main
+
+main:
+    PUSH  10          ; n = 10
+    STORE r0
+    PUSH  0
+    STORE r1          ; a = 0
+    PUSH  1
+    STORE r2          ; b = 1
+    PUSH  0
+    STORE r3          ; i = 0
+
+loop:
+    LOAD  r3
+    LOAD  r0
+    GE                ; i >= n?
+    JMP_IF done
+
+    LOAD  r1
+    LOAD  r2
+    ADD               ; a + b
+    LOAD  r2
+    STORE r1          ; a = b
+    STORE r2          ; b = a + b  (temp)
+
+    LOAD  r3
+    PUSH  1
+    ADD
+    STORE r3          ; i++
+    JMP   loop
+
+done:
+    LOAD  r1
+    PRINT
+    HALT
+```
+
+## Chapter 21: Writing Complete Programs
+
+Here's a complete program that demonstrates many features together:
+
+```lateralus
+module statistics_toolkit
+
+import "math"
+import "science"
+
+// Summary statistics with pipeline
+fn describe(data: list<float>) -> map {
+    guard len(data) > 0 else {
+        throw ValueError("Cannot describe empty list")
+    }
+
+    let sorted = data |> sort
+
+    let n    = float(len(data))
+    let mu   = foldl((a, b) => a + b, 0.0, data) / n
+    let var_ = [( x - mu)**2 for x in data]
+        |> foldl((a, b) => a + b, 0.0)
+        |> (s) => s / n
+    let std  = sqrt(var_)
+    let med  = n % 2.0 == 0.0
+        ? (sorted[int(n/2.0) - 1] + sorted[int(n/2.0)]) / 2.0
+        : sorted[int(n/2.0)]
+
+    return {
+        "n":      int(n),
+        "mean":   mu,
+        "std":    std,
+        "var":    var_,
+        "min":    sorted[0],
+        "q1":     sorted[int(n * 0.25)],
+        "median": med,
+        "q3":     sorted[int(n * 0.75)],
+        "max":    sorted[len(sorted) - 1],
+    }
+}
+
+// Pearson correlation
+fn correlation(xs: list<float>, ys: list<float>) -> float {
+    guard len(xs) == len(ys) else {
+        throw ValueError("Lists must have equal length")
+    }
+
+    let n  = float(len(xs))
+    let mx = foldl((a, b) => a + b, 0.0, xs) / n
+    let my = foldl((a, b) => a + b, 0.0, ys) / n
+
+    let cov   = foldl((a, (x, y)) => a + (x-mx)*(y-my), 0.0, zip(xs, ys)) / n
+    let sx    = sqrt([( x-mx)**2 for x in xs] |> foldl((a, b) => a+b, 0.0) / n)
+    let sy    = sqrt([( y-my)**2 for y in ys] |> foldl((a, b) => a+b, 0.0) / n)
+
+    guard sx > 0.0 and sy > 0.0 else {
+        return 0.0  // zero variance → no correlation
+    }
+    return cov / (sx * sy)
+}
+
+fn main() {
+    let data = [2.1, 3.4, 1.8, 5.2, 4.7, 2.9, 6.1, 3.3, 4.0, 5.5]
+
+    let stats = describe(data)
+    println("N:      {stats["n"]}")
+    println("Mean:   {stats["mean"]:.4f}")
+    println("Std:    {stats["std"]:.4f}")
+    println("Median: {stats["median"]:.4f}")
+    println("Range:  [{stats["min"]:.2f}, {stats["max"]:.2f}]")
+
+    let xs = [1.0, 2.0, 3.0, 4.0, 5.0]
+    let ys = [2.1, 3.9, 6.2, 7.8, 10.1]
+    println("Pearson r = {correlation(xs, ys):.4f}")  // ≈ 0.998
+}
+```
+
+## What's Next?
+
+## Chapter 22: Result and Option Types (v1.5)
+
+LATERALUS v1.5 introduces algebraic data types for explicit, safe error
+handling — no more nulls, no hidden panics.
+
+### 22.1 Result<T, E> — Success or Failure
+
+```lateralus
+fn safe_div(a: float, b: float) -> Result<float, str> {
+    if b == 0.0 {
+        return Result::Err("division by zero")
+    }
+    return Result::Ok(a / b)
+}
+
+// Destructure with match
+let answer = match safe_div(10.0, 3.0) {
+    Result::Ok(v)  => "got {v:.4f}",
+    Result::Err(e) => "failed: {e}",
+}
+println(answer)  // "got 3.3333"
+```
+
+### 22.2 Option<T> — Value or Nothing
+
+```lateralus
+fn find_user(id: int) -> Option<str> {
+    let db = { 1: "root", 2: "admin" }
+    if contains(db, id) {
+        return Option::Some(db[id])
+    }
+    return Option::None
+}
+
+match find_user(1) {
+    Option::Some(name) => println("found: {name}"),
+    Option::None       => println("user not found"),
+}
+```
+
+### 22.3 Match as Expression
+
+Match returns a value — no need for a separate variable:
+
+```lateralus
+let weekend = match day {
+    "Saturday" | "Sunday" => true,
+    _                      => false,
+}
+
+// 8 pattern types:
+//   1. literal     — 42, "hello", true
+//   2. binding     — x  (captures the value)
+//   3. wildcard    — _  (matches anything)
+//   4. constructor — Result::Ok(v)
+//   5. guard       — Result::Ok(v) if v > 0
+//   6. OR          — "a" | "b"
+//   7. list        — [x, y, ...rest]
+//   8. nested      — Some(Ok(value))
+```
+
+### 22.4 The :: Scope Operator
+
+Access enum variants via the `::` operator:
+
+```lateralus
+enum Color {
+    Red,
+    Green,
+    Blue,
+    Custom(int, int, int),
+}
+
+let c = Color::Custom(255, 128, 0)
+match c {
+    Color::Red   => println("red"),
+    Color::Green => println("green"),
+    Color::Custom(r, g, b) => println("rgb({r},{g},{b})"),
+    _ => println("other"),
+}
+```
+
+## Chapter 23: Optional Types and Type Narrowing (v1.5)
+
+### 23.1 The `?` Suffix — Nullable Safety
+
+Append `?` to any type to make it optional:
+
+```lateralus
+fn lookup(key: str) -> int? {
+    let table = { "x": 10, "y": 20 }
+    if contains(table, key) {
+        return table[key]
+    }
+    return none
+}
+
+let val: int? = lookup("x")  // might be int or none
+```
+
+### 23.2 Type Narrowing
+
+After a conditional check, LATERALUS narrows the type automatically:
+
+```lateralus
+fn show(val: int?) {
+    if val != none {
+        // 'val' is now narrowed from int? to int
+        println("double: {val * 2}")
+    } else {
+        println("no value")
+    }
+}
+```
+
+### 23.3 Trait Bounds
+
+Constrain generic type parameters to require specific capabilities:
+
+```lateralus
+fn max_element<T: Comparable>(items: list<T>) -> T {
+    let best = items[0]
+    for item in items {
+        if item > best {
+            best = item
+        }
+    }
+    return best
+}
+
+// Const generics — parameterise over values, not just types
+fn zeros<N: int>() -> list<int> {
+    return [0 for _ in range(0, N)]
+}
+```
+
+## Chapter 24: The C Backend (v1.5)
+
+LATERALUS can transpile to C99, enabling native compilation,
+embedded targets, and even bare-metal OS kernels.
+
+### 24.1 Transpiling to C
+
+```bash
+# Hosted (links libc — printf, malloc, etc.)
+lateralus c hello.ltl -o hello.c
+gcc -O2 hello.c -o hello && ./hello
+
+# Freestanding (no libc — for OS kernels, embedded)
+lateralus c kernel.ltl --freestanding -o kernel.c
+gcc -ffreestanding -nostdlib -c kernel.c -o kernel.o
+```
+
+### 24.2 Hosted vs Freestanding
+
+| Feature         | Hosted          | Freestanding          |
+|-----------------|-----------------|------------------------|
+| `println()`     | `printf()`      | serial/VGA stub        |
+| `malloc/free`   | libc            | bump allocator         |
+| Entry point     | `int main()`    | `void _start()`       |
+| Target          | Desktop/server  | OS kernel / MCU        |
+
+### 24.3 LateralusOS — A Real Kernel in Lateralus
+
+The C backend powers **LateralusOS**, a real operating system:
+
+```lateralus
+// This Lateralus code compiles to C, then to a 375KB kernel
+// that boots on bare x86_64 hardware via QEMU
+fn main() {
+    println("Welcome to LateralusOS v0.1.0")
+    println("Heap: 2 MB  |  GUI: 800x600")
+}
+```
+
+Features: desktop GUI, window manager, terminal with 17 commands,
+start menu, animated wallpaper, PC speaker, Alt+Tab, RAM filesystem.
+
+## Chapter 25: The Standard Library (28 Modules)
+
+### 25.1 Essential Imports
+
+```lateralus
+import math       // PI, sin, cos, sqrt, log
+import strings    // split, join, upper, lower, trim
+import collections// sorted, unique, group_by, flatten
+import io         // read_file, write_file, prompt
+import json       // parse, stringify
+import random     // random, randint, choice, shuffle
+```
+
+### 25.2 New in v1.5
+
+```lateralus
+import os         // env, args, exec, getcwd, exit
+import datetime   // now, Date, Time, Duration, format
+import regex      // match, find_all, replace, Pattern
+import http       // get, post, Request, Response
+import result     // map_ok, map_err, unwrap_or, flatten
+import iter       // map, filter, zip, chain, take, fold
+```
+
+### 25.3 Scientific Stack
+
+```lateralus
+import science    // Unit, Measurement, conversions
+import linalg     // Vector, Matrix, dot, cross
+import stats      // mean, std, median, regression
+import numerics   // solve_ode, integrate, interpolate
+import optimize   // gradient_descent, minimize
+```
+
+## What's Next?
+
+### Explore on Your Own
+
+- Browse the `examples/` directory for complete programs
+- Try the `lateralus repl` for interactive exploration
+- Run `lateralus check myfile.ltl` for type-checking
+- Use `lateralus fmt myfile.ltl` to format your code
+- Use `lateralus c myfile.ltl -o out.c` to transpile to C
+
+### Read More
+
+- [language-spec.ltlml](language-spec.ltlml) — Full syntax reference
+- [architecture.ltlml](architecture.ltlml) — How the compiler works
+- [cookbook.ltlml](cookbook.ltlml) — Practical recipes for common tasks
+
+---
+
+::: note Keep Spiraling
+LATERALUS is a language that grows with you. Every version adds new
+capabilities while keeping old code working. *Spiral out, keep going.*
+:::
+
+  </script>
+  <script src="ltlml.js"></script>
+</body>
+</html>

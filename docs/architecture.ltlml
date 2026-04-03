@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LATERALUS Architecture Overview</title>
+  <link rel="stylesheet" href="ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="./index.ltlml">Home</a>
+    <a href="./tutorial.ltlml">Tutorial</a>
+    <a href="./cookbook.ltlml">Cookbook</a>
+    <a href="./language-spec.ltlml">Spec</a>
+    <a href="./quick-reference.ltlml">Quick Ref</a>
+    <a href="./architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: LATERALUS Architecture Overview
+subtitle: How Everything Fits Together
+---
+
+# Architecture
+
+LATERALUS is a multi-target language with a modular compiler architecture.
+This document explains how the pieces connect.
+
+## Compilation Pipeline
+
+```
+Source Code (.ltl)
+    |
+    v
+[Lexer] -- Tokenization (123 token types)
+    |
+    v
+[Parser] -- Recursive descent, 1756 lines
+    |       -- 106 AST node types
+    v
+[AST] -- Abstract Syntax Tree
+    |
+    +--- [Type Checker] (v1.5: Hindley-Milner TypeInferencer)
+    |         |-- TypeVar generation (fresh_typevar)
+    |         |-- Constraint collection (constrain)
+    |         |-- Unification (occurs_check + unify)
+    |         |-- Substitution (substitute + solve)
+    |         |-- Pattern binding inference (infer_pattern)
+    |
+    +--- [Optimizer] -- O0-O3 optimization levels
+    |         |-- Constant folding
+    |         |-- Dead code elimination
+    |         |-- Strength reduction
+    |         |-- Common subexpression elimination
+    |         |-- Pipeline fusion
+    |         |-- Dead branch elimination (v2.4)
+    |         |-- Algebraic simplification — 20 identities (v2.4)
+    |         |-- Function inlining analysis (v2.4)
+    |
+    v
+[Code Generator] -- Target selection (7 backends)
+    |
+    +--- [Python Target] -- Transpile to Python 3.10+
+    |         |
+    |         v
+    |    [Subprocess] -- Execute generated Python
+    |
+    +--- [C Target] -- Transpile to C99 (hosted or freestanding)
+    |
+    +--- [JS Target] -- Transpile to JavaScript (ES2020)
+    |
+    +--- [WASM Target] -- Transpile to WebAssembly text format
+    |
+    +--- [IR Target] -- Three-address intermediate representation
+    |         |
+    |         v
+    |    [VM] -- 102 opcode virtual machine
+    |
+    +--- [Binary Target] -- Compile to .ltlc
+    |         |
+    |         v
+    |    [LTLC Format] -- Proprietary binary with sections
+    |
+    +--- [Disassembler] -- Round-trip bytecode disassembly (v2.4)
+```
+
+## Engine Architecture
+
+```
+lateralus_lang/
+    engines.py          -- Unified engine interface (lazy loading)
+    |
+    +--- math_engine.py     -- LTLNumber, Matrix, Vector, Interval, Dual
+    +--- crypto_engine.py   -- SHA/BLAKE2b/HMAC, AES-GCM, LBE encoding
+    +--- science.py         -- Constants, dimensions, ODE, FFT
+    +--- markup.py          -- LTLML parser and HTML renderer
+    +--- bytecode_format.py -- .ltlc compiler/decompiler
+    +--- error_engine.py    -- Rich diagnostics with suggestions
+```
+
+Each engine exposes a `*_BUILTINS` dictionary that maps function names
+to Python callables. The `engines.py` module unifies them via
+`get_all_builtins()` for injection into the runtime preamble.
+
+## Type System
+
+```
+TypeKind (14 variants)
+    |
+    +--- PrimitiveType (int, float, str, bool, none)
+    +--- FunctionType (params -> return_type)
+    +--- ListType, MapType, TupleType
+    +--- UnionType (A | B)
+    +--- OptionalType (T?)
+    +--- TypeVar (generic placeholder)
+    +--- StructType (named fields)
+    +--- InterfaceType (method signatures)
+    +--- AnyType (escape hatch)
+```
+
+The type checker runs as an optional pass before code generation.
+Type annotations use the syntax `name: Type` and `-> ReturnType`.
+
+## v1.5 Hindley-Milner Inference
+
+The `TypeInferencer` (in `type_system.py`) implements a constraint-based
+subset of the Hindley-Milner algorithm:
+
+```
+Phase 1 — Constraint Collection
+    For each expression node, call inferencer.constrain(T_expected, T_actual).
+    Fresh type variables are created with fresh_typevar("T").
+
+Phase 2 — Solving
+    inferencer.solve() iterates over all (T1, T2, context) triples.
+    Each pair is unified via the unify(t1, t2) method.
+
+Phase 3 — Substitution
+    After solving, substitute(typ) applies the final substitution map
+    to resolve all remaining TypeVars to concrete types.
+```
+
+### Robinson Unification Rules (unify)
+
+| Case | Rule |
+|------|------|
+| `T == T` | trivially succeed |
+| `T == ANY` or `ANY == T` | succeed (ANY is top type) |
+| `α` (TypeVar) ~ `T` | bind α → T (if no occurs-check failure) |
+| `T` ~ `α` (TypeVar) | bind α → T |
+| `List<A>` ~ `List<B>` | unify(A, B) |
+| `Map<K1,V1>` ~ `Map<K2,V2>` | unify(K1,K2) and unify(V1,V2) |
+| `(A1,...)->R1` ~ `(B1,...)->R2` | unify each param pair; unify returns |
+| `T?` ~ `U?` | unify(T, U) |
+| `T?` ~ `U` | unify(T, U) (nullable coercion) |
+
+### Pattern Inference (infer_pattern)
+
+Match arm patterns bind new variables. `infer_pattern(pattern, subject)` returns
+`{name: LTLType}` bindings for every captured name:
+
+```
+WildcardPattern(_)            → {}
+LiteralPattern(42)            → {}  (adds constraint: subject == int)
+BindingPattern(x)             → {x: resolve(subject)}
+TypePattern(Point, [px, py])  → {px: T0, py: T1}
+EnumVariantPattern(Result::Ok, [v]) → {v: V0}
+TuplePattern((a, b))          → {a: T0, b: T1}  (adds subject == Tuple<T0,T1>)
+ListPattern([head, ...tail])  → {head: E, tail: List<E>}
+OrPattern(p1 | p2)            → intersection of bindings from p1 and p2
+```
+
+## VM Opcode Reference
+
+The stack-based VM (`lateralus_lang/vm/vm.py`) uses 102 opcodes:
+
+### Stack Operations
+| Opcode | Effect |
+|--------|--------|
+| `PUSH_INT n` | push integer constant |
+| `PUSH_FLOAT f` | push float constant |
+| `PUSH_STR s` | push string constant |
+| `PUSH_BOOL b` | push boolean |
+| `PUSH_NIL` | push nil |
+| `POP` | discard top of stack |
+| `DUP` | duplicate top of stack |
+| `SWAP` | swap top two items |
+
+### Arithmetic
+| Opcode | Effect |
+|--------|--------|
+| `ADD`, `SUB`, `MUL`, `DIV` | binary arithmetic |
+| `MOD`, `POW` | modulo, exponent |
+| `NEG` | negate top |
+| `FLOOR_DIV` | integer division |
+
+### Comparisons & Logic
+| Opcode | Effect |
+|--------|--------|
+| `EQ`, `NEQ` | equality |
+| `LT`, `GT`, `LTE`, `GTE` | ordered comparison |
+| `AND`, `OR`, `NOT` | boolean logic |
+
+### Control Flow
+| Opcode | Effect |
+|--------|--------|
+| `JUMP offset` | unconditional jump |
+| `JUMP_IF_FALSE offset` | pop, jump if false |
+| `JUMP_IF_TRUE offset` | pop, jump if true |
+| `CALL name nargs` | call function |
+| `RETURN` | return from function |
+| `YIELD val` | suspend generator |
+
+### Containers
+| Opcode | Effect |
+|--------|--------|
+| `BUILD_LIST n` | pop n items → list |
+| `BUILD_MAP n` | pop 2n items → map |
+| `BUILD_TUPLE n` | pop n items → tuple |
+| `INDEX` | list/map subscript |
+| `FIELD name` | field access |
+| `STORE_INDEX` | list/map assignment |
+
+### Scoping
+| Opcode | Effect |
+|--------|--------|
+| `LOAD_LOCAL name` | push local variable |
+| `STORE_LOCAL name` | pop → local variable |
+| `LOAD_GLOBAL name` | push global |
+| `STORE_GLOBAL name` | pop → global |
+
+### Pipeline
+| Opcode | Effect |
+|--------|--------|
+| `PIPELINE` | invoke the piped function |
+| `PIPELINE_OPT` | `\|?` — skip if nil |
+| `PROPAGATE` | `?` — propagate error/nil upward |
+
+## IR (Three-Address) Representation
+
+The `ir.py` module produces a flat list of `IRInstr` objects:
+
+```
+IRInstr(op="ASSIGN", dest="t0", left="x", right=None)
+IRInstr(op="ADD", dest="t1", left="t0", right="1")
+IRInstr(op="CALL", dest="t2", left="println", right=["t1"])
+IRInstr(op="JUMP_IF", dest=None, left="t2", right="label_12")
+IRInstr(op="LABEL", dest="label_12", left=None, right=None)
+```
+
+The IR is used as the input to the bytecode compiler and as the basis for
+optimization passes (constant folding reads IR nodes directly).
+
+## Integration Points
+
+The `integration_patch.py` module connects new engines to the
+existing compiler without modifying original files:
+
+1. `patch_builtins()` -- Injects engine functions into codegen preamble
+2. `patch_cli()` -- Registers new CLI subcommands
+3. `patch_error_handling()` -- Enhances error messages
+4. `patch_compiler()` -- Adds optimizer passes
+
+Call `apply_all()` at startup to activate all patches.
+
+## Developer Tools Architecture
+
+```
+Developer Tools
+    |
+    +--- LSP Server (lsp_server.py)
+    |       -- JSON-RPC 2.0, completions, hover, diagnostics
+    |
+    +--- Formatter (formatter.py)
+    |       -- Whitespace, indentation, pipeline alignment
+    |
+    +--- Linter (linter.py)
+    |       -- 21+ rules, suggestions, strict mode
+    |
+    +--- Debugger (debugger.py)
+    |       -- Breakpoints, stepping, watches, REPL
+    |
+    +--- DAP Server (dap_server.py)
+    |       -- Debug Adapter Protocol (VS Code debug integration)
+    |
+    +--- Package Manager (package_manager.py)
+    |       -- lateralus.json, dependency resolution, scaffolding
+    |
+    +--- Test Runner (test_runner.py)
+    |       -- Discover @test functions, run, report
+    |
+    +--- Benchmark Suite (bench.py)
+    |       -- Per-engine benchmarks, statistics, JSON output
+    |
+    +--- Watch Mode (watch.py)
+            -- File watcher for incremental compilation
+```
+
+## File Format Reference
+
+### Source (.ltl)
+Plain text, UTF-8 encoded LATERALUS source code.
+
+### Compiled Binary (.ltlc)
+```
+Magic:    \x89LTL (4 bytes)
+Version:  2 bytes (major.minor)
+Flags:    4 bytes
+Sections:
+    HEADER   -- Metadata, timestamps
+    CODE     -- Compressed bytecode (zlib)
+    DATA     -- String/number constants
+    SYMBOLS  -- Symbol table
+    TYPES    -- Type information (v1.5: includes HM type variables)
+    DEBUG    -- Source maps, line info
+    META     -- Custom metadata
+Footer:
+    HMAC-SHA256 integrity signature
+```
+
+### Markup (.ltlml)
+```
+---
+frontmatter: yaml-like metadata
+---
+
+# Heading syntax (h1–h6)
+::: note / warning / theorem / definition :::
+$inline math$  and  $$display math$$
+@fig{path}{caption}  @ref{label}  @cite{key}
+| table | rows |
+*bold*, _italic_, `code`
+```
+
+### Assembly (.ltasm)
+Three-address IR with labels, typed operations, and register allocation hints.
+
+
+
+The `bootstrap/` directory contains LATERALUS source that implements
+the compiler itself:
+
+```
+bootstrap/
+    v2_lexer.ltl     -- Tokenizer in LATERALUS
+    v2_parser.ltl    -- Parser in LATERALUS
+    v2_codegen.ltl   -- Code generator in LATERALUS
+```
+
+The self-hosting plan:
+1. v1.3 compiler compiles the v2 bootstrap sources
+2. v2 bootstrap becomes a minimal LATERALUS compiler
+3. v2 compiler compiles itself (bootstrapping complete)
+4. v2 replaces v1 as the primary compiler
+
+## Directory Structure
+
+```
+lateralus-lang/
+    lateralus_lang/     -- Python implementation
+        __init__.py         -- Version, exports
+        __main__.py         -- CLI entry point (26+ subcommands)
+        lexer.py            -- Tokenizer (123 token types)
+        parser.py           -- Recursive-descent parser (1,756 lines)
+        ast_nodes.py        -- AST definitions (106 node types)
+        compiler.py         -- Pipeline orchestrator
+        ir.py               -- IR + semantic analysis
+        codegen/
+            python.py       -- Python 3.10+ transpiler
+            c_backend.py    -- C99 transpiler (hosted + freestanding)
+            js_backend.py   -- JavaScript (ES2020) transpiler
+            wasm_backend.py -- WebAssembly text format transpiler
+        vm/
+            vm.py           -- Stack-based VM (102 opcodes)
+            disassembler.py -- Bytecode disassembler (v2.4)
+        math_engine.py      -- Mathematical computing
+        crypto_engine.py    -- Cryptography
+        science.py          -- Scientific computing
+        markup.py           -- LTLML parser + HTML renderer
+        bytecode_format.py  -- Binary format (.ltlc)
+        error_engine.py     -- Rich diagnostics with suggestions
+        engines.py          -- Unified engine interface
+        optimizer.py        -- 10 optimization passes (O0-O3)
+        type_system.py      -- HM type inference + checker
+        async_runtime.py    -- Concurrency
+        repl_enhanced.py    -- Interactive REPL (14 commands)
+        lsp_server.py       -- Language server (JSON-RPC 2.0)
+        dap_server.py       -- Debug Adapter Protocol server
+        formatter.py        -- Code formatter
+        linter.py           -- Code linter (21+ rules)
+        debugger.py         -- Interactive debugger
+        package_manager.py  -- Package management
+        bench.py            -- Micro-benchmarks
+        test_runner.py      -- .ltl test runner
+        integration_patch.py -- Engine integration
+        cli_extensions.py   -- Extended CLI
+    stdlib/              -- Standard library (59 modules)
+    tests/               -- Test suites (43 files, 1,976 tests)
+    bootstrap/           -- Self-hosting compiler
+    vscode-lateralus/    -- VS Code extension
+    lateralus-os/        -- LateralusOS bare-metal kernel
+    docs/                -- Documentation (.ltlml)
+    examples/            -- Example programs (38 .ltl files)
+    scripts/             -- Build & maintenance scripts
+```
+
+  </script>
+  <script src="ltlml.js"></script>
+</body>
+</html>

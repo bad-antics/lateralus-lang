@@ -1,0 +1,438 @@
+// ═══════════════════════════════════════════════════════════════════
+// LATERALUS v2 — Self-hosted Code Formatter (ltlfmt)
+// Ported from lateralus_lang/formatter.py
+//
+// Automatic code formatting for LATERALUS source files.
+// Enforces consistent style:
+//   - 4-space indentation
+//   - Spaces around operators
+//   - Consistent brace placement
+//   - Pipeline alignment
+//   - Import ordering
+// ═══════════════════════════════════════════════════════════════════
+
+import io
+import strings
+
+// ── Configuration ─────────────────────────────────────────────────
+
+struct FormatConfig {
+    indent_size: int,
+    max_line_length: int,
+    align_pipelines: bool,
+    spaces_around_operators: bool,
+    blank_lines_between_functions: int,
+    trailing_newline: bool,
+    sort_imports: bool,
+    brace_style: str,
+}
+
+fn default_config() -> FormatConfig {
+    return FormatConfig {
+        indent_size: 4,
+        max_line_length: 100,
+        align_pipelines: true,
+        spaces_around_operators: true,
+        blank_lines_between_functions: 1,
+        trailing_newline: true,
+        sort_imports: true,
+        brace_style: "same_line",
+    }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────
+
+fn repeat_str(s: str, n: int) -> str {
+    let mut result = ""
+    for _ in range(0, n) {
+        result = result + s
+    }
+    return result
+}
+
+fn make_indent(config: FormatConfig) -> str {
+    return repeat_str(" ", config.indent_size)
+}
+
+fn lstrip(s: str) -> str {
+    let mut i = 0
+    while i < len(s) {
+        if s[i] != " " {
+            break
+        }
+        i = i + 1
+    }
+    return slice(s, i, len(s))
+}
+
+fn leading_spaces(s: str) -> int {
+    let mut count = 0
+    while count < len(s) {
+        if s[count] != " " {
+            break
+        }
+        count = count + 1
+    }
+    return count
+}
+
+// ── Phase 1: Normalize whitespace ─────────────────────────────────
+
+fn normalize_whitespace(lines: list, config: FormatConfig) -> list {
+    let mut result = []
+    let tab_replacement = repeat_str(" ", config.indent_size)
+
+    for line in lines {
+        // Convert tabs to spaces
+        let mut l = replace(line, "\t", tab_replacement)
+        // Remove trailing whitespace
+        l = rstrip(l)
+        result = result + [l]
+    }
+
+    // Remove excessive trailing blank lines
+    while len(result) > 1 {
+        if result[len(result) - 1] == "" {
+            result = slice(result, 0, len(result) - 1)
+        } else {
+            break
+        }
+    }
+
+    return result
+}
+
+// ── Phase 2: Fix indentation ─────────────────────────────────────
+
+fn fix_indentation(lines: list, config: FormatConfig) -> list {
+    let mut result = []
+    let mut indent_level = 0
+    let indent = make_indent(config)
+
+    for line in lines {
+        let stripped = strip(line)
+
+        // Skip empty lines
+        if stripped == "" {
+            result = result + [""]
+            continue
+        }
+
+        // Skip comments — preserve indentation relative to context
+        if starts_with(stripped, "//") {
+            result = result + [repeat_str(indent, indent_level) + stripped]
+            continue
+        }
+
+        // Decrease indent for closing braces
+        if starts_with(stripped, "}") {
+            indent_level = max(0, indent_level - 1)
+        }
+
+        // Handle else on same line as closing brace
+        if starts_with(stripped, "} else") {
+            // Keep at current level after decrement
+            indent_level = max(0, indent_level)
+        }
+
+        // Apply indentation
+        let formatted = repeat_str(indent, indent_level) + stripped
+        result = result + [formatted]
+
+        // Increase indent for opening braces
+        let open_count = count(stripped, "{") - count(stripped, "}")
+        indent_level = max(0, indent_level + open_count)
+    }
+
+    return result
+}
+
+// ── Phase 3: Operator spacing ─────────────────────────────────────
+
+fn fix_operator_spacing(lines: list) -> list {
+    // Operator spacing is complex with regex; for the self-hosted
+    // version we preserve lines as-is and let the indentation pass
+    // handle the main formatting. Regex-based operator spacing
+    // requires the Python regex engine which we delegate to the
+    // Python implementation.
+    return lines
+}
+
+// ── Phase 4: Pipeline alignment ───────────────────────────────────
+
+fn align_pipelines(lines: list, config: FormatConfig) -> list {
+    let mut result = []
+    let mut i = 0
+
+    while i < len(lines) {
+        let line = lines[i]
+        let stripped = strip(line)
+
+        // Check if next line starts with |> or |?
+        if i + 1 < len(lines) {
+            let next_stripped = strip(lines[i + 1])
+            if starts_with(next_stripped, "|>") || starts_with(next_stripped, "|?") {
+                // Find the base indentation
+                let base_indent = leading_spaces(line)
+                result = result + [line]
+                i = i + 1
+
+                // Align subsequent pipeline operators
+                while i < len(lines) {
+                    let s = strip(lines[i])
+                    if starts_with(s, "|>") || starts_with(s, "|?") {
+                        result = result + [repeat_str(" ", base_indent + config.indent_size) + s]
+                        i = i + 1
+                    } else {
+                        break
+                    }
+                }
+                continue
+            }
+        }
+
+        result = result + [line]
+        i = i + 1
+    }
+
+    return result
+}
+
+// ── Phase 5: Blank lines between functions ────────────────────────
+
+fn is_block_starter(stripped: str) -> bool {
+    let starters = [
+        "fn ", "enum ", "struct ", "impl ", "trait ",
+        "pub fn ", "pub struct ", "pub enum ", "pub trait ",
+        "@",
+    ]
+    for starter in starters {
+        if starts_with(stripped, starter) {
+            return true
+        }
+    }
+    return false
+}
+
+fn fix_blank_lines(lines: list, config: FormatConfig) -> list {
+    let mut result = []
+    let mut prev_was_fn_end = false
+
+    for i in range(0, len(lines)) {
+        let line = lines[i]
+        let stripped = strip(line)
+
+        // Detect function/block end (closing brace at indent level 0)
+        if stripped == "}" && !starts_with(line, " ") {
+            prev_was_fn_end = true
+        }
+
+        // Is this line a block declaration?
+        let is_block = is_block_starter(stripped)
+
+        if is_block {
+            // Check if there is previous non-empty content
+            let mut prev_non_empty = false
+            if len(result) > 0 {
+                if strip(result[len(result) - 1]) != "" {
+                    prev_non_empty = true
+                }
+            }
+
+            if prev_was_fn_end || (prev_non_empty && len(result) > 0) {
+                // Strip existing trailing blanks
+                while len(result) > 0 {
+                    if result[len(result) - 1] == "" {
+                        result = slice(result, 0, len(result) - 1)
+                    } else {
+                        break
+                    }
+                }
+                // Add proper blank line count
+                for _ in range(0, config.blank_lines_between_functions) {
+                    result = result + [""]
+                }
+            }
+        }
+
+        if stripped != "" {
+            prev_was_fn_end = false
+        }
+
+        result = result + [line]
+    }
+
+    return result
+}
+
+// ── Phase 6: Sort imports ─────────────────────────────────────────
+
+fn sort_imports(lines: list) -> list {
+    let mut import_lines = []
+    let mut other_lines = []
+    let mut in_imports = true
+
+    for line in lines {
+        let stripped = strip(line)
+
+        if in_imports && (starts_with(stripped, "import ") || starts_with(stripped, "from ")) {
+            import_lines = import_lines + [line]
+        } else if in_imports && stripped == "" {
+            if len(import_lines) > 0 {
+                in_imports = false
+                other_lines = other_lines + [line]
+            } else {
+                other_lines = other_lines + [line]
+            }
+        } else {
+            in_imports = false
+            other_lines = other_lines + [line]
+        }
+    }
+
+    // Sort imports alphabetically
+    import_lines = sorted(import_lines)
+
+    if len(import_lines) > 0 {
+        return import_lines + [""] + other_lines
+    }
+    return other_lines
+}
+
+// ── Phase 7: Trailing commas ──────────────────────────────────────
+
+fn normalize_trailing_commas(lines: list) -> list {
+    let mut result = []
+
+    for i in range(0, len(lines)) {
+        let line = lines[i]
+        let stripped = strip(line)
+
+        // If the next line is a closing bracket/brace, add trailing comma
+        if i + 1 < len(lines) {
+            let next_stripped = strip(lines[i + 1])
+            if next_stripped == "}" || next_stripped == "]" || next_stripped == ")" {
+                // Current line is last item — ensure trailing comma
+                if stripped != "" && !ends_with(stripped, ",") && !ends_with(stripped, "{") && !ends_with(stripped, "(") && !ends_with(stripped, "[") && !starts_with(stripped, "//") && !starts_with(stripped, "}") && !starts_with(stripped, ")") && !starts_with(stripped, "]") {
+                    let indent_str = repeat_str(" ", leading_spaces(line))
+                    result = result + [indent_str + stripped + ","]
+                    continue
+                }
+            }
+        }
+
+        result = result + [line]
+    }
+    return result
+}
+
+// ── Phase 8: Collapse blank lines ─────────────────────────────────
+
+fn collapse_blank_lines(lines: list) -> list {
+    let mut result = []
+    let mut blank_count = 0
+
+    for line in lines {
+        if strip(line) == "" {
+            blank_count = blank_count + 1
+            if blank_count <= 2 {
+                result = result + [line]
+            }
+        } else {
+            blank_count = 0
+            result = result + [line]
+        }
+    }
+
+    return result
+}
+
+// ── Main format function ──────────────────────────────────────────
+
+fn format_source(source: str) -> str {
+    return format_source_with_config(source, default_config())
+}
+
+fn format_source_with_config(source: str, config: FormatConfig) -> str {
+    let mut lines = split(source, "\n")
+
+    // Phase 1: Normalize whitespace
+    lines = normalize_whitespace(lines, config)
+
+    // Phase 2: Fix indentation
+    lines = fix_indentation(lines, config)
+
+    // Phase 3: Operator spacing
+    if config.spaces_around_operators {
+        lines = fix_operator_spacing(lines)
+    }
+
+    // Phase 4: Pipeline alignment
+    if config.align_pipelines {
+        lines = align_pipelines(lines, config)
+    }
+
+    // Phase 5: Blank lines between functions
+    lines = fix_blank_lines(lines, config)
+
+    // Phase 6: Sort imports
+    if config.sort_imports {
+        lines = sort_imports(lines)
+    }
+
+    // Phase 7: Trailing comma normalization
+    lines = normalize_trailing_commas(lines)
+
+    // Phase 8: Consecutive blank line collapse
+    lines = collapse_blank_lines(lines)
+
+    let mut result = join(lines, "\n")
+
+    // Trailing newline
+    if config.trailing_newline && !ends_with(result, "\n") {
+        result = result + "\n"
+    }
+
+    return result
+}
+
+// ── File formatting entry point ───────────────────────────────────
+
+fn format_file(path: str) -> bool {
+    return format_file_with_config(path, default_config(), false, false)
+}
+
+fn format_file_with_config(path: str, config: FormatConfig, check: bool, diff: bool) -> bool {
+    let original = read_file(path)
+    let formatted = format_source_with_config(original, config)
+
+    if original == formatted {
+        return true
+    }
+
+    if check {
+        println("  Would reformat: " + path)
+        return false
+    }
+
+    // In check-only mode we don't write; in normal mode write back
+    if !check && !diff {
+        write_file(path, formatted)
+        println("  Formatted: " + path)
+    }
+
+    return false
+}
+
+// ── CLI entry ─────────────────────────────────────────────────────
+
+fn main() {
+    println("ltlfmt — LATERALUS Code Formatter")
+    println("Usage: lateralus fmt <files...> [--check] [--diff]")
+    println("")
+    println("Options:")
+    println("  --check   Check if files need formatting (exit 1 if so)")
+    println("  --diff    Show diff of changes")
+    println("  --indent  Indentation size (default: 4)")
+    println("  --max-line  Max line length (default: 100)")
+}

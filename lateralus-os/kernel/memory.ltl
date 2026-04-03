@@ -1,0 +1,358 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// LateralusOS — Physical & Virtual Memory Manager
+// ═══════════════════════════════════════════════════════════════════════════
+// Copyright (c) 2025 bad-antics. All rights reserved.
+//
+// Manages:
+//   • Physical page frame allocator (bitmap-based)
+//   • Virtual memory mapper (4-level page tables)
+//   • Kernel heap allocator (slab allocator + fallback bump)
+//   • Page fault handler
+// ═══════════════════════════════════════════════════════════════════════════
+
+import hal::cpu
+import hal::serial
+import kernel::panic
+
+// ── Constants ───────────────────────────────────────────────────────────
+
+const PAGE_SIZE      = 4096
+const PAGE_SHIFT     = 12
+const PAGES_PER_BYTE = 8
+const MAX_MEMORY     = 1024 * 1024 * 1024 * 4   // 4 GB addressable
+const MAX_PAGES      = MAX_MEMORY / PAGE_SIZE
+const BITMAP_SIZE    = MAX_PAGES / PAGES_PER_BYTE
+
+// Page table entry flags
+const PTE_PRESENT    = 0x01
+const PTE_WRITABLE   = 0x02
+const PTE_USER       = 0x04
+const PTE_WRITETHROUGH = 0x08
+const PTE_NOCACHE    = 0x10
+const PTE_HUGE       = 0x80
+
+// ── Physical Frame Allocator ────────────────────────────────────────────
+
+struct PhysicalAllocator {
+    bitmap:       [byte; BITMAP_SIZE],
+    total_pages:  int,
+    free_pages:   int,
+    next_free:    int,    // hint for faster allocation
+}
+
+let mut phys_alloc = PhysicalAllocator {
+    bitmap:      [0; BITMAP_SIZE],
+    total_pages: 0,
+    free_pages:  0,
+    next_free:   0,
+}
+
+pub fn init_physical_allocator() {
+    serial::log("[mem] Initializing physical page allocator")
+
+    // Mark all pages as used initially
+    let i = 0
+    while i < BITMAP_SIZE {
+        phys_alloc.bitmap[i] = 0xFF
+        i = i + 1
+    }
+
+    // Mark usable pages as free (after kernel end)
+    // The kernel image occupies first 2 MB typically
+    let kernel_end_page = 512   // 2 MB / 4 KB
+    let total_usable = 65536    // 256 MB default (detected at boot)
+
+    let page = kernel_end_page
+    while page < total_usable {
+        let byte_idx = page / 8
+        let bit_idx  = page % 8
+        phys_alloc.bitmap[byte_idx] = phys_alloc.bitmap[byte_idx] & ~(1 << bit_idx)
+        phys_alloc.free_pages = phys_alloc.free_pages + 1
+        page = page + 1
+    }
+
+    phys_alloc.total_pages = total_usable
+    phys_alloc.next_free = kernel_end_page
+
+    serial::log("[mem] Physical allocator ready: {phys_alloc.free_pages} free pages ({phys_alloc.free_pages * PAGE_SIZE / 1024 / 1024} MB)")
+}
+
+// Allocate a single physical page frame
+pub fn alloc_frame() -> Result<int, str> {
+    if phys_alloc.free_pages == 0 {
+        return Result::Err("Out of physical memory")
+    }
+
+    // Search from hint position
+    let page = phys_alloc.next_free
+    while page < phys_alloc.total_pages {
+        let byte_idx = page / 8
+        let bit_idx  = page % 8
+        if (phys_alloc.bitmap[byte_idx] & (1 << bit_idx)) == 0 {
+            // Found free page — mark as used
+            phys_alloc.bitmap[byte_idx] = phys_alloc.bitmap[byte_idx] | (1 << bit_idx)
+            phys_alloc.free_pages = phys_alloc.free_pages - 1
+            phys_alloc.next_free = page + 1
+            return Result::Ok(page * PAGE_SIZE)
+        }
+        page = page + 1
+    }
+
+    return Result::Err("No free frames found")
+}
+
+// Free a physical page frame
+pub fn free_frame(phys_addr: int) {
+    let page = phys_addr / PAGE_SIZE
+    if page >= phys_alloc.total_pages {
+        panic::kernel_panic("free_frame: address out of range")
+    }
+
+    let byte_idx = page / 8
+    let bit_idx  = page % 8
+    phys_alloc.bitmap[byte_idx] = phys_alloc.bitmap[byte_idx] & ~(1 << bit_idx)
+    phys_alloc.free_pages = phys_alloc.free_pages + 1
+
+    if page < phys_alloc.next_free {
+        phys_alloc.next_free = page
+    }
+}
+
+// ── Virtual Memory Manager ──────────────────────────────────────────────
+
+struct VirtualMemoryManager {
+    pml4_phys:   int,     // Physical address of PML4 table
+    initialized: bool,
+}
+
+let mut vmm = VirtualMemoryManager {
+    pml4_phys:   0,
+    initialized: false,
+}
+
+pub fn init_virtual_memory() {
+    serial::log("[mem] Initializing virtual memory manager")
+
+    // Allocate PML4 table
+    match alloc_frame() {
+        Result::Ok(addr) => {
+            vmm.pml4_phys = addr
+            // Zero out the page table
+            cpu::memset(addr, 0, PAGE_SIZE)
+            vmm.initialized = true
+            serial::log("[mem] PML4 at physical 0x{addr:08X}")
+        },
+        Result::Err(e) => {
+            panic::kernel_panic("Cannot allocate PML4: {e}")
+        },
+    }
+
+    // Identity-map first 4 MB for kernel
+    let addr = 0
+    while addr < 4 * 1024 * 1024 {
+        map_page(addr, addr, PTE_PRESENT | PTE_WRITABLE)
+        addr = addr + PAGE_SIZE
+    }
+
+    serial::log("[mem] Virtual memory ready")
+}
+
+// Map a virtual address to a physical address
+pub fn map_page(virt: int, phys: int, flags: int) {
+    if !vmm.initialized {
+        panic::kernel_panic("VMM not initialized")
+    }
+
+    let pml4_idx = (virt >> 39) & 0x1FF
+    let pdpt_idx = (virt >> 30) & 0x1FF
+    let pd_idx   = (virt >> 21) & 0x1FF
+    let pt_idx   = (virt >> 12) & 0x1FF
+
+    // Walk/create page table hierarchy
+    let pdpt = ensure_table(vmm.pml4_phys, pml4_idx)
+    let pd   = ensure_table(pdpt, pdpt_idx)
+    let pt   = ensure_table(pd, pd_idx)
+
+    // Set the final page table entry
+    cpu::write_mem64(pt + pt_idx * 8, phys | flags)
+}
+
+// Ensure a page table entry exists, allocate if needed
+fn ensure_table(table_phys: int, index: int) -> int {
+    let entry_addr = table_phys + index * 8
+    let entry = cpu::read_mem64(entry_addr)
+
+    if (entry & PTE_PRESENT) != 0 {
+        return entry & 0xFFFFFFFFF000  // mask to get physical address
+    }
+
+    // Allocate new table
+    match alloc_frame() {
+        Result::Ok(new_table) => {
+            cpu::memset(new_table, 0, PAGE_SIZE)
+            cpu::write_mem64(entry_addr, new_table | PTE_PRESENT | PTE_WRITABLE)
+            return new_table
+        },
+        Result::Err(e) => {
+            panic::kernel_panic("Cannot allocate page table: {e}")
+            return 0  // unreachable
+        },
+    }
+}
+
+// ── Kernel Heap Allocator ───────────────────────────────────────────────
+
+struct HeapBlock {
+    size:     int,
+    is_free:  bool,
+    next:     int,    // offset to next block (0 = end)
+}
+
+struct KernelHeap {
+    base:       int,
+    size:       int,
+    used:       int,
+    first_free: int,  // offset of first free block
+}
+
+let mut heap = KernelHeap {
+    base:       0,
+    size:       0,
+    used:       0,
+    first_free: 0,
+}
+
+pub fn init_heap(size: int) {
+    serial::log("[mem] Initializing kernel heap ({size / 1024} KB)")
+
+    // Allocate pages for the heap
+    let pages_needed = (size + PAGE_SIZE - 1) / PAGE_SIZE
+    let base_addr = 0x100000000  // 4 GB mark — above identity-mapped region
+
+    let i = 0
+    while i < pages_needed {
+        match alloc_frame() {
+            Result::Ok(frame) => {
+                map_page(base_addr + i * PAGE_SIZE, frame, PTE_PRESENT | PTE_WRITABLE)
+            },
+            Result::Err(e) => {
+                panic::kernel_panic("Heap allocation failed at page {i}: {e}")
+            },
+        }
+        i = i + 1
+    }
+
+    heap.base = base_addr
+    heap.size = pages_needed * PAGE_SIZE
+    heap.used = 0
+    heap.first_free = 0
+
+    // Initialize first free block spanning entire heap
+    cpu::write_mem64(base_addr, heap.size - 24)  // size
+    cpu::write_mem8(base_addr + 8, 1)            // is_free = true
+    cpu::write_mem64(base_addr + 16, 0)          // next = null
+
+    serial::log("[mem] Heap ready at 0x{base_addr:X} ({heap.size / 1024} KB)")
+}
+
+// Allocate memory from the kernel heap
+pub fn kmalloc(size: int) -> Result<int, str> {
+    // Align to 8 bytes
+    let aligned = (size + 7) & ~7
+    let needed = aligned + 24   // block header overhead
+
+    // First-fit search
+    let offset = heap.first_free
+    while offset < heap.size {
+        let block_addr = heap.base + offset
+        let block_size = cpu::read_mem64(block_addr)
+        let is_free    = cpu::read_mem8(block_addr + 8)
+        let next       = cpu::read_mem64(block_addr + 16)
+
+        if is_free == 1 && block_size >= aligned {
+            // Found a suitable block
+            // Split if there's enough space left
+            if block_size > needed + 32 {
+                let new_block = block_addr + needed
+                cpu::write_mem64(new_block, block_size - needed)
+                cpu::write_mem8(new_block + 8, 1)        // free
+                cpu::write_mem64(new_block + 16, next)
+                cpu::write_mem64(block_addr, aligned)     // shrink original
+                cpu::write_mem64(block_addr + 16, offset + needed)
+            }
+
+            cpu::write_mem8(block_addr + 8, 0)  // mark as used
+            heap.used = heap.used + aligned
+            return Result::Ok(block_addr + 24)   // return data pointer
+        }
+
+        if next == 0 { break }
+        offset = next
+    }
+
+    return Result::Err("Heap exhausted")
+}
+
+// Free heap memory
+pub fn kfree(ptr: int) {
+    if ptr < heap.base + 24 || ptr >= heap.base + heap.size {
+        serial::log("[mem] WARNING: kfree called with invalid pointer")
+        return
+    }
+
+    let block_addr = ptr - 24
+    let block_size = cpu::read_mem64(block_addr)
+    cpu::write_mem8(block_addr + 8, 1)  // mark as free
+    heap.used = heap.used - block_size
+
+    // TODO: coalesce adjacent free blocks
+}
+
+// ── Page Fault Handler ──────────────────────────────────────────────────
+
+pub fn page_fault_handler(error_code: int) {
+    let fault_addr = cpu::read_cr2()
+
+    serial::log("[mem] PAGE FAULT at 0x{fault_addr:X} (error=0x{error_code:X})")
+
+    let is_present   = (error_code & 0x01) != 0
+    let is_write     = (error_code & 0x02) != 0
+    let is_user      = (error_code & 0x04) != 0
+    let is_reserved  = (error_code & 0x08) != 0
+    let is_fetch     = (error_code & 0x10) != 0
+
+    if is_reserved {
+        panic::kernel_panic("Page fault: reserved bit set at 0x{fault_addr:X}")
+    }
+
+    if !is_present && !is_user {
+        // Kernel tried to access unmapped page — try to map it
+        match alloc_frame() {
+            Result::Ok(frame) => {
+                let page_addr = fault_addr & ~0xFFF
+                map_page(page_addr, frame, PTE_PRESENT | PTE_WRITABLE)
+                serial::log("[mem] Demand-paged 0x{page_addr:X} -> 0x{frame:X}")
+            },
+            Result::Err(_) => {
+                panic::kernel_panic("OOM during page fault at 0x{fault_addr:X}")
+            },
+        }
+    } else if is_user {
+        // User process fault — send SIGSEGV
+        serial::log("[mem] User page fault — killing process")
+        // scheduler::kill_current(11)  // SIGSEGV
+    } else {
+        panic::kernel_panic("Unrecoverable page fault at 0x{fault_addr:X}")
+    }
+}
+
+// ── Memory stats ────────────────────────────────────────────────────────
+
+pub fn get_stats() -> (int, int, int, int) {
+    return (
+        phys_alloc.total_pages * PAGE_SIZE,
+        phys_alloc.free_pages * PAGE_SIZE,
+        heap.size,
+        heap.used,
+    )
+}

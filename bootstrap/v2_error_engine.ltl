@@ -1,0 +1,834 @@
+// ═══════════════════════════════════════════════════════════════════════
+// v2_error_engine.ltl  —  LATERALUS Advanced Error Handling System
+// Self-hosted port of lateralus_lang/error_engine.py
+//
+// Provides:
+//   - Rich error messages with source context
+//   - Error codes for every category (E1xxx–E7xxx)
+//   - Structured error chains (cause tracking)
+//   - Suggestion engine (did-you-mean, fix hints)
+//   - ANSI-colored terminal output
+//   - Machine-readable error format (JSON)
+//
+// v2.3.0
+// ═══════════════════════════════════════════════════════════════════════
+
+import strings
+import math
+
+// ─── Error Codes ────────────────────────────────────────────────────────
+
+// Lexer errors (E1xxx)
+const E1001 = "E1001"
+const E1002 = "E1002"
+const E1003 = "E1003"
+const E1004 = "E1004"
+const E1005 = "E1005"
+
+// Parser errors (E2xxx)
+const E2001 = "E2001"
+const E2002 = "E2002"
+const E2003 = "E2003"
+const E2004 = "E2004"
+const E2005 = "E2005"
+const E2006 = "E2006"
+const E2007 = "E2007"
+const E2008 = "E2008"
+const E2009 = "E2009"
+const E2010 = "E2010"
+
+// Type errors (E3xxx)
+const E3001 = "E3001"
+const E3002 = "E3002"
+const E3003 = "E3003"
+const E3004 = "E3004"
+const E3005 = "E3005"
+const E3006 = "E3006"
+
+// Name resolution errors (E4xxx)
+const E4001 = "E4001"
+const E4002 = "E4002"
+const E4003 = "E4003"
+const E4004 = "E4004"
+const E4005 = "E4005"
+const E4006 = "E4006"
+
+// Runtime errors (E5xxx)
+const E5001 = "E5001"
+const E5002 = "E5002"
+const E5003 = "E5003"
+const E5004 = "E5004"
+const E5005 = "E5005"
+const E5006 = "E5006"
+const E5007 = "E5007"
+const E5008 = "E5008"
+
+// IO errors (E6xxx)
+const E6001 = "E6001"
+const E6002 = "E6002"
+const E6003 = "E6003"
+const E6004 = "E6004"
+
+// Compiler errors (E7xxx)
+const E7001 = "E7001"
+const E7002 = "E7002"
+const E7003 = "E7003"
+const E7004 = "E7004"
+
+
+// ─── Severity Constants ─────────────────────────────────────────────────
+
+const SEV_ERROR   = "error"
+const SEV_WARNING = "warning"
+const SEV_INFO    = "info"
+const SEV_HINT    = "hint"
+
+
+// ─── ANSI Color Codes ───────────────────────────────────────────────────
+
+const RESET     = "\x1b[0m"
+const BOLD      = "\x1b[1m"
+const DIM       = "\x1b[2m"
+const RED       = "\x1b[91m"
+const YELLOW    = "\x1b[93m"
+const BLUE      = "\x1b[94m"
+const CYAN      = "\x1b[96m"
+const GREEN     = "\x1b[92m"
+const MAGENTA   = "\x1b[95m"
+const WHITE     = "\x1b[97m"
+const GRAY      = "\x1b[90m"
+const UNDERLINE = "\x1b[4m"
+
+
+// ─── Source Location ────────────────────────────────────────────────────
+
+struct SourceLocation {
+    file: str
+    line: int
+    column: int
+    end_line: int
+    end_column: int
+}
+
+fn source_location_new(file: str, line: int, column: int) -> SourceLocation {
+    return SourceLocation(file, line, column, 0, 0)
+}
+
+fn source_location_with_end(file: str, line: int, column: int,
+                            end_line: int, end_column: int) -> SourceLocation {
+    return SourceLocation(file, line, column, end_line, end_column)
+}
+
+fn source_location_str(loc: SourceLocation) -> str {
+    if loc.column > 0 {
+        return loc.file + ":" + str(loc.line) + ":" + str(loc.column)
+    }
+    return loc.file + ":" + str(loc.line)
+}
+
+
+// ─── LateralusError — the core error type ───────────────────────────────
+
+struct LateralusError {
+    code: str
+    message: str
+    severity: str
+    file: str
+    line: int
+    column: int
+    end_line: int
+    end_column: int
+    source_lines: list
+    suggestions: list
+    notes: list
+    cause_code: str
+    cause_message: str
+}
+
+fn error_new(code: str, message: str) -> LateralusError {
+    return LateralusError(
+        code, message, SEV_ERROR,
+        "<input>", 0, 0, 0, 0,
+        [], [], [],
+        "", ""
+    )
+}
+
+fn error_with_location(code: str, message: str, file: str,
+                       line: int, column: int) -> LateralusError {
+    return LateralusError(
+        code, message, SEV_ERROR,
+        file, line, column, 0, 0,
+        [], [], [],
+        "", ""
+    )
+}
+
+fn error_with_severity(code: str, message: str,
+                       severity: str) -> LateralusError {
+    return LateralusError(
+        code, message, severity,
+        "<input>", 0, 0, 0, 0,
+        [], [], [],
+        "", ""
+    )
+}
+
+fn error_add_suggestion(err: LateralusError, suggestion: str) -> LateralusError {
+    let mut suggestions = err.suggestions
+    suggestions = suggestions + [suggestion]
+    return LateralusError(
+        err.code, err.message, err.severity,
+        err.file, err.line, err.column, err.end_line, err.end_column,
+        err.source_lines, suggestions, err.notes,
+        err.cause_code, err.cause_message
+    )
+}
+
+fn error_add_note(err: LateralusError, note: str) -> LateralusError {
+    let mut new_notes = err.notes
+    new_notes = new_notes + [note]
+    return LateralusError(
+        err.code, err.message, err.severity,
+        err.file, err.line, err.column, err.end_line, err.end_column,
+        err.source_lines, err.suggestions, new_notes,
+        err.cause_code, err.cause_message
+    )
+}
+
+fn error_with_cause(err: LateralusError,
+                    cause_code: str, cause_msg: str) -> LateralusError {
+    return LateralusError(
+        err.code, err.message, err.severity,
+        err.file, err.line, err.column, err.end_line, err.end_column,
+        err.source_lines, err.suggestions, err.notes,
+        cause_code, cause_msg
+    )
+}
+
+fn error_set_source(err: LateralusError, source_lines: list) -> LateralusError {
+    return LateralusError(
+        err.code, err.message, err.severity,
+        err.file, err.line, err.column, err.end_line, err.end_column,
+        source_lines, err.suggestions, err.notes,
+        err.cause_code, err.cause_message
+    )
+}
+
+
+// ─── Severity Color Mapping ─────────────────────────────────────────────
+
+fn severity_color(severity: str) -> str {
+    return match severity {
+        "error"   => RED,
+        "warning" => YELLOW,
+        "info"    => BLUE,
+        "hint"    => GREEN,
+        _         => WHITE,
+    }
+}
+
+
+// ─── Format Source Context ──────────────────────────────────────────────
+
+fn format_source_context(err: LateralusError, use_color: bool) -> str {
+    let lines = []
+    let target_line = err.line
+    let mut start = target_line - 3
+    if start < 0 {
+        start = 0
+    }
+    let mut end = target_line + 2
+    if end > len(err.source_lines) {
+        end = len(err.source_lines)
+    }
+
+    // Calculate gutter width
+    let gutter_width = len(str(end))
+
+    for i in range(start, end) {
+        let line_num = i + 1
+        let mut line_text = ""
+        if i < len(err.source_lines) {
+            line_text = err.source_lines[i]
+        }
+        let is_error_line = line_num == target_line
+
+        if is_error_line {
+            let mut prefix = "  "
+            if use_color {
+                prefix = prefix + RED
+            }
+            prefix = prefix + str(line_num) + " | "
+            if use_color {
+                prefix = prefix + RESET + " "
+            }
+            lines = lines + [prefix + line_text]
+
+            // Underline
+            let mut col = err.column - 1
+            if col < 0 {
+                col = 0
+            }
+            let mut end_col = err.end_column
+            if end_col == 0 {
+                end_col = col + 1
+            }
+            let mut underline_len = end_col - col
+            if underline_len < 1 {
+                underline_len = 1
+            }
+            let padding = repeat_str(" ", gutter_width + 5 + col)
+            let mut marker = ""
+            if use_color {
+                marker = padding + RED + repeat_str("~", underline_len) + RESET
+            } else {
+                marker = padding + repeat_str("~", underline_len)
+            }
+            lines = lines + [marker]
+        } else {
+            let mut prefix = "  "
+            if use_color {
+                prefix = prefix + GRAY
+            }
+            prefix = prefix + str(line_num) + " | "
+            if use_color {
+                prefix = prefix + RESET + " "
+            }
+            let mut decorated = line_text
+            if use_color {
+                decorated = DIM + line_text + RESET
+            }
+            lines = lines + [prefix + decorated]
+        }
+    }
+
+    return join(lines, "\n")
+}
+
+
+// ─── Format Error for Terminal ──────────────────────────────────────────
+
+fn format_error(err: LateralusError, use_color: bool) -> str {
+    let parts = []
+
+    // Severity + code + message
+    let mut header = ""
+    if use_color {
+        let sc = severity_color(err.severity)
+        header = sc + BOLD + err.severity + RESET
+        header = header + GRAY + "[" + err.code + "]" + RESET
+        header = header + BOLD + ": " + err.message + RESET
+    } else {
+        header = err.severity + "[" + err.code + "]: " + err.message
+    }
+    parts = parts + [header]
+
+    // Location
+    if err.line > 0 {
+        let loc_str = err.file + ":" + str(err.line)
+        if err.column > 0 {
+            loc_str = loc_str + ":" + str(err.column)
+        }
+        let mut loc_line = ""
+        if use_color {
+            loc_line = "  " + CYAN + "-->" + RESET + " " + loc_str
+        } else {
+            loc_line = "  --> " + loc_str
+        }
+        parts = parts + [loc_line]
+
+        // Source context
+        if len(err.source_lines) > 0 {
+            parts = parts + [format_source_context(err, use_color)]
+        }
+    }
+
+    // Suggestions
+    for suggestion in err.suggestions {
+        let mut s = ""
+        if use_color {
+            s = "  " + GREEN + "help" + RESET + ": " + suggestion
+        } else {
+            s = "  help: " + suggestion
+        }
+        parts = parts + [s]
+    }
+
+    // Notes
+    for note in err.notes {
+        let mut n = ""
+        if use_color {
+            n = "  " + BLUE + "note" + RESET + ": " + note
+        } else {
+            n = "  note: " + note
+        }
+        parts = parts + [n]
+    }
+
+    // Cause chain
+    if len(err.cause_code) > 0 {
+        if use_color {
+            parts = parts + ["\n" + DIM + "Caused by:" + RESET]
+        } else {
+            parts = parts + ["\nCaused by:"]
+        }
+        parts = parts + ["  " + err.cause_code + ": " + err.cause_message]
+    }
+
+    return join(parts, "\n")
+}
+
+
+// ─── Error to JSON ──────────────────────────────────────────────────────
+
+fn error_to_json(err: LateralusError) -> str {
+    let mut result = "  " + quote("code") + ": " + quote(err.code)
+    result = result + ",\n  " + quote("message") + ": " + quote(err.message)
+    result = result + ",\n  " + quote("severity") + ": " + quote(err.severity)
+
+    if err.line > 0 {
+        result = result + ",\n  " + quote("location") + ": "
+        result = result + quote(err.file + ":" + str(err.line) + ":" + str(err.column))
+    }
+
+    if len(err.suggestions) > 0 {
+        result = result + ",\n  " + quote("suggestions") + ": ["
+        for i in range(0, len(err.suggestions)) {
+            if i > 0 {
+                result = result + ", "
+            }
+            result = result + quote(err.suggestions[i])
+        }
+        result = result + "]"
+    }
+
+    if len(err.notes) > 0 {
+        result = result + ",\n  " + quote("notes") + ": ["
+        for i in range(0, len(err.notes)) {
+            if i > 0 {
+                result = result + ", "
+            }
+            result = result + quote(err.notes[i])
+        }
+        result = result + "]"
+    }
+
+    return "{\n" + result + "\n}"
+}
+
+fn quote(s: str) -> str {
+    return "\"" + s + "\""
+}
+
+
+// ─── Suggestion Engine ──────────────────────────────────────────────────
+
+// Simple edit distance (Levenshtein) for did-you-mean suggestions
+fn edit_distance(a: str, b: str) -> int {
+    let m = len(a)
+    let n = len(b)
+
+    // Build distance matrix (flattened: row * (n+1) + col)
+    let mut matrix = []
+    for i in range(0, m + 1) {
+        for j in range(0, n + 1) {
+            if i == 0 {
+                matrix = matrix + [j]
+            } else if j == 0 {
+                matrix = matrix + [i]
+            } else {
+                matrix = matrix + [0]
+            }
+        }
+    }
+
+    for i in range(1, m + 1) {
+        for j in range(1, n + 1) {
+            let idx = i * (n + 1) + j
+            let mut cost = 1
+            if a[i - 1] == b[j - 1] {
+                cost = 0
+            }
+            let del_cost = matrix[(i - 1) * (n + 1) + j] + 1
+            let ins_cost = matrix[i * (n + 1) + (j - 1)] + 1
+            let sub_cost = matrix[(i - 1) * (n + 1) + (j - 1)] + cost
+
+            let mut best = del_cost
+            if ins_cost < best {
+                best = ins_cost
+            }
+            if sub_cost < best {
+                best = sub_cost
+            }
+            matrix[idx] = best
+        }
+    }
+
+    return matrix[m * (n + 1) + n]
+}
+
+fn suggest_similar(name: str, candidates: list, max_results: int) -> list {
+    // Find candidates with edit distance below threshold
+    let threshold = len(name) / 2 + 1
+    let mut scored = []
+
+    for candidate in candidates {
+        let dist = edit_distance(name, candidate)
+        if dist <= threshold {
+            scored = scored + [[candidate, dist]]
+        }
+    }
+
+    // Sort by distance (simple selection sort)
+    for i in range(0, len(scored)) {
+        let mut min_idx = i
+        for j in range(i + 1, len(scored)) {
+            if scored[j][1] < scored[min_idx][1] {
+                min_idx = j
+            }
+        }
+        if min_idx != i {
+            let tmp = scored[i]
+            scored[i] = scored[min_idx]
+            scored[min_idx] = tmp
+        }
+    }
+
+    // Take top results
+    let mut results = []
+    let mut count = 0
+    for entry in scored {
+        if count >= max_results {
+            break
+        }
+        results = results + [entry[0]]
+        count = count + 1
+    }
+    return results
+}
+
+
+fn suggest_fix_for_undefined(name: str, scope_names: list,
+                             builtin_names: list) -> list {
+    let mut suggestions = []
+
+    // Check scope
+    let similar_scope = suggest_similar(name, scope_names, 3)
+    if len(similar_scope) > 0 {
+        suggestions = suggestions + ["Did you mean `" + similar_scope[0] + "`?"]
+        if len(similar_scope) > 1 {
+            let mut others = ""
+            for i in range(1, len(similar_scope)) {
+                if len(others) > 0 {
+                    others = others + ", "
+                }
+                others = others + "`" + similar_scope[i] + "`"
+            }
+            suggestions = suggestions + ["Other similar names: " + others]
+        }
+    }
+
+    // Check builtins
+    let similar_builtin = suggest_similar(name, builtin_names, 3)
+    for b in similar_builtin {
+        // Only suggest if not already in scope
+        let mut in_scope = false
+        for sn in scope_names {
+            if sn == b {
+                in_scope = true
+            }
+        }
+        if !in_scope {
+            suggestions = suggestions + ["`" + b + "` is a built-in - did you forget an import?"]
+        }
+    }
+
+    // Common typos
+    let lower_name = lower(name)
+    if lower_name == "pritnln" {
+        suggestions = suggestions + ["Did you mean `println`?"]
+    } else if lower_name == "pirnt" {
+        suggestions = suggestions + ["Did you mean `print`?"]
+    } else if lower_name == "retrun" {
+        suggestions = suggestions + ["Did you mean `return`?"]
+    } else if lower_name == "ture" {
+        suggestions = suggestions + ["Did you mean `true`?"]
+    } else if lower_name == "flase" {
+        suggestions = suggestions + ["Did you mean `false`?"]
+    } else if lower_name == "nill" {
+        suggestions = suggestions + ["Did you mean `nil`?"]
+    } else if lower_name == "lenght" {
+        suggestions = suggestions + ["Did you mean `length`?"]
+    } else if lower_name == "stirng" {
+        suggestions = suggestions + ["Did you mean `string`?"]
+    }
+
+    return suggestions
+}
+
+
+fn suggest_fix_for_type_mismatch(expected: str, actual: str) -> list {
+    let mut suggestions = []
+
+    let e = lower(expected)
+    let a = lower(actual)
+
+    if e == "int" && a == "str" {
+        suggestions = suggestions + ["Use `int(value)` to parse string as integer"]
+    } else if e == "str" && a == "int" {
+        suggestions = suggestions + ["Use `str(value)` to convert int to string"]
+    } else if e == "str" && a == "float" {
+        suggestions = suggestions + ["Use `str(value)` to convert float to string"]
+    } else if e == "float" && a == "int" {
+        suggestions = suggestions + ["Use `float(value)` to promote int to float"]
+    } else if e == "bool" && a == "int" {
+        suggestions = suggestions + ["Booleans are already valid as integers (true=1, false=0)"]
+    } else if e == "list" && a == "str" {
+        suggestions = suggestions + ["Use `str_join(list, \", \")` to convert list to string"]
+    }
+
+    suggestions = suggestions + ["Expected type `" + expected + "`, got `" + actual + "`"]
+    return suggestions
+}
+
+
+// ─── Error Collector (multi-error reporting) ────────────────────────────
+
+struct ErrorCollector {
+    errors: list
+    source: str
+    source_lines: list
+    file: str
+}
+
+fn collector_new(source: str, file: str) -> ErrorCollector {
+    let lines = split(source, "\n")
+    return ErrorCollector([], source, lines, file)
+}
+
+fn collector_add(coll: ErrorCollector, err: LateralusError) -> ErrorCollector {
+    let mut enriched = err
+    if len(err.source_lines) == 0 {
+        enriched = error_set_source(err, coll.source_lines)
+    }
+    let mut new_errors = coll.errors
+    new_errors = new_errors + [enriched]
+    return ErrorCollector(new_errors, coll.source, coll.source_lines, coll.file)
+}
+
+fn collector_add_error(coll: ErrorCollector, code: str,
+                       message: str, line: int, column: int) -> ErrorCollector {
+    let err = error_with_location(code, message, coll.file, line, column)
+    return collector_add(coll, err)
+}
+
+fn collector_add_warning(coll: ErrorCollector, code: str,
+                         message: str, line: int, column: int) -> ErrorCollector {
+    let mut err = error_with_location(code, message, coll.file, line, column)
+    err = LateralusError(
+        err.code, err.message, SEV_WARNING,
+        err.file, err.line, err.column, err.end_line, err.end_column,
+        err.source_lines, err.suggestions, err.notes,
+        err.cause_code, err.cause_message
+    )
+    return collector_add(coll, err)
+}
+
+fn collector_has_errors(coll: ErrorCollector) -> bool {
+    for err in coll.errors {
+        if err.severity == SEV_ERROR {
+            return true
+        }
+    }
+    return false
+}
+
+fn collector_error_count(coll: ErrorCollector) -> int {
+    let mut count = 0
+    for err in coll.errors {
+        if err.severity == SEV_ERROR {
+            count = count + 1
+        }
+    }
+    return count
+}
+
+fn collector_warning_count(coll: ErrorCollector) -> int {
+    let mut count = 0
+    for err in coll.errors {
+        if err.severity == SEV_WARNING {
+            count = count + 1
+        }
+    }
+    return count
+}
+
+
+// ─── Format All Errors ──────────────────────────────────────────────────
+
+fn collector_format_all(coll: ErrorCollector, use_color: bool) -> str {
+    // Sort errors by line number (simple insertion sort)
+    let mut sorted_errors = coll.errors
+
+    for i in range(1, len(sorted_errors)) {
+        let key = sorted_errors[i]
+        let mut j = i - 1
+        while j >= 0 && sorted_errors[j].line > key.line {
+            sorted_errors[j + 1] = sorted_errors[j]
+            j = j - 1
+        }
+        sorted_errors[j + 1] = key
+    }
+
+    let mut parts = []
+    for err in sorted_errors {
+        parts = parts + [format_error(err, use_color)]
+        parts = parts + [""]
+    }
+
+    // Summary
+    if len(coll.errors) > 0 {
+        let ec = collector_error_count(coll)
+        let wc = collector_warning_count(coll)
+        let mut summary_parts = []
+
+        if ec > 0 {
+            let mut label = " error"
+            if ec != 1 {
+                label = " errors"
+            }
+            if use_color {
+                summary_parts = summary_parts + [RED + str(ec) + label + RESET]
+            } else {
+                summary_parts = summary_parts + [str(ec) + label]
+            }
+        }
+
+        if wc > 0 {
+            let mut label = " warning"
+            if wc != 1 {
+                label = " warnings"
+            }
+            if use_color {
+                summary_parts = summary_parts + [YELLOW + str(wc) + label + RESET]
+            } else {
+                summary_parts = summary_parts + [str(wc) + label]
+            }
+        }
+
+        let mut summary = join(summary_parts, " and ") + " generated"
+        if use_color {
+            summary = BOLD + summary + RESET
+        }
+        parts = parts + [summary]
+    }
+
+    return join(parts, "\n")
+}
+
+fn collector_to_json(coll: ErrorCollector) -> str {
+    let mut err_json_list = []
+    for err in coll.errors {
+        err_json_list = err_json_list + [error_to_json(err)]
+    }
+
+    let mut result = quote("error_count") + ": " + str(collector_error_count(coll))
+    result = result + ",\n" + quote("warning_count") + ": " + str(collector_warning_count(coll))
+    result = result + ",\n" + quote("errors") + ": [\n"
+    result = result + join(err_json_list, ",\n")
+    result = result + "\n]"
+    return "{\n" + result + "\n}"
+}
+
+
+// ─── Stack Trace Enhancer ───────────────────────────────────────────────
+
+fn enhance_traceback(exc_type: str, exc_message: str,
+                     source: str, file: str) -> LateralusError {
+    // Map Python exception types to error codes
+    let mut code = E5005
+    if exc_type == "ZeroDivisionError" {
+        code = E5001
+    } else if exc_type == "NameError" {
+        code = E4001
+    } else if exc_type == "TypeError" {
+        code = E3001
+    } else if exc_type == "IndexError" {
+        code = E5003
+    } else if exc_type == "KeyError" {
+        code = E5004
+    }
+
+    let source_lines = split(source, "\n")
+    let err = LateralusError(
+        code, exc_message, SEV_ERROR,
+        file, 1, 0, 0, 0,
+        source_lines, [], [],
+        "", ""
+    )
+    return err
+}
+
+
+// ─── Utility: Repeat String ─────────────────────────────────────────────
+
+fn repeat_str(s: str, n: int) -> str {
+    let mut result = ""
+    for i in range(0, n) {
+        result = result + s
+    }
+    return result
+}
+
+
+// ─── Demo / Self-test ───────────────────────────────────────────────────
+
+fn main() {
+    println("=== Lateralus Error Engine (self-hosted) ===")
+    println("")
+
+    // Create a sample error
+    let source = "fn main() {\n    let x = pritnln(42)\n    return x\n}"
+    let source_lines = split(source, "\n")
+
+    let mut err = error_with_location(E4001, "Undefined name `pritnln`",
+                                      "demo.ltl", 2, 13)
+    err = error_set_source(err, source_lines)
+    err = error_add_suggestion(err, "Did you mean `println`?")
+    err = error_add_note(err, "`println` is a built-in function")
+
+    println(format_error(err, true))
+    println("")
+
+    // Test suggestion engine
+    let candidates = ["println", "print", "parse", "push", "pop"]
+    let similar = suggest_similar("pritnln", candidates, 3)
+    println("Similar to 'pritnln': " + str(similar))
+
+    // Test edit distance
+    println("edit_distance('kitten', 'sitting') = " + str(edit_distance("kitten", "sitting")))
+    println("edit_distance('hello', 'hello') = " + str(edit_distance("hello", "hello")))
+
+    // Test type mismatch suggestions
+    let type_fixes = suggest_fix_for_type_mismatch("int", "str")
+    println("Type fix suggestions: " + str(type_fixes))
+
+    // Test error collector
+    let mut coll = collector_new(source, "demo.ltl")
+    coll = collector_add_error(coll, E4001, "Undefined name `pritnln`", 2, 13)
+    coll = collector_add_warning(coll, E2005, "Unused variable `x`", 2, 9)
+
+    println("")
+    println(collector_format_all(coll, true))
+    println("")
+
+    // JSON output
+    println("=== JSON ===")
+    println(error_to_json(err))
+
+    println("")
+    println("=== Error Engine OK ===")
+}
+
+main()

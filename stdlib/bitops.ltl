@@ -1,0 +1,179 @@
+// ═══════════════════════════════════════════════════════════════════════
+// stdlib/bitops.ltl — Bit manipulation primitives
+// ═══════════════════════════════════════════════════════════════════════
+// Low-level bit twiddling operations for OS development, drivers,
+// protocol parsing, and performance-critical code.
+// ═══════════════════════════════════════════════════════════════════════
+
+module bitops
+
+// ── Individual bit operations ───────────────────────────────────────────
+
+/// Set bit `n` in `val` (0-indexed from LSB).
+pub fn bit_set(val: u64, n: u32) -> u64 {
+    return val | (1 << n)
+}
+
+/// Clear bit `n` in `val`.
+pub fn bit_clear(val: u64, n: u32) -> u64 {
+    return val & ~(1 << n)
+}
+
+/// Toggle bit `n` in `val`.
+pub fn bit_toggle(val: u64, n: u32) -> u64 {
+    return val ^ (1 << n)
+}
+
+/// Test if bit `n` is set in `val`.
+pub fn bit_test(val: u64, n: u32) -> bool {
+    return (val & (1 << n)) != 0
+}
+
+// ── Bit field extraction/insertion ──────────────────────────────────────
+
+/// Extract `width` bits starting at position `pos` from `val`.
+pub fn extract_bits(val: u64, pos: u32, width: u32) -> u64 {
+    let mask = (1 << width) - 1
+    return (val >> pos) & mask
+}
+
+/// Insert `field` of `width` bits at position `pos` into `val`.
+pub fn insert_bits(val: u64, field: u64, pos: u32, width: u32) -> u64 {
+    let mask = (1 << width) - 1
+    let cleared = val & ~(mask << pos)
+    return cleared | ((field & mask) << pos)
+}
+
+// ── Bit counting ────────────────────────────────────────────────────────
+
+/// Count the number of set bits (population count / hamming weight).
+pub fn popcount(val: u64) -> u32 {
+    let mut x = val
+    let mut count = 0
+    while x != 0 {
+        count = count + 1
+        x = x & (x - 1)
+    }
+    return count
+}
+
+/// Count leading zeros (number of 0 bits before the first 1 from MSB).
+pub fn clz(val: u64) -> u32 {
+    if val == 0 { return 64 }
+    let mut count = 0
+    let mut x = val
+    if (x & 0xFFFFFFFF00000000) == 0 { count = count + 32; x = x << 32 }
+    if (x & 0xFFFF000000000000) == 0 { count = count + 16; x = x << 16 }
+    if (x & 0xFF00000000000000) == 0 { count = count + 8;  x = x << 8 }
+    if (x & 0xF000000000000000) == 0 { count = count + 4;  x = x << 4 }
+    if (x & 0xC000000000000000) == 0 { count = count + 2;  x = x << 2 }
+    if (x & 0x8000000000000000) == 0 { count = count + 1 }
+    return count
+}
+
+/// Count trailing zeros (number of 0 bits after the last 1 from LSB).
+pub fn ctz(val: u64) -> u32 {
+    if val == 0 { return 64 }
+    let mut count = 0
+    let mut x = val
+    if (x & 0x00000000FFFFFFFF) == 0 { count = count + 32; x = x >> 32 }
+    if (x & 0x000000000000FFFF) == 0 { count = count + 16; x = x >> 16 }
+    if (x & 0x00000000000000FF) == 0 { count = count + 8;  x = x >> 8 }
+    if (x & 0x000000000000000F) == 0 { count = count + 4;  x = x >> 4 }
+    if (x & 0x0000000000000003) == 0 { count = count + 2;  x = x >> 2 }
+    if (x & 0x0000000000000001) == 0 { count = count + 1 }
+    return count
+}
+
+/// Find the position of the highest set bit (0-indexed). Returns -1 if val == 0.
+pub fn highest_bit(val: u64) -> int {
+    if val == 0 { return -1 }
+    return 63 - clz(val) as int
+}
+
+/// Find the position of the lowest set bit (0-indexed). Returns -1 if val == 0.
+pub fn lowest_bit(val: u64) -> int {
+    if val == 0 { return -1 }
+    return ctz(val) as int
+}
+
+// ── Byte manipulation ───────────────────────────────────────────────────
+
+/// Reverse byte order of a 16-bit value (big ↔ little endian).
+pub fn bswap16(val: u16) -> u16 {
+    return ((val & 0xFF) << 8) | ((val >> 8) & 0xFF)
+}
+
+/// Reverse byte order of a 32-bit value.
+pub fn bswap32(val: u32) -> u32 {
+    let mut x = val
+    x = ((x & 0x00FF00FF) << 8) | ((x >> 8) & 0x00FF00FF)
+    x = (x << 16) | (x >> 16)
+    return x
+}
+
+/// Reverse byte order of a 64-bit value.
+pub fn bswap64(val: u64) -> u64 {
+    let mut x = val
+    x = ((x & 0x00FF00FF00FF00FF) << 8)  | ((x >> 8)  & 0x00FF00FF00FF00FF)
+    x = ((x & 0x0000FFFF0000FFFF) << 16) | ((x >> 16) & 0x0000FFFF0000FFFF)
+    x = (x << 32) | (x >> 32)
+    return x
+}
+
+// ── Rotation ────────────────────────────────────────────────────────────
+
+/// Rotate `val` left by `n` bits (32-bit).
+pub fn rotl32(val: u32, n: u32) -> u32 {
+    let s = n & 31
+    return (val << s) | (val >> (32 - s))
+}
+
+/// Rotate `val` right by `n` bits (32-bit).
+pub fn rotr32(val: u32, n: u32) -> u32 {
+    let s = n & 31
+    return (val >> s) | (val << (32 - s))
+}
+
+/// Rotate `val` left by `n` bits (64-bit).
+pub fn rotl64(val: u64, n: u32) -> u64 {
+    let s = n & 63
+    return (val << s) | (val >> (64 - s))
+}
+
+/// Rotate `val` right by `n` bits (64-bit).
+pub fn rotr64(val: u64, n: u32) -> u64 {
+    let s = n & 63
+    return (val >> s) | (val << (64 - s))
+}
+
+// ── Masks ───────────────────────────────────────────────────────────────
+
+/// Create a bitmask with `width` bits set starting at position `pos`.
+pub fn mask(pos: u32, width: u32) -> u64 {
+    return ((1 << width) - 1) << pos
+}
+
+/// Check if `val` is a power of 2 (and non-zero).
+pub fn is_power_of_2(val: u64) -> bool {
+    return val != 0 and (val & (val - 1)) == 0
+}
+
+/// Round `val` up to the next power of 2.
+pub fn next_power_of_2(val: u64) -> u64 {
+    if val == 0 { return 1 }
+    let mut x = val - 1
+    x = x | (x >> 1)
+    x = x | (x >> 2)
+    x = x | (x >> 4)
+    x = x | (x >> 8)
+    x = x | (x >> 16)
+    x = x | (x >> 32)
+    return x + 1
+}
+
+/// Log base 2 (integer, floor). Returns 0 for val=0.
+pub fn log2(val: u64) -> u32 {
+    if val == 0 { return 0 }
+    return 63 - clz(val)
+}

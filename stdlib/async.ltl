@@ -1,0 +1,218 @@
+// ═══════════════════════════════════════════════════════════════════════
+// LATERALUS Standard Library — async.ltl
+// Concurrency patterns and asynchronous programming
+// ═══════════════════════════════════════════════════════════════════════
+
+// ─── Promise-like Future ──────────────────────────────────────────────
+
+fn future_new(f) -> map {
+    return {
+        "type": "future",
+        "fn": f,
+        "resolved": false,
+        "value": none,
+        "error": none,
+    }
+}
+
+fn future_resolve(fut: map) -> map {
+    if fut["resolved"] {
+        return fut
+    }
+    try {
+        fut["value"] = fut["fn"]()
+        fut["resolved"] = true
+    } catch e {
+        fut["error"] = e
+        fut["resolved"] = true
+    }
+    return fut
+}
+
+fn future_then(fut: map, f) -> map {
+    let resolved = future_resolve(fut)
+    if resolved["error"] != none {
+        return resolved
+    }
+    return future_new(() => f(resolved["value"]))
+}
+
+fn future_catch(fut: map, handler) -> map {
+    let resolved = future_resolve(fut)
+    if resolved["error"] != none {
+        return future_new(() => handler(resolved["error"]))
+    }
+    return resolved
+}
+
+fn future_get(fut: map) {
+    let resolved = future_resolve(fut)
+    if resolved["error"] != none {
+        throw "Future failed: " + str(resolved["error"])
+    }
+    return resolved["value"]
+}
+
+// ─── Retry pattern ────────────────────────────────────────────────────
+
+fn retry(f, max_attempts: int, delay_fn) {
+    let attempts = 0
+    let last_error = none
+
+    while attempts < max_attempts {
+        try {
+            return f()
+        } catch e {
+            last_error = e
+            attempts = attempts + 1
+            if attempts < max_attempts and delay_fn != none {
+                delay_fn(attempts)
+            }
+        }
+    }
+
+    throw "All " + str(max_attempts) + " attempts failed. Last error: " + str(last_error)
+}
+
+// ─── Pipeline with timeout simulation ─────────────────────────────────
+
+fn with_deadline(f, steps: int) {
+    // Simulated deadline: run function but track steps
+    let result = none
+    let step = 0
+
+    try {
+        result = f()
+    } catch e {
+        throw "Deadline exceeded after " + str(steps) + " steps: " + str(e)
+    }
+
+    return result
+}
+
+// ─── Batch processing ─────────────────────────────────────────────────
+
+fn batch_process(items: list, batch_size: int, processor) -> list {
+    let results = []
+    let i = 0
+    while i < len(items) {
+        let end = min(i + batch_size, len(items))
+        let batch = slice(items, i, end)
+        let batch_result = processor(batch)
+        results = results + [batch_result]
+        i = i + batch_size
+    }
+    return results
+}
+
+// ─── Work queue ───────────────────────────────────────────────────────
+
+fn work_queue_new() -> map {
+    return {
+        "tasks": [],
+        "results": [],
+        "processed": 0,
+    }
+}
+
+fn work_queue_add(wq: map, task) -> map {
+    wq["tasks"] = wq["tasks"] + [task]
+    return wq
+}
+
+fn work_queue_process_all(wq: map, worker) -> map {
+    for task in wq["tasks"] {
+        try {
+            let result = worker(task)
+            wq["results"] = wq["results"] + [{ "status": "ok", "value": result }]
+        } catch e {
+            wq["results"] = wq["results"] + [{ "status": "error", "error": str(e) }]
+        }
+        wq["processed"] = wq["processed"] + 1
+    }
+    wq["tasks"] = []
+    return wq
+}
+
+fn work_queue_success_count(wq: map) -> int {
+    return wq["results"]
+        |> filter((r) => r["status"] == "ok")
+        |> len()
+}
+
+fn work_queue_error_count(wq: map) -> int {
+    return wq["results"]
+        |> filter((r) => r["status"] == "error")
+        |> len()
+}
+
+// ─── Event emitter ────────────────────────────────────────────────────
+
+fn emitter_new() -> map {
+    return { "listeners": {} }
+}
+
+fn emitter_on(em: map, event: str, handler) -> map {
+    if not contains(keys(em["listeners"]), event) {
+        em["listeners"][event] = []
+    }
+    em["listeners"][event] = em["listeners"][event] + [handler]
+    return em
+}
+
+fn emitter_emit(em: map, event: str, data) {
+    if contains(keys(em["listeners"]), event) {
+        for handler in em["listeners"][event] {
+            handler(data)
+        }
+    }
+}
+
+fn emitter_off(em: map, event: str) -> map {
+    let new_listeners = {}
+    for key in keys(em["listeners"]) {
+        if key != event {
+            new_listeners[key] = em["listeners"][key]
+        }
+    }
+    em["listeners"] = new_listeners
+    return em
+}
+
+// ─── Memoization ──────────────────────────────────────────────────────
+
+fn memoize(f) {
+    let cache = {}
+    return (arg) => {
+        let key = str(arg)
+        if contains(keys(cache), key) {
+            return cache[key]
+        }
+        let result = f(arg)
+        cache[key] = result
+        return result
+    }
+}
+
+// ─── Rate limiting ────────────────────────────────────────────────────
+
+fn rate_limiter_new(max_calls: int) -> map {
+    return {
+        "max_calls": max_calls,
+        "call_count": 0,
+    }
+}
+
+fn rate_limited_call(rl: map, f) -> map {
+    if rl["call_count"] >= rl["max_calls"] {
+        return { "limiter": rl, "result": none, "limited": true }
+    }
+    let result = f()
+    rl["call_count"] = rl["call_count"] + 1
+    return { "limiter": rl, "result": result, "limited": false }
+}
+
+fn rate_limiter_reset(rl: map) -> map {
+    rl["call_count"] = 0
+    return rl
+}

@@ -1,0 +1,154 @@
+// Lateralus Standard Library — encoding.ltl  (v2.2.0)
+// Base64, hex, and other encoding/decoding utilities
+
+module stdlib.encoding
+
+// ── Hex encoding ─────────────────────────────────────────────────────────────
+
+/// Encode a list of bytes as a hex string.
+/// hex_encode([0, 255, 128]) => "00ff80"
+pub fn hex_encode(bytes: list) -> str {
+    let digits = "0123456789abcdef"
+    let mut result = ""
+    for b in bytes {
+        let hi = (b / 16) % 16
+        let lo = b % 16
+        result = result + digits[hi] + digits[lo]
+    }
+    return result
+}
+
+/// Decode a hex string to a list of bytes.
+/// hex_decode("00ff80") => [0, 255, 128]
+pub fn hex_decode(s: str) -> list {
+    let mut result = []
+    let mut i = 0
+    while i + 1 < len(s) {
+        let hi = _hex_digit(s[i])
+        let lo = _hex_digit(s[i + 1])
+        result = result + [hi * 16 + lo]
+        i = i + 2
+    }
+    return result
+}
+
+fn _hex_digit(c: str) -> int {
+    if c >= "0" && c <= "9" {
+        return ord(c) - ord("0")
+    }
+    if c >= "a" && c <= "f" {
+        return ord(c) - ord("a") + 10
+    }
+    if c >= "A" && c <= "F" {
+        return ord(c) - ord("A") + 10
+    }
+    return 0
+}
+
+// ── Base64 encoding ──────────────────────────────────────────────────────────
+
+let _B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+/// Encode a list of bytes as a base64 string.
+/// base64_encode([72, 101, 108, 108, 111]) => "SGVsbG8="
+pub fn base64_encode(bytes: list) -> str {
+    let mut result = ""
+    let mut i = 0
+    let n = len(bytes)
+    while i < n {
+        let b0 = bytes[i]
+        let b1 = (i + 1 < n) ? bytes[i + 1] : 0
+        let b2 = (i + 2 < n) ? bytes[i + 2] : 0
+
+        result = result + _B64_CHARS[(b0 >> 2) % 64]
+        result = result + _B64_CHARS[((b0 & 3) * 16 + (b1 >> 4)) % 64]
+        result = result + ((i + 1 < n) ? _B64_CHARS[((b1 & 15) * 4 + (b2 >> 6)) % 64] : "=")
+        result = result + ((i + 2 < n) ? _B64_CHARS[b2 % 64] : "=")
+
+        i = i + 3
+    }
+    return result
+}
+
+/// Decode a base64 string to a list of bytes.
+pub fn base64_decode(s: str) -> list {
+    let mut result = []
+    let mut i = 0
+    while i + 3 < len(s) {
+        let a = _b64_val(s[i])
+        let b = _b64_val(s[i + 1])
+        let c = _b64_val(s[i + 2])
+        let d = _b64_val(s[i + 3])
+
+        result = result + [((a * 4) + (b >> 4)) % 256]
+        if s[i + 2] != "=" {
+            result = result + [((b & 15) * 16 + (c >> 2)) % 256]
+        }
+        if s[i + 3] != "=" {
+            result = result + [((c & 3) * 64 + d) % 256]
+        }
+        i = i + 4
+    }
+    return result
+}
+
+fn _b64_val(c: str) -> int {
+    if c >= "A" && c <= "Z" {
+        return ord(c) - ord("A")
+    }
+    if c >= "a" && c <= "z" {
+        return ord(c) - ord("a") + 26
+    }
+    if c >= "0" && c <= "9" {
+        return ord(c) - ord("0") + 52
+    }
+    if c == "+" {
+        return 62
+    }
+    if c == "/" {
+        return 63
+    }
+    return 0
+}
+
+// ── URL encoding ─────────────────────────────────────────────────────────────
+
+/// URL-encode a string (percent-encoding).
+/// url_encode("hello world") => "hello%20world"
+pub fn url_encode(s: str) -> str {
+    let safe = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~"
+    let hex_chars = "0123456789ABCDEF"
+    let mut result = ""
+    for i in range(0, len(s)) {
+        let c = s[i]
+        if contains(safe, c) {
+            result = result + c
+        } else {
+            let code = ord(c)
+            result = result + "%" + hex_chars[(code / 16) % 16] + hex_chars[code % 16]
+        }
+    }
+    return result
+}
+
+/// URL-decode a percent-encoded string.
+/// url_decode("hello%20world") => "hello world"
+pub fn url_decode(s: str) -> str {
+    let mut result = ""
+    let mut i = 0
+    while i < len(s) {
+        if s[i] == "%" && i + 2 < len(s) {
+            let hi = _hex_digit(s[i + 1])
+            let lo = _hex_digit(s[i + 2])
+            result = result + chr(hi * 16 + lo)
+            i = i + 3
+        } else if s[i] == "+" {
+            result = result + " "
+            i = i + 1
+        } else {
+            result = result + s[i]
+            i = i + 1
+        }
+    }
+    return result
+}

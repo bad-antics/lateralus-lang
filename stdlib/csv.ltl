@@ -1,0 +1,123 @@
+// Lateralus Standard Library — csv.ltl  (v2.2.0)
+// CSV (Comma-Separated Values) parsing and generation
+
+module stdlib.csv
+
+// ── CSV Parsing ──────────────────────────────────────────────────────────────
+
+/// Parse a CSV string into a list of rows (each row is a list of strings).
+/// parse("a,b,c\n1,2,3\n") => [["a","b","c"], ["1","2","3"]]
+pub fn parse(text: str, delimiter: str) -> list {
+    let delim = len(delimiter) > 0 ? delimiter : ","
+    let mut rows = []
+    let lines = split(text, "\n")
+    for line in lines {
+        let trimmed = trim(line)
+        if len(trimmed) > 0 {
+            rows = rows + [_parse_row(trimmed, delim)]
+        }
+    }
+    return rows
+}
+
+/// Parse a CSV string, using the first row as header names.
+/// Returns a list of maps: [{"name": "Alice", "age": "30"}, ...]
+pub fn parse_dict(text: str, delimiter: str) -> list {
+    let rows = parse(text, delimiter)
+    if len(rows) < 2 {
+        return []
+    }
+    let headers = rows[0]
+    let mut result = []
+    for i in range(1, len(rows)) {
+        let row = rows[i]
+        let mut record = map_new()
+        for j in range(0, len(headers)) {
+            let val = j < len(row) ? row[j] : ""
+            record[headers[j]] = val
+        }
+        result = result + [record]
+    }
+    return result
+}
+
+fn _parse_row(line: str, delim: str) -> list {
+    let mut fields = []
+    let mut current = ""
+    let mut in_quotes = false
+    let mut i = 0
+    while i < len(line) {
+        let c = line[i]
+        if in_quotes {
+            if c == "\"" {
+                if i + 1 < len(line) && line[i + 1] == "\"" {
+                    // Escaped quote
+                    current = current + "\""
+                    i = i + 2
+                } else {
+                    in_quotes = false
+                    i = i + 1
+                }
+            } else {
+                current = current + c
+                i = i + 1
+            }
+        } else {
+            if c == "\"" {
+                in_quotes = true
+                i = i + 1
+            } else if c == delim {
+                fields = fields + [current]
+                current = ""
+                i = i + 1
+            } else {
+                current = current + c
+                i = i + 1
+            }
+        }
+    }
+    fields = fields + [current]
+    return fields
+}
+
+// ── CSV Generation ───────────────────────────────────────────────────────────
+
+/// Generate a CSV string from a list of rows.
+/// generate([["a","b"], ["1","2"]]) => "a,b\n1,2\n"
+pub fn generate(rows: list, delimiter: str) -> str {
+    let delim = len(delimiter) > 0 ? delimiter : ","
+    let mut lines = []
+    for row in rows {
+        let mut parts = []
+        for field in row {
+            parts = parts + [_escape_field(str(field), delim)]
+        }
+        lines = lines + [join(parts, delim)]
+    }
+    return join(lines, "\n") + "\n"
+}
+
+/// Generate CSV with headers from a list of maps.
+/// generate_dict([{"name": "Alice"}], ["name"]) => "name\nAlice\n"
+pub fn generate_dict(records: list, headers: list, delimiter: str) -> str {
+    let delim = len(delimiter) > 0 ? delimiter : ","
+    let mut rows = [headers]
+    for record in records {
+        let mut row = []
+        for h in headers {
+            let val = has_key(record, h) ? str(record[h]) : ""
+            row = row + [val]
+        }
+        rows = rows + [row]
+    }
+    return generate(rows, delim)
+}
+
+fn _escape_field(field: str, delim: str) -> str {
+    let needs_quote = contains(field, delim) || contains(field, "\"") || contains(field, "\n")
+    if needs_quote {
+        let escaped = replace(field, "\"", "\"\"")
+        return "\"" + escaped + "\""
+    }
+    return field
+}

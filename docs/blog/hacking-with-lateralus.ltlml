@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hacking with LATERALUS — A Security Researcher's Toolkit</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: Hacking with LATERALUS — A Security Researcher's Toolkit
+author: bad-antics
+date: 2026-03-30
+abstract: LATERALUS ships with zero-dependency cryptographic primitives, pipeline-driven data transformation, binary encoding, and Result types for explicit error tracking — making it an ideal language for CTF challenges, security tooling, and vulnerability research.
+---
+
+# Hacking with LATERALUS
+
+## Why Another Language for Security?
+
+Security researchers live in a strange world. We write Python scripts that hash passwords, parse binary formats, XOR-decrypt payloads, and pipe data through transformation chains — often all in the same script. The tools work, but the language wasn't designed for this workflow.
+
+LATERALUS was.
+
+## Built-In Cryptography
+
+No `pip install pycryptodome`. No `npm install crypto-js`. LATERALUS ships cryptographic primitives in the language runtime:
+
+```lateralus
+// Hash functions — zero dependencies
+let sha = sha256("LATERALUS")
+let blake = blake2b(data, digest_size=32)
+let md5 = md5_hash(payload)  // for legacy compat
+
+// HMAC authentication
+let token = hmac_sha256(secret_key, message)
+let valid = hmac_verify(secret_key, message, token)
+
+// AES-256-GCM encryption
+let encrypted = aes_encrypt(key, plaintext, nonce)
+let decrypted = aes_decrypt(key, encrypted, nonce, tag)
+```
+
+Every hash function, every cipher, every MAC — built into the standard library. No supply chain risk. No version conflicts. No broken wheels on ARM.
+
+## XOR Cipher — The CTF Classic
+
+```lateralus
+// XOR is its own inverse
+let key = "SPIRAL"
+let plaintext = "LATERALUS LIVES"
+let encrypted = xor_cipher(plaintext, key)
+let decrypted = xor_cipher(encrypted, key)  // back to plaintext
+
+// Brute-force single-byte XOR
+fn crack_single_byte_xor(ciphertext: str) -> str {
+  let results = range(256)
+    |> map((k) => xor_cipher(ciphertext, chr(k)))
+    |> filter((t) => is_printable(t))
+    |> sort_by((t) => english_score(t))
+
+  return results[0]
+}
+```
+
+Pipelines make brute-force elegant. Filter, score, sort — in three lines.
+
+## Result Types for Error Tracking
+
+In security tooling, errors aren't exceptions — they're data. A failed connection, a malformed packet, a rejected credential — these are expected outcomes that need to be tracked, not thrown.
+
+```lateralus
+fn scan_port(host: str, port: int) -> Result<str, str> {
+  if port < 1 { return Result::Err("invalid port") }
+  if port == 80 { return Result::Ok("HTTP") }
+  if port == 443 { return Result::Ok("HTTPS") }
+  if port == 22 { return Result::Ok("SSH") }
+  return Result::Err("closed")
+}
+
+// Scan a range and collect results
+let scan_results = range(1, 1024)
+  |> map((p) => scan_port(target, p))
+  |> filter((r) => match r {
+    Result::Ok(_) => true,
+    _ => false,
+  })
+```
+
+No try/catch. No silent failures. Every port scan returns `Ok("service")` or `Err("reason")`.
+
+## LBE — LATERALUS Binary Encoding
+
+LATERALUS has its own binary format with built-in integrity verification:
+
+```lateralus
+// Encode structured data to binary with HMAC
+let payload = {
+  "target": "192.168.1.1",
+  "ports": [22, 80, 443, 8080],
+  "timestamp": now(),
+  "agent": "lateralus-scanner-v1.5"
+}
+
+let encoded = lbe_encode(payload)
+let decoded = lbe_decode(encoded)
+
+// Tamper detection — HMAC catches modifications
+let tampered = flip_bit(encoded, 42)
+let result = lbe_decode(tampered)  // Result::Err("integrity check failed")
+```
+
+## Pipeline-Driven Data Processing
+
+The pipeline operator `|>` turns multi-step analysis into readable chains:
+
+```lateralus
+// Log analysis pipeline
+let suspicious = raw_logs
+  |> split("\n")
+  |> filter((line) => contains(line, "FAILED"))
+  |> map((line) => extract_ip(line))
+  |> group_by((ip) => ip)
+  |> filter((group) => len(group.items) > 5)
+  |> sort_by((group) => len(group.items))
+  |> reverse()
+```
+
+```lateralus
+// Base64 decode → XOR → hash pipeline
+let processed = encoded_payload
+  |> base64_decode()
+  |> xor_cipher(key)
+  |> sha256()
+```
+
+## Event System for Monitoring
+
+LATERALUS has built-in observability primitives:
+
+```lateralus
+// Emit events when patterns are detected
+fn analyze_traffic(packets: List<Packet>) {
+  for packet in packets {
+    if packet.size > 65535 {
+      emit buffer_overflow_attempt(packet.src, packet.size)
+    }
+    if contains(packet.payload, "../../../") {
+      emit path_traversal_detected(packet.src, packet.payload)
+    }
+  }
+}
+
+// Probe to intercept and inspect
+probe suspicious_activity {
+  println("ALERT: {event.type} from {event.src}")
+}
+```
+
+## Why Security Researchers Should Care
+
+| Feature | Python | Go | LATERALUS |
+|---------|--------|-----|-----------|
+| Built-in crypto | ❌ (pip) | ❌ (import) | ✅ native |
+| Pipeline operator | ❌ | ❌ | ✅ `\|>` |
+| Result types | ❌ | partial | ✅ full ADT |
+| Binary format | ❌ | ❌ | ✅ LBE |
+| Event/probe | ❌ | ❌ | ✅ native |
+| Pattern matching | 3.10+ | ❌ | ✅ since v1.0 |
+
+LATERALUS doesn't replace your existing toolkit — it gives you a better language to build it in. Pipeline-driven. Type-safe. Zero-dependency crypto. Made for the hacker mindset.
+
+---
+
+*Try the crypto demo:*
+
+```
+lateralus run examples/crypto_demo.ltl
+```
+
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>

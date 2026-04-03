@@ -1,0 +1,140 @@
+// ═══════════════════════════════════════════════════════════════════
+// Lateralus stdlib — event
+// Pub/sub event emitter for decoupled component communication
+// ═══════════════════════════════════════════════════════════════════
+
+// ── Construction ────────────────────────────────────────────────────
+
+/// Create a new event emitter.
+/// Returns a map of event_name -> [handler, handler, …].
+pub fn new() -> map {
+    return {}
+}
+
+// ── Registration ────────────────────────────────────────────────────
+
+/// Register a handler for an event.  Returns the updated emitter.
+pub fn on(emitter: map, event: str, handler: fn) -> map {
+    let handlers = []
+    if contains(keys(emitter), event) {
+        handlers = emitter[event]
+    }
+    handlers = handlers + [handler]
+    emitter[event] = handlers
+    return emitter
+}
+
+/// Register a one-shot handler (fires once then removes itself).
+/// Wraps the handler in a list marker so emit() can detect it.
+pub fn once(emitter: map, event: str, handler: fn) -> map {
+    // Store as ["once", handler] to mark as one-shot
+    let handlers = []
+    if contains(keys(emitter), event) {
+        handlers = emitter[event]
+    }
+    handlers = handlers + [["once", handler]]
+    emitter[event] = handlers
+    return emitter
+}
+
+/// Remove a specific handler for an event.
+pub fn off(emitter: map, event: str, handler: fn) -> map {
+    if !contains(keys(emitter), event) {
+        return emitter
+    }
+    let handlers = emitter[event]
+    let new_handlers = handlers |> filter(fn(h) { h != handler })
+    emitter[event] = new_handlers
+    return emitter
+}
+
+/// Remove all handlers for an event.
+pub fn off_all(emitter: map, event: str) -> map {
+    emitter[event] = []
+    return emitter
+}
+
+// ── Emission ────────────────────────────────────────────────────────
+
+/// Fire an event, calling all registered handlers with the given data.
+/// One-shot handlers are removed after firing.
+/// Returns the updated emitter.
+pub fn fire(emitter: map, event: str, data) -> map {
+    if !contains(keys(emitter), event) {
+        return emitter
+    }
+    let handlers = emitter[event]
+    let keep = []
+    for h in handlers {
+        if typeof(h) == "list" && len(h) == 2 && h[0] == "once" {
+            // One-shot handler: fire and discard
+            h[1](data)
+        } else {
+            // Normal handler: fire and keep
+            h(data)
+            keep = keep + [h]
+        }
+    }
+    emitter[event] = keep
+    return emitter
+}
+
+/// Fire an event with no data (convenience).
+pub fn fire_empty(emitter: map, event: str) -> map {
+    return fire(emitter, event, nil)
+}
+
+// ── Inspection ──────────────────────────────────────────────────────
+
+/// List all registered event names.
+pub fn event_names(emitter: map) -> list {
+    return keys(emitter)
+}
+
+/// Count handlers registered for an event.
+pub fn handler_count(emitter: map, event: str) -> int {
+    if !contains(keys(emitter), event) {
+        return 0
+    }
+    return len(emitter[event])
+}
+
+/// Check if an event has any handlers registered.
+pub fn has_listeners(emitter: map, event: str) -> bool {
+    return handler_count(emitter, event) > 0
+}
+
+/// Get total handler count across all events.
+pub fn total_handlers(emitter: map) -> int {
+    let total = 0
+    for name in keys(emitter) {
+        total = total + len(emitter[name])
+    }
+    return total
+}
+
+// ── Utilities ───────────────────────────────────────────────────────
+
+/// Create a filtered emitter that only forwards events matching a predicate.
+pub fn filter_events(emitter: map, pred: fn) -> map {
+    let result = new()
+    for name in keys(emitter) {
+        if pred(name) {
+            result[name] = emitter[name]
+        }
+    }
+    return result
+}
+
+/// Pipe all events from one emitter to another.
+/// Returns the source emitter with forwarding handlers added.
+pub fn pipe(source: map, target: map, event: str) -> map {
+    return on(source, event, fn(data) {
+        fire(target, event, data)
+    })
+}
+
+/// Reset the emitter, removing all handlers.
+pub fn reset(emitter: map) -> map {
+    return new()
+}

@@ -1,0 +1,184 @@
+// ═══════════════════════════════════════════════════════════════════
+// Lateralus stdlib — template
+// Simple string template engine with variable substitution
+// Uses <<name>> delimiters for template variables
+// ═══════════════════════════════════════════════════════════════════
+
+import strings
+
+// ── Core rendering ──────────────────────────────────────────────────
+
+/// Render a template string with variable substitutions.
+/// Variables are denoted by <<name>>.
+/// Example: render("Hello <<name>>!", vars) -> "Hello world!"
+pub fn render(tmpl: str, vars: map) -> str {
+    let result = ""
+    let i = 0
+    while i < len(tmpl) {
+        if i + 1 < len(tmpl) && tmpl[i] == "<" && tmpl[i + 1] == "<" {
+            // Find closing >>
+            let j = i + 2
+            let found = false
+            while j + 1 < len(tmpl) {
+                if tmpl[j] == ">" && tmpl[j + 1] == ">" {
+                    found = true
+                    break
+                }
+                j = j + 1
+            }
+            if found {
+                let name = trim(slice(tmpl, i + 2, j))
+                if contains(keys(vars), name) {
+                    result = result + str(vars[name])
+                } else {
+                    result = result + "<<" + name + ">>"
+                }
+                i = j + 2
+            } else {
+                result = result + tmpl[i]
+                i = i + 1
+            }
+        } else {
+            result = result + tmpl[i]
+            i = i + 1
+        }
+    }
+    return result
+}
+
+/// Render with a default value for missing variables.
+pub fn render_default(tmpl: str, vars: map, default_val: str) -> str {
+    let result = ""
+    let i = 0
+    while i < len(tmpl) {
+        if i + 1 < len(tmpl) && tmpl[i] == "<" && tmpl[i + 1] == "<" {
+            let j = i + 2
+            let found = false
+            while j + 1 < len(tmpl) {
+                if tmpl[j] == ">" && tmpl[j + 1] == ">" {
+                    found = true
+                    break
+                }
+                j = j + 1
+            }
+            if found {
+                let name = trim(slice(tmpl, i + 2, j))
+                if contains(keys(vars), name) {
+                    result = result + str(vars[name])
+                } else {
+                    result = result + default_val
+                }
+                i = j + 2
+            } else {
+                result = result + tmpl[i]
+                i = i + 1
+            }
+        } else {
+            result = result + tmpl[i]
+            i = i + 1
+        }
+    }
+    return result
+}
+
+// ── Building templates ──────────────────────────────────────────────
+
+/// Create a reusable template object.
+pub fn compile(tmpl: str) -> map {
+    let t = {}
+    t["source"] = tmpl
+    t["vars"] = extract_vars(tmpl)
+    return t
+}
+
+/// Render a compiled template with variables.
+pub fn render_template(compiled: map, vars: map) -> str {
+    return render(compiled["source"], vars)
+}
+
+/// Extract all variable names from a template string.
+pub fn extract_vars(tmpl: str) -> list {
+    let vars = []
+    let i = 0
+    while i < len(tmpl) {
+        if i + 1 < len(tmpl) && tmpl[i] == "<" && tmpl[i + 1] == "<" {
+            let j = i + 2
+            let found = false
+            while j + 1 < len(tmpl) {
+                if tmpl[j] == ">" && tmpl[j + 1] == ">" {
+                    found = true
+                    break
+                }
+                j = j + 1
+            }
+            if found {
+                let name = trim(slice(tmpl, i + 2, j))
+                if !contains(vars, name) {
+                    vars = vars + [name]
+                }
+                i = j + 2
+            } else {
+                i = i + 1
+            }
+        } else {
+            i = i + 1
+        }
+    }
+    return vars
+}
+
+// ── List rendering ──────────────────────────────────────────────────
+
+/// Render a template for each item in a list, joining results.
+pub fn render_each(tmpl: str, items: list, item_key: str) -> str {
+    let parts = []
+    for item in items {
+        let vars = {}
+        vars[item_key] = item
+        parts = parts + [render(tmpl, vars)]
+    }
+    return join(parts, "")
+}
+
+/// Render a template for each item with a separator.
+pub fn render_join(tmpl: str, items: list, item_key: str, sep: str) -> str {
+    let parts = []
+    for item in items {
+        let vars = {}
+        vars[item_key] = item
+        parts = parts + [render(tmpl, vars)]
+    }
+    return join(parts, sep)
+}
+
+/// Render a numbered list.
+pub fn render_numbered(tmpl: str, items: list, item_key: str, index_key: str) -> str {
+    let parts = []
+    for i in range(0, len(items)) {
+        let vars = {}
+        vars[item_key] = items[i]
+        vars[index_key] = i + 1
+        parts = parts + [render(tmpl, vars)]
+    }
+    return join(parts, "\n")
+}
+
+// ── Escaping ────────────────────────────────────────────────────────
+
+/// HTML-escape a string.
+pub fn escape_html(s: str) -> str {
+    let result = s
+    result = replace(result, "&", "&amp;")
+    result = replace(result, "<", "&lt;")
+    result = replace(result, ">", "&gt;")
+    return result
+}
+
+/// Render with HTML-escaped variable values.
+pub fn render_safe(tmpl: str, vars: map) -> str {
+    let escaped = {}
+    for k in keys(vars) {
+        escaped[k] = escape_html(str(vars[k]))
+    }
+    return render(tmpl, escaped)
+}

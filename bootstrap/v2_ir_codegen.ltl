@@ -1,0 +1,640 @@
+// ═══════════════════════════════════════════════════════════════════════
+// LATERALUS Self-Hosting Bootstrap — IR Code Generator
+// Translates LATERALUS AST to LATERALUS Intermediate Representation
+//
+// This is the IR generation stage of the self-hosting compiler:
+//   v2_lexer.ltl → v2_parser.ltl → v2_ir_codegen.ltl
+//
+// Generates a textual IR in SSA-like form that maps 1:1 to the
+// IROp enum in lateralus_lang/ir.py.
+//
+// IR format (per instruction):
+//   OP  dest  src1  src2        e.g. "ADD t7 t5 t6"
+// ═══════════════════════════════════════════════════════════════════════
+
+// ─── IR Instruction ──────────────────────────────────────────────────
+
+struct IRInstr {
+    op: str,
+    dest: str,
+    src1: str,
+    src2: str,
+}
+
+fn new_instr(op: str, dest: str, src1: str, src2: str) -> IRInstr {
+    return IRInstr {
+        op: op,
+        dest: dest,
+        src1: src1,
+        src2: src2,
+    }
+}
+
+// ─── Basic Block ─────────────────────────────────────────────────────
+
+struct BasicBlock {
+    label: str,
+    instrs: list,
+}
+
+fn new_block(label: str) -> BasicBlock {
+    return BasicBlock {
+        label: label,
+        instrs: [],
+    }
+}
+
+// ─── IR Function ─────────────────────────────────────────────────────
+
+struct IRFunction {
+    name: str,
+    params: list,
+    blocks: list,
+}
+
+fn new_function(name: str, params: list) -> IRFunction {
+    let entry = new_block(name + ".entry")
+    return IRFunction {
+        name: name,
+        params: params,
+        blocks: [entry],
+    }
+}
+
+// ─── IR Module ───────────────────────────────────────────────────────
+
+struct IRModule {
+    name: str,
+    functions: list,
+    globals: list,
+}
+
+fn new_module(name: str) -> IRModule {
+    return IRModule {
+        name: name,
+        functions: [],
+        globals: [],
+    }
+}
+
+// ─── IR Builder Context ─────────────────────────────────────────────
+
+struct IRBuilder {
+    mod: IRModule,
+    current_fn: IRFunction,
+    current_block: BasicBlock,
+    temp_counter: int,
+    label_counter: int,
+}
+
+fn new_builder(module_name: str) -> IRBuilder {
+    let m = new_module(module_name)
+    return IRBuilder {
+        mod: m,
+        current_fn: none,
+        current_block: none,
+        temp_counter: 0,
+        label_counter: 0,
+    }
+}
+
+fn fresh_temp(b: IRBuilder) -> str {
+    let t = "t" + str(b.temp_counter)
+    b.temp_counter = b.temp_counter + 1
+    return t
+}
+
+fn fresh_label(b: IRBuilder, prefix: str) -> str {
+    let l = prefix + "_" + str(b.label_counter)
+    b.label_counter = b.label_counter + 1
+    return l
+}
+
+fn emit_instr(b: IRBuilder, op: str, dest: str, src1: str, src2: str) {
+    let instr = new_instr(op, dest, src1, src2)
+    if b.current_block != none {
+        b.current_block.instrs = b.current_block.instrs + [instr]
+    } else if b.current_fn == none {
+        // Top-level global instruction
+        b.mod.globals = b.mod.globals + [instr]
+    }
+}
+
+fn begin_function(b: IRBuilder, name: str, params: list) {
+    let func = new_function(name, params)
+    b.current_fn = func
+    b.current_block = func.blocks[0]
+}
+
+fn end_function(b: IRBuilder) {
+    b.mod.functions = b.mod.functions + [b.current_fn]
+    b.current_fn = none
+    b.current_block = none
+}
+
+fn new_bb(b: IRBuilder, label: str) {
+    let block = new_block(label)
+    b.current_fn.blocks = b.current_fn.blocks + [block]
+    b.current_block = block
+}
+
+// ─── Binary Operator → IR Opcode ────────────────────────────────────
+
+fn binop_to_ir(op: str) -> str {
+    match op {
+        "+"  => { return "ADD" },
+        "-"  => { return "SUB" },
+        "*"  => { return "MUL" },
+        "/"  => { return "DIV" },
+        "%"  => { return "MOD" },
+        "**" => { return "POW" },
+        "==" => { return "EQ" },
+        "!=" => { return "NE" },
+        "<"  => { return "LT" },
+        "<=" => { return "LE" },
+        ">"  => { return "GT" },
+        ">=" => { return "GE" },
+        "and" => { return "AND" },
+        "or"  => { return "OR" },
+        "^"   => { return "XOR" },
+        "<<"  => { return "SHL" },
+        ">>"  => { return "SHR" },
+        "|>"  => { return "PIPE" },
+        _     => { return "NOP" },
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Expression → IR (returns temporary holding the result)
+// ═══════════════════════════════════════════════════════════════════════
+
+fn gen_ir_expression(b: IRBuilder, node: ASTNode) -> str {
+    match node.kind {
+        "INT_LIT" => {
+            let t = fresh_temp(b)
+            emit_instr(b, "LOAD_IMM", t, node.value, "")
+            return t
+        },
+        "FLOAT_LIT" => {
+            let t = fresh_temp(b)
+            emit_instr(b, "LOAD_IMM", t, node.value, "")
+            return t
+        },
+        "STRING_LIT" => {
+            let t = fresh_temp(b)
+            emit_instr(b, "LOAD_STR", t, node.value, "")
+            return t
+        },
+        "BOOL_LIT" => {
+            let t = fresh_temp(b)
+            emit_instr(b, "LOAD_BOOL", t, node.value, "")
+            return t
+        },
+        "NONE_LIT" => {
+            let t = fresh_temp(b)
+            emit_instr(b, "LOAD_NIL", t, "", "")
+            return t
+        },
+        "IDENT_EXPR" => {
+            // Variable reference — emit COPY from named variable
+            let t = fresh_temp(b)
+            emit_instr(b, "COPY", t, node.value, "")
+            return t
+        },
+        "BINARY_EXPR" => {
+            let left = gen_ir_expression(b, node.children[0])
+            let right = gen_ir_expression(b, node.children[1])
+            let t = fresh_temp(b)
+            let op = binop_to_ir(node.value)
+            emit_instr(b, op, t, left, right)
+            return t
+        },
+        "UNARY_EXPR" => {
+            let operand = gen_ir_expression(b, node.children[0])
+            let t = fresh_temp(b)
+            if node.value == "not" {
+                emit_instr(b, "NOT", t, operand, "")
+            } else if node.value == "-" {
+                emit_instr(b, "NEG", t, operand, "")
+            } else {
+                emit_instr(b, "BNOT", t, operand, "")
+            }
+            return t
+        },
+        "CALL_EXPR" => {
+            // Evaluate each argument
+            let arg_temps = []
+            for child in node.children {
+                let at = gen_ir_expression(b, child)
+                arg_temps = arg_temps + [at]
+            }
+            let t = fresh_temp(b)
+            emit_instr(b, "CALL", t, node.value, join(arg_temps, ","))
+            return t
+        },
+        "PIPE_EXPR" => {
+            let left = gen_ir_expression(b, node.children[0])
+            let right = gen_ir_expression(b, node.children[1])
+            let t = fresh_temp(b)
+            emit_instr(b, "PIPE", t, left, right)
+            return t
+        },
+        "LIST_LIT" => {
+            let item_temps = []
+            for child in node.children {
+                let it = gen_ir_expression(b, child)
+                item_temps = item_temps + [it]
+            }
+            let t = fresh_temp(b)
+            emit_instr(b, "MAKE_LIST", t, join(item_temps, ","), str(len(item_temps)))
+            return t
+        },
+        "MAP_LIT" => {
+            let t = fresh_temp(b)
+            emit_instr(b, "MAKE_MAP", t, "", "")
+            // Children are key-value pairs
+            let i = 0
+            while i < len(node.children) - 1 {
+                let key_t = gen_ir_expression(b, node.children[i])
+                let val_t = gen_ir_expression(b, node.children[i + 1])
+                emit_instr(b, "SET_IDX", val_t, t, key_t)
+                i = i + 2
+            }
+            return t
+        },
+        "FIELD_ACCESS" => {
+            let obj = gen_ir_expression(b, node.children[0])
+            let t = fresh_temp(b)
+            emit_instr(b, "GET_FIELD", t, obj, node.value)
+            return t
+        },
+        "INDEX_EXPR" => {
+            let obj = gen_ir_expression(b, node.children[0])
+            let idx = gen_ir_expression(b, node.children[1])
+            let t = fresh_temp(b)
+            emit_instr(b, "INDEX", t, obj, idx)
+            return t
+        },
+        "MATCH_EXPR" => {
+            // Simple match → chain of conditionals in IR
+            let scrutinee = gen_ir_expression(b, node.children[0])
+            let result = fresh_temp(b)
+            let after_label = fresh_label(b, "match_end")
+
+            let i = 1
+            while i < len(node.children) {
+                let arm = node.children[i]
+                let arm_label = fresh_label(b, "arm")
+                let next_label = fresh_label(b, "next")
+
+                if arm.value == "_" {
+                    // Default arm
+                    new_bb(b, arm_label)
+                    let val = gen_ir_expression(b, arm.children[0])
+                    emit_instr(b, "COPY", result, val, "")
+                    emit_instr(b, "JMP", after_label, "", "")
+                } else {
+                    // Pattern arm: compare scrutinee to pattern
+                    let pat = gen_ir_expression(b, arm)
+                    let cmp = fresh_temp(b)
+                    emit_instr(b, "EQ", cmp, scrutinee, pat)
+                    emit_instr(b, "JF", next_label, cmp, "")
+
+                    let val = gen_ir_expression(b, arm.children[0])
+                    emit_instr(b, "COPY", result, val, "")
+                    emit_instr(b, "JMP", after_label, "", "")
+
+                    new_bb(b, next_label)
+                }
+
+                i = i + 1
+            }
+
+            new_bb(b, after_label)
+            return result
+        },
+        _ => {
+            // Unknown expression — emit a NOP
+            let t = fresh_temp(b)
+            emit_instr(b, "NOP", t, "unknown:" + node.kind, "")
+            return t
+        },
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Statement → IR
+// ═══════════════════════════════════════════════════════════════════════
+
+fn gen_ir_statement(b: IRBuilder, node: ASTNode) {
+    match node.kind {
+        "LET_DECL" => {
+            let val = gen_ir_expression(b, node.children[0])
+            emit_instr(b, "COPY", node.value, val, "")
+        },
+        "RETURN_STMT" => {
+            if len(node.children) > 0 {
+                let val = gen_ir_expression(b, node.children[0])
+                emit_instr(b, "RETURN", "", val, "")
+            } else {
+                emit_instr(b, "RETURN", "", "", "")
+            }
+        },
+        "IF_STMT" => {
+            let cond = gen_ir_expression(b, node.children[0])
+            let then_label = fresh_label(b, "then")
+            let else_label = fresh_label(b, "else")
+            let after_label = fresh_label(b, "endif")
+
+            emit_instr(b, "JF", else_label, cond, "")
+
+            // Then branch
+            new_bb(b, then_label)
+            gen_ir_block(b, node.children[1])
+            emit_instr(b, "JMP", after_label, "", "")
+
+            // Else branch
+            new_bb(b, else_label)
+            if len(node.children) > 2 {
+                let else_node = node.children[2]
+                if else_node.kind == "IF_STMT" {
+                    gen_ir_statement(b, else_node)
+                } else {
+                    gen_ir_block(b, else_node)
+                }
+            }
+            emit_instr(b, "JMP", after_label, "", "")
+
+            new_bb(b, after_label)
+        },
+        "WHILE_STMT" => {
+            let cond_label = fresh_label(b, "while_cond")
+            let body_label = fresh_label(b, "while_body")
+            let after_label = fresh_label(b, "while_end")
+
+            emit_instr(b, "JMP", cond_label, "", "")
+
+            // Condition
+            new_bb(b, cond_label)
+            let cond = gen_ir_expression(b, node.children[0])
+            emit_instr(b, "JF", after_label, cond, "")
+
+            // Body
+            new_bb(b, body_label)
+            gen_ir_block(b, node.children[1])
+            emit_instr(b, "JMP", cond_label, "", "")
+
+            new_bb(b, after_label)
+        },
+        "FOR_STMT" => {
+            // for x in iterable { ... }
+            let iterable = gen_ir_expression(b, node.children[0])
+            let idx = fresh_temp(b)
+            let length = fresh_temp(b)
+            let cond_label = fresh_label(b, "for_cond")
+            let body_label = fresh_label(b, "for_body")
+            let after_label = fresh_label(b, "for_end")
+
+            emit_instr(b, "LOAD_IMM", idx, "0", "")
+            emit_instr(b, "CALL", length, "len", iterable)
+            emit_instr(b, "JMP", cond_label, "", "")
+
+            // Condition: idx < length
+            new_bb(b, cond_label)
+            let cmp = fresh_temp(b)
+            emit_instr(b, "LT", cmp, idx, length)
+            emit_instr(b, "JF", after_label, cmp, "")
+
+            // Body: bind loop variable
+            new_bb(b, body_label)
+            let elem = fresh_temp(b)
+            emit_instr(b, "INDEX", elem, iterable, idx)
+            emit_instr(b, "COPY", node.value, elem, "")
+
+            gen_ir_block(b, node.children[1])
+
+            // Increment
+            let one = fresh_temp(b)
+            emit_instr(b, "LOAD_IMM", one, "1", "")
+            let next_idx = fresh_temp(b)
+            emit_instr(b, "ADD", next_idx, idx, one)
+            emit_instr(b, "COPY", idx, next_idx, "")
+            emit_instr(b, "JMP", cond_label, "", "")
+
+            new_bb(b, after_label)
+        },
+        "FN_DECL" => {
+            // Collect parameter names
+            let params_node = node.children[0]
+            let param_names = []
+            for param in params_node.children {
+                param_names = param_names + [param.value]
+            }
+
+            begin_function(b, node.value, param_names)
+
+            // Generate function body
+            gen_ir_block(b, node.children[1])
+
+            // Implicit return at end
+            emit_instr(b, "RETURN", "", "", "")
+
+            end_function(b)
+        },
+        "STRUCT_DECL" => {
+            // Register struct type
+            let field_names = []
+            for child in node.children {
+                field_names = field_names + [child.value]
+            }
+            emit_instr(b, "DEFINE_STRUCT", "", node.value, join(field_names, ","))
+        },
+        "BLOCK" => {
+            gen_ir_block(b, node)
+        },
+        _ => {
+            // Expression statement — evaluate for side effects
+            gen_ir_expression(b, node)
+        },
+    }
+}
+
+fn gen_ir_block(b: IRBuilder, node: ASTNode) {
+    for child in node.children {
+        gen_ir_statement(b, child)
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Program → IR Module
+// ═══════════════════════════════════════════════════════════════════════
+
+fn gen_ir_program(b: IRBuilder, program: ASTNode) {
+    for child in program.children {
+        if child.kind == "FN_DECL" {
+            gen_ir_statement(b, child)
+        } else {
+            // Top-level statement → goes into implicit __main__ function
+        }
+    }
+
+    // Collect top-level non-function statements into __main__
+    let has_top_level = false
+    for child in program.children {
+        if child.kind != "FN_DECL" and child.kind != "STRUCT_DECL" {
+            has_top_level = true
+        }
+    }
+
+    if has_top_level {
+        begin_function(b, "__main__", [])
+        for child in program.children {
+            if child.kind != "FN_DECL" and child.kind != "STRUCT_DECL" {
+                gen_ir_statement(b, child)
+            } else if child.kind == "STRUCT_DECL" {
+                gen_ir_statement(b, child)
+            }
+        }
+        emit_instr(b, "RETURN", "", "", "")
+        end_function(b)
+    }
+}
+
+fn generate_ir(ast: ASTNode) -> IRModule {
+    let b = new_builder("main")
+    gen_ir_program(b, ast)
+    return b.mod
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// IR → Text serialization (human-readable + machine-parseable)
+// ═══════════════════════════════════════════════════════════════════════
+
+fn format_instr(instr: IRInstr) -> str {
+    let parts = [instr.op]
+    if instr.dest != "" {
+        parts = parts + [instr.dest]
+    }
+    if instr.src1 != "" {
+        parts = parts + [instr.src1]
+    }
+    if instr.src2 != "" {
+        parts = parts + [instr.src2]
+    }
+    return "    " + join(parts, "  ")
+}
+
+fn format_block(block: BasicBlock) -> str {
+    let lines = [block.label + ":"]
+    for instr in block.instrs {
+        lines = lines + [format_instr(instr)]
+    }
+    return join(lines, "\n")
+}
+
+fn format_function(func: IRFunction) -> str {
+    let header = "fn " + func.name + "(" + join(func.params, ", ") + "):"
+    let lines = [header]
+    for block in func.blocks {
+        lines = lines + [format_block(block)]
+    }
+    return join(lines, "\n")
+}
+
+fn format_module(mod: IRModule) -> str {
+    let lines = [
+        "; LATERALUS IR — Module: " + mod.name,
+        "; Generated by Self-Hosted Compiler v0.2",
+        "",
+    ]
+
+    // Global instructions
+    if len(mod.globals) > 0 {
+        lines = lines + ["; --- Globals ---"]
+        for instr in mod.globals {
+            lines = lines + [format_instr(instr)]
+        }
+        lines = lines + [""]
+    }
+
+    // Functions
+    for func in mod.functions {
+        lines = lines + [format_function(func), ""]
+    }
+
+    return join(lines, "\n")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Full Pipeline: Source → Tokens → AST → IR → Text
+// ═══════════════════════════════════════════════════════════════════════
+
+fn compile_to_ir(source: str) -> str {
+    // Stage 1: Lex
+    let tokens = tokenize(source)
+
+    // Stage 2: Parse
+    let parser = new_parser(tokens)
+    let ast = parse_program(parser)
+
+    // Stage 3: Generate IR
+    let ir_module = generate_ir(ast)
+
+    // Stage 4: Serialize
+    return format_module(ir_module)
+}
+
+fn ir_stats(source: str) -> map {
+    let tokens = tokenize(source)
+    let parser = new_parser(tokens)
+    let ast = parse_program(parser)
+    let ir_module = generate_ir(ast)
+
+    let total_instrs = 0
+    let total_blocks = 0
+    for func in ir_module.functions {
+        total_blocks = total_blocks + len(func.blocks)
+        for block in func.blocks {
+            total_instrs = total_instrs + len(block.instrs)
+        }
+    }
+
+    let result = {}
+    result["source_lines"] = len(split(source, "\n"))
+    result["tokens"] = len(tokens)
+    result["functions"] = len(ir_module.functions)
+    result["blocks"] = total_blocks
+    result["instructions"] = total_instrs
+    return result
+}
+
+// ─── Main ─────────────────────────────────────────────────────────────
+
+fn main() {
+    println("LATERALUS Self-Hosted Compiler v0.2")
+    println("====================================")
+    println("Pipeline: Source → Lexer → Parser → IR → Text")
+
+    let source = "fn factorial(n) {\n    if n <= 1 {\n        return 1\n    }\n    return n * factorial(n - 1)\n}\n\nlet result = factorial(10)\nprintln(result)"
+
+    println("\n--- Input Source ---")
+    println(source)
+
+    // Run the IR pipeline
+    let ir_text = compile_to_ir(source)
+
+    println("\n--- Generated IR ---")
+    println(ir_text)
+
+    // Statistics
+    let stats = ir_stats(source)
+    println("\n--- IR Statistics ---")
+    println("  Source lines:   " + str(stats["source_lines"]))
+    println("  Tokens:         " + str(stats["tokens"]))
+    println("  IR Functions:   " + str(stats["functions"]))
+    println("  Basic Blocks:   " + str(stats["blocks"]))
+    println("  IR Instructions:" + str(stats["instructions"]))
+
+    println("\nSelf-hosted IR codegen: OPERATIONAL")
+    println("Next milestone: Optimization passes (DCE, constant folding)")
+}

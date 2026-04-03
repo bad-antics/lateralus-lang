@@ -1,0 +1,142 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// LateralusOS — VGA Text Mode Driver
+// ═══════════════════════════════════════════════════════════════════════════
+// Copyright (c) 2025 bad-antics. All rights reserved.
+// ═══════════════════════════════════════════════════════════════════════════
+
+import hal::cpu
+
+const VGA_ADDR   = 0xB8000
+const VGA_WIDTH  = 80
+const VGA_HEIGHT = 25
+
+enum Color {
+    Black        = 0,
+    Blue         = 1,
+    Green        = 2,
+    Cyan         = 3,
+    Red          = 4,
+    Magenta      = 5,
+    Brown        = 6,
+    LightGrey    = 7,
+    DarkGrey     = 8,
+    LightBlue    = 9,
+    LightGreen   = 10,
+    LightCyan    = 11,
+    LightRed     = 12,
+    LightMagenta = 13,
+    Yellow       = 14,
+    White        = 15,
+}
+
+let mut cursor_x: int = 0
+let mut cursor_y: int = 0
+let mut fg_color: int = 15   // white
+let mut bg_color: int = 0    // black
+
+pub fn set_color(fg: Color, bg: Color) {
+    fg_color = fg as int
+    bg_color = bg as int
+}
+
+fn color_byte() -> int {
+    return (bg_color << 4) | fg_color
+}
+
+pub fn clear() {
+    let color = color_byte()
+    let i = 0
+    while i < VGA_WIDTH * VGA_HEIGHT {
+        cpu::write_mem8(VGA_ADDR + i * 2, 0x20)       // space
+        cpu::write_mem8(VGA_ADDR + i * 2 + 1, color)
+        i = i + 1
+    }
+    cursor_x = 0
+    cursor_y = 0
+    update_cursor()
+}
+
+fn scroll() {
+    // Move all lines up by one
+    let i = 0
+    while i < (VGA_HEIGHT - 1) * VGA_WIDTH {
+        let src = VGA_ADDR + (i + VGA_WIDTH) * 2
+        let dst = VGA_ADDR + i * 2
+        cpu::write_mem8(dst, cpu::read_mem8(src))
+        cpu::write_mem8(dst + 1, cpu::read_mem8(src + 1))
+        i = i + 1
+    }
+
+    // Clear last line
+    let color = color_byte()
+    let j = (VGA_HEIGHT - 1) * VGA_WIDTH
+    while j < VGA_HEIGHT * VGA_WIDTH {
+        cpu::write_mem8(VGA_ADDR + j * 2, 0x20)
+        cpu::write_mem8(VGA_ADDR + j * 2 + 1, color)
+        j = j + 1
+    }
+    cursor_y = VGA_HEIGHT - 1
+}
+
+pub fn putchar(c: byte) {
+    if c == 0x0A {  // newline
+        cursor_x = 0
+        cursor_y = cursor_y + 1
+    } else if c == 0x0D {  // carriage return
+        cursor_x = 0
+    } else if c == 0x09 {  // tab
+        cursor_x = (cursor_x + 8) & ~7
+    } else if c == 0x08 {  // backspace
+        if cursor_x > 0 {
+            cursor_x = cursor_x - 1
+            let offset = (cursor_y * VGA_WIDTH + cursor_x) * 2
+            cpu::write_mem8(VGA_ADDR + offset, 0x20)
+            cpu::write_mem8(VGA_ADDR + offset + 1, color_byte())
+        }
+    } else {
+        let offset = (cursor_y * VGA_WIDTH + cursor_x) * 2
+        cpu::write_mem8(VGA_ADDR + offset, c as int)
+        cpu::write_mem8(VGA_ADDR + offset + 1, color_byte())
+        cursor_x = cursor_x + 1
+    }
+
+    if cursor_x >= VGA_WIDTH {
+        cursor_x = 0
+        cursor_y = cursor_y + 1
+    }
+    if cursor_y >= VGA_HEIGHT {
+        scroll()
+    }
+    update_cursor()
+}
+
+pub fn print(s: str) {
+    let i = 0
+    while i < s.len() {
+        putchar(s[i] as byte)
+        i = i + 1
+    }
+}
+
+pub fn println(s: str) {
+    print(s)
+    putchar(0x0A)
+}
+
+pub fn print_at(x: int, y: int, s: str) {
+    cursor_x = x
+    cursor_y = y
+    print(s)
+}
+
+fn update_cursor() {
+    let pos = cursor_y * VGA_WIDTH + cursor_x
+    cpu::outb(0x3D4, 14)
+    cpu::outb(0x3D5, (pos >> 8) & 0xFF)
+    cpu::outb(0x3D4, 15)
+    cpu::outb(0x3D5, pos & 0xFF)
+}
+
+pub fn get_cursor() -> (int, int) {
+    return (cursor_x, cursor_y)
+}

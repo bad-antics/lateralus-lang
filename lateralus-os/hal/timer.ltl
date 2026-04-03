@@ -1,0 +1,75 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// LateralusOS — Timer (PIT / APIC)
+// ═══════════════════════════════════════════════════════════════════════════
+// Copyright (c) 2025 bad-antics. All rights reserved.
+// ═══════════════════════════════════════════════════════════════════════════
+
+import hal::serial
+import hal::cpu
+import hal::interrupts
+
+const PIT_FREQ     = 1193182    // PIT oscillator frequency (Hz)
+const PIT_CHANNEL0 = 0x40
+const PIT_COMMAND  = 0x43
+const MAX_CALLBACKS = 16
+
+let mut tick_count: int = 0
+let mut tick_freq:  int = 0     // configured frequency in Hz
+let mut callbacks:  [fn(); MAX_CALLBACKS] = [null; MAX_CALLBACKS]
+let mut cb_count:   int = 0
+
+pub fn init_pit(freq: int) {
+    serial::log("[timer] Configuring PIT at {freq} Hz")
+
+    tick_freq = freq
+    let divisor = PIT_FREQ / freq
+
+    // Channel 0, lobyte/hibyte, rate generator
+    cpu::outb(PIT_COMMAND, 0x36)
+    cpu::outb(PIT_CHANNEL0, divisor & 0xFF)
+    cpu::outb(PIT_CHANNEL0, (divisor >> 8) & 0xFF)
+
+    // Register timer IRQ handler
+    interrupts::register_handler(32, timer_irq)
+    interrupts::enable_irq(0)
+
+    serial::log("[timer] PIT ready (divisor={divisor}, actual freq={PIT_FREQ / divisor} Hz)")
+}
+
+fn timer_irq(error_code: int) {
+    tick_count = tick_count + 1
+
+    // Fire all registered callbacks
+    let i = 0
+    while i < cb_count {
+        if callbacks[i] != null {
+            callbacks[i]()
+        }
+        i = i + 1
+    }
+
+    interrupts::eoi(0)
+}
+
+pub fn register_callback(cb: fn()) {
+    if cb_count < MAX_CALLBACKS {
+        callbacks[cb_count] = cb
+        cb_count = cb_count + 1
+    }
+}
+
+pub fn get_ticks() -> int {
+    return tick_count
+}
+
+pub fn get_uptime_ms() -> int {
+    if tick_freq == 0 { return 0 }
+    return (tick_count * 1000) / tick_freq
+}
+
+pub fn sleep_ms(ms: int) {
+    let target = tick_count + (ms * tick_freq) / 1000
+    while tick_count < target {
+        cpu::halt()
+    }
+}

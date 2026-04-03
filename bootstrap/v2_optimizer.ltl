@@ -1,0 +1,857 @@
+// ═══════════════════════════════════════════════════════════════════════
+// v2_optimizer.ltl  —  LATERALUS Compilation Optimizer
+// Self-hosted port of lateralus_lang/optimizer.py
+//
+// Implements optimization passes on the IR/AST to improve generated code:
+//   - Constant folding (binary, unary, pure function calls)
+//   - Dead code elimination
+//   - Strength reduction (shift/mask for pow-of-2 multiply/divide/mod)
+//   - Common subexpression elimination (CSE)
+//   - Tail call optimization (TCO) detection
+//   - Pipeline fusion analysis
+//   - Optimization report generation
+//
+// v2.3.0
+// ═══════════════════════════════════════════════════════════════════════
+
+import math
+
+// ─── Optimization Level ────────────────────────────────────────────────
+
+const OPT_O0 = 0
+const OPT_O1 = 1
+const OPT_O2 = 2
+const OPT_O3 = 3
+
+fn opt_level_name(level: int) -> str {
+    return match level {
+        0 => "O0",
+        1 => "O1",
+        2 => "O2",
+        3 => "O3",
+        _ => "O?",
+    }
+}
+
+// ─── Fold Result ───────────────────────────────────────────────────────
+
+struct FoldResult {
+    folded: bool
+    value: any
+    folded_count: int
+}
+
+fn fold_ok(val: any) -> FoldResult {
+    return FoldResult { folded: true, value: val, folded_count: 1 }
+}
+
+fn fold_fail() -> FoldResult {
+    return FoldResult { folded: false, value: none, folded_count: 0 }
+}
+
+// ─── Constant Folding: Binary ──────────────────────────────────────────
+
+fn is_const(v: any) -> bool {
+    // Check if value is a foldable constant (int, float, bool, string)
+    if v == none {
+        return false
+    }
+    if v == true {
+        return true
+    }
+    if v == false {
+        return true
+    }
+    let s = str(v)
+    let slen = len(s)
+    if slen == 0 {
+        return true
+    }
+    // Check numeric
+    let start = 0
+    if slen > 0 {
+        let c0 = s[0]
+        if str(c0) == "-" {
+            start = 1
+        }
+    }
+    let all_num = true
+    let has_dot = false
+    let i = start
+    while i < slen {
+        let ch = str(s[i])
+        if ch == "." {
+            has_dot = true
+        } else if ch != "0" && ch != "1" && ch != "2" && ch != "3" && ch != "4" && ch != "5" && ch != "6" && ch != "7" && ch != "8" && ch != "9" {
+            all_num = false
+        }
+        i = i + 1
+    }
+    if all_num && slen > start {
+        return true
+    }
+    // String constants are also foldable
+    return true
+}
+
+fn try_fold_binary(op: str, left: any, right: any) -> FoldResult {
+    // Attempt to fold a binary operation on two constants
+
+    if op == "+" {
+        return fold_ok(left + right)
+    }
+    if op == "-" {
+        return fold_ok(left - right)
+    }
+    if op == "*" {
+        return fold_ok(left * right)
+    }
+    if op == "/" {
+        if right == 0 {
+            return fold_fail()
+        }
+        return fold_ok(left / right)
+    }
+    if op == "%" {
+        if right == 0 {
+            return fold_fail()
+        }
+        return fold_ok(left % right)
+    }
+    if op == "==" {
+        return fold_ok(left == right)
+    }
+    if op == "!=" {
+        return fold_ok(left != right)
+    }
+    if op == "<" {
+        return fold_ok(left < right)
+    }
+    if op == ">" {
+        return fold_ok(left > right)
+    }
+    if op == "<=" {
+        return fold_ok(left <= right)
+    }
+    if op == ">=" {
+        return fold_ok(left >= right)
+    }
+    if op == "and" {
+        return fold_ok(left && right)
+    }
+    if op == "or" {
+        return fold_ok(left || right)
+    }
+
+    return fold_fail()
+}
+
+// ─── Constant Folding: Unary ───────────────────────────────────────────
+
+fn try_fold_unary(op: str, operand: any) -> FoldResult {
+    if op == "-" {
+        return fold_ok(0 - operand)
+    }
+    if op == "not" {
+        return fold_ok(!operand)
+    }
+    if op == "!" {
+        return fold_ok(!operand)
+    }
+    return fold_fail()
+}
+
+// ─── Constant Folding: Pure Function Calls ─────────────────────────────
+
+fn try_fold_call(fn_name: str, args: list) -> FoldResult {
+    let argc = len(args)
+
+    // Single-argument pure builtins
+    if argc == 1 {
+        let a = args[0]
+        if fn_name == "abs" {
+            if a < 0 {
+                return fold_ok(0 - a)
+            }
+            return fold_ok(a)
+        }
+        if fn_name == "str" {
+            return fold_ok(str(a))
+        }
+        if fn_name == "int" {
+            return fold_ok(to_int(a))
+        }
+        if fn_name == "float" {
+            return fold_ok(to_float(a))
+        }
+        if fn_name == "sqrt" {
+            if a >= 0 {
+                return fold_ok(sqrt(to_float(a)))
+            }
+            return fold_fail()
+        }
+        if fn_name == "floor" {
+            return fold_ok(floor(to_float(a)))
+        }
+        if fn_name == "ceil" {
+            return fold_ok(ceil(to_float(a)))
+        }
+    }
+
+    // Two-argument pure builtins
+    if argc == 2 {
+        let a = args[0]
+        let b = args[1]
+        if fn_name == "min" {
+            if a < b {
+                return fold_ok(a)
+            }
+            return fold_ok(b)
+        }
+        if fn_name == "max" {
+            if a > b {
+                return fold_ok(a)
+            }
+            return fold_ok(b)
+        }
+        if fn_name == "round" {
+            return fold_ok(round(to_float(a), to_int(b)))
+        }
+    }
+
+    return fold_fail()
+}
+
+// ─── Dead Code Elimination ─────────────────────────────────────────────
+
+struct DCEResult {
+    eliminated: list
+    count: int
+}
+
+fn find_dead_variables(defined: list, used: list, protected: list) -> list {
+    // Find variables that are defined but never used
+    // All lists are lists of strings (variable names)
+    let dead = []
+    let di = 0
+    while di < len(defined) {
+        let name = defined[di]
+        let is_used = false
+        let ui = 0
+        while ui < len(used) {
+            if used[ui] == name {
+                is_used = true
+            }
+            ui = ui + 1
+        }
+
+        let is_protected = false
+        let pi = 0
+        while pi < len(protected) {
+            if protected[pi] == name {
+                is_protected = true
+            }
+            pi = pi + 1
+        }
+
+        // Never eliminate special names
+        if name == "_" || name == "__" || name == "self" || name == "this" || name == "main" || name == "init" {
+            is_protected = true
+        }
+
+        if !is_used && !is_protected {
+            dead = dead + [name]
+        }
+        di = di + 1
+    }
+    return dead
+}
+
+fn find_unreachable_after_return(stmt_types: list) -> list {
+    // Find statement indices that come after an unconditional return
+    // stmt_types is a list of strings: "return", "throw", or other
+    let unreachable = []
+    let found_terminator = false
+    let i = 0
+    while i < len(stmt_types) {
+        if found_terminator {
+            unreachable = unreachable + [i]
+        } else {
+            if stmt_types[i] == "return" || stmt_types[i] == "throw" {
+                found_terminator = true
+            }
+        }
+        i = i + 1
+    }
+    return unreachable
+}
+
+// ─── Strength Reduction ────────────────────────────────────────────────
+
+struct StrengthReduction {
+    pattern: str
+    replacement: str
+    condition: str
+}
+
+fn get_strength_reductions() -> list {
+    return [
+        StrengthReduction { pattern: "x * 2",  replacement: "x << 1", condition: "int" },
+        StrengthReduction { pattern: "x * 4",  replacement: "x << 2", condition: "int" },
+        StrengthReduction { pattern: "x * 8",  replacement: "x << 3", condition: "int" },
+        StrengthReduction { pattern: "x * 16", replacement: "x << 4", condition: "int" },
+        StrengthReduction { pattern: "x / 2",  replacement: "x >> 1", condition: "int" },
+        StrengthReduction { pattern: "x / 4",  replacement: "x >> 2", condition: "int" },
+        StrengthReduction { pattern: "x % 2",  replacement: "x & 1",  condition: "int" },
+        StrengthReduction { pattern: "x % 4",  replacement: "x & 3",  condition: "int" },
+        StrengthReduction { pattern: "x % 8",  replacement: "x & 7",  condition: "int" },
+        StrengthReduction { pattern: "x * 1",  replacement: "x",      condition: "" },
+        StrengthReduction { pattern: "x + 0",  replacement: "x",      condition: "" },
+        StrengthReduction { pattern: "x - 0",  replacement: "x",      condition: "" },
+        StrengthReduction { pattern: "x * 0",  replacement: "0",      condition: "" },
+    ]
+}
+
+struct SRResult {
+    kind: str
+    left: any
+    right: any
+}
+
+fn apply_strength_reduction(op: str, left: any, right: any) -> SRResult {
+    // Try to apply strength reduction to a binary operation
+    // Returns SRResult with kind "none", "const", "identity", or new op
+
+    // x * 0 = 0
+    if op == "*" && right == 0 {
+        return SRResult { kind: "const", left: 0, right: none }
+    }
+    if op == "*" && left == 0 {
+        return SRResult { kind: "const", left: 0, right: none }
+    }
+
+    // x * 1 = x
+    if op == "*" && right == 1 {
+        return SRResult { kind: "identity", left: left, right: none }
+    }
+    if op == "*" && left == 1 {
+        return SRResult { kind: "identity", left: right, right: none }
+    }
+
+    // x + 0 = x
+    if op == "+" && right == 0 {
+        return SRResult { kind: "identity", left: left, right: none }
+    }
+    if op == "+" && left == 0 {
+        return SRResult { kind: "identity", left: right, right: none }
+    }
+
+    // x - 0 = x
+    if op == "-" && right == 0 {
+        return SRResult { kind: "identity", left: left, right: none }
+    }
+
+    // x ** 0 = 1
+    if op == "**" && right == 0 {
+        return SRResult { kind: "const", left: 1, right: none }
+    }
+
+    // x ** 1 = x
+    if op == "**" && right == 1 {
+        return SRResult { kind: "identity", left: left, right: none }
+    }
+
+    // x ** 2 = x * x (faster)
+    if op == "**" && right == 2 {
+        return SRResult { kind: "*", left: left, right: left }
+    }
+
+    // Multiply by power of 2 -> shift
+    if op == "*" {
+        let shift = power_of_two_shift(right)
+        if shift > 0 {
+            return SRResult { kind: "<<", left: left, right: shift }
+        }
+    }
+
+    return SRResult { kind: "none", left: none, right: none }
+}
+
+fn power_of_two_shift(n: any) -> int {
+    // Returns the shift amount if n is a power of 2, else 0
+    if n == 2 { return 1 }
+    if n == 4 { return 2 }
+    if n == 8 { return 3 }
+    if n == 16 { return 4 }
+    if n == 32 { return 5 }
+    if n == 64 { return 6 }
+    if n == 128 { return 7 }
+    if n == 256 { return 8 }
+    return 0
+}
+
+// ─── Common Subexpression Elimination ──────────────────────────────────
+
+struct CSEEntry {
+    expression: str
+    temp_var: str
+    uses: int
+}
+
+struct CSETracker {
+    entries: list
+    counter: int
+}
+
+fn cse_new() -> CSETracker {
+    return CSETracker { entries: [], counter: 0 }
+}
+
+fn cse_next_temp(tracker: CSETracker) -> str {
+    tracker.counter = tracker.counter + 1
+    return "__cse_" + str(tracker.counter)
+}
+
+fn cse_register(tracker: CSETracker, expr_key: str) -> str {
+    // Register an expression. Returns temp var name if seen before, else ""
+    let i = 0
+    while i < len(tracker.entries) {
+        let entry = tracker.entries[i]
+        if entry.expression == expr_key {
+            entry.uses = entry.uses + 1
+            return entry.temp_var
+        }
+        i = i + 1
+    }
+    // New expression
+    let temp = cse_next_temp(tracker)
+    tracker.entries = tracker.entries + [CSEEntry { expression: expr_key, temp_var: temp, uses: 1 }]
+    return ""
+}
+
+fn cse_get_reusable(tracker: CSETracker) -> list {
+    // Get expressions that appear more than once (worth extracting)
+    let result = []
+    let i = 0
+    while i < len(tracker.entries) {
+        if tracker.entries[i].uses > 1 {
+            result = result + [tracker.entries[i]]
+        }
+        i = i + 1
+    }
+    return result
+}
+
+// ─── Tail Call Optimization Detection ──────────────────────────────────
+
+struct TCOCandidate {
+    fn_name: str
+    recursive_calls: int
+    is_tail_recursive: bool
+    can_be_loopified: bool
+}
+
+fn detect_tail_recursion(fn_name: str, return_exprs: list) -> TCOCandidate {
+    // Analyze return expressions to determine if function is tail-recursive.
+    // return_exprs is a list of maps with keys:
+    //   "kind": "call" | "binary" | "other"
+    //   "callee": function name (for "call" kind)
+    //   "is_last": bool — whether this return is in tail position
+    let recursive_calls = 0
+    let is_tail = true
+
+    let i = 0
+    while i < len(return_exprs) {
+        let expr = return_exprs[i]
+        if expr["kind"] == "call" && expr["callee"] == fn_name {
+            recursive_calls = recursive_calls + 1
+            if expr["is_last"] != true {
+                is_tail = false
+            }
+        }
+        if expr["kind"] == "binary" {
+            // Binary op on recursive result = not tail
+            is_tail = false
+        }
+        i = i + 1
+    }
+
+    let is_tr = is_tail && recursive_calls > 0
+    return TCOCandidate {
+        fn_name: fn_name,
+        recursive_calls: recursive_calls,
+        is_tail_recursive: is_tr,
+        can_be_loopified: is_tr,
+    }
+}
+
+// ─── Pipeline Fusion ───────────────────────────────────────────────────
+
+fn is_fusable_pair(a: str, b: str) -> bool {
+    // Check if two pipeline stages can be fused
+    if a == "map" && b == "map" { return true }
+    if a == "map" && b == "filter" { return true }
+    if a == "filter" && b == "map" { return true }
+    if a == "filter" && b == "filter" { return true }
+    return false
+}
+
+fn can_fuse_pipeline(stages: list) -> bool {
+    // Determine if a pipeline's stages can be fused into a single pass
+    if len(stages) < 2 {
+        return false
+    }
+    let i = 0
+    while i < len(stages) - 1 {
+        if !is_fusable_pair(stages[i], stages[i + 1]) {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+fn describe_fusion(stages: list) -> str {
+    if !can_fuse_pipeline(stages) {
+        return "Cannot fuse: incompatible stages"
+    }
+
+    let all_map = true
+    let all_filter = true
+    let si = 0
+    while si < len(stages) {
+        if stages[si] != "map" {
+            all_map = false
+        }
+        if stages[si] != "filter" {
+            all_filter = false
+        }
+        si = si + 1
+    }
+
+    let n = str(len(stages))
+    if all_map {
+        return "Fuse " + n + " map stages into single composed map"
+    }
+    if all_filter {
+        return "Fuse " + n + " filter stages into single combined filter"
+    }
+    return "Fuse " + n + " stages into single loop with transform+predicate"
+}
+
+// ─── Optimization Report ───────────────────────────────────────────────
+
+struct OptReport {
+    level: int
+    constants_folded: int
+    dead_vars_eliminated: int
+    unreachable_stmts_removed: int
+    strength_reductions: int
+    cse_extractions: int
+    tco_candidates: list
+    pipeline_fusions: int
+}
+
+fn report_new(level: int) -> OptReport {
+    return OptReport {
+        level: level,
+        constants_folded: 0,
+        dead_vars_eliminated: 0,
+        unreachable_stmts_removed: 0,
+        strength_reductions: 0,
+        cse_extractions: 0,
+        tco_candidates: [],
+        pipeline_fusions: 0,
+    }
+}
+
+fn report_total(r: OptReport) -> int {
+    return r.constants_folded + r.dead_vars_eliminated + r.unreachable_stmts_removed + r.strength_reductions + r.cse_extractions + len(r.tco_candidates) + r.pipeline_fusions
+}
+
+fn report_summary(r: OptReport) -> str {
+    let lines = [
+        "Optimization Report (level: " + opt_level_name(r.level) + ")",
+        "  Constants folded:          " + str(r.constants_folded),
+        "  Dead variables eliminated: " + str(r.dead_vars_eliminated),
+        "  Unreachable code removed:  " + str(r.unreachable_stmts_removed),
+        "  Strength reductions:       " + str(r.strength_reductions),
+        "  CSE extractions:           " + str(r.cse_extractions),
+        "  TCO candidates:            " + str(len(r.tco_candidates)),
+        "  Pipeline fusions:          " + str(r.pipeline_fusions),
+        "  Total optimizations:       " + str(report_total(r)),
+    ]
+    if len(r.tco_candidates) > 0 {
+        lines = lines + ["  TCO functions: " + join(r.tco_candidates, ", ")]
+    }
+    return join(lines, "\n")
+}
+
+// ─── Main Optimizer ────────────────────────────────────────────────────
+
+struct Optimizer {
+    level: int
+    report: OptReport
+    cse: CSETracker
+}
+
+fn optimizer_new(level: int) -> Optimizer {
+    return Optimizer {
+        level: level,
+        report: report_new(level),
+        cse: cse_new(),
+    }
+}
+
+fn opt_constant(opt: Optimizer, op: str, left: any, right: any) -> FoldResult {
+    if opt.level < OPT_O1 {
+        return fold_fail()
+    }
+    let result = try_fold_binary(op, left, right)
+    if result.folded {
+        opt.report.constants_folded = opt.report.constants_folded + result.folded_count
+    }
+    return result
+}
+
+fn opt_unary(opt: Optimizer, op: str, operand: any) -> FoldResult {
+    if opt.level < OPT_O1 {
+        return fold_fail()
+    }
+    let result = try_fold_unary(op, operand)
+    if result.folded {
+        opt.report.constants_folded = opt.report.constants_folded + result.folded_count
+    }
+    return result
+}
+
+fn opt_call(opt: Optimizer, fn_name: str, args: list) -> FoldResult {
+    if opt.level < OPT_O1 {
+        return fold_fail()
+    }
+    let result = try_fold_call(fn_name, args)
+    if result.folded {
+        opt.report.constants_folded = opt.report.constants_folded + result.folded_count
+    }
+    return result
+}
+
+fn opt_strength(opt: Optimizer, op: str, left: any, right: any) -> SRResult {
+    if opt.level < OPT_O2 {
+        return SRResult { kind: "none", left: none, right: none }
+    }
+    let result = apply_strength_reduction(op, left, right)
+    if result.kind != "none" {
+        opt.report.strength_reductions = opt.report.strength_reductions + 1
+    }
+    return result
+}
+
+fn opt_track_expr(opt: Optimizer, expr_key: str) -> str {
+    if opt.level < OPT_O2 {
+        return ""
+    }
+    return cse_register(opt.cse, expr_key)
+}
+
+fn opt_check_tco(opt: Optimizer, fn_name: str, return_exprs: list) -> TCOCandidate {
+    let candidate = detect_tail_recursion(fn_name, return_exprs)
+    if candidate.is_tail_recursive {
+        opt.report.tco_candidates = opt.report.tco_candidates + [fn_name]
+    }
+    return candidate
+}
+
+fn opt_check_pipeline(opt: Optimizer, stages: list) -> bool {
+    if opt.level < OPT_O3 {
+        return false
+    }
+    if can_fuse_pipeline(stages) {
+        opt.report.pipeline_fusions = opt.report.pipeline_fusions + 1
+        return true
+    }
+    return false
+}
+
+fn opt_finalize(opt: Optimizer) -> OptReport {
+    opt.report.cse_extractions = len(cse_get_reusable(opt.cse))
+    return opt.report
+}
+
+// ─── Self-Test ──────────────────────────────────────────────────────────
+
+fn assert_eq(label: str, actual: any, expected: any) {
+    if str(actual) == str(expected) {
+        println("  PASS: " + label)
+    } else {
+        println("  FAIL: " + label)
+        println("    expected: " + str(expected))
+        println("    actual:   " + str(actual))
+    }
+}
+
+fn main() {
+    println("=== Optimizer Self-Test ===")
+    println("")
+
+    // ── Constant Folding: Binary ────────────────────────────────────
+    println("-- Constant Folding: Binary --")
+    let r1 = try_fold_binary("+", 3, 4)
+    assert_eq("3 + 4 = 7", r1.value, 7)
+    assert_eq("3 + 4 folded", r1.folded, true)
+
+    let r2 = try_fold_binary("*", 6, 7)
+    assert_eq("6 * 7 = 42", r2.value, 42)
+
+    let r3 = try_fold_binary("/", 10, 0)
+    assert_eq("10 / 0 not folded", r3.folded, false)
+
+    let r4 = try_fold_binary("==", 5, 5)
+    assert_eq("5 == 5", r4.value, true)
+
+    let r5 = try_fold_binary("<", 3, 7)
+    assert_eq("3 < 7", r5.value, true)
+
+    let r6 = try_fold_binary("and", true, false)
+    assert_eq("true and false", r6.value, false)
+
+    let r7 = try_fold_binary("or", true, false)
+    assert_eq("true or false", r7.value, true)
+
+    // ── Constant Folding: Unary ─────────────────────────────────────
+    println("")
+    println("-- Constant Folding: Unary --")
+    let u1 = try_fold_unary("-", 42)
+    assert_eq("-(42) = -42", u1.value, -42)
+
+    let u2 = try_fold_unary("not", true)
+    assert_eq("not true = false", u2.value, false)
+
+    let u3 = try_fold_unary("!", false)
+    assert_eq("!false = true", u3.value, true)
+
+    // ── Constant Folding: Pure Calls ────────────────────────────────
+    println("")
+    println("-- Constant Folding: Pure Calls --")
+    let c1 = try_fold_call("abs", [-5])
+    assert_eq("abs(-5) = 5", c1.value, 5)
+
+    let c2 = try_fold_call("min", [3, 7])
+    assert_eq("min(3,7) = 3", c2.value, 3)
+
+    let c3 = try_fold_call("max", [3, 7])
+    assert_eq("max(3,7) = 7", c3.value, 7)
+
+    let c4 = try_fold_call("floor", [3.7])
+    assert_eq("floor(3.7) = 3", c4.value, 3)
+
+    // ── Dead Code Elimination ───────────────────────────────────────
+    println("")
+    println("-- Dead Code Elimination --")
+    let dead = find_dead_variables(["a", "b", "c", "x"], ["a", "c"], [])
+    assert_eq("dead vars count", len(dead), 2)
+
+    let dead2 = find_dead_variables(["main", "x"], ["main"], [])
+    assert_eq("main not eliminated", len(dead2), 1)
+
+    let unreachable = find_unreachable_after_return(["assign", "return", "assign", "call"])
+    assert_eq("unreachable count", len(unreachable), 2)
+    assert_eq("unreachable[0]", unreachable[0], 2)
+
+    // ── Strength Reduction ──────────────────────────────────────────
+    println("")
+    println("-- Strength Reduction --")
+    let sr1 = apply_strength_reduction("*", "x", 0)
+    assert_eq("x*0 = const 0", sr1.kind, "const")
+
+    let sr2 = apply_strength_reduction("*", "x", 1)
+    assert_eq("x*1 = identity", sr2.kind, "identity")
+
+    let sr3 = apply_strength_reduction("+", "x", 0)
+    assert_eq("x+0 = identity", sr3.kind, "identity")
+
+    let sr4 = apply_strength_reduction("**", "x", 2)
+    assert_eq("x**2 = x*x", sr4.kind, "*")
+
+    let sr5 = apply_strength_reduction("**", "x", 0)
+    assert_eq("x**0 = const 1", sr5.kind, "const")
+
+    let sr6 = apply_strength_reduction("*", "x", 8)
+    assert_eq("x*8 = x<<3", sr6.kind, "<<")
+    assert_eq("x*8 shift=3", sr6.right, 3)
+
+    // ── CSE Tracker ─────────────────────────────────────────────────
+    println("")
+    println("-- CSE Tracker --")
+    let cse = cse_new()
+    let t1 = cse_register(cse, "a + b")
+    assert_eq("first reg returns empty", t1, "")
+    let t2 = cse_register(cse, "a + b")
+    assert_eq("second reg returns temp", len(t2) > 0, true)
+    let t3 = cse_register(cse, "c + d")
+    assert_eq("new expr returns empty", t3, "")
+    let reusable = cse_get_reusable(cse)
+    assert_eq("one reusable expr", len(reusable), 1)
+    assert_eq("reusable is a+b", reusable[0].expression, "a + b")
+
+    // ── Pipeline Fusion ─────────────────────────────────────────────
+    println("")
+    println("-- Pipeline Fusion --")
+    assert_eq("map|map fusable", can_fuse_pipeline(["map", "map"]), true)
+    assert_eq("map|filter fusable", can_fuse_pipeline(["map", "filter"]), true)
+    assert_eq("filter|map fusable", can_fuse_pipeline(["filter", "map"]), true)
+    assert_eq("sort|map not fusable", can_fuse_pipeline(["sort", "map"]), false)
+    assert_eq("single not fusable", can_fuse_pipeline(["map"]), false)
+
+    let desc = describe_fusion(["map", "map", "map"])
+    assert_eq("3 maps fusion", desc, "Fuse 3 map stages into single composed map")
+
+    // ── TCO Detection ───────────────────────────────────────────────
+    println("")
+    println("-- TCO Detection --")
+    let re1 = {}
+    re1["kind"] = "call"
+    re1["callee"] = "fib"
+    re1["is_last"] = true
+    let return_exprs1 = [re1]
+    let tco1 = detect_tail_recursion("fib", return_exprs1)
+    assert_eq("fib tail recursive", tco1.is_tail_recursive, true)
+
+    let re2 = {}
+    re2["kind"] = "binary"
+    re2["callee"] = ""
+    re2["is_last"] = true
+    let return_exprs2 = [re2]
+    let tco2 = detect_tail_recursion("fib", return_exprs2)
+    assert_eq("binary not tail", tco2.is_tail_recursive, false)
+
+    // ── Full Optimizer Flow ─────────────────────────────────────────
+    println("")
+    println("-- Full Optimizer Flow --")
+    let opt = optimizer_new(OPT_O3)
+
+    let fold = opt_constant(opt, "+", 10, 20)
+    assert_eq("opt fold 10+20", fold.value, 30)
+
+    let sr = opt_strength(opt, "**", "x", 2)
+    assert_eq("opt strength x**2", sr.kind, "*")
+
+    let cse_res = opt_track_expr(opt, "a * b")
+    assert_eq("first track empty", cse_res, "")
+    let cse_res2 = opt_track_expr(opt, "a * b")
+    assert_eq("second track has temp", len(cse_res2) > 0, true)
+
+    let fused = opt_check_pipeline(opt, ["map", "filter"])
+    assert_eq("pipeline fused", fused, true)
+
+    let report = opt_finalize(opt)
+    assert_eq("report total > 0", report_total(report) > 0, true)
+
+    println("")
+    println(report_summary(report))
+
+    println("")
+    println("=== All Optimizer Tests Complete ===")
+}
+
+main()

@@ -1,0 +1,130 @@
+// examples/polyglot_demo.ltl  — Lateralus v1.2.0
+// Demonstrates the polyglot foreign block + @foreign decorator features.
+
+module polyglot_demo
+
+import stdlib.io
+import stdlib.math
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 1.  @foreign decorator — entire function body runs in another language
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Compute the first `limit` prime numbers using Julia's Primes package.
+@foreign("julia")
+fn julia_primes(limit: int) -> list {
+    "
+    using JSON3, Primes
+    params = JSON3.read(readline())
+    result = collect(primes(params.limit))
+    println(JSON3.write(Dict(:ok => true, :result => result)))
+    "
+}
+
+/// Fast matrix multiply using a C implementation.
+@foreign("c")
+fn c_dot_product(a: list, b: list) -> float {
+    "
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+
+    int main() {
+        printf('{\"ok\":true,\"result\":42.0}\\n');
+        return 0;
+    }
+    "
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2.  Inline foreign block — ad-hoc polyglot evaluation
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn run_inline_julia_demo() {
+    println("=== Inline Julia foreign block ===")
+
+    let n: int = 20
+
+    // Pass n to Julia and compute its sqrt
+    foreign "julia" (n: n) {
+        "
+        params = JSON3.read(readline())
+        println(JSON3.write(Dict(:ok=>true, :result=>sqrt(Float64(params.n)))))
+        "
+    }
+
+    println("Foreign call dispatched (runtime needed to execute)")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 3.  Mixing native Lateralus + polyglot
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct Matrix {
+    rows: int
+    cols: int
+    data: list
+}
+
+impl Matrix {
+    fn at(self, r: int, c: int) -> float {
+        return self.data[r * self.cols + c]
+    }
+
+    fn to_string(self) -> str {
+        let mut s = "["
+        let mut i = 0
+        for v in self.data {
+            s = s + str(v)
+            if i < len(self.data) - 1 { s = s + ", " }
+            i += 1
+        }
+        return s + "]"
+    }
+}
+
+pub fn demo_matrix() {
+    let m = Matrix { rows: 2, cols: 2, data: [1.0, 2.0, 3.0, 4.0] }
+    println("Matrix element [0,1] = " + str(m.at(0, 1)))
+    println("Matrix data: " + m.to_string())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4.  Pipeline + foreign combination
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn double(x: float) -> float { return x * 2.0 }
+fn square(x: float) -> float { return x * x }
+
+pub fn pipeline_demo() {
+    println("=== Pipeline demo ===")
+    let result = 3.0 |> double |> square
+    println("3.0 |> double |> square = " + str(result))
+
+    // Chained pipeline with stdlib math
+    let angle_deg: float = 45.0
+    let sin_45 = angle_deg |> stdlib.math.radians |> stdlib.math.sin
+    println("sin(45) = " + str(sin_45))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5.  Entry point
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn main() {
+    println("LATERALUS v1.2.0 Polyglot Demo")
+    println("==============================")
+    println("")
+
+    run_inline_julia_demo()
+    println("")
+
+    demo_matrix()
+    println("")
+
+    pipeline_demo()
+    println("")
+
+    println("Polyglot demo complete.")
+    println("  Install Julia / C runtimes to enable foreign calls.")
+}

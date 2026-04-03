@@ -1,0 +1,508 @@
+// ═══════════════════════════════════════════════════════════════════════
+// LATERALUS Self-Hosting Bootstrap — Lexer
+// The beginning of writing LATERALUS v2 in LATERALUS itself
+//
+// This is the lexer (tokenizer) for LATERALUS, written in LATERALUS.
+// It reads source code character-by-character and produces tokens.
+// ═══════════════════════════════════════════════════════════════════════
+
+// ─── Token Types ──────────────────────────────────────────────────────
+
+// ─── Token Types (string constants) ───────────────────────────────────
+// Used for token kind identification throughout the lexer
+
+let TT_INT       = "INT"
+let TT_FLOAT     = "FLOAT"
+let TT_STRING    = "STRING"
+let TT_BOOL      = "BOOL"
+let TT_NONE      = "NONE"
+let TT_IDENT     = "IDENT"
+let TT_KW_FN     = "KW_FN"
+let TT_KW_LET    = "KW_LET"
+let TT_KW_CONST  = "KW_CONST"
+let TT_KW_IF     = "KW_IF"
+let TT_KW_ELSE   = "KW_ELSE"
+let TT_KW_FOR    = "KW_FOR"
+let TT_KW_WHILE  = "KW_WHILE"
+let TT_KW_RETURN = "KW_RETURN"
+let TT_KW_MATCH  = "KW_MATCH"
+let TT_KW_STRUCT = "KW_STRUCT"
+let TT_KW_ENUM   = "KW_ENUM"
+let TT_KW_IMPL   = "KW_IMPL"
+let TT_KW_TRAIT  = "KW_TRAIT"
+let TT_KW_IMPORT = "KW_IMPORT"
+let TT_KW_FROM   = "KW_FROM"
+let TT_KW_AS     = "KW_AS"
+let TT_KW_IN     = "KW_IN"
+let TT_KW_THROW  = "KW_THROW"
+let TT_KW_TRY    = "KW_TRY"
+let TT_KW_CATCH  = "KW_CATCH"
+let TT_KW_TYPE   = "KW_TYPE"
+let TT_KW_LOOP   = "KW_LOOP"
+let TT_KW_BREAK  = "KW_BREAK"
+let TT_KW_CONTINUE = "KW_CONTINUE"
+let TT_KW_AND    = "KW_AND"
+let TT_KW_OR     = "KW_OR"
+let TT_KW_NOT    = "KW_NOT"
+let TT_PLUS      = "PLUS"
+let TT_MINUS     = "MINUS"
+let TT_STAR      = "STAR"
+let TT_SLASH     = "SLASH"
+let TT_PERCENT   = "PERCENT"
+let TT_POWER     = "POWER"
+let TT_EQ        = "EQ"
+let TT_NEQ       = "NEQ"
+let TT_LT        = "LT"
+let TT_GT        = "GT"
+let TT_LTE       = "LTE"
+let TT_GTE       = "GTE"
+let TT_ASSIGN    = "ASSIGN"
+let TT_FAT_ARROW = "FAT_ARROW"
+let TT_ARROW     = "ARROW"
+let TT_PIPE      = "PIPE"
+let TT_DOT       = "DOT"
+let TT_AT        = "AT"
+let TT_LPAREN    = "LPAREN"
+let TT_RPAREN    = "RPAREN"
+let TT_LBRACE    = "LBRACE"
+let TT_RBRACE    = "RBRACE"
+let TT_LBRACKET  = "LBRACKET"
+let TT_RBRACKET  = "RBRACKET"
+let TT_COMMA     = "COMMA"
+let TT_COLON     = "COLON"
+let TT_SEMICOLON = "SEMICOLON"
+let TT_EOF       = "EOF"
+let TT_NEWLINE   = "NEWLINE"
+
+// Keyword lookup: maps word → token kind string
+fn keyword_lookup(word: str) -> str {
+    match word {
+        "fn"       => { return "KW_FN" },
+        "let"      => { return "KW_LET" },
+        "const"    => { return "KW_CONST" },
+        "if"       => { return "KW_IF" },
+        "else"     => { return "KW_ELSE" },
+        "for"      => { return "KW_FOR" },
+        "while"    => { return "KW_WHILE" },
+        "return"   => { return "KW_RETURN" },
+        "match"    => { return "KW_MATCH" },
+        "struct"   => { return "KW_STRUCT" },
+        "enum"     => { return "KW_ENUM" },
+        "impl"     => { return "KW_IMPL" },
+        "trait"    => { return "KW_TRAIT" },
+        "import"   => { return "KW_IMPORT" },
+        "from"     => { return "KW_FROM" },
+        "as"       => { return "KW_AS" },
+        "in"       => { return "KW_IN" },
+        "throw"    => { return "KW_THROW" },
+        "try"      => { return "KW_TRY" },
+        "catch"    => { return "KW_CATCH" },
+        "loop"     => { return "KW_LOOP" },
+        "break"    => { return "KW_BREAK" },
+        "continue" => { return "KW_CONTINUE" },
+        "and"      => { return "KW_AND" },
+        "or"       => { return "KW_OR" },
+        "not"      => { return "KW_NOT" },
+        "true"     => { return "BOOL" },
+        "false"    => { return "BOOL" },
+        "none"     => { return "NONE" },
+        _          => { return "IDENT" },
+    }
+}
+
+// ─── Token ────────────────────────────────────────────────────────────
+
+struct Token {
+    kind: str,
+    value: str,
+    line: int,
+    column: int,
+}
+
+fn token_to_string(tok: Token) -> str {
+    return "Token(" + tok.kind + ", " + repr(tok.value) +
+           ", line=" + str(tok.line) + ", col=" + str(tok.column) + ")"
+}
+
+// ─── Lexer ────────────────────────────────────────────────────────────
+
+struct Lexer {
+    source: str,
+    pos: int,
+    line: int,
+    column: int,
+    tokens: list,
+}
+
+fn new_lexer(source: str) -> Lexer {
+    return Lexer {
+        source: source,
+        pos: 0,
+        line: 1,
+        column: 0,
+        tokens: [],
+    }
+}
+
+fn lexer_peek(lex: Lexer) -> str {
+    if lex.pos >= len(lex.source) {
+        return ""
+    }
+    return char_at(lex.source, lex.pos)
+}
+
+fn lexer_peek_next(lex: Lexer) -> str {
+    if lex.pos + 1 >= len(lex.source) {
+        return ""
+    }
+    return char_at(lex.source, lex.pos + 1)
+}
+
+fn lexer_advance(lex: Lexer) -> str {
+    let ch = lexer_peek(lex)
+    lex.pos = lex.pos + 1
+    if ch == "\n" {
+        lex.line = lex.line + 1
+        lex.column = 0
+    } else {
+        lex.column = lex.column + 1
+    }
+    return ch
+}
+
+fn is_alpha(ch: str) -> bool {
+    return (ch >= "a" and ch <= "z") or (ch >= "A" and ch <= "Z") or ch == "_"
+}
+
+fn is_digit(ch: str) -> bool {
+    return ch >= "0" and ch <= "9"
+}
+
+fn is_alnum(ch: str) -> bool {
+    return is_alpha(ch) or is_digit(ch)
+}
+
+fn is_whitespace(ch: str) -> bool {
+    return ch == " " or ch == "\t" or ch == "\r"
+}
+
+fn make_token(lex: Lexer, tok_kind: str, value: str) -> Token {
+    return Token {
+        kind: tok_kind,
+        value: value,
+        line: lex.line,
+        column: lex.column,
+    }
+}
+
+// ─── Skip whitespace and comments ─────────────────────────────────────
+
+fn skip_whitespace(lex: Lexer) {
+    while lex.pos < len(lex.source) {
+        let ch = lexer_peek(lex)
+        if is_whitespace(ch) {
+            lexer_advance(lex)
+        } else if ch == "/" and lexer_peek_next(lex) == "/" {
+            // Line comment
+            while (lex.pos < len(lex.source)) and (lexer_peek(lex) != "\n") {
+                lexer_advance(lex)
+            }
+        } else {
+            break
+        }
+    }
+}
+
+// ─── Read number ──────────────────────────────────────────────────────
+
+fn read_number(lex: Lexer) -> Token {
+    let start = lex.pos
+    let is_float = false
+
+    while (lex.pos < len(lex.source)) and (is_digit(lexer_peek(lex))) {
+        lexer_advance(lex)
+    }
+
+    if lex.pos < len(lex.source) and lexer_peek(lex) == "." and is_digit(lexer_peek_next(lex)) {
+        is_float = true
+        lexer_advance(lex)  // consume .
+        while (lex.pos < len(lex.source)) and (is_digit(lexer_peek(lex))) {
+            lexer_advance(lex)
+        }
+    }
+
+    // Scientific notation
+    if lex.pos < len(lex.source) and (lexer_peek(lex) == "e" or lexer_peek(lex) == "E") {
+        is_float = true
+        lexer_advance(lex)
+        if lex.pos < len(lex.source) and (lexer_peek(lex) == "+" or lexer_peek(lex) == "-") {
+            lexer_advance(lex)
+        }
+        while (lex.pos < len(lex.source)) and (is_digit(lexer_peek(lex))) {
+            lexer_advance(lex)
+        }
+    }
+
+    let value = substring(lex.source, start, lex.pos)
+    let tk = "INT"
+    if is_float {
+        tk = "FLOAT"
+    }
+    return make_token(lex, tk, value)
+}
+
+// ─── Read string ──────────────────────────────────────────────────────
+
+fn is_backslash(ch: str) -> bool {
+    return ch == "\\"
+}
+
+fn read_string(lex: Lexer) -> Token {
+    let quote = lexer_advance(lex)  // consume opening quote
+    let value = ""
+
+    while (lex.pos < len(lex.source)) and (lexer_peek(lex) != quote) {
+        let ch = lexer_advance(lex)
+        if is_backslash(ch) {
+            let esc = lexer_advance(lex)
+            if esc == "n" {
+                value = value + "\n"
+            }
+            if esc == "t" {
+                value = value + "\t"
+            }
+            if esc != "n" and esc != "t" {
+                value = value + esc
+            }
+        } else {
+            value = value + ch
+        }
+    }
+
+    if lex.pos >= len(lex.source) {
+        throw ValueError("Unterminated string at line " + str(lex.line))
+    }
+    lexer_advance(lex)  // consume closing quote
+
+    return make_token(lex, "STRING", value)
+}
+
+// ─── Read identifier/keyword ──────────────────────────────────────────
+
+fn read_identifier(lex: Lexer) -> Token {
+    let start = lex.pos
+
+    while (lex.pos < len(lex.source)) and (is_alnum(lexer_peek(lex))) {
+        lexer_advance(lex)
+    }
+
+    let word = substring(lex.source, start, lex.pos)
+
+    // Check if it's a keyword
+    let tk = keyword_lookup(word)
+    return make_token(lex, tk, word)
+}
+
+// ─── Main tokenize function ──────────────────────────────────────────
+
+fn tokenize(source: str) -> list {
+    let lex = new_lexer(source)
+    let tokens = []
+
+    while lex.pos < len(lex.source) {
+        skip_whitespace(lex)
+
+        if lex.pos >= len(lex.source) {
+            break
+        }
+
+        let ch = lexer_peek(lex)
+
+        // Newline
+        if ch == "\n" {
+            lexer_advance(lex)
+            tokens = tokens + [make_token(lex, "NEWLINE", "\n")]
+            continue
+        }
+
+        // Numbers
+        if is_digit(ch) {
+            tokens = tokens + [read_number(lex)]
+            continue
+        }
+
+        // Strings
+        if ch == "\"" or ch == "'" {
+            tokens = tokens + [read_string(lex)]
+            continue
+        }
+
+        // Identifiers and keywords
+        if is_alpha(ch) {
+            tokens = tokens + [read_identifier(lex)]
+            continue
+        }
+
+        // Two-character operators
+        let next = lexer_peek_next(lex)
+
+        if ch == "|" and next == ">" {
+            lexer_advance(lex)
+            lexer_advance(lex)
+            tokens = tokens + [make_token(lex, "PIPE", "|>")]
+            continue
+        }
+        if ch == "|" and next == "?" {
+            lexer_advance(lex)
+            lexer_advance(lex)
+            tokens = tokens + [make_token(lex, "PIPE_OPT", "|?")]
+            continue
+        }
+        if ch == "=" and next == ">" {
+            lexer_advance(lex)
+            lexer_advance(lex)
+            tokens = tokens + [make_token(lex, "FAT_ARROW", "=>")]
+            continue
+        }
+        if ch == "-" and next == ">" {
+            lexer_advance(lex)
+            lexer_advance(lex)
+            tokens = tokens + [make_token(lex, "ARROW", "->")]
+            continue
+        }
+        if ch == "=" and next == "=" {
+            lexer_advance(lex)
+            lexer_advance(lex)
+            tokens = tokens + [make_token(lex, "EQ", "==")]
+            continue
+        }
+        if ch == "!" and next == "=" {
+            lexer_advance(lex)
+            lexer_advance(lex)
+            tokens = tokens + [make_token(lex, "NEQ", "!=")]
+            continue
+        }
+        if ch == "<" and next == "=" {
+            lexer_advance(lex)
+            lexer_advance(lex)
+            tokens = tokens + [make_token(lex, "LTE", "<=")]
+            continue
+        }
+        if ch == ">" and next == "=" {
+            lexer_advance(lex)
+            lexer_advance(lex)
+            tokens = tokens + [make_token(lex, "GTE", ">=")]
+            continue
+        }
+        if ch == "*" and next == "*" {
+            lexer_advance(lex)
+            lexer_advance(lex)
+            tokens = tokens + [make_token(lex, "POWER", "**")]
+            continue
+        }
+
+        // Single-character operators and delimiters
+        lexer_advance(lex)
+
+        if ch == "+" {
+            tokens = tokens + [make_token(lex, "PLUS", "+")]
+        } else if ch == "-" {
+            tokens = tokens + [make_token(lex, "MINUS", "-")]
+        } else if ch == "*" {
+            tokens = tokens + [make_token(lex, "STAR", "*")]
+        } else if ch == "/" {
+            tokens = tokens + [make_token(lex, "SLASH", "/")]
+        } else if ch == "%" {
+            tokens = tokens + [make_token(lex, "PERCENT", "%")]
+        } else if ch == "=" {
+            tokens = tokens + [make_token(lex, "ASSIGN", "=")]
+        } else if ch == "<" {
+            tokens = tokens + [make_token(lex, "LT", "<")]
+        } else if ch == ">" {
+            tokens = tokens + [make_token(lex, "GT", ">")]
+        } else if ch == "(" {
+            tokens = tokens + [make_token(lex, "LPAREN", "(")]
+        } else if ch == ")" {
+            tokens = tokens + [make_token(lex, "RPAREN", ")")]
+        } else if ch == "[" {
+            tokens = tokens + [make_token(lex, "LBRACKET", "[")]
+        } else if ch == "]" {
+            tokens = tokens + [make_token(lex, "RBRACKET", "]")]
+        } else if ch == "," {
+            tokens = tokens + [make_token(lex, "COMMA", ",")]
+        } else if ch == ":" {
+            tokens = tokens + [make_token(lex, "COLON", ":")]
+        } else if ch == ";" {
+            tokens = tokens + [make_token(lex, "SEMICOLON", ";")]
+        } else if ch == "." {
+            tokens = tokens + [make_token(lex, "DOT", ".")]
+        } else if ch == "@" {
+            tokens = tokens + [make_token(lex, "AT", "@")]
+        } else {
+            // Braces handled separately to avoid parser confusion
+            let is_lbrace = (ch == "{")
+            let is_rbrace = (ch == "}")
+            if is_lbrace {
+                tokens = tokens + [make_token(lex, "LBRACE", ch)]
+            } else if is_rbrace {
+                tokens = tokens + [make_token(lex, "RBRACE", ch)]
+            } else {
+                throw ValueError("Unexpected character at line " + str(lex.line) +
+                                ", column " + str(lex.column))
+            }
+        }
+    }
+
+    tokens = tokens + [make_token(lex, "EOF", "")]
+    return tokens
+}
+
+// ─── Test the self-hosted lexer ───────────────────────────────────────
+
+@test
+fn test_lexer_basic() {
+    let tokens = tokenize("let x = 42")
+    assert_eq(tokens[0].kind, "KW_LET")
+    assert_eq(tokens[1].kind, "IDENT")
+    assert_eq(tokens[1].value, "x")
+    assert_eq(tokens[2].kind, "ASSIGN")
+    assert_eq(tokens[3].kind, "INT")
+    assert_eq(tokens[3].value, "42")
+}
+
+@test
+fn test_lexer_pipeline() {
+    let tokens = tokenize("data |> map(f)")
+    assert_eq(tokens[0].kind, "IDENT")
+    assert_eq(tokens[1].kind, "PIPE")
+    assert_eq(tokens[2].kind, "IDENT")
+}
+
+@test
+fn test_lexer_function() {
+    let tokens = tokenize("fn add(a: int, b: int) -> int { return a + b }")
+    assert_eq(tokens[0].kind, "KW_FN")
+    assert_eq(tokens[1].kind, "IDENT")
+    assert_eq(tokens[1].value, "add")
+}
+
+fn main() {
+    println("LATERALUS Self-Hosted Lexer v0.1")
+    println("================================")
+
+    let source = "fn fibonacci(n: int) -> int {\n    if n <= 1 { return n }\n    return fibonacci(n - 1) + fibonacci(n - 2)\n}"
+
+    println("\nSource:")
+    println(source)
+    println("\nTokens:")
+
+    let tokens = tokenize(source)
+    for tok in tokens {
+        if tok.kind != "NEWLINE" {
+            println("  " + token_to_string(tok))
+        }
+    }
+
+    println("\nTotal tokens: " + str(len(tokens)))
+    println("Self-hosting bootstrap: OPERATIONAL")
+}

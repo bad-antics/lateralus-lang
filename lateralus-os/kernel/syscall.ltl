@@ -1,0 +1,244 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// LateralusOS — System Call Interface
+// ═══════════════════════════════════════════════════════════════════════════
+// Copyright (c) 2025 bad-antics. All rights reserved.
+//
+// System call table and dispatcher. User-mode programs invoke syscalls
+// via the `syscall` instruction (x86_64) or `svc` (ARM).
+//
+// Syscall convention (x86_64):
+//   rax = syscall number
+//   rdi = arg1, rsi = arg2, rdx = arg3, r10 = arg4, r8 = arg5, r9 = arg6
+//   Return value in rax
+// ═══════════════════════════════════════════════════════════════════════════
+
+import hal::serial
+import hal::cpu
+import kernel::memory
+import kernel::scheduler
+import kernel::ipc
+import kernel::panic
+
+// ── Syscall Numbers ─────────────────────────────────────────────────────
+
+const SYS_EXIT        = 0
+const SYS_READ        = 1
+const SYS_WRITE       = 2
+const SYS_OPEN        = 3
+const SYS_CLOSE       = 4
+const SYS_FORK        = 5
+const SYS_EXEC        = 6
+const SYS_WAIT        = 7
+const SYS_GETPID      = 8
+const SYS_SLEEP       = 9
+const SYS_YIELD       = 10
+const SYS_MMAP        = 11
+const SYS_MUNMAP      = 12
+const SYS_BRK         = 13
+const SYS_IOCTL       = 14
+const SYS_STAT        = 15
+const SYS_MKDIR       = 16
+const SYS_RMDIR       = 17
+const SYS_UNLINK      = 18
+const SYS_RENAME      = 19
+const SYS_PIPE        = 20
+const SYS_DUP         = 21
+const SYS_KILL        = 22
+const SYS_SIGNAL      = 23
+const SYS_TIME        = 24
+const SYS_SPAWN       = 25
+const SYS_CHAN_CREATE  = 26
+const SYS_CHAN_SEND    = 27
+const SYS_CHAN_RECV    = 28
+const SYS_CHAN_CLOSE   = 29
+const SYS_SHM_CREATE  = 30
+const SYS_SHM_ATTACH  = 31
+const SYS_SHM_DETACH  = 32
+const SYS_MESH_CONNECT = 33
+const SYS_MESH_SEND    = 34
+const SYS_MESH_RECV    = 35
+const SYS_CRYPTO_SEAL  = 36
+const SYS_CRYPTO_OPEN  = 37
+const MAX_SYSCALL      = 64
+
+// ── Syscall Table ───────────────────────────────────────────────────────
+
+let mut syscall_table: [fn(int, int, int, int, int, int) -> int; MAX_SYSCALL] = [null; MAX_SYSCALL]
+
+pub fn init_table() {
+    serial::log("[syscall] Registering system calls")
+
+    syscall_table[SYS_EXIT]       = sys_exit
+    syscall_table[SYS_WRITE]      = sys_write
+    syscall_table[SYS_GETPID]     = sys_getpid
+    syscall_table[SYS_SLEEP]      = sys_sleep
+    syscall_table[SYS_YIELD]      = sys_yield
+    syscall_table[SYS_SPAWN]      = sys_spawn
+    syscall_table[SYS_KILL]       = sys_kill
+    syscall_table[SYS_CHAN_CREATE] = sys_chan_create
+    syscall_table[SYS_CHAN_SEND]   = sys_chan_send
+    syscall_table[SYS_CHAN_RECV]   = sys_chan_recv
+    syscall_table[SYS_CHAN_CLOSE]  = sys_chan_close
+    syscall_table[SYS_TIME]       = sys_time
+    syscall_table[SYS_MMAP]       = sys_mmap
+    syscall_table[SYS_BRK]        = sys_brk
+
+    // Install syscall handler via SYSCALL/SYSRET MSRs (x86_64)
+    cpu::write_msr(0xC0000081, 0x001B000800000000)  // STAR
+    cpu::write_msr(0xC0000082, syscall_entry as int) // LSTAR
+    cpu::write_msr(0xC0000084, 0x200)               // SFMASK — disable IF on entry
+
+    serial::log("[syscall] {SYS_CRYPTO_OPEN + 1} syscalls registered")
+}
+
+// ── Syscall Dispatcher ──────────────────────────────────────────────────
+
+pub fn syscall_entry(regs: RegisterState) -> int {
+    let num  = regs.rax
+    let arg1 = regs.rdi
+    let arg2 = regs.rsi
+    let arg3 = regs.rdx
+    let arg4 = regs.r10
+    let arg5 = regs.r8
+    let arg6 = regs.r9
+
+    if num >= MAX_SYSCALL || syscall_table[num] == null {
+        serial::log("[syscall] Invalid syscall {num} from PID {scheduler::current_pid()}")
+        return -1
+    }
+
+    return syscall_table[num](arg1, arg2, arg3, arg4, arg5, arg6)
+}
+
+// ── Syscall Implementations ─────────────────────────────────────────────
+
+fn sys_exit(code: int, _: int, _: int, _: int, _: int, _: int) -> int {
+    scheduler::exit(code)
+    return 0  // unreachable
+}
+
+fn sys_write(fd: int, buf_addr: int, count: int, _: int, _: int, _: int) -> int {
+    if fd == 1 || fd == 2 {
+        // stdout / stderr → VGA + serial
+        let i = 0
+        while i < count {
+            let c = cpu::read_mem8(buf_addr + i)
+            serial::putc(c as byte)
+            // vga::putc(c as byte)  — would need import
+            i = i + 1
+        }
+        return count
+    }
+    // TODO: file descriptor table lookup
+    return -1
+}
+
+fn sys_getpid(_: int, _: int, _: int, _: int, _: int, _: int) -> int {
+    return scheduler::current_pid()
+}
+
+fn sys_sleep(ms: int, _: int, _: int, _: int, _: int, _: int) -> int {
+    scheduler::sleep_current(ms)
+    return 0
+}
+
+fn sys_yield(_: int, _: int, _: int, _: int, _: int, _: int) -> int {
+    scheduler::schedule()
+    return 0
+}
+
+fn sys_spawn(name_addr: int, entry_addr: int, _: int, _: int, _: int, _: int) -> int {
+    // Read process name from user memory
+    let name = cpu::read_string(name_addr)
+    let pid = scheduler::spawn(name, entry_addr as fn())
+    return pid
+}
+
+fn sys_kill(pid: int, sig: int, _: int, _: int, _: int, _: int) -> int {
+    match ipc::send_signal(pid, sig) {
+        Result::Ok(_) => return 0,
+        Result::Err(_) => return -1,
+    }
+}
+
+fn sys_chan_create(name_addr: int, cap: int, _: int, _: int, _: int, _: int) -> int {
+    let name = cpu::read_string(name_addr)
+    match ipc::channel_create(name, cap) {
+        Result::Ok(id) => return id,
+        Result::Err(_) => return -1,
+    }
+}
+
+fn sys_chan_send(ch_id: int, data: int, _: int, _: int, _: int, _: int) -> int {
+    match ipc::channel_send(ch_id, data) {
+        Result::Ok(_) => return 0,
+        Result::Err(_) => return -1,
+    }
+}
+
+fn sys_chan_recv(ch_id: int, _: int, _: int, _: int, _: int, _: int) -> int {
+    match ipc::channel_recv(ch_id) {
+        Result::Ok(data) => return data,
+        Result::Err(_) => return -1,
+    }
+}
+
+fn sys_chan_close(ch_id: int, _: int, _: int, _: int, _: int, _: int) -> int {
+    ipc::channel_close(ch_id)
+    return 0
+}
+
+fn sys_time(_: int, _: int, _: int, _: int, _: int, _: int) -> int {
+    return scheduler::get_ticks()
+}
+
+fn sys_mmap(addr: int, length: int, prot: int, flags: int, _: int, _: int) -> int {
+    // Simple mmap: allocate pages and map them
+    let pages = (length + 4095) / 4096
+    let virt = if addr == 0 { memory::next_free_vaddr() } else { addr }
+
+    let i = 0
+    while i < pages {
+        match memory::alloc_frame() {
+            Result::Ok(frame) => {
+                let pflags = memory::PTE_PRESENT | memory::PTE_USER
+                if (prot & 0x02) != 0 { // PROT_WRITE
+                    pflags = pflags | memory::PTE_WRITABLE
+                }
+                memory::map_page(virt + i * 4096, frame, pflags)
+            },
+            Result::Err(_) => return -1,
+        }
+        i = i + 1
+    }
+
+    return virt
+}
+
+fn sys_brk(addr: int, _: int, _: int, _: int, _: int, _: int) -> int {
+    let pid = scheduler::current_pid()
+    let proc = scheduler::get_process(pid)
+    if addr == 0 {
+        return proc.heap_end
+    }
+    if addr > proc.heap_end {
+        // Grow heap
+        let pages = (addr - proc.heap_end + 4095) / 4096
+        let i = 0
+        while i < pages {
+            match memory::alloc_frame() {
+                Result::Ok(frame) => {
+                    memory::map_page(
+                        proc.heap_end + i * 4096,
+                        frame,
+                        memory::PTE_PRESENT | memory::PTE_WRITABLE | memory::PTE_USER
+                    )
+                },
+                Result::Err(_) => return -1,
+            }
+            i = i + 1
+        }
+        proc.heap_end = addr
+    }
+    return proc.heap_end
+}

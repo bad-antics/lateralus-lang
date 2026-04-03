@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>v1.5 Type System: Optional Types, Trait Bounds & Type Narrowing</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "v1.5 Type System: Optional Types, Trait Bounds & Type Narrowing"
+author: bad-antics
+date: 2026-04-01
+version: 1.5.0
+category: release
+tags: ["types", "generics", "narrowing", "optional"]
+---
+
+# v1.5 Type System: Optional Types, Trait Bounds & Type Narrowing
+
+The Lateralus v1.5 type system has reached feature completeness.
+Building on the Hindley-Milner foundation, Result/Option ADTs, and
+pattern matching from earlier v1.5 milestones, this release adds
+four significant type features that bring Lateralus closer to the
+safety guarantees of Rust and TypeScript while keeping the ergonomics
+of a dynamically typed language.
+
+## What's New
+
+### Optional Types (`int?`)
+
+Any type can now be made nullable by appending `?`:
+
+```lateralus
+let name: str? = nil          // accepts str or nil
+fn find(id: int) -> map? {    // may return nil
+    if id == 0 { return nil }
+    return {id: id}
+}
+```
+
+The `?` suffix creates an `OptionalType` wrapping the inner type.
+The type checker enforces that optional values cannot be used where
+non-optional values are expected, eliminating an entire class of
+null-pointer bugs at compile time.
+
+### Type Narrowing
+
+When you guard against `nil`, the type system narrows the variable's
+type inside the branch:
+
+```lateralus
+let user: map? = find_user(1)
+if user != nil {
+    // user is narrowed from map? to map
+    println(user["name"])  // safe — no nil risk
+}
+```
+
+The `TypeNarrower` performs flow-sensitive analysis on conditions:
+- `x != nil` narrows optionals in the true branch
+- `x == nil` narrows in the false branch
+- `!expr` swaps true/false narrowings
+- `&&` / `||` compose narrowings
+- `type_of(x) == "int"` narrows union types
+
+### Generics with Trait Bounds
+
+Generic parameters can now carry interface constraints:
+
+```lateralus
+interface Comparable {
+    fn compare(self, other) -> int
+}
+
+fn sort<T: Comparable>(items: list) -> list {
+    // T is guaranteed to have a compare method
+    ...
+}
+```
+
+Multiple bounded generics and mixed plain/bounded params work:
+
+```lateralus
+fn display<T: Show, U: Eq>(a: T, b: U) { ... }
+fn identity<T>(x: T) -> T { x }  // unbounded
+```
+
+### Const Generics
+
+Value-level generic parameters enable fixed-size types:
+
+```lateralus
+struct Matrix<N: int, M: int> {
+    data: list,
+    rows: int,
+    cols: int,
+}
+
+fn new_matrix<N: int, M: int>(fill: float) -> Matrix<N, M> { ... }
+```
+
+This is the foundation for future compile-time dimension checking
+in linear algebra code — a critical feature for scientific computing.
+
+## Test Results
+
+The complete test suite now includes **1,158 tests** across 32 files,
+all passing in under 2.5 seconds:
+
+| Suite | Tests | Status |
+|-------|-------|--------|
+| v1.5 features | 97 | PASS |
+| Type system | 69 | PASS |
+| Full suite | 1,158 | PASS |
+
+New test classes added:
+- `TestOptionalTypeSyntax` — 4 tests for `int?` parsing and type checking
+- `TestGenericTraitBounds` — 5 tests for bounded generics and backward compat
+- `TestTypeNarrowing` — 4 tests for narrowing, nilability detection
+
+## Standard Library Growth
+
+Six new stdlib modules ship with this release:
+
+| Module | Purpose |
+|--------|---------|
+| `stdlib.os` | File system, paths, environment, process |
+| `stdlib.datetime` | Date construction, arithmetic, formatting |
+| `stdlib.regex` | Pattern matching, validation, extraction |
+| `stdlib.http` | HTTP client with JSON helpers |
+| `stdlib.result` | Result/Option monads with combinators |
+| `stdlib.iter` | Lazy iterator combinators (map, filter, chunk, zip) |
+
+Total stdlib modules: **28** (up from 22).
+
+## What's Next
+
+Two v1.5 items remain:
+- **Gradual typing** — seamless interop between typed and untyped code
+- **LSP type error integration** — surface type errors in VS Code diagnostics
+
+Beyond v1.5, the roadmap targets:
+- **v1.6**: Structured concurrency, channels, actors
+- **v1.7**: Package manager with dependency resolution
+- **v2.0**: Self-hosting compiler written in Lateralus
+
+The spiral continues outward.
+
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>

@@ -1,0 +1,1387 @@
+// ═══════════════════════════════════════════════════════════════════
+// LATERALUS v2.3 — AIM Instant Messenger
+// A faithful recreation of the classic AOL Instant Messenger,
+// featuring the OSCAR-inspired protocol, buddy lists, profiles,
+// away messages, buddy icons, warning levels, and chat rooms.
+// ═══════════════════════════════════════════════════════════════════
+//
+// Usage:
+//   lateralus run aim_messenger.ltl --server --port 5190
+//   lateralus run aim_messenger.ltl --client --host 127.0.0.1 --port 5190
+//
+// Features:
+//   Sign-on / Sign-off with buddy notifications
+//   Buddy List with groups (Buddies, Family, Co-Workers, etc.)
+//   Direct IM conversations with timestamps
+//   Away messages (with auto-reply)
+//   User profiles & buddy info
+//   Chat rooms (like AOL chat rooms)
+//   Warning system (warn a user, increase their warning %)
+//   Rate limiting to prevent spam
+//   Buddy icons (simulated)
+//   Idle time tracking
+//   Typing notifications ("SmarterChild is typing...")
+// ═══════════════════════════════════════════════════════════════════
+
+import strings
+import collections
+
+// ─── Constants ────────────────────────────────────────────────────
+
+const AIM_VERSION = "5.9.3702"
+const OSCAR_PORT = 5190
+const MAX_SCREEN_NAME_LEN = 16
+const MAX_AWAY_MSG_LEN = 1024
+const MAX_PROFILE_LEN = 2048
+const MAX_WARNING_LEVEL = 100
+const WARNING_DECAY_RATE = 1
+const RATE_LIMIT_MSGS_PER_MIN = 15
+const IDLE_TIMEOUT_SECS = 600
+
+// ─── Enums ────────────────────────────────────────────────────────
+
+enum UserStatus {
+    Online,
+    Away,
+    Idle,
+    Invisible,
+    Offline,
+}
+
+enum BuddyGroup {
+    Buddies,
+    Family,
+    CoWorkers,
+    SchoolFriends,
+    Custom,
+}
+
+enum MessageType {
+    IM,
+    AutoReply,
+    ChatRoom,
+    SystemAlert,
+    TypingNotification,
+    Warning,
+}
+
+enum TypingState {
+    NotTyping,
+    Typing,
+    TextEntered,
+}
+
+// ─── Data Structures ──────────────────────────────────────────────
+
+struct ScreenName {
+    raw: str,
+    formatted: str,
+    normalized: str
+}
+
+struct BuddyIcon {
+    hash: str,
+    data_size: int,
+    mime_type: str
+}
+
+struct BuddyEntry {
+    screen_name: str,
+    alias: str,
+    group: str,
+    notes: str,
+    blocked: bool,
+    icon: BuddyIcon
+}
+
+struct BuddyList {
+    groups: map,
+    permit_list: list,
+    deny_list: list,
+    permit_mode: str
+}
+
+struct UserProfile {
+    screen_name: str,
+    formatted_name: str,
+    profile_html: str,
+    away_message: str,
+    status: str,
+    warning_level: int,
+    idle_minutes: int,
+    online_since: int,
+    member_since: str,
+    capabilities: list,
+    buddy_icon: BuddyIcon,
+    buddy_list: BuddyList,
+    typing_state: str,
+    last_activity: int,
+    rate_counter: int,
+    rate_window_start: int
+}
+
+struct IMMessage {
+    from_sn: str,
+    to_sn: str,
+    text: str,
+    html: str,
+    timestamp: int,
+    msg_type: str,
+    auto_reply: bool,
+    typing_state: str
+}
+
+struct ChatRoom {
+    name: str,
+    topic: str,
+    exchange: int,
+    members: list,
+    created_by: str,
+    max_occupancy: int,
+    invite_only: bool,
+    log: list
+}
+
+struct AIMServer {
+    host: str,
+    port: int,
+    server_name: str,
+    motd: str,
+    users: map,
+    chat_rooms: map,
+    global_msg_count: int,
+    uptime_start: int
+}
+
+struct RateLimit {
+    messages_sent: int,
+    window_start: int,
+    warned: bool
+}
+
+// ─── Screen Name Handling ─────────────────────────────────────────
+
+fn normalize_screen_name(name: str) -> str {
+    // AIM normalized screen names by lowercasing and stripping spaces
+    let result = lower(replace(name, " ", ""))
+    return result
+}
+
+fn format_screen_name(raw: str) -> ScreenName {
+    return ScreenName {
+        raw: raw,
+        formatted: raw,
+        normalized: normalize_screen_name(raw)
+    }
+}
+
+fn is_valid_screen_name(name: str) -> bool {
+    if len(name) < 3 {
+        return false
+    }
+    if len(name) > MAX_SCREEN_NAME_LEN {
+        return false
+    }
+    // Must start with a letter
+    let first = slice(name, 0, 1)
+    if not is_alpha(first) {
+        return false
+    }
+    return true
+}
+
+// ─── Buddy List Management ───────────────────────────────────────
+
+fn create_buddy_list() -> BuddyList {
+    let groups = {}
+    groups["Buddies"] = []
+    groups["Family"] = []
+    groups["Co-Workers"] = []
+    return BuddyList {
+        groups: groups,
+        permit_list: [],
+        deny_list: [],
+        permit_mode: "allow_all"
+    }
+}
+
+fn add_buddy(bl: BuddyList, screen_name: str, group: str, alias: str) -> BuddyList {
+    let entry = BuddyEntry {
+        screen_name: normalize_screen_name(screen_name),
+        alias: alias,
+        group: group,
+        notes: "",
+        blocked: false,
+        icon: BuddyIcon { hash: "", data_size: 0, mime_type: "" }
+    }
+
+    if not contains_key(bl.groups, group) {
+        bl.groups[group] = []
+    }
+    bl.groups[group] = bl.groups[group] + [entry]
+    return bl
+}
+
+fn remove_buddy(bl: BuddyList, screen_name: str) -> BuddyList {
+    let norm = normalize_screen_name(screen_name)
+    for group_name in keys(bl.groups) {
+        bl.groups[group_name] = filter(bl.groups[group_name], fn(b) {
+            b.screen_name != norm
+        })
+    }
+    return bl
+}
+
+fn is_buddy(bl: BuddyList, screen_name: str) -> bool {
+    let norm = normalize_screen_name(screen_name)
+    for group_name in keys(bl.groups) {
+        let members = bl.groups[group_name]
+        for buddy in members {
+            if buddy.screen_name == norm {
+                return true
+            }
+        }
+    }
+    return false
+}
+
+fn block_buddy(bl: BuddyList, screen_name: str) -> BuddyList {
+    let norm = normalize_screen_name(screen_name)
+    if not contains(bl.deny_list, norm) {
+        bl.deny_list = bl.deny_list + [norm]
+    }
+    return bl
+}
+
+fn unblock_buddy(bl: BuddyList, screen_name: str) -> BuddyList {
+    let norm = normalize_screen_name(screen_name)
+    bl.deny_list = filter(bl.deny_list, fn(n) { n != norm })
+    return bl
+}
+
+fn is_blocked(bl: BuddyList, screen_name: str) -> bool {
+    let norm = normalize_screen_name(screen_name)
+    return contains(bl.deny_list, norm)
+}
+
+fn get_online_buddies(bl: BuddyList, server: AIMServer) -> list {
+    let online = []
+    for group_name in keys(bl.groups) {
+        let members = bl.groups[group_name]
+        for buddy in members {
+            if contains_key(server.users, buddy.screen_name) {
+                let user = server.users[buddy.screen_name]
+                if user.status != "offline" {
+                    if user.status != "invisible" {
+                        online = online + [buddy]
+                    }
+                }
+            }
+        }
+    }
+    return online
+}
+
+fn format_buddy_list(bl: BuddyList, server: AIMServer) -> str {
+    let lines = []
+    lines = lines + [""]
+    lines = lines + [" .-===========================================-."]
+    lines = lines + [" |          AIM Buddy List (tm)                |"]
+    lines = lines + [" |--------------------------------------------|"]
+
+    for group_name in sorted(keys(bl.groups)) {
+        let members = bl.groups[group_name]
+        if len(members) > 0 {
+            let online_count = 0
+            for buddy in members {
+                if contains_key(server.users, buddy.screen_name) {
+                    let u = server.users[buddy.screen_name]
+                    if u.status != "offline" {
+                        if u.status != "invisible" {
+                            online_count = online_count + 1
+                        }
+                    }
+                }
+            }
+            lines = lines + [" | " + group_name + " (" + str(online_count) + "/" + str(len(members)) + " online)"]
+            for buddy in members {
+                let display_name = buddy.screen_name
+                if len(buddy.alias) > 0 {
+                    display_name = buddy.alias
+                }
+                let status_icon = "  "
+                if contains_key(server.users, buddy.screen_name) {
+                    let u = server.users[buddy.screen_name]
+                    match u.status {
+                        "online" => {
+                            status_icon = "O "
+                        },
+                        "away" => {
+                            status_icon = "X "
+                        },
+                        "idle" => {
+                            status_icon = "~ "
+                        },
+                        _ => {
+                            status_icon = "  "
+                        },
+                    }
+                    let idle_str = ""
+                    if u.idle_minutes > 0 {
+                        idle_str = " (idle " + str(u.idle_minutes) + "m)"
+                    }
+                    let warn_str = ""
+                    if u.warning_level > 0 {
+                        warn_str = " [" + str(u.warning_level) + "%]"
+                    }
+                    lines = lines + [" |   " + status_icon + display_name + idle_str + warn_str]
+                } else {
+                    lines = lines + [" |   " + status_icon + display_name]
+                }
+            }
+        }
+    }
+
+    lines = lines + [" '-==========================================='-"]
+    lines = lines + [""]
+    return join(lines, "\n")
+}
+
+// ─── User Profile Management ─────────────────────────────────────
+
+fn create_profile(screen_name: str) -> UserProfile {
+    return UserProfile {
+        screen_name: normalize_screen_name(screen_name),
+        formatted_name: screen_name,
+        profile_html: "",
+        away_message: "",
+        status: "offline",
+        warning_level: 0,
+        idle_minutes: 0,
+        online_since: 0,
+        member_since: "2003",
+        capabilities: ["im", "chat", "file_transfer"],
+        buddy_icon: BuddyIcon { hash: "", data_size: 0, mime_type: "" },
+        buddy_list: create_buddy_list(),
+        typing_state: "not_typing",
+        last_activity: 0,
+        rate_counter: 0,
+        rate_window_start: 0
+    }
+}
+
+fn set_profile(user: UserProfile, html: str) -> UserProfile {
+    let truncated = html
+    if len(html) > MAX_PROFILE_LEN {
+        truncated = slice(html, 0, MAX_PROFILE_LEN)
+    }
+    user.profile_html = truncated
+    return user
+}
+
+fn set_away(user: UserProfile, message: str) -> UserProfile {
+    if len(message) == 0 {
+        user.away_message = ""
+        user.status = "online"
+    } else {
+        let truncated = message
+        if len(message) > MAX_AWAY_MSG_LEN {
+            truncated = slice(message, 0, MAX_AWAY_MSG_LEN)
+        }
+        user.away_message = truncated
+        user.status = "away"
+    }
+    return user
+}
+
+fn format_profile_info(user: UserProfile) -> str {
+    let lines = []
+    lines = lines + [""]
+    lines = lines + ["  .---------------------------------------. "]
+    lines = lines + ["  | Buddy Info: " + user.formatted_name]
+    lines = lines + ["  |---------------------------------------|"]
+    lines = lines + ["  | Status:      " + user.status]
+    lines = lines + ["  | Warning:     " + str(user.warning_level) + "%"]
+    lines = lines + ["  | Member since: " + user.member_since]
+
+    if user.idle_minutes > 0 {
+        lines = lines + ["  | Idle:        " + str(user.idle_minutes) + " minutes"]
+    }
+    if len(user.away_message) > 0 {
+        lines = lines + ["  | Away:        " + user.away_message]
+    }
+    if len(user.profile_html) > 0 {
+        lines = lines + ["  |---------------------------------------|"]
+        lines = lines + ["  | Profile:"]
+        lines = lines + ["  |   " + user.profile_html]
+    }
+    lines = lines + ["  '---------------------------------------' "]
+    lines = lines + [""]
+    return join(lines, "\n")
+}
+
+// ─── Warning System ──────────────────────────────────────────────
+
+fn warn_user(warner: UserProfile, target: UserProfile, anonymous: bool) -> list {
+    // AIM let you warn someone — increasing their "warning level"
+    // Anonymous warns increased by 3%, identified warns by 5%
+    let increase = 3
+    if not anonymous {
+        increase = 5
+    }
+
+    let new_level = target.warning_level + increase
+    if new_level > MAX_WARNING_LEVEL {
+        new_level = MAX_WARNING_LEVEL
+    }
+    target.warning_level = new_level
+
+    let responses = []
+
+    if anonymous {
+        responses = responses + [
+            "WARN_ACK:" + warner.screen_name + "::You have anonymously warned " + target.formatted_name + ". Their warning level is now " + str(new_level) + "%."
+        ]
+        responses = responses + [
+            "WARN_NOTIFY:" + target.screen_name + "::You have been warned anonymously. Your warning level is now " + str(new_level) + "%."
+        ]
+    } else {
+        responses = responses + [
+            "WARN_ACK:" + warner.screen_name + "::You have warned " + target.formatted_name + ". Their warning level is now " + str(new_level) + "%."
+        ]
+        responses = responses + [
+            "WARN_NOTIFY:" + target.screen_name + "::" + warner.formatted_name + " has warned you. Your warning level is now " + str(new_level) + "%."
+        ]
+    }
+
+    // If warning level is too high, throttle the user
+    if new_level >= 50 {
+        responses = responses + [
+            "SYSTEM:" + target.screen_name + "::Warning: Your warning level (" + str(new_level) + "%) is high. You may be rate-limited."
+        ]
+    }
+
+    return responses
+}
+
+fn decay_warning(user: UserProfile) -> UserProfile {
+    if user.warning_level > 0 {
+        user.warning_level = user.warning_level - WARNING_DECAY_RATE
+        if user.warning_level < 0 {
+            user.warning_level = 0
+        }
+    }
+    return user
+}
+
+// ─── Rate Limiting ───────────────────────────────────────────────
+
+fn check_rate_limit(user: UserProfile, current_time: int) -> bool {
+    // Rate limit based on warning level — higher warning = stricter
+    let allowed = RATE_LIMIT_MSGS_PER_MIN
+    if user.warning_level >= 70 {
+        allowed = 3
+    } else if user.warning_level >= 50 {
+        allowed = 5
+    } else if user.warning_level >= 30 {
+        allowed = 10
+    }
+
+    // Reset window if a minute has passed
+    if current_time - user.rate_window_start > 60 {
+        user.rate_counter = 0
+        user.rate_window_start = current_time
+    }
+
+    if user.rate_counter >= allowed {
+        return false
+    }
+
+    user.rate_counter = user.rate_counter + 1
+    return true
+}
+
+// ─── Message Formatting ─────────────────────────────────────────
+
+fn format_im(msg: IMMessage) -> str {
+    let time_str = format_time(msg.timestamp)
+    let prefix = ""
+
+    if msg.auto_reply {
+        prefix = "<AUTO-REPLY> "
+    }
+
+    return time_str + " " + prefix + msg.from_sn + ": " + msg.text
+}
+
+fn format_time(timestamp: int) -> str {
+    // Format as HH:MM:SS (simplified — uses modular arithmetic)
+    let hours = (timestamp / 3600) % 24
+    let minutes = (timestamp % 3600) / 60
+    let seconds = timestamp % 60
+
+    let h = str(hours)
+    let m = str(minutes)
+    let s = str(seconds)
+
+    if hours < 10 { h = "0" + h }
+    if minutes < 10 { m = "0" + m }
+    if seconds < 10 { s = "0" + s }
+
+    return h + ":" + m + ":" + s
+}
+
+fn create_im(from_sn: str, to_sn: str, text: str, timestamp: int) -> IMMessage {
+    return IMMessage {
+        from_sn: from_sn,
+        to_sn: to_sn,
+        text: text,
+        html: "<html>" + text + "</html>",
+        timestamp: timestamp,
+        msg_type: "im",
+        auto_reply: false,
+        typing_state: "not_typing"
+    }
+}
+
+fn create_auto_reply(from_sn: str, to_sn: str, away_msg: str, timestamp: int) -> IMMessage {
+    return IMMessage {
+        from_sn: from_sn,
+        to_sn: to_sn,
+        text: away_msg,
+        html: "<html><em>" + away_msg + "</em></html>",
+        timestamp: timestamp,
+        msg_type: "auto_reply",
+        auto_reply: true,
+        typing_state: "not_typing"
+    }
+}
+
+// ─── Chat Room Management ────────────────────────────────────────
+
+fn create_chat_room(name: str, creator: str) -> ChatRoom {
+    return ChatRoom {
+        name: name,
+        topic: "Welcome to " + name,
+        exchange: 4,
+        members: [],
+        created_by: creator,
+        max_occupancy: 50,
+        invite_only: false,
+        log: []
+    }
+}
+
+fn chat_room_join(room: ChatRoom, screen_name: str) -> list {
+    if len(room.members) >= room.max_occupancy {
+        return ["ERROR:" + screen_name + "::Chat room " + room.name + " is full."]
+    }
+
+    let responses = []
+
+    // Notify existing members
+    for member in room.members {
+        responses = responses + [
+            "CHAT_EVENT:" + member + "::" + screen_name + " has entered the room."
+        ]
+    }
+
+    room.members = room.members + [screen_name]
+
+    // Send room info to joining user
+    let member_list = join(room.members, ", ")
+    responses = responses + [
+        "CHAT_JOIN:" + screen_name + "::Welcome to chat room \"" + room.name + "\". Topic: " + room.topic,
+        "CHAT_MEMBERS:" + screen_name + "::Members online: " + member_list
+    ]
+
+    room.log = room.log + [screen_name + " has entered the room."]
+    return responses
+}
+
+fn chat_room_leave(room: ChatRoom, screen_name: str) -> list {
+    room.members = filter(room.members, fn(m) { m != screen_name })
+    room.log = room.log + [screen_name + " has left the room."]
+
+    let responses = []
+    for member in room.members {
+        responses = responses + [
+            "CHAT_EVENT:" + member + "::" + screen_name + " has left the room."
+        ]
+    }
+    return responses
+}
+
+fn chat_room_send(room: ChatRoom, from_sn: str, text: str, timestamp: int) -> list {
+    let time_str = format_time(timestamp)
+    let formatted = time_str + " " + from_sn + ": " + text
+    room.log = room.log + [formatted]
+
+    let responses = []
+    for member in room.members {
+        if member != from_sn {
+            responses = responses + [
+                "CHAT_MSG:" + member + "::" + formatted
+            ]
+        }
+    }
+    return responses
+}
+
+// ─── Server Logic ─────────────────────────────────────────────────
+
+fn create_aim_server(host: str, port: int) -> AIMServer {
+    return AIMServer {
+        host: host,
+        port: port,
+        server_name: "login.oscar.aol.com",
+        motd: "Welcome to AIM! You've Got Mail... er, Messages!",
+        users: {},
+        chat_rooms: {},
+        global_msg_count: 0,
+        uptime_start: 0
+    }
+}
+
+fn sign_on(server: AIMServer, screen_name: str, timestamp: int) -> list {
+    let norm = normalize_screen_name(screen_name)
+
+    if contains_key(server.users, norm) {
+        let existing = server.users[norm]
+        if existing.status != "offline" {
+            return ["ERROR:" + norm + "::Screen name \"" + screen_name + "\" is already signed on."]
+        }
+    }
+
+    let user = create_profile(screen_name)
+    user.status = "online"
+    user.online_since = timestamp
+    user.last_activity = timestamp
+    server.users[norm] = user
+
+    let responses = []
+    responses = responses + [
+        "SIGNON:" + norm + "::You are now signed on as " + screen_name + ".",
+        "SYSTEM:" + norm + "::" + server.motd
+    ]
+
+    // Notify all users who have this person on their buddy list
+    for other_sn in keys(server.users) {
+        if other_sn != norm {
+            let other = server.users[other_sn]
+            if other.status != "offline" {
+                if is_buddy(other.buddy_list, norm) {
+                    responses = responses + [
+                        "BUDDY_ONLINE:" + other_sn + "::" + screen_name + " has signed on."
+                    ]
+                }
+            }
+        }
+    }
+
+    return responses
+}
+
+fn sign_off(server: AIMServer, screen_name: str) -> list {
+    let norm = normalize_screen_name(screen_name)
+
+    if not contains_key(server.users, norm) {
+        return ["ERROR:" + norm + "::Not signed on."]
+    }
+
+    let user = server.users[norm]
+    user.status = "offline"
+    user.away_message = ""
+    server.users[norm] = user
+
+    let responses = [
+        "SIGNOFF:" + norm + "::You have signed off."
+    ]
+
+    // Remove from all chat rooms
+    for room_name in keys(server.chat_rooms) {
+        let room = server.chat_rooms[room_name]
+        if contains(room.members, norm) {
+            let leave_resps = chat_room_leave(room, norm)
+            responses = responses + leave_resps
+        }
+    }
+
+    // Notify buddies
+    for other_sn in keys(server.users) {
+        if other_sn != norm {
+            let other = server.users[other_sn]
+            if other.status != "offline" {
+                if is_buddy(other.buddy_list, norm) {
+                    responses = responses + [
+                        "BUDDY_OFFLINE:" + other_sn + "::" + user.formatted_name + " has signed off."
+                    ]
+                }
+            }
+        }
+    }
+
+    return responses
+}
+
+fn send_im(server: AIMServer, from_sn: str, to_sn: str, text: str, timestamp: int) -> list {
+    let from_norm = normalize_screen_name(from_sn)
+    let to_norm = normalize_screen_name(to_sn)
+
+    if not contains_key(server.users, from_norm) {
+        return ["ERROR:" + from_norm + "::You are not signed on."]
+    }
+    if not contains_key(server.users, to_norm) {
+        return ["ERROR:" + from_norm + "::User \"" + to_sn + "\" is not online."]
+    }
+
+    let sender = server.users[from_norm]
+    let recipient = server.users[to_norm]
+
+    // Check blocked
+    if is_blocked(recipient.buddy_list, from_norm) {
+        return ["ERROR:" + from_norm + "::" + to_sn + " is not available. (You may be blocked.)"]
+    }
+
+    // Check rate limit
+    if not check_rate_limit(sender, timestamp) {
+        return ["ERROR:" + from_norm + "::You are sending messages too fast. Please wait."]
+    }
+
+    let msg = create_im(sender.formatted_name, recipient.formatted_name, text, timestamp)
+    server.global_msg_count = server.global_msg_count + 1
+    sender.last_activity = timestamp
+
+    let responses = [
+        "IM_DELIVER:" + to_norm + "::" + format_im(msg)
+    ]
+
+    // If recipient is away, send auto-reply
+    if recipient.status == "away" {
+        if len(recipient.away_message) > 0 {
+            let auto = create_auto_reply(recipient.formatted_name, sender.formatted_name, recipient.away_message, timestamp)
+            responses = responses + [
+                "IM_DELIVER:" + from_norm + "::" + format_im(auto)
+            ]
+        }
+    }
+
+    return responses
+}
+
+fn send_typing_notification(server: AIMServer, from_sn: str, to_sn: str, state: str) -> list {
+    let from_norm = normalize_screen_name(from_sn)
+    let to_norm = normalize_screen_name(to_sn)
+
+    if not contains_key(server.users, to_norm) {
+        return []
+    }
+
+    let recipient = server.users[to_norm]
+    if is_blocked(recipient.buddy_list, from_norm) {
+        return []
+    }
+
+    let label = match state {
+        "typing"       => from_sn + " is typing...",
+        "text_entered" => from_sn + " has entered text.",
+        _              => "",
+    }
+
+    if len(label) > 0 {
+        return ["TYPING:" + to_norm + "::" + label]
+    }
+    return []
+}
+
+// ─── Command Dispatcher ──────────────────────────────────────────
+
+fn dispatch_aim_command(server: AIMServer, screen_name: str, input: str, timestamp: int) -> list {
+    let line = trim(input)
+    let norm = normalize_screen_name(screen_name)
+
+    if len(line) == 0 {
+        return []
+    }
+
+    // Parse command
+    let parts = split(line, " ")
+    let cmd = upper(parts[0])
+
+    match cmd {
+        "IM" => {
+            // IM <screen_name> <message>
+            if len(parts) < 3 {
+                return ["ERROR:" + norm + "::Usage: IM <screen_name> <message>"]
+            }
+            let target = parts[1]
+            let msg_text = join(slice(parts, 2, len(parts)), " ")
+            return send_im(server, screen_name, target, msg_text, timestamp)
+        },
+        "AWAY" => {
+            // AWAY [message]  — set/clear away
+            if not contains_key(server.users, norm) {
+                return ["ERROR:" + norm + "::Not signed on."]
+            }
+            let user = server.users[norm]
+            if len(parts) > 1 {
+                let away_text = join(slice(parts, 1, len(parts)), " ")
+                user = set_away(user, away_text)
+                server.users[norm] = user
+                return ["SYSTEM:" + norm + "::Away message set: " + away_text]
+            } else {
+                user = set_away(user, "")
+                server.users[norm] = user
+                return ["SYSTEM:" + norm + "::You are no longer away."]
+            }
+        },
+        "PROFILE" => {
+            // PROFILE [text] — set or view profile
+            if not contains_key(server.users, norm) {
+                return ["ERROR:" + norm + "::Not signed on."]
+            }
+            if len(parts) > 1 {
+                let profile_text = join(slice(parts, 1, len(parts)), " ")
+                let user = server.users[norm]
+                user = set_profile(user, profile_text)
+                server.users[norm] = user
+                return ["SYSTEM:" + norm + "::Profile updated."]
+            } else {
+                let user = server.users[norm]
+                return ["PROFILE:" + norm + "::" + format_profile_info(user)]
+            }
+        },
+        "INFO" => {
+            // INFO <screen_name>  — get buddy info
+            if len(parts) < 2 {
+                return ["ERROR:" + norm + "::Usage: INFO <screen_name>"]
+            }
+            let target_norm = normalize_screen_name(parts[1])
+            if not contains_key(server.users, target_norm) {
+                return ["ERROR:" + norm + "::" + parts[1] + " is not online."]
+            }
+            let target = server.users[target_norm]
+            return ["INFO:" + norm + "::" + format_profile_info(target)]
+        },
+        "WARN" => {
+            // WARN <screen_name> [anon]
+            if len(parts) < 2 {
+                return ["ERROR:" + norm + "::Usage: WARN <screen_name> [anon]"]
+            }
+            let target_norm = normalize_screen_name(parts[1])
+            if not contains_key(server.users, target_norm) {
+                return ["ERROR:" + norm + "::" + parts[1] + " is not online."]
+            }
+            let anon = false
+            if len(parts) > 2 {
+                if parts[2] == "anon" {
+                    anon = true
+                }
+            }
+            let warner = server.users[norm]
+            let target = server.users[target_norm]
+            return warn_user(warner, target, anon)
+        },
+        "ADDBUDDY" => {
+            // ADDBUDDY <screen_name> [group] [alias]
+            if len(parts) < 2 {
+                return ["ERROR:" + norm + "::Usage: ADDBUDDY <screen_name> [group] [alias]"]
+            }
+            let buddy_sn = parts[1]
+            let group = "Buddies"
+            if len(parts) > 2 {
+                group = parts[2]
+            }
+            let alias = ""
+            if len(parts) > 3 {
+                alias = join(slice(parts, 3, len(parts)), " ")
+            }
+            let user = server.users[norm]
+            user.buddy_list = add_buddy(user.buddy_list, buddy_sn, group, alias)
+            server.users[norm] = user
+            return ["SYSTEM:" + norm + "::" + buddy_sn + " added to group \"" + group + "\"."]
+        },
+        "REMOVEBUDDY" => {
+            // REMOVEBUDDY <screen_name>
+            if len(parts) < 2 {
+                return ["ERROR:" + norm + "::Usage: REMOVEBUDDY <screen_name>"]
+            }
+            let user = server.users[norm]
+            user.buddy_list = remove_buddy(user.buddy_list, parts[1])
+            server.users[norm] = user
+            return ["SYSTEM:" + norm + "::" + parts[1] + " removed from buddy list."]
+        },
+        "BLOCK" => {
+            // BLOCK <screen_name>
+            if len(parts) < 2 {
+                return ["ERROR:" + norm + "::Usage: BLOCK <screen_name>"]
+            }
+            let user = server.users[norm]
+            user.buddy_list = block_buddy(user.buddy_list, parts[1])
+            server.users[norm] = user
+            return ["SYSTEM:" + norm + "::" + parts[1] + " has been blocked."]
+        },
+        "UNBLOCK" => {
+            // UNBLOCK <screen_name>
+            if len(parts) < 2 {
+                return ["ERROR:" + norm + "::Usage: UNBLOCK <screen_name>"]
+            }
+            let user = server.users[norm]
+            user.buddy_list = unblock_buddy(user.buddy_list, parts[1])
+            server.users[norm] = user
+            return ["SYSTEM:" + norm + "::" + parts[1] + " has been unblocked."]
+        },
+        "BUDDYLIST" => {
+            // BUDDYLIST — show buddy list
+            if not contains_key(server.users, norm) {
+                return ["ERROR:" + norm + "::Not signed on."]
+            }
+            let user = server.users[norm]
+            return ["BUDDYLIST:" + norm + "::" + format_buddy_list(user.buddy_list, server)]
+        },
+        "CHATJOIN" => {
+            // CHATJOIN <room_name>
+            if len(parts) < 2 {
+                return ["ERROR:" + norm + "::Usage: CHATJOIN <room_name>"]
+            }
+            let room_name = parts[1]
+            if not contains_key(server.chat_rooms, room_name) {
+                server.chat_rooms[room_name] = create_chat_room(room_name, norm)
+            }
+            let room = server.chat_rooms[room_name]
+            return chat_room_join(room, norm)
+        },
+        "CHATLEAVE" => {
+            // CHATLEAVE <room_name>
+            if len(parts) < 2 {
+                return ["ERROR:" + norm + "::Usage: CHATLEAVE <room_name>"]
+            }
+            let room_name = parts[1]
+            if not contains_key(server.chat_rooms, room_name) {
+                return ["ERROR:" + norm + "::Chat room \"" + room_name + "\" does not exist."]
+            }
+            let room = server.chat_rooms[room_name]
+            return chat_room_leave(room, norm)
+        },
+        "CHATSEND" => {
+            // CHATSEND <room_name> <message>
+            if len(parts) < 3 {
+                return ["ERROR:" + norm + "::Usage: CHATSEND <room_name> <message>"]
+            }
+            let room_name = parts[1]
+            if not contains_key(server.chat_rooms, room_name) {
+                return ["ERROR:" + norm + "::Chat room \"" + room_name + "\" does not exist."]
+            }
+            let msg_text = join(slice(parts, 2, len(parts)), " ")
+            let room = server.chat_rooms[room_name]
+            return chat_room_send(room, norm, msg_text, timestamp)
+        },
+        "TYPING" => {
+            // TYPING <screen_name> <state>
+            if len(parts) < 3 {
+                return []
+            }
+            return send_typing_notification(server, screen_name, parts[1], parts[2])
+        },
+        "SIGNOFF" => {
+            return sign_off(server, screen_name)
+        },
+        "HELP" => {
+            return [
+                "SYSTEM:" + norm + "::" + join([
+                    "",
+                    " .--------------------------------------------.",
+                    " |           AIM Command Reference             |",
+                    " |--------------------------------------------|",
+                    " | IM <user> <msg>      Send instant message   |",
+                    " | AWAY [msg]           Set/clear away message |",
+                    " | PROFILE [text]       Set/view your profile  |",
+                    " | INFO <user>          View buddy info        |",
+                    " | WARN <user> [anon]   Warn a user            |",
+                    " | ADDBUDDY <user> [g]  Add to buddy list      |",
+                    " | REMOVEBUDDY <user>   Remove from buddy list |",
+                    " | BLOCK <user>         Block a user           |",
+                    " | UNBLOCK <user>       Unblock a user         |",
+                    " | BUDDYLIST            Show buddy list        |",
+                    " | CHATJOIN <room>      Join a chat room       |",
+                    " | CHATLEAVE <room>     Leave a chat room      |",
+                    " | CHATSEND <room> msg  Send chat room message |",
+                    " | SIGNOFF              Sign off               |",
+                    " | HELP                 Show this help         |",
+                    " '--------------------------------------------'",
+                    ""
+                ], "\n")
+            ]
+        },
+        _ => {
+            return ["ERROR:" + norm + "::Unknown command: " + cmd + ". Type HELP for commands."]
+        },
+    }
+}
+
+// ─── Server Entry Point ──────────────────────────────────────────
+
+async fn start_aim_server(host: str, port: int) {
+    let server = create_aim_server(host, port)
+
+    // Pre-create some classic AIM chat rooms
+    server.chat_rooms["TownSquare"] = create_chat_room("TownSquare", "AOL")
+    server.chat_rooms["TownSquare"].topic = "Welcome to Town Square! Chat about anything."
+    server.chat_rooms["ThirtySomething"] = create_chat_room("ThirtySomething", "AOL")
+    server.chat_rooms["ThirtySomething"].topic = "For the 30-something crowd."
+    server.chat_rooms["Lobby"] = create_chat_room("Lobby", "AOL")
+    server.chat_rooms["Lobby"].topic = "AOL Chat Lobby — Meet new friends!"
+    server.chat_rooms["TeenChat"] = create_chat_room("TeenChat", "AOL")
+    server.chat_rooms["TeenChat"].topic = "a/s/l? jk. Chat safely!"
+
+    println("==============================================")
+    println("     AIM Server v" + AIM_VERSION)
+    println("     Listening on " + host + ":" + str(port))
+    println("     OSCAR Protocol Emulation Active")
+    println("==============================================")
+
+    let listener = await tcp_listen(host, port)
+
+    while true {
+        let client_socket = await accept(listener)
+        spawn handle_aim_client(server, client_socket)
+    }
+}
+
+async fn handle_aim_client(server: AIMServer, socket: any) {
+    // Client must send SIGNON <screen_name> first
+    let raw = await recv_line(socket)
+    let parts = split(trim(raw), " ")
+
+    if len(parts) < 2 {
+        await send(socket, "ERROR::Please sign on with: SIGNON <screen_name>\r\n")
+        return
+    }
+
+    if upper(parts[0]) != "SIGNON" {
+        await send(socket, "ERROR::First command must be SIGNON <screen_name>\r\n")
+        return
+    }
+
+    let screen_name = parts[1]
+    let timestamp = 43200
+
+    let signon_resps = sign_on(server, screen_name, timestamp)
+    for r in signon_resps {
+        await send(socket, r + "\r\n")
+    }
+
+    let norm = normalize_screen_name(screen_name)
+
+    while true {
+        let line = await recv_line(socket)
+        if line == "" {
+            break
+        }
+        timestamp = timestamp + 1
+        let responses = dispatch_aim_command(server, screen_name, line, timestamp)
+        for r in responses {
+            await send(socket, r + "\r\n")
+        }
+    }
+
+    // Clean disconnect
+    sign_off(server, screen_name)
+}
+
+// ─── Demo Mode ────────────────────────────────────────────────────
+// Simulates a full AIM session when run without --server or --client
+
+fn demo() {
+    println("")
+    println("  ==============================================")
+    println("  |     ___    ____   __  ___                  |")
+    println("  |    /   |  /  _/  /  |/  /                  |")
+    println("  |   / /| |  / /   / /|_/ /                   |")
+    println("  |  / ___ |_/ /   / /  / /                    |")
+    println("  | /_/  |_/___/  /_/  /_/   Instant Messenger |")
+    println("  |                                            |")
+    println("  |    Built with Lateralus v2.3               |")
+    println("  |    OSCAR Protocol Emulation                |")
+    println("  ==============================================")
+    println("")
+
+    let server = create_aim_server("127.0.0.1", OSCAR_PORT)
+    let t = 43200   // Noon
+
+    // ─── Scene 1: Sign On ──────────────────────────────────────
+
+    println("--- SCENE 1: Signing On ---")
+    println("")
+
+    let r = sign_on(server, "SmarterChild", t)
+    for line in r { println("  " + line) }
+    t = t + 1
+
+    // Set SmarterChild profile & away
+    let sc = server.users["smarterchild"]
+    sc = set_profile(sc, "I'm SmarterChild! Ask me anything. I know movies, weather, and fun facts!")
+    sc.member_since = "2001"
+    server.users["smarterchild"] = sc
+
+    r = sign_on(server, "xXsk8rboi99Xx", t)
+    for line in r { println("  " + line) }
+    t = t + 1
+
+    // Set up sk8rboi's profile
+    let sk = server.users["xxsk8rboi99xx"]
+    sk = set_profile(sk, "<b>~*~ToNy HaWk Is My HeRo~*~</b> pUnK rAwK 4 LyFe!! check out my xanga")
+    sk.member_since = "2003"
+    server.users["xxsk8rboi99xx"] = sk
+
+    r = sign_on(server, "away msg queen", t)
+    for line in r { println("  " + line) }
+    t = t + 1
+
+    r = sign_on(server, "LiLpRiNcEsS04", t)
+    for line in r { println("  " + line) }
+    t = t + 1
+
+    let lp = server.users["lilprincess04"]
+    lp = set_profile(lp, "~*~if u cant handle me at my worst u dont deserve me at my best~*~ <3 <3")
+    lp.member_since = "2004"
+    server.users["lilprincess04"] = lp
+
+    println("")
+
+    // ─── Scene 2: Buddy List Setup ─────────────────────────────
+
+    println("--- SCENE 2: Building Buddy Lists ---")
+    println("")
+
+    // sk8rboi adds buddies
+    r = dispatch_aim_command(server, "xXsk8rboi99Xx", "ADDBUDDY SmarterChild Buddies", t)
+    for line in r { println("  " + line) }
+    t = t + 1
+
+    r = dispatch_aim_command(server, "xXsk8rboi99Xx", "ADDBUDDY LiLpRiNcEsS04 Buddies Stacy", t)
+    for line in r { println("  " + line) }
+    t = t + 1
+
+    r = dispatch_aim_command(server, "xXsk8rboi99Xx", "ADDBUDDY away msg queen Co-Workers", t)
+    for line in r { println("  " + line) }
+    t = t + 1
+
+    // LilPrincess adds buddies
+    r = dispatch_aim_command(server, "LiLpRiNcEsS04", "ADDBUDDY xXsk8rboi99Xx Buddies Tony", t)
+    for line in r { println("  " + line) }
+    t = t + 1
+
+    r = dispatch_aim_command(server, "LiLpRiNcEsS04", "ADDBUDDY SmarterChild Buddies", t)
+    for line in r { println("  " + line) }
+    t = t + 1
+
+    // Show buddy list
+    r = dispatch_aim_command(server, "xXsk8rboi99Xx", "BUDDYLIST", t)
+    for line in r { println("  " + line) }
+    t = t + 1
+
+    println("")
+
+    // ─── Scene 3: Instant Messages ─────────────────────────────
+
+    println("--- SCENE 3: Chatting ---")
+    println("")
+
+    // sk8rboi messages SmarterChild
+    r = dispatch_aim_command(server, "xXsk8rboi99Xx", "IM SmarterChild hey smarterchild whats the weather", t)
+    for line in r { println("  " + line) }
+    t = t + 5
+
+    // SmarterChild replies
+    r = dispatch_aim_command(server, "SmarterChild", "IM xXsk8rboi99Xx The weather in YOUR AREA is: Sunny, 72F. Have a great day!", t)
+    for line in r { println("  " + line) }
+    t = t + 2
+
+    // Typing notification
+    r = dispatch_aim_command(server, "xXsk8rboi99Xx", "TYPING LiLpRiNcEsS04 typing", t)
+    for line in r { println("  " + line) }
+    t = t + 3
+
+    // sk8rboi IMs his crush
+    r = dispatch_aim_command(server, "xXsk8rboi99Xx", "IM LiLpRiNcEsS04 heyy wats up? u goin 2 da skatepark l8r?", t)
+    for line in r { println("  " + line) }
+    t = t + 10
+
+    r = dispatch_aim_command(server, "LiLpRiNcEsS04", "IM xXsk8rboi99Xx omg maybeee lol. did u hear the new blink 182 song?? its sooo good", t)
+    for line in r { println("  " + line) }
+    t = t + 8
+
+    r = dispatch_aim_command(server, "xXsk8rboi99Xx", "IM LiLpRiNcEsS04 yesss all the small things is a banger!! brb my mom needs the phone", t)
+    for line in r { println("  " + line) }
+    t = t + 5
+
+    println("")
+
+    // ─── Scene 4: Away Messages ────────────────────────────────
+
+    println("--- SCENE 4: Away Messages ---")
+    println("")
+
+    // away msg queen sets an elaborate away message (classic AIM move)
+    r = dispatch_aim_command(server, "away msg queen", "AWAY ~*~iM nOt HeRe RiGhT nOw~*~ leave a msg after the beep... BEEEEP lol ~*~*~", t)
+    for line in r { println("  " + line) }
+    t = t + 1
+
+    // Someone IMs the away user
+    r = dispatch_aim_command(server, "xXsk8rboi99Xx", "IM away msg queen yo are u there??", t)
+    for line in r { println("  " + line) }
+    t = t + 2
+
+    println("")
+
+    // ─── Scene 5: Buddy Info ───────────────────────────────────
+
+    println("--- SCENE 5: Checking Buddy Info ---")
+    println("")
+
+    r = dispatch_aim_command(server, "LiLpRiNcEsS04", "INFO SmarterChild", t)
+    for line in r { println("  " + line) }
+    t = t + 1
+
+    r = dispatch_aim_command(server, "LiLpRiNcEsS04", "INFO xXsk8rboi99Xx", t)
+    for line in r { println("  " + line) }
+    t = t + 1
+
+    println("")
+
+    // ─── Scene 6: Warning System ───────────────────────────────
+
+    println("--- SCENE 6: Warning System ---")
+    println("")
+
+    // A random signs on and is annoying
+    r = sign_on(server, "sp4mB0t2003", t)
+    for line in r { println("  " + line) }
+    t = t + 1
+
+    r = dispatch_aim_command(server, "sp4mB0t2003", "IM xXsk8rboi99Xx BUY CHEAP RINGTONES AT www.totallylegit.com!!!!!", t)
+    for line in r { println("  " + line) }
+    t = t + 1
+
+    // sk8rboi warns the spammer
+    r = dispatch_aim_command(server, "xXsk8rboi99Xx", "WARN sp4mB0t2003", t)
+    for line in r { println("  " + line) }
+    t = t + 1
+
+    // LilPrincess also warns
+    r = dispatch_aim_command(server, "LiLpRiNcEsS04", "WARN sp4mB0t2003", t)
+    for line in r { println("  " + line) }
+    t = t + 1
+
+    // Anonymous warn too
+    r = dispatch_aim_command(server, "SmarterChild", "WARN sp4mB0t2003 anon", t)
+    for line in r { println("  " + line) }
+    t = t + 1
+
+    println("")
+
+    // ─── Scene 7: Blocking ─────────────────────────────────────
+
+    println("--- SCENE 7: Blocking ---")
+    println("")
+
+    r = dispatch_aim_command(server, "xXsk8rboi99Xx", "BLOCK sp4mB0t2003", t)
+    for line in r { println("  " + line) }
+    t = t + 1
+
+    // Spammer tries to IM — blocked!
+    r = dispatch_aim_command(server, "sp4mB0t2003", "IM xXsk8rboi99Xx MORE SPAM LOLOL", t)
+    for line in r { println("  " + line) }
+    t = t + 1
+
+    println("")
+
+    // ─── Scene 8: Chat Rooms ───────────────────────────────────
+
+    println("--- SCENE 8: Chat Rooms ---")
+    println("")
+
+    // Join the lobby
+    r = dispatch_aim_command(server, "xXsk8rboi99Xx", "CHATJOIN Lobby", t)
+    for line in r { println("  " + line) }
+    t = t + 1
+
+    r = dispatch_aim_command(server, "LiLpRiNcEsS04", "CHATJOIN Lobby", t)
+    for line in r { println("  " + line) }
+    t = t + 1
+
+    r = dispatch_aim_command(server, "SmarterChild", "CHATJOIN Lobby", t)
+    for line in r { println("  " + line) }
+    t = t + 1
+
+    // Chat room conversation
+    r = dispatch_aim_command(server, "xXsk8rboi99Xx", "CHATSEND Lobby hey everyone!! any1 wanna chat?", t)
+    for line in r { println("  " + line) }
+    t = t + 3
+
+    r = dispatch_aim_command(server, "LiLpRiNcEsS04", "CHATSEND Lobby hiii!! a/s/l?? lol jk", t)
+    for line in r { println("  " + line) }
+    t = t + 2
+
+    r = dispatch_aim_command(server, "SmarterChild", "CHATSEND Lobby I'm SmarterChild! I'm a bot / ageless / the internet. Ask me anything!", t)
+    for line in r { println("  " + line) }
+    t = t + 4
+
+    r = dispatch_aim_command(server, "xXsk8rboi99Xx", "CHATSEND Lobby lmao smarterchild ur so funny. ok who likes tony hawk pro skater??", t)
+    for line in r { println("  " + line) }
+    t = t + 2
+
+    // Someone leaves
+    r = dispatch_aim_command(server, "LiLpRiNcEsS04", "CHATLEAVE Lobby", t)
+    for line in r { println("  " + line) }
+    t = t + 1
+
+    println("")
+
+    // ─── Scene 9: Sign Off ─────────────────────────────────────
+
+    println("--- SCENE 9: Signing Off ---")
+    println("")
+
+    r = dispatch_aim_command(server, "xXsk8rboi99Xx", "SIGNOFF", t)
+    for line in r { println("  " + line) }
+    t = t + 1
+
+    r = dispatch_aim_command(server, "LiLpRiNcEsS04", "SIGNOFF", t)
+    for line in r { println("  " + line) }
+    t = t + 1
+
+    r = dispatch_aim_command(server, "SmarterChild", "SIGNOFF", t)
+    for line in r { println("  " + line) }
+    t = t + 1
+
+    r = dispatch_aim_command(server, "away msg queen", "SIGNOFF", t)
+    for line in r { println("  " + line) }
+    t = t + 1
+
+    r = dispatch_aim_command(server, "sp4mB0t2003", "SIGNOFF", t)
+    for line in r { println("  " + line) }
+    t = t + 1
+
+    println("")
+    println("  ==============================================")
+    println("  |  Goodbye! You have been signed off AIM.    |")
+    println("  |                                            |")
+    println("  |  Total messages sent: " + str(server.global_msg_count))
+    println("  |                                            |")
+    println("  |  Run with --server or --client for live    |")
+    println("  |  AIM chat over the network.                |")
+    println("  |                                            |")
+    println("  |      \"I think, therefore I AIM.\"           |")
+    println("  ==============================================")
+    println("")
+}
+
+// ─── Main ─────────────────────────────────────────────────────────
+
+fn main() {
+    demo()
+}
+
+main()

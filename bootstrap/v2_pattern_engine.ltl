@@ -1,0 +1,891 @@
+// ═══════════════════════════════════════════════════════════════════════
+// v2_pattern_engine.ltl  —  LATERALUS Pattern Matching Engine
+// Self-hosted port of lateralus_lang/pattern_engine.py
+//
+// Supports:
+//   - Literal, wildcard, binding, list, range, OR, AND, as, type,
+//     struct, guard, tuple, none-check, and rest patterns
+//   - Pattern parsing from string syntax
+//   - Exhaustiveness checking
+//
+// v2.3.0
+// ═══════════════════════════════════════════════════════════════════════
+
+import strings
+
+// ─── Pattern Kind Constants ─────────────────────────────────────────────
+
+const PAT_LITERAL    = "literal"
+const PAT_WILDCARD   = "wildcard"
+const PAT_BINDING    = "binding"
+const PAT_STRUCT     = "struct_pat"
+const PAT_LIST       = "list_pat"
+const PAT_TUPLE      = "tuple_pat"
+const PAT_RANGE      = "range"
+const PAT_GUARD      = "guard"
+const PAT_OR         = "or_pat"
+const PAT_AND        = "and_pat"
+const PAT_TYPE       = "type_pat"
+const PAT_AS         = "as_pat"
+const PAT_NONE_CHECK = "none_check"
+const PAT_REST       = "rest"
+
+// ─── Match Result ───────────────────────────────────────────────────────
+
+struct MatchResult {
+    matched: bool
+    bindings: list
+}
+
+fn match_success() -> MatchResult {
+    return MatchResult(true, [])
+}
+
+fn match_failure() -> MatchResult {
+    return MatchResult(false, [])
+}
+
+fn match_with_binding(name: str, val: any) -> MatchResult {
+    return MatchResult(true, [[name, val]])
+}
+
+fn merge_results(a: MatchResult, b: MatchResult) -> MatchResult {
+    if !a.matched || !b.matched {
+        return match_failure()
+    }
+    return MatchResult(true, a.bindings + b.bindings)
+}
+
+fn get_binding(result: MatchResult, name: str) -> any {
+    for pair in result.bindings {
+        if pair[0] == name {
+            return pair[1]
+        }
+    }
+    return nil
+}
+
+// ─── Pattern Node ───────────────────────────────────────────────────────
+
+struct Pattern {
+    kind: str
+    val: any
+    children: list
+    name: str
+    extra: list
+}
+
+// ─── Pattern Factories ──────────────────────────────────────────────────
+
+fn pat_literal(v: any) -> Pattern {
+    return Pattern(PAT_LITERAL, v, [], "", [])
+}
+
+fn pat_wildcard() -> Pattern {
+    return Pattern(PAT_WILDCARD, nil, [], "", [])
+}
+
+fn pat_binding(nm: str) -> Pattern {
+    return Pattern(PAT_BINDING, nil, [], nm, [])
+}
+
+fn pat_none_check() -> Pattern {
+    return Pattern(PAT_NONE_CHECK, nil, [], "", [])
+}
+
+fn pat_type(tname: str) -> Pattern {
+    return Pattern(PAT_TYPE, nil, [], tname, [])
+}
+
+fn pat_range(start_v: any, end_v: any, incl: bool) -> Pattern {
+    return Pattern(PAT_RANGE, [start_v, end_v, incl], [], "", [])
+}
+
+fn pat_list(elems: list, rest_nm: str) -> Pattern {
+    return Pattern(PAT_LIST, nil, elems, "", [rest_nm])
+}
+
+fn pat_tuple(elems: list) -> Pattern {
+    return Pattern(PAT_TUPLE, nil, elems, "", [])
+}
+
+fn pat_or(alts: list) -> Pattern {
+    return Pattern(PAT_OR, nil, alts, "", [])
+}
+
+fn pat_and(pats: list) -> Pattern {
+    return Pattern(PAT_AND, nil, pats, "", [])
+}
+
+fn pat_as(inner: Pattern, nm: str) -> Pattern {
+    return Pattern(PAT_AS, nil, [inner], nm, [])
+}
+
+fn pat_struct(tname: str, fnames: list, fpats: list) -> Pattern {
+    return Pattern(PAT_STRUCT, nil, [], tname, [fnames, fpats])
+}
+
+fn pat_guard(inner: Pattern) -> Pattern {
+    return Pattern(PAT_GUARD, nil, [inner], "", [])
+}
+
+fn pat_rest(nm: str) -> Pattern {
+    return Pattern(PAT_REST, nil, [], nm, [])
+}
+
+// ─── Pattern Matcher ────────────────────────────────────────────────────
+
+fn do_match(val: any, pat: Pattern) -> MatchResult {
+    let kind = pat.kind
+
+    if kind == PAT_LITERAL {
+        if val == pat.val {
+            return match_success()
+        }
+        return match_failure()
+    }
+
+    if kind == PAT_WILDCARD {
+        return match_success()
+    }
+
+    if kind == PAT_BINDING {
+        return match_with_binding(pat.name, val)
+    }
+
+    if kind == PAT_NONE_CHECK {
+        if val == nil {
+            return match_success()
+        }
+        return match_failure()
+    }
+
+    if kind == PAT_TYPE {
+        let matched = check_type_match(val, pat.name)
+        if matched {
+            return match_success()
+        }
+        return match_failure()
+    }
+
+    if kind == PAT_RANGE {
+        return match_range(val, pat)
+    }
+
+    if kind == PAT_LIST {
+        return match_list(val, pat)
+    }
+
+    if kind == PAT_TUPLE {
+        return match_tuple(val, pat)
+    }
+
+    if kind == PAT_GUARD {
+        return do_match(val, pat.children[0])
+    }
+
+    if kind == PAT_OR {
+        return match_or(val, pat)
+    }
+
+    if kind == PAT_AND {
+        return match_and(val, pat)
+    }
+
+    if kind == PAT_AS {
+        return match_as(val, pat)
+    }
+
+    if kind == PAT_STRUCT {
+        return match_struct(val, pat)
+    }
+
+    return match_failure()
+}
+
+fn check_type_match(val: any, tname: str) -> bool {
+    if tname == "any" {
+        return true
+    }
+    let s = str(val)
+    if tname == "int" {
+        let mut ok = true
+        if len(s) == 0 {
+            ok = false
+        }
+        for i in range(0, len(s)) {
+            let c = s[i]
+            if c == "-" && i == 0 {
+                // leading minus
+            } else if c < "0" || c > "9" {
+                ok = false
+            }
+        }
+        return ok
+    }
+    if tname == "str" {
+        return true
+    }
+    if tname == "bool" {
+        if val == true || val == false {
+            return true
+        }
+        return false
+    }
+    return false
+}
+
+fn match_range(val: any, pat: Pattern) -> MatchResult {
+    let sv = pat.val[0]
+    let ev = pat.val[1]
+    let incl = pat.val[2]
+    if val < sv {
+        return match_failure()
+    }
+    if incl && val > ev {
+        return match_failure()
+    }
+    if !incl && val >= ev {
+        return match_failure()
+    }
+    return match_success()
+}
+
+fn match_list(val: any, pat: Pattern) -> MatchResult {
+    let elems = pat.children
+    let mut rest_nm = ""
+    if len(pat.extra) > 0 {
+        rest_nm = pat.extra[0]
+    }
+
+    let mut bnd = []
+
+    if len(rest_nm) == 0 {
+        if len(val) != len(elems) {
+            return match_failure()
+        }
+        for i in range(0, len(elems)) {
+            let sub = do_match(val[i], elems[i])
+            if !sub.matched {
+                return match_failure()
+            }
+            bnd = bnd + sub.bindings
+        }
+    } else {
+        if len(val) < len(elems) {
+            return match_failure()
+        }
+        for i in range(0, len(elems)) {
+            let sub = do_match(val[i], elems[i])
+            if !sub.matched {
+                return match_failure()
+            }
+            bnd = bnd + sub.bindings
+        }
+        if rest_nm != "_" {
+            let mut rest_vals = []
+            for i in range(len(elems), len(val)) {
+                rest_vals = rest_vals + [val[i]]
+            }
+            bnd = bnd + [[rest_nm, rest_vals]]
+        }
+    }
+
+    return MatchResult(true, bnd)
+}
+
+fn match_tuple(val: any, pat: Pattern) -> MatchResult {
+    let elems = pat.children
+    if len(val) != len(elems) {
+        return match_failure()
+    }
+    let mut bnd = []
+    for i in range(0, len(elems)) {
+        let sub = do_match(val[i], elems[i])
+        if !sub.matched {
+            return match_failure()
+        }
+        bnd = bnd + sub.bindings
+    }
+    return MatchResult(true, bnd)
+}
+
+fn match_or(val: any, pat: Pattern) -> MatchResult {
+    for alt in pat.children {
+        let r = do_match(val, alt)
+        if r.matched {
+            return r
+        }
+    }
+    return match_failure()
+}
+
+fn match_and(val: any, pat: Pattern) -> MatchResult {
+    let mut bnd = []
+    for sp in pat.children {
+        let r = do_match(val, sp)
+        if !r.matched {
+            return match_failure()
+        }
+        bnd = bnd + r.bindings
+    }
+    return MatchResult(true, bnd)
+}
+
+fn match_as(val: any, pat: Pattern) -> MatchResult {
+    let ir = do_match(val, pat.children[0])
+    if !ir.matched {
+        return match_failure()
+    }
+    let mut bnd = ir.bindings
+    bnd = bnd + [[pat.name, val]]
+    return MatchResult(true, bnd)
+}
+
+fn match_struct(val: any, pat: Pattern) -> MatchResult {
+    if len(pat.extra) < 2 {
+        return match_failure()
+    }
+    let fnames = pat.extra[0]
+    let fpats = pat.extra[1]
+
+    let mut bnd = []
+    for i in range(0, len(fnames)) {
+        let fname = fnames[i]
+        let fpat = fpats[i]
+
+        let k_list = keys(val)
+        let mut fval = nil
+        let mut found = false
+        for k in k_list {
+            if k == fname {
+                fval = val[fname]
+                found = true
+            }
+        }
+
+        if !found {
+            return match_failure()
+        }
+
+        let sub = do_match(fval, fpat)
+        if !sub.matched {
+            return match_failure()
+        }
+        bnd = bnd + sub.bindings
+    }
+    return MatchResult(true, bnd)
+}
+
+// ─── Match Arm & Execute ────────────────────────────────────────────────
+
+struct MatchArm {
+    pat: Pattern
+    label: str
+}
+
+fn match_arm_new(p: Pattern, lbl: str) -> MatchArm {
+    return MatchArm(p, lbl)
+}
+
+fn execute_match(val: any, arms: list) -> str {
+    for arm in arms {
+        let r = do_match(val, arm.pat)
+        if r.matched {
+            return arm.label
+        }
+    }
+    return ""
+}
+
+// ─── Pattern Parser ─────────────────────────────────────────────────────
+
+const KNOWN_TYPES = ["int", "float", "str", "bool", "list", "dict", "tuple", "set", "any", "map"]
+
+fn str_at(s: str, idx: int) -> str {
+    if idx >= len(s) {
+        return ""
+    }
+    return s[idx]
+}
+
+fn str_slice(s: str, start: int, stop: int) -> str {
+    let mut result = ""
+    let mut st = stop
+    if st > len(s) {
+        st = len(s)
+    }
+    for i in range(start, st) {
+        result = result + s[i]
+    }
+    return result
+}
+
+fn str_starts(s: str, pfx: str) -> bool {
+    if len(pfx) > len(s) {
+        return false
+    }
+    for i in range(0, len(pfx)) {
+        if s[i] != pfx[i] {
+            return false
+        }
+    }
+    return true
+}
+
+fn is_digit(c: str) -> bool {
+    return c >= "0" && c <= "9"
+}
+
+fn is_alpha(c: str) -> bool {
+    return (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || c == "_"
+}
+
+fn is_alnum(c: str) -> bool {
+    return is_digit(c) || is_alpha(c)
+}
+
+fn is_lower(c: str) -> bool {
+    return c >= "a" && c <= "z"
+}
+
+// Parse a pattern from string source
+fn parse_pattern(source: str) -> Pattern {
+    let result = pp_or(trim(source), 0)
+    return result[0]
+}
+
+// pp_or: handles | alternation
+fn pp_or(src: str, pos: int) -> list {
+    let first = pp_and(src, pos)
+    let mut p = first[0]
+    let mut cur = skip_ws(src, first[1])
+
+    let mut parts = [p]
+
+    while cur < len(src) && str_at(src, cur) == "|" {
+        cur = skip_ws(src, cur + 1)
+        let nxt = pp_and(src, cur)
+        parts = parts + [nxt[0]]
+        cur = skip_ws(src, nxt[1])
+    }
+
+    if len(parts) == 1 {
+        return [parts[0], cur]
+    }
+    return [pat_or(parts), cur]
+}
+
+// pp_and: handles & conjunction
+fn pp_and(src: str, pos: int) -> list {
+    let first = pp_as(src, pos)
+    let mut p = first[0]
+    let mut cur = skip_ws(src, first[1])
+
+    let mut parts = [p]
+
+    while cur < len(src) && str_at(src, cur) == "&" {
+        cur = skip_ws(src, cur + 1)
+        let nxt = pp_as(src, cur)
+        parts = parts + [nxt[0]]
+        cur = skip_ws(src, nxt[1])
+    }
+
+    if len(parts) == 1 {
+        return [parts[0], cur]
+    }
+    return [pat_and(parts), cur]
+}
+
+// pp_as: handles @ as-binding
+fn pp_as(src: str, pos: int) -> list {
+    let inner = pp_atom(src, pos)
+    let mut p = inner[0]
+    let mut cur = skip_ws(src, inner[1])
+
+    let rest = str_slice(src, cur, cur + 2)
+    if rest == "@ " {
+        cur = skip_ws(src, cur + 2)
+        let nm_result = read_ident(src, cur)
+        return [pat_as(p, nm_result[0]), nm_result[1]]
+    }
+    return [p, cur]
+}
+
+// pp_atom: parse a single pattern atom
+fn pp_atom(src: str, pos: int) -> list {
+    let cur = skip_ws(src, pos)
+    if cur >= len(src) {
+        return [pat_wildcard(), cur]
+    }
+
+    let rest = str_slice(src, cur, len(src))
+    let c0 = str_at(src, cur)
+
+    // Wildcard _
+    if c0 == "_" && (cur + 1 >= len(src) || !is_alnum(str_at(src, cur + 1))) {
+        return [pat_wildcard(), cur + 1]
+    }
+
+    // nil
+    if str_starts(rest, "nil") && (len(rest) == 3 || !is_alnum(str_at(rest, 3))) {
+        return [pat_none_check(), cur + 3]
+    }
+
+    // true
+    if str_starts(rest, "true") && (len(rest) == 4 || !is_alnum(str_at(rest, 4))) {
+        return [pat_literal(true), cur + 4]
+    }
+
+    // false
+    if str_starts(rest, "false") && (len(rest) == 5 || !is_alnum(str_at(rest, 5))) {
+        return [pat_literal(false), cur + 5]
+    }
+
+    // String literal
+    if c0 == "'" {
+        return pp_string(src, cur)
+    }
+
+    // Number or range
+    if is_digit(c0) || (c0 == "-" && cur + 1 < len(src) && is_digit(str_at(src, cur + 1))) {
+        return pp_number(src, cur)
+    }
+
+    // List pattern
+    if c0 == "[" {
+        return pp_list(src, cur)
+    }
+
+    // Tuple pattern
+    if c0 == "(" {
+        return pp_tuple(src, cur)
+    }
+
+    // Identifier
+    if is_alpha(c0) {
+        return pp_ident(src, cur)
+    }
+
+    return [pat_wildcard(), cur]
+}
+
+fn pp_string(src: str, pos: int) -> list {
+    let qc = str_at(src, pos)
+    let mut cur = pos + 1
+    let mut buf = ""
+
+    while cur < len(src) {
+        let c = str_at(src, cur)
+        cur = cur + 1
+        if c == qc {
+            return [pat_literal(buf), cur]
+        }
+        buf = buf + c
+    }
+    return [pat_literal(buf), cur]
+}
+
+fn pp_number(src: str, pos: int) -> list {
+    let mut cur = pos
+
+    while cur < len(src) {
+        let c = str_at(src, cur)
+        if c == "." && cur + 1 < len(src) && str_at(src, cur + 1) == "." {
+            // Range: ..
+            let num_s = str_slice(src, pos, cur)
+            cur = cur + 2
+            let mut incl = true
+            if cur < len(src) && str_at(src, cur) == "<" {
+                cur = cur + 1
+                incl = false
+            }
+            let end_start = cur
+            while cur < len(src) && (is_digit(str_at(src, cur)) || str_at(src, cur) == ".") {
+                cur = cur + 1
+            }
+            let end_s = str_slice(src, end_start, cur)
+            return [pat_range(parse_num(num_s), parse_num(end_s), incl), cur]
+        }
+        if is_digit(c) || c == "." || (c == "-" && cur == pos) {
+            cur = cur + 1
+        } else {
+            break
+        }
+    }
+
+    let num_s = str_slice(src, pos, cur)
+    return [pat_literal(parse_num(num_s)), cur]
+}
+
+fn parse_num(s: str) -> any {
+    if contains(s, ".") {
+        return float(s)
+    }
+    return int(s)
+}
+
+fn pp_list(src: str, pos: int) -> list {
+    let mut cur = pos + 1
+    let mut elems = []
+    let mut rest_nm = ""
+
+    while cur < len(src) {
+        cur = skip_ws(src, cur)
+        if str_at(src, cur) == "]" {
+            cur = cur + 1
+            break
+        }
+        if str_at(src, cur) == "*" {
+            cur = cur + 1
+            cur = skip_ws(src, cur)
+            let nm_r = read_ident(src, cur)
+            rest_nm = nm_r[0]
+            cur = nm_r[1]
+            cur = skip_ws(src, cur)
+            if str_at(src, cur) == "," {
+                cur = cur + 1
+            }
+        } else {
+            let er = pp_or(src, cur)
+            elems = elems + [er[0]]
+            cur = skip_ws(src, er[1])
+            if str_at(src, cur) == "," {
+                cur = cur + 1
+            }
+        }
+    }
+
+    return [pat_list(elems, rest_nm), cur]
+}
+
+fn pp_tuple(src: str, pos: int) -> list {
+    let mut cur = pos + 1
+    let mut elems = []
+
+    while cur < len(src) {
+        cur = skip_ws(src, cur)
+        if str_at(src, cur) == ")" {
+            cur = cur + 1
+            break
+        }
+        let er = pp_or(src, cur)
+        elems = elems + [er[0]]
+        cur = skip_ws(src, er[1])
+        if str_at(src, cur) == "," {
+            cur = cur + 1
+        }
+    }
+
+    return [pat_tuple(elems), cur]
+}
+
+fn read_ident(src: str, pos: int) -> list {
+    let mut cur = pos
+    while cur < len(src) && is_alnum(str_at(src, cur)) {
+        cur = cur + 1
+    }
+    return [str_slice(src, pos, cur), cur]
+}
+
+fn pp_ident(src: str, pos: int) -> list {
+    let nm_r = read_ident(src, pos)
+    let nm = nm_r[0]
+    let cur = nm_r[1]
+
+    for t in KNOWN_TYPES {
+        if nm == t {
+            return [pat_type(nm), cur]
+        }
+    }
+
+    if is_lower(nm[0]) {
+        return [pat_binding(nm), cur]
+    }
+
+    return [pat_type(nm), cur]
+}
+
+fn skip_ws(src: str, pos: int) -> int {
+    let mut cur = pos
+    while cur < len(src) {
+        let c = str_at(src, cur)
+        if c != " " && c != "\t" {
+            return cur
+        }
+        cur = cur + 1
+    }
+    return cur
+}
+
+// ─── Exhaustiveness Checker ─────────────────────────────────────────────
+
+fn check_exhaustiveness(pats: list, vtype: str) -> list {
+    let mut has_wc = false
+    for p in pats {
+        if p.kind == PAT_WILDCARD || p.kind == PAT_BINDING {
+            has_wc = true
+        }
+    }
+    if has_wc {
+        return [true, []]
+    }
+
+    let mut has_tc = false
+    for p in pats {
+        if p.kind == PAT_TYPE {
+            if p.name == vtype || p.name == "any" {
+                has_tc = true
+            }
+        }
+    }
+    if has_tc {
+        return [true, []]
+    }
+
+    let warn = "Non-exhaustive match: add a wildcard arm for type " + vtype
+    return [false, [warn]]
+}
+
+// ─── Pattern to String ──────────────────────────────────────────────────
+
+fn pat_to_str(p: Pattern) -> str {
+    if p.kind == PAT_LITERAL {
+        return str(p.val)
+    }
+    if p.kind == PAT_WILDCARD {
+        return "_"
+    }
+    if p.kind == PAT_BINDING {
+        return p.name
+    }
+    if p.kind == PAT_NONE_CHECK {
+        return "nil"
+    }
+    if p.kind == PAT_TYPE {
+        return p.name
+    }
+    if p.kind == PAT_RANGE {
+        let sv = p.val[0]
+        let ev = p.val[1]
+        let incl = p.val[2]
+        if incl {
+            return str(sv) + ".." + str(ev)
+        }
+        return str(sv) + "..<" + str(ev)
+    }
+    if p.kind == PAT_OR {
+        let mut parts = []
+        for ch in p.children {
+            parts = parts + [pat_to_str(ch)]
+        }
+        return join(parts, " | ")
+    }
+    if p.kind == PAT_AND {
+        let mut parts = []
+        for ch in p.children {
+            parts = parts + [pat_to_str(ch)]
+        }
+        return join(parts, " & ")
+    }
+    if p.kind == PAT_AS {
+        return pat_to_str(p.children[0]) + " @ " + p.name
+    }
+    if p.kind == PAT_LIST {
+        let mut parts = []
+        for ch in p.children {
+            parts = parts + [pat_to_str(ch)]
+        }
+        let mut rs = ""
+        if len(p.extra) > 0 && len(p.extra[0]) > 0 {
+            rs = ", *" + p.extra[0]
+        }
+        return "[" + join(parts, ", ") + rs + "]"
+    }
+    if p.kind == PAT_TUPLE {
+        let mut parts = []
+        for ch in p.children {
+            parts = parts + [pat_to_str(ch)]
+        }
+        return "(" + join(parts, ", ") + ")"
+    }
+    return "<pat>"
+}
+
+// ─── Demo / Self-test ───────────────────────────────────────────────────
+
+fn main() {
+    println("=== Lateralus Pattern Engine (self-hosted) ===")
+    println("")
+
+    // Literal matching
+    let p1 = pat_literal(42)
+    println("42 matches 42: " + str(do_match(42, p1).matched))
+    println("42 matches 99: " + str(do_match(99, p1).matched))
+
+    // Wildcard
+    let p2 = pat_wildcard()
+    println("_ matches anything: " + str(do_match("anything", p2).matched))
+
+    // Binding
+    let p3 = pat_binding("x")
+    let r3 = do_match(42, p3)
+    println("x matches 42: " + str(r3.matched) + ", x=" + str(get_binding(r3, "x")))
+
+    // Range inclusive
+    let p4 = pat_range(1, 10, true)
+    println("1..10 matches 5: " + str(do_match(5, p4).matched))
+    println("1..10 matches 11: " + str(do_match(11, p4).matched))
+
+    // Range exclusive
+    let p5 = pat_range(0, 10, false)
+    println("0..<10 matches 9: " + str(do_match(9, p5).matched))
+    println("0..<10 matches 10: " + str(do_match(10, p5).matched))
+
+    // OR pattern
+    let p6 = pat_or([pat_literal(1), pat_literal(2), pat_literal(3)])
+    println("1|2|3 matches 2: " + str(do_match(2, p6).matched))
+    println("1|2|3 matches 5: " + str(do_match(5, p6).matched))
+
+    // List pattern with rest
+    let p7 = pat_list([pat_binding("head")], "tail")
+    let r7 = do_match([10, 20, 30], p7)
+    println("[head, *tail] matches [10,20,30]: " + str(r7.matched))
+    println("  head=" + str(get_binding(r7, "head")))
+    println("  tail=" + str(get_binding(r7, "tail")))
+
+    // AND pattern
+    let p8 = pat_and([pat_binding("x"), pat_type("int")])
+    let r8 = do_match(42, p8)
+    println("x & int matches 42: " + str(r8.matched))
+
+    // As pattern
+    let p9 = pat_as(pat_range(1, 100, true), "n")
+    let r9 = do_match(50, p9)
+    println("1..100 @ n matches 50: " + str(r9.matched) + ", n=" + str(get_binding(r9, "n")))
+
+    // Pattern parsing
+    println("")
+    println("-- Pattern Parsing --")
+    println("parse 42: " + pat_to_str(parse_pattern("42")))
+    println("parse _: " + pat_to_str(parse_pattern("_")))
+    println("parse 1..10: " + pat_to_str(parse_pattern("1..10")))
+    println("parse x: " + pat_to_str(parse_pattern("x")))
+    println("parse true: " + pat_to_str(parse_pattern("true")))
+    println("parse int: " + pat_to_str(parse_pattern("int")))
+
+    // Exhaustiveness
+    println("")
+    println("-- Exhaustiveness --")
+    let exh1 = check_exhaustiveness([pat_literal(1), pat_literal(2)], "int")
+    println("[1, 2] exhaustive for int: " + str(exh1[0]))
+    let exh2 = check_exhaustiveness([pat_literal(1), pat_wildcard()], "int")
+    println("[1, _] exhaustive for int: " + str(exh2[0]))
+    let exh3 = check_exhaustiveness([pat_type("int")], "int")
+    println("[int] exhaustive for int: " + str(exh3[0]))
+
+    println("")
+    println("=== Pattern Engine OK ===")
+}
+
+main()

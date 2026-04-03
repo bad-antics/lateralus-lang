@@ -1,0 +1,395 @@
+-- stdlib/signals.ltl
+-- LATERALUS Signal Processing Standard Library
+-- DSP primitives, filtering, spectral analysis, and audio pipeline tools
+-- Delegates heavy computation to the science module (FFT, etc.)
+
+module Signals
+
+import "core"
+import "math"
+import "science"
+import "collections"
+
+-- ============================================================
+-- Types
+-- ============================================================
+
+struct Signal {
+    samples: list[float]
+    sample_rate: float     -- Hz
+    label: str
+}
+
+struct FrequencyBin {
+    frequency: float
+    magnitude: float
+    phase: float
+}
+
+struct FilterResult {
+    output: list[float]
+    filter_type: str
+}
+
+-- ============================================================
+-- Signal construction
+-- ============================================================
+
+fn new_signal(samples: list[float], sample_rate: float = 44100.0, label: str = "") -> Signal {
+    return Signal { samples: samples, sample_rate: sample_rate, label: label }
+}
+
+-- Generate a pure sine wave
+fn sine_wave(freq: float, duration: float, sample_rate: float = 44100.0, amplitude: float = 1.0) -> Signal {
+    let n_samples = int(duration * sample_rate)
+    let samples = [amplitude * math.sin(2.0 * math.PI * freq * i / sample_rate)
+                   for i in range(n_samples)]
+    return Signal { samples: samples, sample_rate: sample_rate,
+                    label: "sine@" + str(freq) + "Hz" }
+}
+
+-- Generate a square wave
+fn square_wave(freq: float, duration: float, sample_rate: float = 44100.0, amplitude: float = 1.0) -> Signal {
+    let n_samples = int(duration * sample_rate)
+    let samples = [amplitude * (1.0 if math.sin(2.0 * math.PI * freq * i / sample_rate) >= 0.0 else -1.0)
+                   for i in range(n_samples)]
+    return Signal { samples: samples, sample_rate: sample_rate,
+                    label: "square@" + str(freq) + "Hz" }
+}
+
+-- Generate a sawtooth wave
+fn sawtooth_wave(freq: float, duration: float, sample_rate: float = 44100.0, amplitude: float = 1.0) -> Signal {
+    let n_samples = int(duration * sample_rate)
+    let period = sample_rate / freq
+    let samples = [amplitude * (2.0 * ((i / period) - math.floor(i / period + 0.5)))
+                   for i in range(n_samples)]
+    return Signal { samples: samples, sample_rate: sample_rate,
+                    label: "sawtooth@" + str(freq) + "Hz" }
+}
+
+-- White noise
+fn white_noise(duration: float, sample_rate: float = 44100.0, amplitude: float = 1.0) -> Signal {
+    @python("
+import random as _rand
+n = int(duration * sample_rate)
+_result = [amplitude * (_rand.random() * 2.0 - 1.0) for _ in range(n)]
+")
+    return Signal { samples: @result, sample_rate: sample_rate, label: "noise" }
+}
+
+-- ============================================================
+-- Basic operations
+-- ============================================================
+
+fn signal_length(s: Signal) -> int { return len(s.samples) }
+fn duration(s: Signal) -> float    { return len(s.samples) / s.sample_rate }
+
+fn slice_signal(s: Signal, start: float, end: float) -> Signal {
+    let start_idx = int(start * s.sample_rate)
+    let end_idx = int(end * s.sample_rate)
+    return Signal { samples: s.samples[start_idx:end_idx],
+                    sample_rate: s.sample_rate, label: s.label }
+}
+
+fn concatenate(a: Signal, b: Signal) -> Signal {
+    -- Both must have same sample rate
+    return Signal { samples: a.samples + b.samples,
+                    sample_rate: a.sample_rate,
+                    label: a.label + "+" + b.label }
+}
+
+fn mix(a: Signal, b: Signal, blend: float = 0.5) -> Signal {
+    let n = min(len(a.samples), len(b.samples))
+    let samples = [(1.0 - blend) * a.samples[i] + blend * b.samples[i] for i in range(n)]
+    return Signal { samples: samples, sample_rate: a.sample_rate, label: "mix" }
+}
+
+fn amplify(s: Signal, gain: float) -> Signal {
+    return Signal { samples: [x * gain for x in s.samples],
+                    sample_rate: s.sample_rate, label: s.label }
+}
+
+fn normalize(s: Signal) -> Signal {
+    let peak = max([math.abs(x) for x in s.samples] + [1e-10])
+    return amplify(s, 1.0 / peak)
+}
+
+fn reverse_signal(s: Signal) -> Signal {
+    return Signal { samples: list(reversed(s.samples)),
+                    sample_rate: s.sample_rate, label: s.label + "_rev" }
+}
+
+-- ============================================================
+-- Statistical metrics
+-- ============================================================
+
+fn rms(s: Signal) -> float {
+    let sq_sum = sum([x * x for x in s.samples])
+    return math.sqrt(sq_sum / len(s.samples))
+}
+
+fn peak(s: Signal) -> float {
+    return max([math.abs(x) for x in s.samples])
+}
+
+fn zero_crossing_rate(s: Signal) -> float {
+    let crossings = 0
+    for i in range(1, len(s.samples)) {
+        if (s.samples[i - 1] >= 0.0) != (s.samples[i] >= 0.0) {
+            crossings = crossings + 1
+        }
+    }
+    return crossings / duration(s)
+}
+
+-- ============================================================
+-- Moving window operations
+-- ============================================================
+
+fn moving_average(s: Signal, window: int) -> Signal {
+    @python("
+samples = s['samples']
+w = window
+n = len(samples)
+out = []
+cumsum = 0.0
+for i in range(n):
+    cumsum += samples[i]
+    if i >= w:
+        cumsum -= samples[i - w]
+    count = min(i + 1, w)
+    out.append(cumsum / count)
+_result = out
+")
+    return Signal { samples: @result, sample_rate: s.sample_rate,
+                    label: s.label + "_ma" + str(window) }
+}
+
+fn moving_rms(s: Signal, window: int) -> Signal {
+    @python("
+import math as _m
+samples = s['samples']
+w = window
+n = len(samples)
+out = []
+sq_sum = 0.0
+for i in range(n):
+    sq_sum += samples[i] ** 2
+    if i >= w:
+        sq_sum -= samples[i - w] ** 2
+    count = min(i + 1, w)
+    out.append(_m.sqrt(sq_sum / count))
+_result = out
+")
+    return Signal { samples: @result, sample_rate: s.sample_rate,
+                    label: s.label + "_rms" }
+}
+
+-- ============================================================
+-- Spectral analysis (delegates to science.fft)
+-- ============================================================
+
+fn spectrum(s: Signal) -> list[FrequencyBin] {
+    @python("
+import cmath as _cm
+n = len(s['samples'])
+sr = s['sample_rate']
+
+# Compute FFT using science module or fallback
+try:
+    from lateralus_lang.science import fft as _fft
+    complex_spectrum = _fft(s['samples'])
+except ImportError:
+    # Simple DFT fallback for small signals
+    complex_spectrum = []
+    for k in range(n // 2):
+        val = sum(s['samples'][t] * _cm.exp(-2j * _cm.pi * k * t / n) for t in range(n))
+        complex_spectrum.append(val)
+
+bins = []
+freq_res = sr / n
+for i, c in enumerate(complex_spectrum[:n // 2]):
+    bins.append({
+        'frequency': i * freq_res,
+        'magnitude': abs(c) / (n / 2),
+        'phase': _cm.phase(c)
+    })
+_result = bins
+")
+    return [@result[i]["frequency"],
+            @result[i]["magnitude"],
+            @result[i]["phase"]
+            for i in range(len(@result))]
+        |> [FrequencyBin { frequency: b[0], magnitude: b[1], phase: b[2] }
+            for b in _]
+}
+
+fn dominant_frequency(s: Signal) -> float {
+    let bins = spectrum(s)
+    let max_bin = bins[0]
+    for b in bins {
+        if b.magnitude > max_bin.magnitude { max_bin = b }
+    }
+    return max_bin.frequency
+}
+
+-- ============================================================
+-- Filtering
+-- ============================================================
+
+-- Simple first-order IIR low-pass filter
+fn lowpass_filter(s: Signal, cutoff_hz: float) -> Signal {
+    let rc = 1.0 / (2.0 * math.PI * cutoff_hz)
+    let dt = 1.0 / s.sample_rate
+    let alpha = dt / (rc + dt)
+    let filtered = [s.samples[0]]
+
+    for i in range(1, len(s.samples)) {
+        let prev = filtered[-1]
+        filtered = filtered + [prev + alpha * (s.samples[i] - prev)]
+    }
+
+    return Signal { samples: filtered, sample_rate: s.sample_rate,
+                    label: s.label + "_lp" }
+}
+
+-- High-pass filter (signal minus low-pass)
+fn highpass_filter(s: Signal, cutoff_hz: float) -> Signal {
+    let lp = lowpass_filter(s, cutoff_hz)
+    let hp = [s.samples[i] - lp.samples[i] for i in range(len(s.samples))]
+    return Signal { samples: hp, sample_rate: s.sample_rate,
+                    label: s.label + "_hp" }
+}
+
+-- Band-pass filter: apply high-pass then low-pass
+fn bandpass_filter(s: Signal, low_hz: float, high_hz: float) -> Signal {
+    return s |> highpass_filter(_, low_hz) |> lowpass_filter(_, high_hz)
+}
+
+-- ============================================================
+-- Convolution
+-- ============================================================
+
+fn convolve(s: Signal, kernel: list[float]) -> Signal {
+    @python("
+x = s['samples']
+h = kernel
+n = len(x)
+m = len(h)
+out = [0.0] * (n + m - 1)
+for i in range(n):
+    for j in range(m):
+        out[i + j] += x[i] * h[j]
+_result = out[:n]  # trim to original length
+")
+    return Signal { samples: @result, sample_rate: s.sample_rate,
+                    label: s.label + "_conv" }
+}
+
+-- Cross-correlation
+fn correlate(a: Signal, b: Signal) -> list[float] {
+    @python("
+x = a['samples']
+y = b['samples']
+n = len(x)
+lags = range(-(n-1), n)
+result = []
+for lag in lags:
+    s = 0.0
+    for i in range(n):
+        j = i - lag
+        if 0 <= j < n:
+            s += x[i] * y[j]
+    result.append(s / n)
+_result = result
+")
+    return @result
+}
+
+-- Autocorrelation
+fn autocorrelate(s: Signal) -> list[float] {
+    return correlate(s, s)
+}
+
+-- ============================================================
+-- Resampling
+-- ============================================================
+
+fn resample(s: Signal, new_rate: float) -> Signal {
+    @python("
+import math as _m
+old_n = len(s['samples'])
+old_rate = s['sample_rate']
+new_n = int(old_n * new_rate / old_rate)
+out = []
+for i in range(new_n):
+    t = i * old_rate / new_rate
+    lo = int(t)
+    hi = min(lo + 1, old_n - 1)
+    frac = t - lo
+    out.append(s['samples'][lo] * (1 - frac) + s['samples'][hi] * frac)
+_result = out
+")
+    return Signal { samples: @result, sample_rate: new_rate, label: s.label }
+}
+
+-- ============================================================
+-- Windowing functions
+-- ============================================================
+
+fn apply_window(s: Signal, window_type: str = "hanning") -> Signal {
+    @python("
+import math as _m
+n = len(s['samples'])
+wt = window_type.lower()
+if wt == 'hanning':
+    w = [0.5 - 0.5 * _m.cos(2 * _m.pi * i / (n - 1)) for i in range(n)]
+elif wt == 'hamming':
+    w = [0.54 - 0.46 * _m.cos(2 * _m.pi * i / (n - 1)) for i in range(n)]
+elif wt == 'blackman':
+    w = [0.42 - 0.5 * _m.cos(2 * _m.pi * i / (n-1)) + 0.08 * _m.cos(4 * _m.pi * i / (n-1)) for i in range(n)]
+else:  # rectangular
+    w = [1.0] * n
+_result = [s['samples'][i] * w[i] for i in range(n)]
+")
+    return Signal { samples: @result, sample_rate: s.sample_rate,
+                    label: s.label + "_" + window_type }
+}
+
+-- ============================================================
+-- Spectrogram
+-- ============================================================
+
+-- Short-time Fourier transform -> list of frequency bins per window
+fn spectrogram(s: Signal, window_size: int = 1024, hop_size: int = 512) -> list {
+    let frames = []
+    let i = 0
+    while i + window_size <= len(s.samples) {
+        let frame_samples = s.samples[i:i + window_size]
+        let frame_sig = new_signal(frame_samples, s.sample_rate)
+        let windowed = apply_window(frame_sig, "hanning")
+        let spec = spectrum(windowed)
+        frames = frames + [spec]
+        i = i + hop_size
+    }
+    return frames
+}
+
+-- ============================================================
+-- Encoding / export
+-- ============================================================
+
+-- Export samples as CSV
+fn to_csv(s: Signal) -> str {
+    let header = "time,amplitude\n"
+    let rows = [str(i / s.sample_rate) + "," + str(v) for i, v in enumerate(s.samples)]
+    return header + "\n".join(rows)
+}
+
+-- Summary string
+fn signal_info(s: Signal) -> str {
+    return "Signal[" + s.label + "] " +
+           str(len(s.samples)) + " samples @ " +
+           str(s.sample_rate) + "Hz (" +
+           str(duration(s)) + "s), peak=" + str(peak(s))
+}

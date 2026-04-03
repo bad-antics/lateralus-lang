@@ -1,0 +1,219 @@
+// Lateralus Standard Library — io.ltl  (v1.5.0)
+// File I/O and console helpers
+
+module stdlib.io
+
+import stdlib.core
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Console I/O
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Read a full line from stdin (strips trailing newline)
+pub fn read_line() -> str {
+    return io.input("")
+}
+
+/// Prompt the user and read a line
+pub fn prompt(message: str) -> str {
+    return io.input(message)
+}
+
+/// Read an integer from stdin (prompt optional)
+pub fn read_int(prompt_msg: str) -> int {
+    let raw = io.input(prompt_msg)
+    return raw as int
+}
+
+/// Read a float from stdin (prompt optional)
+pub fn read_float(prompt_msg: str) -> float {
+    let raw = io.input(prompt_msg)
+    return raw as float
+}
+
+/// Print a formatted table to stdout
+pub fn print_table(headers: list[str], rows: list[list[str]]) {
+    // Determine column widths
+    let mut widths: list[int] = []
+    for h in headers {
+        widths = widths + [len(h)]
+    }
+    for row in rows {
+        let mut i = 0
+        for cell in row {
+            if i < len(widths) {
+                if len(cell) > widths[i] {
+                    widths[i] = len(cell)
+                }
+            }
+            i += 1
+        }
+    }
+    // Print header
+    let mut line = ""
+    let mut i = 0
+    for h in headers {
+        let w = widths[i]
+        line = line + h
+        let mut pad = w - len(h) + 2
+        while pad > 0 {
+            line = line + " "
+            pad -= 1
+        }
+        i += 1
+    }
+    println(line)
+    // Print separator
+    let mut sep = ""
+    for w in widths {
+        let mut j = 0
+        while j < w + 2 {
+            sep = sep + "-"
+            j += 1
+        }
+    }
+    println(sep)
+    // Print rows
+    for row in rows {
+        let mut rowline = ""
+        let mut k = 0
+        for cell in row {
+            let w = widths[k]
+            rowline = rowline + cell
+            let mut pad = w - len(cell) + 2
+            while pad > 0 {
+                rowline = rowline + " "
+                pad -= 1
+            }
+            k += 1
+        }
+        println(rowline)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// File I/O  — thin wrappers around the host runtime
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Read the entire contents of a file as a string.
+/// Throws IOError if the file cannot be opened.
+pub fn read_file(path: str) -> str {
+    return _file_op("read", path, "")
+}
+
+/// Write content to a file, replacing any existing content.
+/// Creates the file if it does not exist.
+pub fn write_file(path: str, content: str) {
+    _file_op("write", path, content)
+}
+
+/// Append content to the end of a file.
+/// Creates the file if it does not exist.
+pub fn append_file(path: str, content: str) {
+    _file_op("append", path, content)
+}
+
+/// Return true if a file exists at the given path.
+pub fn file_exists(path: str) -> bool {
+    return _file_op("exists", path, "") == "true"
+}
+
+/// Return the lines of a file as a list of strings (newlines stripped).
+pub fn lines_of(path: str) -> list[str] {
+    let content = read_file(path)
+    return split_lines(content)
+}
+
+/// Split a string on newline characters  (helper — would normally be in strings.ltl)
+pub fn split_lines(s: str) -> list[str] {
+    let mut lines: list[str] = []
+    let mut current = ""
+    for ch in s {
+        if ch == "\n" {
+            lines = lines + [current]
+            current = ""
+        } else {
+            current = current + ch
+        }
+    }
+    if len(current) > 0 {
+        lines = lines + [current]
+    }
+    return lines
+}
+
+/// Private file-op dispatcher — resolved at runtime by the compiler target
+fn _file_op(mode: str, path: str, content: str) -> str {
+    // Resolved by PythonTranspiler to the host's open()/pathlib call
+    if mode == "read" {
+        return _host_read_file(path)
+    }
+    if mode == "write" {
+        _host_write_file(path, content, false)
+        return ""
+    }
+    if mode == "append" {
+        _host_write_file(path, content, true)
+        return ""
+    }
+    if mode == "exists" {
+        if _host_file_exists(path) { return "true" }
+        return "false"
+    }
+    return ""
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Path helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Return the basename (last component) of a file path
+pub fn basename(path: str) -> str {
+    let mut result = ""
+    let mut current = ""
+    for ch in path {
+        if ch == "/" || ch == "\\" {
+            current = ""
+        } else {
+            current = current + ch
+        }
+    }
+    return current
+}
+
+/// Return the directory component of a file path
+pub fn dirname(path: str) -> str {
+    let mut last_slash = -1
+    let mut i = 0
+    for ch in path {
+        if ch == "/" || ch == "\\" {
+            last_slash = i
+        }
+        i += 1
+    }
+    if last_slash < 0 { return "." }
+    return path  // sliced [0..last_slash] — requires str slicing
+}
+
+/// Join two path segments with the system separator
+pub fn path_join(base: str, name: str) -> str {
+    if len(base) == 0 { return name }
+    let last = base[len(base) - 1]
+    if last == "/" || last == "\\" {
+        return base + name
+    }
+    return base + "/" + name
+}
+
+/// Return the file extension (including dot), e.g. ".ltl"
+pub fn extension(path: str) -> str {
+    let b = basename(path)
+    let mut dot_idx = -1
+    let mut i = 0
+    for ch in b {
+        if ch == "." { dot_idx = i }
+        i += 1
+    }
+    if dot_idx < 0 { return "" }
+    return b  // sliced [dot_idx..] — requires str slicing
+}

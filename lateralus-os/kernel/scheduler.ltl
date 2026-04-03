@@ -1,0 +1,515 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// LateralusOS — Process Scheduler
+// ═══════════════════════════════════════════════════════════════════════════
+// Copyright (c) 2025 bad-antics. All rights reserved.
+//
+// Round-robin preemptive scheduler with priority levels.
+// Supports:
+//   • Process creation & destruction
+//   • Thread management
+//   • Priority scheduling (0 = idle, 1-4 = normal, 5-7 = real-time)
+//   • Time-slice preemption via timer interrupt
+//   • Process states: Ready, Running, Blocked, Zombie
+// ═══════════════════════════════════════════════════════════════════════════
+
+import hal::interrupts
+import hal::timer
+import hal::cpu
+import hal::serial
+import kernel::memory
+import kernel::ipc
+import kernel::panic
+
+// ── Constants ───────────────────────────────────────────────────────────
+
+const MAX_PROCESSES    = 256
+const MAX_THREADS      = 1024
+const DEFAULT_STACK_SIZE = 8192     // 8 KB per thread stack
+const DEFAULT_TIMESLICE  = 10       // 10 ms time slice
+const PRIORITY_IDLE      = 0
+const PRIORITY_LOW       = 1
+const PRIORITY_NORMAL    = 3
+const PRIORITY_HIGH      = 5
+const PRIORITY_REALTIME  = 7
+
+// ── Process & Thread Structures ─────────────────────────────────────────
+
+enum ProcessState {
+    Ready,
+    Running,
+    Blocked,
+    Sleeping,
+    Zombie,
+    Dead,
+}
+
+struct RegisterState {
+    rax: int, rbx: int, rcx: int, rdx: int,
+    rsi: int, rdi: int, rbp: int, rsp: int,
+    r8:  int, r9:  int, r10: int, r11: int,
+    r12: int, r13: int, r14: int, r15: int,
+    rip: int, rflags: int,
+    cs: int, ss: int,
+}
+
+struct Thread {
+    tid:           int,
+    pid:           int,          // owning process
+    state:         ProcessState,
+    registers:     RegisterState,
+    stack_base:    int,
+    stack_size:    int,
+    priority:      int,
+    timeslice_ms:  int,
+    remaining_ms:  int,
+    name:          str,
+}
+
+struct Process {
+    pid:            int,
+    parent_pid:     int,
+    name:           str,
+    state:          ProcessState,
+    main_thread:    int,         // TID of main thread
+    threads:        [int; 16],   // TIDs
+    thread_count:   int,
+    priority:       int,
+    exit_code:      int,
+    page_table:     int,         // physical address of PML4
+    heap_start:     int,
+    heap_end:       int,
+    open_files:     [int; 32],   // file descriptor table
+    cwd:            str,
+    env:            Map<str, str>,
+}
+
+// ── Scheduler State ─────────────────────────────────────────────────────
+
+struct Scheduler {
+    processes:       [Process; MAX_PROCESSES],
+    threads:         [Thread; MAX_THREADS],
+    proc_count:      int,
+    thread_count:    int,
+    current_tid:     int,
+    current_pid:     int,
+    next_pid:        int,
+    next_tid:        int,
+    ready_queue:     [int; MAX_THREADS],  // TIDs in ready state
+    ready_count:     int,
+    ready_head:      int,
+    idle_tid:        int,
+    ticks:           int,
+    context_switches: int,
+    initialized:     bool,
+}
+
+let mut sched = Scheduler {
+    processes:       [Process{}; MAX_PROCESSES],
+    threads:         [Thread{}; MAX_THREADS],
+    proc_count:      0,
+    thread_count:    0,
+    current_tid:     0,
+    current_pid:     0,
+    next_pid:        1,
+    next_tid:        1,
+    ready_queue:     [0; MAX_THREADS],
+    ready_count:     0,
+    ready_head:      0,
+    idle_tid:        0,
+    ticks:           0,
+    context_switches: 0,
+    initialized:     false,
+}
+
+// ── Initialization ──────────────────────────────────────────────────────
+
+pub fn init() {
+    serial::log("[sched] Initializing scheduler")
+
+    // Create idle process (PID 0)
+    let idle_thread = create_thread(0, "idle", idle_loop, PRIORITY_IDLE)
+    sched.idle_tid = idle_thread
+    sched.current_tid = idle_thread
+
+    // Register timer interrupt for preemption
+    timer::register_callback(tick_handler)
+
+    sched.initialized = true
+    serial::log("[sched] Scheduler ready (quantum={DEFAULT_TIMESLICE}ms)")
+}
+
+// ── Process Management ──────────────────────────────────────────────────
+
+pub fn spawn(name: str, entry: fn()) -> int {
+    if sched.proc_count >= MAX_PROCESSES {
+        panic::kernel_panic("Process table full")
+    }
+
+    let pid = sched.next_pid
+    sched.next_pid = sched.next_pid + 1
+
+    // Allocate process page table
+    let page_table = match memory::alloc_frame() {
+        Result::Ok(addr) => addr,
+        Result::Err(e) => {
+            panic::kernel_panic("Cannot allocate process page table: {e}")
+            0
+        },
+    }
+
+    // Initialize process
+    sched.processes[pid] = Process {
+        pid:          pid,
+        parent_pid:   sched.current_pid,
+        name:         name,
+        state:        ProcessState::Ready,
+        main_thread:  0,
+        threads:      [0; 16],
+        thread_count: 0,
+        priority:     PRIORITY_NORMAL,
+        exit_code:    0,
+        page_table:   page_table,
+        heap_start:   0,
+        heap_end:     0,
+        open_files:   [-1; 32],
+        cwd:          "/",
+        env:          {},
+    }
+
+    // Create main thread
+    let tid = create_thread(pid, name, entry, PRIORITY_NORMAL)
+    sched.processes[pid].main_thread = tid
+    sched.processes[pid].threads[0] = tid
+    sched.processes[pid].thread_count = 1
+
+    sched.proc_count = sched.proc_count + 1
+
+    serial::log("[sched] Spawned process '{name}' (PID={pid}, TID={tid})")
+    return pid
+}
+
+fn create_thread(pid: int, name: str, entry: fn(), priority: int) -> int {
+    let tid = sched.next_tid
+    sched.next_tid = sched.next_tid + 1
+
+    // Allocate stack
+    let stack_addr = match memory::kmalloc(DEFAULT_STACK_SIZE) {
+        Result::Ok(addr) => addr,
+        Result::Err(e) => {
+            panic::kernel_panic("Cannot allocate thread stack: {e}")
+            0
+        },
+    }
+
+    sched.threads[tid] = Thread {
+        tid:          tid,
+        pid:          pid,
+        state:        ProcessState::Ready,
+        registers:    RegisterState {
+            rax: 0, rbx: 0, rcx: 0, rdx: 0,
+            rsi: 0, rdi: 0,
+            rbp: stack_addr + DEFAULT_STACK_SIZE,
+            rsp: stack_addr + DEFAULT_STACK_SIZE,
+            r8: 0, r9: 0, r10: 0, r11: 0,
+            r12: 0, r13: 0, r14: 0, r15: 0,
+            rip: entry as int,
+            rflags: 0x202,  // IF flag set
+            cs: 0x08,       // kernel code segment
+            ss: 0x10,       // kernel data segment
+        },
+        stack_base:   stack_addr,
+        stack_size:   DEFAULT_STACK_SIZE,
+        priority:     priority,
+        timeslice_ms: DEFAULT_TIMESLICE,
+        remaining_ms: DEFAULT_TIMESLICE,
+        name:         name,
+    }
+
+    // Add to ready queue
+    enqueue_ready(tid)
+    sched.thread_count = sched.thread_count + 1
+
+    return tid
+}
+
+// ── Ready Queue ─────────────────────────────────────────────────────────
+
+fn enqueue_ready(tid: int) {
+    let idx = (sched.ready_head + sched.ready_count) % MAX_THREADS
+    sched.ready_queue[idx] = tid
+    sched.ready_count = sched.ready_count + 1
+}
+
+fn dequeue_ready() -> int {
+    if sched.ready_count == 0 {
+        return sched.idle_tid
+    }
+
+    // Priority scan — find highest-priority ready thread
+    let best_idx = sched.ready_head
+    let best_pri = -1
+    let scan = 0
+
+    while scan < sched.ready_count {
+        let idx = (sched.ready_head + scan) % MAX_THREADS
+        let tid = sched.ready_queue[idx]
+        if sched.threads[tid].priority > best_pri {
+            best_pri = sched.threads[tid].priority
+            best_idx = idx
+        }
+        scan = scan + 1
+    }
+
+    let tid = sched.ready_queue[best_idx]
+
+    // Remove from queue (swap with head)
+    sched.ready_queue[best_idx] = sched.ready_queue[sched.ready_head]
+    sched.ready_head = (sched.ready_head + 1) % MAX_THREADS
+    sched.ready_count = sched.ready_count - 1
+
+    return tid
+}
+
+// ── Context Switch ──────────────────────────────────────────────────────
+
+fn context_switch(from_tid: int, to_tid: int) {
+    if from_tid == to_tid { return }
+
+    // Save current registers
+    cpu::save_registers(sched.threads[from_tid].registers)
+
+    // Update states
+    if sched.threads[from_tid].state == ProcessState::Running {
+        sched.threads[from_tid].state = ProcessState::Ready
+        enqueue_ready(from_tid)
+    }
+
+    sched.threads[to_tid].state = ProcessState::Running
+    sched.threads[to_tid].remaining_ms = sched.threads[to_tid].timeslice_ms
+
+    sched.current_tid = to_tid
+    sched.current_pid = sched.threads[to_tid].pid
+
+    sched.context_switches = sched.context_switches + 1
+
+    // Switch page tables if different process
+    let from_pid = sched.threads[from_tid].pid
+    let to_pid   = sched.threads[to_tid].pid
+    if from_pid != to_pid && to_pid > 0 {
+        cpu::write_cr3(sched.processes[to_pid].page_table)
+    }
+
+    // Restore new thread's registers
+    cpu::restore_registers(sched.threads[to_tid].registers)
+}
+
+// ── Timer Tick Handler ──────────────────────────────────────────────────
+
+fn tick_handler() {
+    sched.ticks = sched.ticks + 1
+
+    let current = sched.threads[sched.current_tid]
+    current.remaining_ms = current.remaining_ms - 1
+
+    if current.remaining_ms <= 0 {
+        // Time slice expired — preempt
+        schedule()
+    }
+
+    // Wake sleeping threads
+    // (simplified — real implementation would use a timer wheel)
+}
+
+// ── Schedule (pick next thread) ─────────────────────────────────────────
+
+pub fn schedule() {
+    let next_tid = dequeue_ready()
+    context_switch(sched.current_tid, next_tid)
+}
+
+// ── Main Scheduler Loop ─────────────────────────────────────────────────
+
+pub fn run() {
+    serial::log("[sched] Entering scheduler loop")
+
+    // Enable interrupts and let the timer drive scheduling
+    interrupts::enable()
+
+    // The scheduler runs via timer interrupts from here
+    // The idle loop runs when nothing else is ready
+    idle_loop()
+}
+
+fn idle_loop() {
+    loop {
+        cpu::halt()   // Wait for next interrupt
+    }
+}
+
+// ── Process Termination ─────────────────────────────────────────────────
+
+pub fn exit(code: int) {
+    let pid = sched.current_pid
+    serial::log("[sched] Process {pid} exiting with code {code}")
+
+    sched.processes[pid].state = ProcessState::Zombie
+    sched.processes[pid].exit_code = code
+
+    // Clean up threads
+    let i = 0
+    while i < sched.processes[pid].thread_count {
+        let tid = sched.processes[pid].threads[i]
+        sched.threads[tid].state = ProcessState::Dead
+        memory::kfree(sched.threads[tid].stack_base)
+        i = i + 1
+    }
+
+    // Free page table
+    memory::free_frame(sched.processes[pid].page_table)
+
+    sched.proc_count = sched.proc_count - 1
+
+    // Reschedule
+    schedule()
+}
+
+// ── Stats ───────────────────────────────────────────────────────────────
+
+pub fn get_stats() -> (int, int, int, int) {
+    return (sched.proc_count, sched.thread_count, sched.context_switches, sched.ticks)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Cooperative Task Scheduler (mirrors tasks.c)
+// ═══════════════════════════════════════════════════════════════════════════
+// Lightweight callback scheduler for periodic OS tasks (cursor blink,
+// speaker tick, system monitor refresh, etc.). Runs alongside the
+// preemptive process scheduler above.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const COOP_MAX_TASKS = 16
+
+struct CoopTask {
+    name:        str,
+    callback:    fn(int),       // callback receives user_data
+    user_data:   int,
+    interval_ms: int,           // ticks between runs (0 = one-shot)
+    next_run:    int,           // next tick to execute at
+    active:      bool,
+    oneshot:     bool,          // if true, auto-remove after first run
+    run_count:   int,
+    last_run:    int,
+}
+
+let mut coop_tasks: [CoopTask; COOP_MAX_TASKS] = [CoopTask{}; COOP_MAX_TASKS]
+let mut coop_count: int = 0
+
+/// Initialize the cooperative scheduler
+pub fn coop_init() {
+    serial::log("[coop] Cooperative task scheduler initialized")
+    coop_count = 0
+    let i = 0
+    while i < COOP_MAX_TASKS {
+        coop_tasks[i].active = false
+        i = i + 1
+    }
+}
+
+/// Register a periodic cooperative task
+/// Returns task ID (0..COOP_MAX_TASKS-1) or -1 if full
+pub fn coop_create(name: str, callback: fn(int), data: int, interval_ms: int) -> int {
+    let i = 0
+    while i < COOP_MAX_TASKS {
+        if !coop_tasks[i].active {
+            coop_tasks[i] = CoopTask {
+                name:        name,
+                callback:    callback,
+                user_data:   data,
+                interval_ms: interval_ms,
+                next_run:    0,
+                active:      true,
+                oneshot:     false,
+                run_count:   0,
+                last_run:    0,
+            }
+            coop_count = coop_count + 1
+            serial::log("[coop] Created task '{name}' (interval={interval_ms}ms)")
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+/// Register a one-shot task (runs once after delay)
+pub fn coop_create_oneshot(name: str, callback: fn(int), data: int, delay_ms: int, current_tick: int) -> int {
+    let i = 0
+    while i < COOP_MAX_TASKS {
+        if !coop_tasks[i].active {
+            coop_tasks[i] = CoopTask {
+                name:        name,
+                callback:    callback,
+                user_data:   data,
+                interval_ms: 0,
+                next_run:    current_tick + delay_ms,
+                active:      true,
+                oneshot:     true,
+                run_count:   0,
+                last_run:    0,
+            }
+            coop_count = coop_count + 1
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+/// Remove a cooperative task
+pub fn coop_remove(id: int) {
+    if id >= 0 && id < COOP_MAX_TASKS && coop_tasks[id].active {
+        coop_tasks[id].active = false
+        coop_count = coop_count - 1
+    }
+}
+
+/// Tick — run all due cooperative tasks (call at 1kHz from PIT ISR)
+pub fn coop_tick(current_tick: int) {
+    let i = 0
+    while i < COOP_MAX_TASKS {
+        if coop_tasks[i].active && current_tick >= coop_tasks[i].next_run {
+            // Execute
+            (coop_tasks[i].callback)(coop_tasks[i].user_data)
+            coop_tasks[i].run_count = coop_tasks[i].run_count + 1
+            coop_tasks[i].last_run = current_tick
+
+            if coop_tasks[i].oneshot {
+                coop_tasks[i].active = false
+                coop_count = coop_count - 1
+            } else {
+                coop_tasks[i].next_run = current_tick + coop_tasks[i].interval_ms
+            }
+        }
+        i = i + 1
+    }
+}
+
+/// Get active cooperative task count
+pub fn coop_active() -> int {
+    return coop_count
+}
+
+/// List cooperative tasks (formatted for terminal output)
+pub fn coop_list() -> [str] {
+    let result: [str] = []
+    let i = 0
+    while i < COOP_MAX_TASKS {
+        if coop_tasks[i].active {
+            let t = coop_tasks[i]
+            let kind = if t.oneshot { "once" } else { "periodic" }
+            result.push("{i}: {t.name}  {kind}  interval={t.interval_ms}ms  runs={t.run_count}")
+        }
+        i = i + 1
+    }
+    return result
+}

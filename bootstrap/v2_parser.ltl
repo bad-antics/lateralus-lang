@@ -1,0 +1,897 @@
+// ═══════════════════════════════════════════════════════════════════════
+// LATERALUS Self-Hosting Bootstrap — Parser (v2.0)
+// Writing the LATERALUS parser in LATERALUS itself
+//
+// This provides the AST node types and recursive-descent parsing
+// for a large subset of LATERALUS. Part of the v2 self-hosting roadmap.
+// ═══════════════════════════════════════════════════════════════════════
+
+// ─── AST Node Types ───────────────────────────────────────────────────
+// Used as string constants throughout the parser.
+// The node kind strings are used directly as literals (e.g., "FN_DECL").
+
+let NT_PROGRAM       = "PROGRAM"
+let NT_FN_DECL       = "FN_DECL"
+let NT_LET_DECL      = "LET_DECL"
+let NT_ASSIGN_STMT   = "ASSIGN_STMT"
+let NT_IF_STMT       = "IF_STMT"
+let NT_WHILE_STMT    = "WHILE_STMT"
+let NT_LOOP_STMT     = "LOOP_STMT"
+let NT_FOR_STMT      = "FOR_STMT"
+let NT_MATCH_STMT    = "MATCH_STMT"
+let NT_MATCH_ARM     = "MATCH_ARM"
+let NT_RETURN_STMT   = "RETURN_STMT"
+let NT_BREAK_STMT    = "BREAK_STMT"
+let NT_CONTINUE_STMT = "CONTINUE_STMT"
+let NT_IMPORT_STMT   = "IMPORT_STMT"
+let NT_TRY_STMT      = "TRY_STMT"
+let NT_CATCH_CLAUSE  = "CATCH_CLAUSE"
+let NT_THROW_STMT    = "THROW_STMT"
+let NT_STRUCT_DECL   = "STRUCT_DECL"
+let NT_ENUM_DECL     = "ENUM_DECL"
+let NT_ENUM_VARIANT  = "ENUM_VARIANT"
+let NT_IMPL_BLOCK    = "IMPL_BLOCK"
+let NT_TRAIT_DECL    = "TRAIT_DECL"
+let NT_TYPE_ALIAS    = "TYPE_ALIAS"
+let NT_BLOCK         = "BLOCK"
+let NT_BINARY_EXPR   = "BINARY_EXPR"
+let NT_UNARY_EXPR    = "UNARY_EXPR"
+let NT_CALL_EXPR     = "CALL_EXPR"
+let NT_PIPE_EXPR     = "PIPE_EXPR"
+let NT_IDENT_EXPR    = "IDENT_EXPR"
+let NT_INT_LIT       = "INT_LIT"
+let NT_FLOAT_LIT     = "FLOAT_LIT"
+let NT_STRING_LIT    = "STRING_LIT"
+let NT_BOOL_LIT      = "BOOL_LIT"
+let NT_NONE_LIT      = "NONE_LIT"
+let NT_LIST_LIT      = "LIST_LIT"
+let NT_MAP_LIT       = "MAP_LIT"
+let NT_STRUCT_LIT    = "STRUCT_LIT"
+let NT_FIELD_EXPR    = "FIELD_EXPR"
+let NT_INDEX_EXPR    = "INDEX_EXPR"
+let NT_LAMBDA_EXPR   = "LAMBDA_EXPR"
+let NT_RANGE_EXPR    = "RANGE_EXPR"
+let NT_SPREAD_EXPR   = "SPREAD_EXPR"
+let NT_TERNARY_EXPR  = "TERNARY_EXPR"
+let NT_CAST_EXPR     = "CAST_EXPR"
+let NT_WILDCARD      = "WILDCARD"
+let NT_PARAMS        = "PARAMS"
+let NT_PARAM         = "PARAM"
+let NT_FIELD         = "FIELD"
+
+// ─── Token (mirroring v2_lexer.ltl, field renamed to avoid keyword) ──
+
+struct Token {
+    kind: str,
+    value: str,
+    line: int,
+    column: int,
+}
+
+// ─── AST Node ─────────────────────────────────────────────────────────
+
+struct ASTNode {
+    kind: str,
+    children: list,
+    value: str,
+    line: int,
+}
+
+fn new_node(kind: str, value: str, line: int) -> ASTNode {
+    return ASTNode {
+        kind: kind,
+        children: [],
+        value: value,
+        line: line,
+    }
+}
+
+fn add_child(parent: ASTNode, child: ASTNode) -> ASTNode {
+    parent.children = parent.children + [child]
+    return parent
+}
+
+fn node_to_string(node: ASTNode, indent: int) -> str {
+    let prefix = repeat(" ", indent * 2)
+    let result = prefix + node.kind
+    if node.value != "" {
+        result = result + "(" + node.value + ")"
+    }
+    result = result + "\n"
+
+    for child in node.children {
+        result = result + node_to_string(child, indent + 1)
+    }
+
+    return result
+}
+
+// ─── Parser ───────────────────────────────────────────────────────────
+
+struct Parser {
+    tokens: list,
+    pos: int,
+    current: Token,
+}
+
+fn new_parser(tokens: list) -> Parser {
+    return Parser {
+        tokens: tokens,
+        pos: 0,
+        current: tokens[0],
+    }
+}
+
+fn parser_peek(p: Parser) -> Token {
+    return p.current
+}
+
+fn parser_advance(p: Parser) -> Token {
+    let tok = p.current
+    p.pos = p.pos + 1
+    if p.pos < len(p.tokens) {
+        p.current = p.tokens[p.pos]
+    }
+    return tok
+}
+
+fn parser_expect(p: Parser, tok_type: str) -> Token {
+    let tok = parser_peek(p)
+    if tok.kind != tok_type {
+        throw ValueError("Expected " + tok_type + " but got " +
+                        tok.kind + " at line " + str(tok.line))
+    }
+    return parser_advance(p)
+}
+
+fn parser_match(p: Parser, tok_type: str) -> bool {
+    if parser_peek(p).kind == tok_type {
+        parser_advance(p)
+        return true
+    }
+    return false
+}
+
+fn skip_newlines(p: Parser) {
+    while parser_peek(p).kind == "NEWLINE" {
+        parser_advance(p)
+    }
+}
+
+// ─── Parse Expressions ────────────────────────────────────────────────
+
+fn parse_primary(p: Parser) -> ASTNode {
+    let tok = parser_peek(p)
+
+    match tok.kind {
+        "INT" => {
+            parser_advance(p)
+            return new_node("INT_LIT", tok.value, tok.line)
+        },
+        "FLOAT" => {
+            parser_advance(p)
+            return new_node("FLOAT_LIT", tok.value, tok.line)
+        },
+        "STRING" => {
+            parser_advance(p)
+            return new_node("STRING_LIT", tok.value, tok.line)
+        },
+        "BOOL" => {
+            parser_advance(p)
+            return new_node("BOOL_LIT", tok.value, tok.line)
+        },
+        "NONE" => {
+            parser_advance(p)
+            return new_node("NONE_LIT", "none", tok.line)
+        },
+        "IDENT" => {
+            parser_advance(p)
+            return new_node("IDENT_EXPR", tok.value, tok.line)
+        },
+        "KW_FN" => {
+            // Lambda: fn(params) { body }
+            parser_advance(p)
+            let lambda = new_node("LAMBDA_EXPR", "", tok.line)
+            parser_expect(p, "LPAREN")
+            let params = new_node("PARAMS", "", tok.line)
+            if parser_peek(p).kind != "RPAREN" {
+                let pname = parser_expect(p, "IDENT")
+                params = add_child(params, new_node("PARAM", pname.value, pname.line))
+                while parser_peek(p).kind == "COMMA" {
+                    parser_advance(p)
+                    let pn2 = parser_expect(p, "IDENT")
+                    params = add_child(params, new_node("PARAM", pn2.value, pn2.line))
+                }
+            }
+            parser_expect(p, "RPAREN")
+            lambda = add_child(lambda, params)
+            lambda = add_child(lambda, parse_block(p))
+            return lambda
+        },
+        "LPAREN" => {
+            parser_advance(p)
+            let expr = parse_expression(p)
+            parser_expect(p, "RPAREN")
+            return expr
+        },
+        "LBRACKET" => {
+            parser_advance(p)
+            let list_node = new_node("LIST_LIT", "", tok.line)
+
+            if parser_peek(p).kind != "RBRACKET" {
+                // Check for spread: [...expr]
+                if parser_peek(p).kind == "DOTDOTDOT" {
+                    parser_advance(p)
+                    let inner = parse_expression(p)
+                    let spread = new_node("SPREAD_EXPR", "", tok.line)
+                    spread = add_child(spread, inner)
+                    list_node = add_child(list_node, spread)
+                } else {
+                    list_node = add_child(list_node, parse_expression(p))
+                }
+                while parser_peek(p).kind == "COMMA" {
+                    parser_advance(p)
+                    if parser_peek(p).kind == "DOTDOTDOT" {
+                        parser_advance(p)
+                        let inner2 = parse_expression(p)
+                        let spr2 = new_node("SPREAD_EXPR", "", tok.line)
+                        spr2 = add_child(spr2, inner2)
+                        list_node = add_child(list_node, spr2)
+                    } else {
+                        list_node = add_child(list_node, parse_expression(p))
+                    }
+                }
+            }
+
+            parser_expect(p, "RBRACKET")
+            return list_node
+        },
+        "LBRACE" => {
+            // Map literal: { key: value, ... }
+            parser_advance(p)
+            let map_node = new_node("MAP_LIT", "", tok.line)
+            skip_newlines(p)
+
+            if parser_peek(p).kind != "RBRACE" {
+                let key = parse_expression(p)
+                parser_expect(p, "COLON")
+                let val = parse_expression(p)
+                map_node = add_child(map_node, key)
+                map_node = add_child(map_node, val)
+
+                while parser_peek(p).kind == "COMMA" {
+                    parser_advance(p)
+                    skip_newlines(p)
+                    if parser_peek(p).kind == "RBRACE" { break }
+                    let k2 = parse_expression(p)
+                    parser_expect(p, "COLON")
+                    let v2 = parse_expression(p)
+                    map_node = add_child(map_node, k2)
+                    map_node = add_child(map_node, v2)
+                }
+            }
+
+            skip_newlines(p)
+            parser_expect(p, "RBRACE")
+            return map_node
+        },
+        "UNDERSCORE" => {
+            parser_advance(p)
+            return new_node("WILDCARD", "_", tok.line)
+        },
+        _ => {
+            throw ValueError("Unexpected token " + tok.kind +
+                            " at line " + str(tok.line))
+        },
+    }
+}
+
+// Postfix: field access (.), index ([]), method calls
+fn parse_postfix(p: Parser) -> ASTNode {
+    let node = parse_primary(p)
+
+    loop {
+        let next = parser_peek(p)
+
+        if next.kind == "DOT" {
+            // Field access: expr.field or method call: expr.method(args)
+            parser_advance(p)
+            let field_name = parser_expect(p, "IDENT")
+            let field = new_node("FIELD_EXPR", field_name.value, field_name.line)
+            field = add_child(field, node)
+
+            // Method call: expr.method(args)
+            if parser_peek(p).kind == "LPAREN" {
+                parser_advance(p)
+                let call = new_node("CALL_EXPR", field_name.value, field_name.line)
+                call = add_child(call, node)  // receiver
+
+                if parser_peek(p).kind != "RPAREN" {
+                    call = add_child(call, parse_expression(p))
+                    while parser_peek(p).kind == "COMMA" {
+                        parser_advance(p)
+                        call = add_child(call, parse_expression(p))
+                    }
+                }
+                parser_expect(p, "RPAREN")
+                node = call
+            } else {
+                node = field
+            }
+        } else if next.kind == "LBRACKET" {
+            // Index: expr[index]
+            parser_advance(p)
+            let idx_expr = parse_expression(p)
+            parser_expect(p, "RBRACKET")
+
+            let idx = new_node("INDEX_EXPR", "", next.line)
+            idx = add_child(idx, node)
+            idx = add_child(idx, idx_expr)
+            node = idx
+        } else if next.kind == "LPAREN" {
+            // Function call: expr(args)
+            parser_advance(p)
+            let call = new_node("CALL_EXPR", "", next.line)
+            call = add_child(call, node)
+
+            if parser_peek(p).kind != "RPAREN" {
+                call = add_child(call, parse_expression(p))
+                while parser_peek(p).kind == "COMMA" {
+                    parser_advance(p)
+                    call = add_child(call, parse_expression(p))
+                }
+            }
+            parser_expect(p, "RPAREN")
+            node = call
+        } else {
+            break
+        }
+    }
+
+    return node
+}
+
+fn parse_unary(p: Parser) -> ASTNode {
+    let tok = parser_peek(p)
+    if tok.kind == "MINUS" or tok.kind == "KW_NOT" {
+        parser_advance(p)
+        let operand = parse_unary(p)
+        let node = new_node("UNARY_EXPR", tok.value, tok.line)
+        return add_child(node, operand)
+    }
+    return parse_postfix(p)
+}
+
+fn parse_factor(p: Parser) -> ASTNode {
+    let left = parse_unary(p)
+
+    while parser_peek(p).kind == "STAR" or parser_peek(p).kind == "SLASH" or parser_peek(p).kind == "PERCENT" {
+        let op = parser_advance(p)
+        let right = parse_unary(p)
+        let node = new_node("BINARY_EXPR", op.value, op.line)
+        node = add_child(node, left)
+        node = add_child(node, right)
+        left = node
+    }
+
+    return left
+}
+
+fn parse_term(p: Parser) -> ASTNode {
+    let left = parse_factor(p)
+
+    while parser_peek(p).kind == "PLUS" or parser_peek(p).kind == "MINUS" {
+        let op = parser_advance(p)
+        let right = parse_factor(p)
+        let node = new_node("BINARY_EXPR", op.value, op.line)
+        node = add_child(node, left)
+        node = add_child(node, right)
+        left = node
+    }
+
+    return left
+}
+
+fn parse_comparison(p: Parser) -> ASTNode {
+    let left = parse_term(p)
+
+    while parser_peek(p).kind == "LT" or parser_peek(p).kind == "GT" or
+          parser_peek(p).kind == "LTE" or parser_peek(p).kind == "GTE" or
+          parser_peek(p).kind == "EQ" or parser_peek(p).kind == "NEQ" {
+        let op = parser_advance(p)
+        let right = parse_term(p)
+        let node = new_node("BINARY_EXPR", op.value, op.line)
+        node = add_child(node, left)
+        node = add_child(node, right)
+        left = node
+    }
+
+    return left
+}
+
+fn parse_expression(p: Parser) -> ASTNode {
+    let left = parse_comparison(p)
+
+    // Pipeline operator
+    while parser_peek(p).kind == "PIPE" or parser_peek(p).kind == "PIPE_OPT" {
+        let op = parser_advance(p)
+        let right = parse_comparison(p)
+        let node = new_node("PIPE_EXPR", op.value, op.line)
+        node = add_child(node, left)
+        node = add_child(node, right)
+        left = node
+    }
+
+    return left
+}
+
+// ─── Parse Statements ─────────────────────────────────────────────────
+
+fn parse_let(p: Parser) -> ASTNode {
+    let kw = parser_expect(p, "KW_LET")
+    let name = parser_expect(p, "IDENT")
+    let node = new_node("LET_DECL", name.value, kw.line)
+
+    // Optional type annotation
+    if parser_peek(p).kind == "COLON" {
+        parser_advance(p)
+        let type_name = parser_expect(p, "IDENT")
+        // Store type info (simplified)
+    }
+
+    parser_expect(p, "ASSIGN")
+    let value = parse_expression(p)
+    return add_child(node, value)
+}
+
+fn parse_return(p: Parser) -> ASTNode {
+    let kw = parser_expect(p, "KW_RETURN")
+    let node = new_node("RETURN_STMT", "", kw.line)
+
+    if parser_peek(p).kind != "NEWLINE" and parser_peek(p).kind != "RBRACE" and parser_peek(p).kind != "EOF" {
+        node = add_child(node, parse_expression(p))
+    }
+
+    return node
+}
+
+fn parse_block(p: Parser) -> ASTNode {
+    parser_expect(p, "LBRACE")
+    skip_newlines(p)
+
+    let block = new_node("BLOCK", "", parser_peek(p).line)
+
+    while parser_peek(p).kind != "RBRACE" and parser_peek(p).kind != "EOF" {
+        skip_newlines(p)
+        if parser_peek(p).kind == "RBRACE" { break }
+        block = add_child(block, parse_statement(p))
+        skip_newlines(p)
+    }
+
+    parser_expect(p, "RBRACE")
+    return block
+}
+
+fn parse_if(p: Parser) -> ASTNode {
+    let kw = parser_expect(p, "KW_IF")
+    let condition = parse_expression(p)
+    let body = parse_block(p)
+
+    let node = new_node("IF_STMT", "", kw.line)
+    node = add_child(node, condition)
+    node = add_child(node, body)
+
+    skip_newlines(p)
+    if parser_peek(p).kind == "KW_ELSE" {
+        parser_advance(p)
+        if parser_peek(p).kind == "KW_IF" {
+            node = add_child(node, parse_if(p))
+        } else {
+            node = add_child(node, parse_block(p))
+        }
+    }
+
+    return node
+}
+
+fn parse_fn(p: Parser) -> ASTNode {
+    let kw = parser_expect(p, "KW_FN")
+    let name = parser_expect(p, "IDENT")
+
+    let node = new_node("FN_DECL", name.value, kw.line)
+
+    // Parameters
+    parser_expect(p, "LPAREN")
+    let params = new_node("PARAMS", "", kw.line)
+
+    if parser_peek(p).kind != "RPAREN" {
+        let param = parser_expect(p, "IDENT")
+        params = add_child(params, new_node("PARAM", param.value, param.line))
+
+        // Optional type annotation
+        if parser_peek(p).kind == "COLON" {
+            parser_advance(p)
+            parser_expect(p, "IDENT")  // type name
+        }
+
+        while parser_peek(p).kind == "COMMA" {
+            parser_advance(p)
+            let param2 = parser_expect(p, "IDENT")
+            params = add_child(params, new_node("PARAM", param2.value, param2.line))
+            if parser_peek(p).kind == "COLON" {
+                parser_advance(p)
+                parser_expect(p, "IDENT")
+            }
+        }
+    }
+
+    parser_expect(p, "RPAREN")
+    node = add_child(node, params)
+
+    // Optional return type
+    if parser_peek(p).kind == "ARROW" {
+        parser_advance(p)
+        parser_expect(p, "IDENT")  // return type
+    }
+
+    // Function body
+    let body = parse_block(p)
+    node = add_child(node, body)
+
+    return node
+}
+
+fn parse_statement(p: Parser) -> ASTNode {
+    skip_newlines(p)
+    let tok = parser_peek(p)
+
+    match tok.kind {
+        "KW_LET"      => { return parse_let(p) },
+        "KW_FN"       => { return parse_fn(p) },
+        "KW_IF"       => { return parse_if(p) },
+        "KW_RETURN"   => { return parse_return(p) },
+        "KW_WHILE"    => { return parse_while(p) },
+        "KW_LOOP"     => { return parse_loop(p) },
+        "KW_FOR"      => { return parse_for(p) },
+        "KW_MATCH"    => { return parse_match(p) },
+        "KW_STRUCT"   => { return parse_struct(p) },
+        "KW_ENUM"     => { return parse_enum(p) },
+        "KW_IMPL"     => { return parse_impl(p) },
+        "KW_TRAIT"    => { return parse_trait(p) },
+        "KW_IMPORT"   => { return parse_import(p) },
+        "KW_TYPE"     => { return parse_type_alias(p) },
+        "KW_BREAK"    => { return parse_break(p) },
+        "KW_CONTINUE" => { return parse_continue(p) },
+        "KW_TRY"      => { return parse_try(p) },
+        "KW_THROW"    => { return parse_throw(p) },
+        _ => {
+            // Expression statement (may include assignment)
+            let expr = parse_expression(p)
+
+            // Check for assignment: x = expr
+            if parser_peek(p).kind == "ASSIGN" {
+                parser_advance(p)
+                let value = parse_expression(p)
+                let assign = new_node("ASSIGN_STMT", "", tok.line)
+                assign = add_child(assign, expr)
+                assign = add_child(assign, value)
+                return assign
+            }
+
+            return expr
+        },
+    }
+}
+
+// ─── While, Loop, For ─────────────────────────────────────────────────
+
+fn parse_while(p: Parser) -> ASTNode {
+    let kw = parser_expect(p, "KW_WHILE")
+    let condition = parse_expression(p)
+    let body = parse_block(p)
+
+    let node = new_node("WHILE_STMT", "", kw.line)
+    node = add_child(node, condition)
+    node = add_child(node, body)
+    return node
+}
+
+fn parse_loop(p: Parser) -> ASTNode {
+    let kw = parser_expect(p, "KW_LOOP")
+    let body = parse_block(p)
+
+    let node = new_node("LOOP_STMT", "", kw.line)
+    node = add_child(node, body)
+    return node
+}
+
+fn parse_for(p: Parser) -> ASTNode {
+    let kw = parser_expect(p, "KW_FOR")
+    let var_tok = parser_expect(p, "IDENT")
+    parser_expect(p, "KW_IN")
+    let iter_expr = parse_expression(p)
+    let body = parse_block(p)
+
+    let node = new_node("FOR_STMT", var_tok.value, kw.line)
+    node = add_child(node, iter_expr)
+    node = add_child(node, body)
+    return node
+}
+
+// ─── Match ────────────────────────────────────────────────────────────
+
+fn parse_match(p: Parser) -> ASTNode {
+    let kw = parser_expect(p, "KW_MATCH")
+    let subject = parse_expression(p)
+
+    let node = new_node("MATCH_STMT", "", kw.line)
+    node = add_child(node, subject)
+
+    let arms = new_node("BLOCK", "", kw.line)
+
+    parser_expect(p, "LBRACE")
+    skip_newlines(p)
+
+    while parser_peek(p).kind != "RBRACE" and parser_peek(p).kind != "EOF" {
+        skip_newlines(p)
+        if parser_peek(p).kind == "RBRACE" { break }
+
+        let arm = new_node("MATCH_ARM", "", parser_peek(p).line)
+
+        // Pattern
+        if parser_peek(p).kind == "UNDERSCORE" {
+            parser_advance(p)
+            arm = add_child(arm, new_node("WILDCARD", "_", parser_peek(p).line))
+        } else {
+            arm = add_child(arm, parse_expression(p))
+        }
+
+        // =>
+        parser_expect(p, "FAT_ARROW")
+
+        // Body (block or expression)
+        if parser_peek(p).kind == "LBRACE" {
+            arm = add_child(arm, parse_block(p))
+        } else {
+            let body_expr = parse_expression(p)
+            let body_block = new_node("BLOCK", "", body_expr.line)
+            body_block = add_child(body_block, body_expr)
+            arm = add_child(arm, body_block)
+        }
+
+        arms = add_child(arms, arm)
+
+        // Optional comma
+        if parser_peek(p).kind == "COMMA" {
+            parser_advance(p)
+        }
+        skip_newlines(p)
+    }
+
+    parser_expect(p, "RBRACE")
+    node = add_child(node, arms)
+    return node
+}
+
+// ─── Struct, Enum, Impl, Trait ────────────────────────────────────────
+
+fn parse_struct(p: Parser) -> ASTNode {
+    let kw = parser_expect(p, "KW_STRUCT")
+    let name = parser_expect(p, "IDENT")
+    let node = new_node("STRUCT_DECL", name.value, kw.line)
+
+    parser_expect(p, "LBRACE")
+    skip_newlines(p)
+
+    while parser_peek(p).kind != "RBRACE" and parser_peek(p).kind != "EOF" {
+        skip_newlines(p)
+        if parser_peek(p).kind == "RBRACE" { break }
+
+        let field_name = parser_expect(p, "IDENT")
+        let field = new_node("FIELD", field_name.value, field_name.line)
+
+        if parser_peek(p).kind == "COLON" {
+            parser_advance(p)
+            let type_tok = parser_expect(p, "IDENT")
+            // Store type as child or metadata
+        }
+
+        node = add_child(node, field)
+
+        // Optional comma or newline
+        if parser_peek(p).kind == "COMMA" {
+            parser_advance(p)
+        }
+        skip_newlines(p)
+    }
+
+    parser_expect(p, "RBRACE")
+    return node
+}
+
+fn parse_enum(p: Parser) -> ASTNode {
+    let kw = parser_expect(p, "KW_ENUM")
+    let name = parser_expect(p, "IDENT")
+    let node = new_node("ENUM_DECL", name.value, kw.line)
+
+    parser_expect(p, "LBRACE")
+    skip_newlines(p)
+
+    while parser_peek(p).kind != "RBRACE" and parser_peek(p).kind != "EOF" {
+        skip_newlines(p)
+        if parser_peek(p).kind == "RBRACE" { break }
+
+        let variant_name = parser_expect(p, "IDENT")
+        let variant = new_node("ENUM_VARIANT", variant_name.value, variant_name.line)
+
+        // ADT fields: Circle(radius: float)
+        if parser_peek(p).kind == "LPAREN" {
+            parser_advance(p)
+            while parser_peek(p).kind != "RPAREN" and parser_peek(p).kind != "EOF" {
+                let fname = parser_expect(p, "IDENT")
+                let field = new_node("FIELD", fname.value, fname.line)
+                if parser_peek(p).kind == "COLON" {
+                    parser_advance(p)
+                    parser_expect(p, "IDENT")  // type
+                }
+                variant = add_child(variant, field)
+                if parser_peek(p).kind == "COMMA" {
+                    parser_advance(p)
+                }
+            }
+            parser_expect(p, "RPAREN")
+        }
+
+        node = add_child(node, variant)
+
+        if parser_peek(p).kind == "COMMA" {
+            parser_advance(p)
+        }
+        skip_newlines(p)
+    }
+
+    parser_expect(p, "RBRACE")
+    return node
+}
+
+fn parse_impl(p: Parser) -> ASTNode {
+    let kw = parser_expect(p, "KW_IMPL")
+    let type_name = parser_expect(p, "IDENT")
+    let node = new_node("IMPL_BLOCK", type_name.value, kw.line)
+
+    parser_expect(p, "LBRACE")
+    skip_newlines(p)
+
+    while parser_peek(p).kind != "RBRACE" and parser_peek(p).kind != "EOF" {
+        skip_newlines(p)
+        if parser_peek(p).kind == "RBRACE" { break }
+        if parser_peek(p).kind == "KW_FN" {
+            node = add_child(node, parse_fn(p))
+        } else {
+            parser_advance(p)  // skip unknown
+        }
+        skip_newlines(p)
+    }
+
+    parser_expect(p, "RBRACE")
+    return node
+}
+
+fn parse_trait(p: Parser) -> ASTNode {
+    let kw = parser_expect(p, "KW_TRAIT")
+    let name = parser_expect(p, "IDENT")
+    let node = new_node("TRAIT_DECL", name.value, kw.line)
+
+    parser_expect(p, "LBRACE")
+    skip_newlines(p)
+
+    while parser_peek(p).kind != "RBRACE" and parser_peek(p).kind != "EOF" {
+        skip_newlines(p)
+        if parser_peek(p).kind == "RBRACE" { break }
+        if parser_peek(p).kind == "KW_FN" {
+            node = add_child(node, parse_fn(p))
+        } else {
+            parser_advance(p)
+        }
+        skip_newlines(p)
+    }
+
+    parser_expect(p, "RBRACE")
+    return node
+}
+
+// ─── Import, Type Alias ──────────────────────────────────────────────
+
+fn parse_import(p: Parser) -> ASTNode {
+    let kw = parser_expect(p, "KW_IMPORT")
+    let module_name = parser_expect(p, "IDENT")
+    return new_node("IMPORT_STMT", module_name.value, kw.line)
+}
+
+fn parse_type_alias(p: Parser) -> ASTNode {
+    let kw = parser_expect(p, "KW_TYPE")
+    let name = parser_expect(p, "IDENT")
+    parser_expect(p, "ASSIGN")
+    let type_expr = parse_expression(p)
+    let node = new_node("TYPE_ALIAS", name.value, kw.line)
+    node = add_child(node, type_expr)
+    return node
+}
+
+// ─── Break, Continue, Try, Throw ─────────────────────────────────────
+
+fn parse_break(p: Parser) -> ASTNode {
+    let kw = parser_expect(p, "KW_BREAK")
+    return new_node("BREAK_STMT", "", kw.line)
+}
+
+fn parse_continue(p: Parser) -> ASTNode {
+    let kw = parser_expect(p, "KW_CONTINUE")
+    return new_node("CONTINUE_STMT", "", kw.line)
+}
+
+fn parse_try(p: Parser) -> ASTNode {
+    let kw = parser_expect(p, "KW_TRY")
+    let body = parse_block(p)
+    let node = new_node("TRY_STMT", "", kw.line)
+    node = add_child(node, body)
+
+    skip_newlines(p)
+    if parser_peek(p).kind == "KW_CATCH" {
+        parser_advance(p)
+        let catch_name = "e"
+        if parser_peek(p).kind == "IDENT" {
+            catch_name = parser_advance(p).value
+        }
+        let catch_body = parse_block(p)
+        let catch_node = new_node("CATCH_CLAUSE", catch_name, kw.line)
+        catch_node = add_child(catch_node, catch_body)
+        node = add_child(node, catch_node)
+    }
+
+    return node
+}
+
+fn parse_throw(p: Parser) -> ASTNode {
+    let kw = parser_expect(p, "KW_THROW")
+    let expr = parse_expression(p)
+    let node = new_node("THROW_STMT", "", kw.line)
+    node = add_child(node, expr)
+    return node
+}
+
+fn parse_program(p: Parser) -> ASTNode {
+    let program = new_node("PROGRAM", "", 1)
+
+    while parser_peek(p).kind != "EOF" {
+        skip_newlines(p)
+        if parser_peek(p).kind == "EOF" { break }
+        program = add_child(program, parse_statement(p))
+    }
+
+    return program
+}
+
+// ─── Main: Self-hosted parse ──────────────────────────────────────────
+
+fn main() {
+    println("LATERALUS Self-Hosted Parser v0.1")
+    println("=================================")
+
+    let source = "fn add(a: int, b: int) -> int {\n    return a + b\n}\n\nlet result = add(3, 4)\nprintln(result)"
+
+    println("\nSource:")
+    println(source)
+
+    // Tokenize
+    let tokens = tokenize(source)
+
+    // Parse
+    let parser = new_parser(tokens)
+    let ast = parse_program(parser)
+
+    println("\nAST:")
+    println(node_to_string(ast, 0))
+
+    println("Self-hosting parser: OPERATIONAL")
+}

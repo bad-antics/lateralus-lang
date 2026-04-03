@@ -1,0 +1,196 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// stdlib/optimize.ltl — Optimization & Numerical Methods Module
+// LATERALUS Standard Library v1.5.0
+// ═══════════════════════════════════════════════════════════════════════════
+// Root finding, minimization, and numerical integration.
+
+module stdlib.optimize
+
+// ── Root Finding ─────────────────────────────────────────────────────────
+
+fn bisect(f: fn, a: float, b: float, tol: float) -> float {
+    // Bisection method: find root of f in [a, b]
+    let fa = f(a)
+    let lo = a
+    let hi = b
+    let i = 0
+    while i < 100 {
+        let mid = (lo + hi) / 2.0
+        let fm = f(mid)
+        if abs(fm) < tol or (hi - lo) / 2.0 < tol {
+            return mid
+        }
+        if fa * fm < 0.0 {
+            hi = mid
+        } else {
+            lo = mid
+            fa = fm
+        }
+        i = i + 1
+    }
+    return (lo + hi) / 2.0
+}
+
+fn newton(f: fn, df: fn, x0: float, tol: float) -> float {
+    // Newton-Raphson method
+    let x = x0
+    let i = 0
+    while i < 100 {
+        let fx = f(x)
+        if abs(fx) < tol {
+            return x
+        }
+        let dfx = df(x)
+        if abs(dfx) < 1e-15 {
+            throw "Newton's method: derivative too small"
+        }
+        x = x - fx / dfx
+        i = i + 1
+    }
+    return x
+}
+
+fn secant(f: fn, x0: float, x1: float, tol: float) -> float {
+    // Secant method (derivative-free)
+    let xprev = x0
+    let xcurr = x1
+    let i = 0
+    while i < 100 {
+        let fprev = f(xprev)
+        let fcurr = f(xcurr)
+        if abs(fcurr) < tol {
+            return xcurr
+        }
+        let xnext = xcurr - fcurr * (xcurr - xprev) / (fcurr - fprev)
+        xprev = xcurr
+        xcurr = xnext
+        i = i + 1
+    }
+    return xcurr
+}
+
+// ── Numerical Integration ────────────────────────────────────────────────
+
+fn trapezoid(f: fn, a: float, b: float, n: int) -> float {
+    // Trapezoidal rule
+    let h = (b - a) / n
+    let s = 0.5 * (f(a) + f(b))
+    let i = 1
+    while i < n {
+        s = s + f(a + i * h)
+        i = i + 1
+    }
+    return s * h
+}
+
+fn simpson(f: fn, a: float, b: float, n: int) -> float {
+    // Simpson's rule (n must be even)
+    let h = (b - a) / n
+    let s = f(a) + f(b)
+    let i = 1
+    while i < n {
+        if i % 2 == 1 {
+            s = s + 4.0 * f(a + i * h)
+        } else {
+            s = s + 2.0 * f(a + i * h)
+        }
+        i = i + 1
+    }
+    return s * h / 3.0
+}
+
+// ── Numerical Differentiation ────────────────────────────────────────────
+
+fn forward_diff(f: fn, x: float, h: float) -> float {
+    return (f(x + h) - f(x)) / h
+}
+
+fn central_diff(f: fn, x: float, h: float) -> float {
+    return (f(x + h) - f(x - h)) / (2.0 * h)
+}
+
+fn second_derivative(f: fn, x: float, h: float) -> float {
+    return (f(x + h) - 2.0 * f(x) + f(x - h)) / (h * h)
+}
+
+// ── Minimization ─────────────────────────────────────────────────────────
+
+fn golden_section_min(f: fn, a: float, b: float, tol: float) -> float {
+    // Golden section search for minimum of f in [a, b]
+    let phi = (sqrt(5.0) - 1.0) / 2.0
+    let lo = a
+    let hi = b
+    let i = 0
+    while (hi - lo) > tol and i < 200 {
+        let x1 = hi - phi * (hi - lo)
+        let x2 = lo + phi * (hi - lo)
+        if f(x1) < f(x2) {
+            hi = x2
+        } else {
+            lo = x1
+        }
+        i = i + 1
+    }
+    return (lo + hi) / 2.0
+}
+
+fn gradient_descent_1d(f: fn, df: fn, x0: float, lr: float, steps: int) -> float {
+    // 1D gradient descent
+    let x = x0
+    let i = 0
+    while i < steps {
+        x = x - lr * df(x)
+        i = i + 1
+    }
+    return x
+}
+
+// ── Interpolation ────────────────────────────────────────────────────────
+
+fn lerp(a: float, b: float, t: float) -> float {
+    return a + t * (b - a)
+}
+
+fn bilinear(x: float, y: float, q11: float, q21: float, q12: float, q22: float) -> float {
+    // Bilinear interpolation on unit square
+    let r1 = lerp(q11, q21, x)
+    let r2 = lerp(q12, q22, x)
+    return lerp(r1, r2, y)
+}
+
+fn lagrange_interp(xs: list, ys: list, x: float) -> float {
+    // Lagrange polynomial interpolation
+    let n = length(xs)
+    let result = 0.0
+    let i = 0
+    while i < n {
+        let basis = 1.0
+        let j = 0
+        while j < n {
+            if j != i {
+                basis = basis * (x - xs[j]) / (xs[i] - xs[j])
+            }
+            j = j + 1
+        }
+        result = result + ys[i] * basis
+        i = i + 1
+    }
+    return result
+}
+
+// ── Fixed point iteration ────────────────────────────────────────────────
+
+fn fixed_point(g: fn, x0: float, tol: float) -> float {
+    // Find x such that g(x) = x
+    let x = x0
+    let i = 0
+    while i < 1000 {
+        let x_new = g(x)
+        if abs(x_new - x) < tol {
+            return x_new
+        }
+        x = x_new
+        i = i + 1
+    }
+    return x
+}

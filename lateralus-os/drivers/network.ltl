@@ -1,0 +1,208 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// LateralusOS — Network Driver (virtio-net / RTL8139)
+// ═══════════════════════════════════════════════════════════════════════════
+// Copyright (c) 2025 bad-antics. All rights reserved.
+//
+// Provides basic Ethernet frame send/receive for mesh networking.
+// ═══════════════════════════════════════════════════════════════════════════
+
+import hal::cpu
+import hal::serial
+import hal::interrupts
+import drivers::pci
+import kernel::memory
+
+const MAX_PACKET_SIZE = 1536
+const RX_BUFFER_SIZE  = 8192 + 16 + 1536
+const TX_BUFFER_COUNT = 4
+
+struct NetworkDriver {
+    present:   bool,
+    driver_type: str,       // "rtl8139" or "virtio-net"
+    mac_addr:  [byte; 6],
+    io_base:   int,
+    rx_buffer: int,         // physical address
+    tx_buffer: [int; TX_BUFFER_COUNT],
+    tx_cur:    int,
+    irq:       int,
+    packets_rx: int,
+    packets_tx: int,
+    bytes_rx:   int,
+    bytes_tx:   int,
+}
+
+let mut nic = NetworkDriver {
+    present:     false,
+    driver_type: "none",
+    mac_addr:    [0; 6],
+    io_base:     0,
+    rx_buffer:   0,
+    tx_buffer:   [0; TX_BUFFER_COUNT],
+    tx_cur:      0,
+    irq:         0,
+    packets_rx:  0,
+    packets_tx:  0,
+    bytes_rx:    0,
+    bytes_tx:    0,
+}
+
+// ── RTL8139 registers ───────────────────────────────────────────────────
+
+const RTL_IDR0         = 0x00   // MAC address
+const RTL_MAR0         = 0x08   // Multicast
+const RTL_RBSTART      = 0x30   // RX buffer start
+const RTL_CMD          = 0x37   // Command register
+const RTL_CAPR         = 0x38   // Current address of packet read
+const RTL_IMR          = 0x3C   // Interrupt mask
+const RTL_ISR          = 0x3E   // Interrupt status
+const RTL_TCR          = 0x40   // Transmit config
+const RTL_RCR          = 0x44   // Receive config
+const RTL_TSAD0        = 0x20   // TX start address (descriptor 0)
+const RTL_TSD0         = 0x10   // TX status (descriptor 0)
+
+pub fn init() {
+    serial::log("[net] Probing for network adapter")
+
+    // Look for RTL8139 (vendor=0x10EC, device=0x8139)
+    match pci::find_by_vendor(0x10EC, 0x8139) {
+        Option::Some(dev) => {
+            serial::log("[net] RTL8139 found at {dev.bus}:{dev.device}.{dev.function}")
+            init_rtl8139(dev)
+            return
+        },
+        Option::None => {},
+    }
+
+    // Look for virtio-net (vendor=0x1AF4, device=0x1000)
+    match pci::find_by_vendor(0x1AF4, 0x1000) {
+        Option::Some(dev) => {
+            serial::log("[net] virtio-net found")
+            // TODO: virtio-net initialization
+            return
+        },
+        Option::None => {},
+    }
+
+    serial::log("[net] No supported network adapter found")
+}
+
+fn init_rtl8139(dev: PciDevice) {
+    nic.driver_type = "rtl8139"
+    nic.io_base = dev.bar[0] & 0xFFFC
+    nic.irq = dev.irq_line
+
+    // Power on
+    cpu::outb(nic.io_base + 0x52, 0x00)
+
+    // Software reset
+    cpu::outb(nic.io_base + RTL_CMD, 0x10)
+    while (cpu::inb(nic.io_base + RTL_CMD) & 0x10) != 0 {}
+
+    // Read MAC address
+    let i = 0
+    while i < 6 {
+        nic.mac_addr[i] = cpu::inb(nic.io_base + RTL_IDR0 + i) as byte
+        i = i + 1
+    }
+    serial::log("[net] MAC: {nic.mac_addr[0]:02X}:{nic.mac_addr[1]:02X}:{nic.mac_addr[2]:02X}:{nic.mac_addr[3]:02X}:{nic.mac_addr[4]:02X}:{nic.mac_addr[5]:02X}")
+
+    // Allocate RX buffer
+    match memory::alloc_frame() {
+        Result::Ok(addr) => {
+            nic.rx_buffer = addr
+            // Set RX buffer address
+            cpu::outb(nic.io_base + RTL_RBSTART, addr)  // Should be outl (32-bit)
+        },
+        Result::Err(e) => {
+            serial::log("[net] Cannot allocate RX buffer: {e}")
+            return
+        },
+    }
+
+    // Allocate TX buffers
+    let t = 0
+    while t < TX_BUFFER_COUNT {
+        match memory::alloc_frame() {
+            Result::Ok(addr) => {
+                nic.tx_buffer[t] = addr
+            },
+            Result::Err(_) => {},
+        }
+        t = t + 1
+    }
+
+    // Enable RX and TX
+    cpu::outb(nic.io_base + RTL_CMD, 0x0C)  // RE + TE
+
+    // Configure RX: accept all, wrap, max DMA burst
+    cpu::outb(nic.io_base + RTL_RCR, 0x0F | (1 << 7))  // AB+AM+APM+AAP + WRAP
+
+    // Enable interrupts
+    cpu::outb(nic.io_base + RTL_IMR, 0x0005)  // ROK + TOK
+
+    // Register IRQ handler
+    interrupts::register_handler(32 + nic.irq, net_irq)
+    interrupts::enable_irq(nic.irq)
+
+    nic.present = true
+    serial::log("[net] RTL8139 initialized, IRQ={nic.irq}")
+}
+
+// ── Send/Receive ────────────────────────────────────────────────────────
+
+pub fn send(data: [byte], length: int) -> Result<bool, str> {
+    if !nic.present {
+        return Result::Err("No network adapter")
+    }
+
+    if length > MAX_PACKET_SIZE {
+        return Result::Err("Packet too large")
+    }
+
+    // Copy data to TX buffer
+    let tx_idx = nic.tx_cur
+    cpu::memcpy(nic.tx_buffer[tx_idx], data as int, length)
+
+    // Set TX address and start transmission
+    cpu::outb(nic.io_base + RTL_TSAD0 + tx_idx * 4, nic.tx_buffer[tx_idx])
+    cpu::outb(nic.io_base + RTL_TSD0 + tx_idx * 4, length & 0x1FFF)
+
+    nic.tx_cur = (nic.tx_cur + 1) % TX_BUFFER_COUNT
+    nic.packets_tx = nic.packets_tx + 1
+    nic.bytes_tx = nic.bytes_tx + length
+
+    return Result::Ok(true)
+}
+
+fn net_irq(error_code: int) {
+    let status = cpu::inb(nic.io_base + RTL_ISR)
+
+    if (status & 0x01) != 0 {
+        // Packet received (ROK)
+        nic.packets_rx = nic.packets_rx + 1
+        // TODO: Read packet from RX buffer, dispatch to network stack
+    }
+
+    if (status & 0x04) != 0 {
+        // Packet sent (TOK)
+        // TX completion
+    }
+
+    // Clear interrupt
+    cpu::outb(nic.io_base + RTL_ISR, status)
+    interrupts::eoi(nic.irq)
+}
+
+// ── Stats ───────────────────────────────────────────────────────────────
+
+pub fn get_stats() -> (int, int, int, int) {
+    return (nic.packets_rx, nic.packets_tx, nic.bytes_rx, nic.bytes_tx)
+}
+
+pub fn get_mac() -> [byte; 6] {
+    return nic.mac_addr
+}
+
+pub fn is_present() -> bool {
+    return nic.present
+}

@@ -1,0 +1,197 @@
+// ═══════════════════════════════════════════════════════════════════════
+// LATERALUS v1.5 — Signal Processing
+// Demonstrates FFT, filtering, and spectral analysis pipelines
+// ═══════════════════════════════════════════════════════════════════════
+
+import math
+import science
+
+// ── Signal Generation ─────────────────────────────────────────────
+
+fn generate_sine(freq: float, amplitude: float, samples: int, sample_rate: float) -> list {
+    let result = []
+    for i in range(0, samples) {
+        let t = i / sample_rate
+        result = result + [amplitude * sin(2.0 * PI * freq * t)]
+    }
+    return result
+}
+
+fn generate_composite_signal(sample_rate: float, duration: float) -> list {
+    let n = int(sample_rate * duration)
+    let result = []
+    for i in range(0, n) {
+        let t = i / sample_rate
+        // 10 Hz fundamental + 25 Hz harmonic + noise
+        let fundamental = 1.0 * sin(2.0 * PI * 10.0 * t)
+        let harmonic = 0.5 * sin(2.0 * PI * 25.0 * t)
+        let high_freq = 0.2 * sin(2.0 * PI * 100.0 * t)
+        result = result + [fundamental + harmonic + high_freq]
+    }
+    return result
+}
+
+// ── Spectral Analysis ─────────────────────────────────────────────
+
+fn analyze_spectrum(signal: list, sample_rate: float) -> list {
+    let spectrum = signal |> fft()
+    let power = spectrum |> power_spectrum()
+    let n = len(power)
+    let freq_resolution = sample_rate / n
+
+    let result = []
+    for i in range(0, n / 2) {
+        let bin = {}
+        bin["frequency"] = i * freq_resolution
+        bin["magnitude"] = sqrt(power[i])
+        bin["power_db"] = 10.0 * log10(power[i] + 1e-12)
+        result = result + [bin]
+    }
+    return result
+}
+
+fn find_peaks(spectrum: list, threshold_db: float) -> list {
+    let filtered = spectrum |> filter(fn(bin) { bin["power_db"] > threshold_db })
+    let sorted_bins = filtered |> sort_by(fn(bin) { bin["power_db"] })
+    return sorted_bins |> reverse()
+}
+
+// ── Digital Filters ───────────────────────────────────────────────
+
+fn moving_avg_filter(signal: list, window: int) -> list {
+    let n = len(signal)
+    let result = []
+    for i in range(0, n) {
+        let start = max(0, i - window / 2)
+        let end_idx = min(n, i + window / 2 + 1)
+        let window_data = slice_list(signal, start, end_idx)
+        result = result + [mean(window_data)]
+    }
+    return result
+}
+
+fn low_pass_filter(signal: list, cutoff: float, sample_rate: float) -> list {
+    // Simple RC low-pass filter simulation
+    let rc = 1.0 / (2.0 * PI * cutoff)
+    let dt = 1.0 / sample_rate
+    let alpha = dt / (rc + dt)
+
+    let filtered = [signal[0]]
+    for i in range(1, len(signal)) {
+        let prev = filtered[i - 1]
+        let curr = prev + alpha * (signal[i] - prev)
+        filtered = filtered + [curr]
+    }
+    return filtered
+}
+
+// ── Signal Statistics ─────────────────────────────────────────────
+
+fn signal_stats(signal: list) -> map {
+    let n = len(signal)
+    let mu = signal |> mean()
+    let sigma = signal |> std_dev()
+    let sq = signal |> map(fn(x) { x * x })
+    let rms = sqrt(sq |> mean())
+    let abs_signal = signal |> map(fn(x) { abs(x) })
+    let peak = abs_signal |> max()
+    let crest_factor = peak / rms
+
+    let result = {}
+    result["samples"] = n
+    result["mean"] = round(mu, 6)
+    result["std_dev"] = round(sigma, 6)
+    result["rms"] = round(rms, 6)
+    result["peak"] = round(peak, 6)
+    result["crest_factor"] = round(crest_factor, 4)
+    return result
+}
+
+// ── Main Analysis Pipeline ────────────────────────────────────────
+
+fn main() {
+    println("LATERALUS v1.5 — Signal Processing")
+    println("===================================")
+    println("")
+
+    let sample_rate = 1000.0  // Hz
+    let duration = 1.0        // seconds
+
+    // Generate composite signal
+    println("=== Signal Generation ===")
+    let signal = generate_composite_signal(sample_rate, duration)
+    let stats = signal_stats(signal)
+    println("Samples:      " + str(stats["samples"]))
+    println("Mean:         " + str(stats["mean"]))
+    println("RMS:          " + str(stats["rms"]))
+    println("Peak:         " + str(stats["peak"]))
+    println("Crest Factor: " + str(stats["crest_factor"]))
+
+    // Spectral analysis
+    println("")
+    println("=== Spectral Analysis ===")
+    let spectrum = analyze_spectrum(signal, sample_rate)
+    let peaks = find_peaks(spectrum, -10.0)
+    println("Detected " + str(len(peaks)) + " spectral peaks:")
+    let top_peaks = peaks |> take(5)
+    for peak in top_peaks {
+        println("  " + str(round(peak["frequency"], 1)) + " Hz: " + str(round(peak["power_db"], 1)) + " dB")
+    }
+
+    // Filtering
+    println("")
+    println("=== Low-Pass Filtering ===")
+    let filtered = low_pass_filter(signal, 30.0, sample_rate)
+    let filtered_stats = signal_stats(filtered)
+    println("Before filter — RMS: " + str(stats["rms"]) + ", Peak: " + str(stats["peak"]))
+    println("After filter  — RMS: " + str(filtered_stats["rms"]) + ", Peak: " + str(filtered_stats["peak"]))
+
+    // Moving average smoothing
+    println("")
+    println("=== Moving Average (window=20) ===")
+    let smoothed = moving_avg_filter(signal, 20)
+    let smooth_stats = signal_stats(smoothed)
+    println("Smoothed RMS:  " + str(smooth_stats["rms"]))
+    println("Smoothed Peak: " + str(smooth_stats["peak"]))
+
+    // Pipeline-driven analysis
+    println("")
+    println("=== Pipeline: Energy in Frequency Bands ===")
+
+    let band_dc = {}
+    band_dc["name"] = "DC"
+    band_dc["low"] = 0.0
+    band_dc["high"] = 1.0
+
+    let band_bass = {}
+    band_bass["name"] = "Bass"
+    band_bass["low"] = 1.0
+    band_bass["high"] = 20.0
+
+    let band_mid = {}
+    band_mid["name"] = "Mid"
+    band_mid["low"] = 20.0
+    band_mid["high"] = 50.0
+
+    let band_high = {}
+    band_high["name"] = "High"
+    band_high["low"] = 50.0
+    band_high["high"] = 200.0
+
+    let bands = [band_dc, band_bass, band_mid, band_high]
+
+    for band in bands {
+        let band_bins = spectrum
+            |> filter(fn(bin) { bin["frequency"] >= band["low"] })
+            |> filter(fn(bin) { bin["frequency"] < band["high"] })
+        let magnitudes = band_bins |> map(fn(bin) { bin["magnitude"] ** 2 })
+        let energy = magnitudes |> sum()
+
+        println("  " + band["name"] + " (" + str(band["low"]) + "-" + str(band["high"]) + " Hz): " + str(round(energy, 4)))
+    }
+
+    println("")
+    println("Signal processing complete")
+}
+
+main()

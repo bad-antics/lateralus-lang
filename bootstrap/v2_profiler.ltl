@@ -1,0 +1,517 @@
+// ═══════════════════════════════════════════════════════════════════════
+// v2_profiler.ltl  —  LATERALUS Profiler & Performance Measurement
+// Self-hosted port of lateralus_lang/profiler.py
+//
+// Provides:
+//   - Timing blocks (begin/end with nesting)
+//   - Function call tracking (name, count, cumulative time)
+//   - Memory estimation (allocation counting)
+//   - Phase-level compilation profiling
+//   - Report generation (ASCII table format)
+//
+// NOTE: Since Lateralus does not expose cProfile or tracemalloc, this
+//       implementation uses clock-based timing and manual instrumentation.
+//
+// v2.3.0
+// ═══════════════════════════════════════════════════════════════════════
+
+import math
+
+// ─── Clock / Timer Utilities ────────────────────────────────────────────
+
+// Simple monotonic clock simulation using a counter
+// In a real runtime, this would call an OS-level timer
+let _clock_counter = 0
+
+fn tick() -> int {
+    // Increment and return a monotonic tick counter
+    // Each tick represents ~1 microsecond in simulation
+    _clock_counter = _clock_counter + 1
+    return _clock_counter
+}
+
+fn reset_clock() {
+    _clock_counter = 0
+}
+
+fn ticks_to_ms(ticks: int) -> float {
+    return to_float(ticks) / 1000.0
+}
+
+fn ticks_to_sec(ticks: int) -> float {
+    return to_float(ticks) / 1000000.0
+}
+
+// ─── Timing Block ───────────────────────────────────────────────────────
+
+struct TimingBlock {
+    name: str
+    start_tick: int
+    end_tick: int
+    children: list
+}
+
+fn timing_new(name: str) -> TimingBlock {
+    return TimingBlock {
+        name: name,
+        start_tick: tick(),
+        end_tick: 0,
+        children: [],
+    }
+}
+
+fn timing_finish(block: TimingBlock) {
+    block.end_tick = tick()
+}
+
+fn timing_elapsed(block: TimingBlock) -> int {
+    return block.end_tick - block.start_tick
+}
+
+fn timing_self_time(block: TimingBlock) -> int {
+    let child_time = 0
+    let i = 0
+    while i < len(block.children) {
+        child_time = child_time + timing_elapsed(block.children[i])
+        i = i + 1
+    }
+    let elapsed = timing_elapsed(block)
+    if elapsed > child_time {
+        return elapsed - child_time
+    }
+    return 0
+}
+
+// ─── Function Stats ─────────────────────────────────────────────────────
+
+struct FuncStat {
+    name: str
+    calls: int
+    total_ticks: int
+    cum_ticks: int
+}
+
+fn funcstat_new(name: str) -> FuncStat {
+    return FuncStat { name: name, calls: 0, total_ticks: 0, cum_ticks: 0 }
+}
+
+// ─── Profile Result ─────────────────────────────────────────────────────
+
+struct ProfileResult {
+    file_name: str
+    total_ticks: int
+    function_stats: list
+    peak_allocs: int
+    total_calls: int
+}
+
+fn profile_result_summary(r: ProfileResult) -> str {
+    let lines = [
+        "  Profile Report: " + r.file_name,
+        "  ============================================================",
+        "  Total time:  " + str(round(ticks_to_sec(r.total_ticks), 4)) + "s",
+        "  Peak allocs: " + str(r.peak_allocs),
+        "  Total calls: " + str(r.total_calls),
+        "",
+    ]
+
+    // Header
+    let hdr = "  " + pad_right("Function", 40) + pad_right("Calls", 8) + pad_right("Tot(ms)", 10) + pad_right("Cum(ms)", 10)
+    lines = lines + [hdr]
+    lines = lines + ["  " + repeat_char("-", 40) + " " + repeat_char("-", 8) + " " + repeat_char("-", 10) + " " + repeat_char("-", 10)]
+
+    // Stats rows (top 20)
+    let limit = len(r.function_stats)
+    if limit > 20 {
+        limit = 20
+    }
+    let i = 0
+    while i < limit {
+        let stat = r.function_stats[i]
+        let nm = stat.name
+        if len(nm) > 40 {
+            nm = str_trunc(nm, 40)
+        }
+        let row = "  " + pad_right(nm, 40) + pad_left(str(stat.calls), 8) + " " + pad_left(str(round(ticks_to_ms(stat.total_ticks), 2)), 10) + " " + pad_left(str(round(ticks_to_ms(stat.cum_ticks), 2)), 10)
+        lines = lines + [row]
+        i = i + 1
+    }
+
+    return join(lines, "\n")
+}
+
+// ─── String Helpers ─────────────────────────────────────────────────────
+
+fn pad_right(s: str, width: int) -> str {
+    let result = s
+    while len(result) < width {
+        result = result + " "
+    }
+    return result
+}
+
+fn pad_left(s: str, width: int) -> str {
+    let result = s
+    while len(result) < width {
+        result = " " + result
+    }
+    return result
+}
+
+fn repeat_char(ch: str, n: int) -> str {
+    let result = ""
+    let i = 0
+    while i < n {
+        result = result + ch
+        i = i + 1
+    }
+    return result
+}
+
+fn str_trunc(s: str, max_len: int) -> str {
+    if len(s) <= max_len {
+        return s
+    }
+    let result = ""
+    let i = 0
+    while i < max_len - 3 {
+        result = result + str(s[i])
+        i = i + 1
+    }
+    return result + "..."
+}
+
+// ─── Profiler ───────────────────────────────────────────────────────────
+
+struct Profiler {
+    timing_stack: list
+    timing_root: list
+    func_stats: list
+    alloc_count: int
+    peak_allocs: int
+}
+
+fn profiler_new() -> Profiler {
+    return Profiler {
+        timing_stack: [],
+        timing_root: [],
+        func_stats: [],
+        alloc_count: 0,
+        peak_allocs: 0,
+    }
+}
+
+fn profiler_begin(p: Profiler, name: str) {
+    let block = timing_new(name)
+    if len(p.timing_stack) > 0 {
+        let parent = p.timing_stack[len(p.timing_stack) - 1]
+        parent.children = parent.children + [block]
+    } else {
+        p.timing_root = p.timing_root + [block]
+    }
+    p.timing_stack = p.timing_stack + [block]
+}
+
+fn profiler_end(p: Profiler) -> float {
+    if len(p.timing_stack) == 0 {
+        return 0.0
+    }
+    let block = p.timing_stack[len(p.timing_stack) - 1]
+    timing_finish(block)
+    // Pop from stack
+    let new_stack = []
+    let i = 0
+    while i < len(p.timing_stack) - 1 {
+        new_stack = new_stack + [p.timing_stack[i]]
+        i = i + 1
+    }
+    p.timing_stack = new_stack
+    return ticks_to_ms(timing_elapsed(block))
+}
+
+fn profiler_record_call(p: Profiler, fn_name: str, ticks: int) {
+    // Find or create a FuncStat entry
+    let found = false
+    let i = 0
+    while i < len(p.func_stats) {
+        if p.func_stats[i].name == fn_name {
+            p.func_stats[i].calls = p.func_stats[i].calls + 1
+            p.func_stats[i].total_ticks = p.func_stats[i].total_ticks + ticks
+            p.func_stats[i].cum_ticks = p.func_stats[i].cum_ticks + ticks
+            found = true
+        }
+        i = i + 1
+    }
+    if !found {
+        let stat = funcstat_new(fn_name)
+        stat.calls = 1
+        stat.total_ticks = ticks
+        stat.cum_ticks = ticks
+        p.func_stats = p.func_stats + [stat]
+    }
+}
+
+fn profiler_track_alloc(p: Profiler, count: int) {
+    p.alloc_count = p.alloc_count + count
+    if p.alloc_count > p.peak_allocs {
+        p.peak_allocs = p.alloc_count
+    }
+}
+
+fn profiler_track_free(p: Profiler, count: int) {
+    p.alloc_count = p.alloc_count - count
+    if p.alloc_count < 0 {
+        p.alloc_count = 0
+    }
+}
+
+fn profiler_timing_report(p: Profiler) -> str {
+    let lines = [
+        "  Timing Report",
+        "  ==================================================",
+    ]
+
+    let i = 0
+    while i < len(p.timing_root) {
+        lines = lines + format_timing_block(p.timing_root[i], 0)
+        i = i + 1
+    }
+
+    return join(lines, "\n")
+}
+
+fn format_timing_block(block: TimingBlock, depth: int) -> list {
+    let indent = ""
+    let di = 0
+    while di < depth {
+        indent = indent + "    "
+        di = di + 1
+    }
+
+    let elapsed_ms = round(ticks_to_ms(timing_elapsed(block)), 2)
+    let self_ms = round(ticks_to_ms(timing_self_time(block)), 2)
+
+    let lines = ["  " + indent + block.name + ": " + str(elapsed_ms) + "ms (self: " + str(self_ms) + "ms)"]
+
+    let i = 0
+    while i < len(block.children) {
+        lines = lines + format_timing_block(block.children[i], depth + 1)
+        i = i + 1
+    }
+
+    return lines
+}
+
+// ─── Compilation Phase Profiler ─────────────────────────────────────────
+
+struct PhaseEntry {
+    name: str
+    timings: list
+}
+
+struct PhaseProfiler {
+    phases: list
+}
+
+fn phase_profiler_new() -> PhaseProfiler {
+    return PhaseProfiler { phases: [] }
+}
+
+fn phase_record(pp: PhaseProfiler, name: str, elapsed_ticks: int) {
+    let found = false
+    let i = 0
+    while i < len(pp.phases) {
+        if pp.phases[i].name == name {
+            pp.phases[i].timings = pp.phases[i].timings + [elapsed_ticks]
+            found = true
+        }
+        i = i + 1
+    }
+    if !found {
+        pp.phases = pp.phases + [PhaseEntry { name: name, timings: [elapsed_ticks] }]
+    }
+}
+
+fn phase_report(pp: PhaseProfiler) -> str {
+    let lines = [
+        "  Compilation Phase Report",
+        "  ==================================================",
+        "  " + pad_right("Phase", 25) + pad_left("Count", 6) + " " + pad_left("Mean(ms)", 10) + " " + pad_left("Total(ms)", 10),
+        "  " + repeat_char("-", 25) + " " + repeat_char("-", 6) + " " + repeat_char("-", 10) + " " + repeat_char("-", 10),
+    ]
+
+    let grand_total = 0.0
+    let i = 0
+    while i < len(pp.phases) {
+        let phase = pp.phases[i]
+        let count = len(phase.timings)
+        let total = 0
+        let j = 0
+        while j < count {
+            total = total + phase.timings[j]
+            j = j + 1
+        }
+        let mean_ms = round(ticks_to_ms(total) / to_float(count), 2)
+        let total_ms = round(ticks_to_ms(total), 2)
+        grand_total = grand_total + to_float(total_ms)
+
+        let row = "  " + pad_right(phase.name, 25) + pad_left(str(count), 6) + " " + pad_left(str(mean_ms), 10) + " " + pad_left(str(total_ms), 10)
+        lines = lines + [row]
+        i = i + 1
+    }
+
+    lines = lines + ["  " + repeat_char("-", 25) + " " + repeat_char("-", 6) + " " + repeat_char("-", 10) + " " + repeat_char("-", 10)]
+    lines = lines + ["  " + pad_right("TOTAL", 25) + pad_left("", 6) + " " + pad_left("", 10) + " " + pad_left(str(round(grand_total, 2)), 10)]
+
+    return join(lines, "\n")
+}
+
+// ─── Sorting helper (sort func stats by cumulative time desc) ───────────
+
+fn sort_stats_by_cum(stats: list) -> list {
+    // Simple insertion sort by cum_ticks descending
+    let sorted_list = []
+    let i = 0
+    while i < len(stats) {
+        sorted_list = sorted_list + [stats[i]]
+        i = i + 1
+    }
+
+    let si = 1
+    while si < len(sorted_list) {
+        let key = sorted_list[si]
+        let j = si - 1
+        while j >= 0 && sorted_list[j].cum_ticks < key.cum_ticks {
+            sorted_list[j + 1] = sorted_list[j]
+            j = j - 1
+        }
+        sorted_list[j + 1] = key
+        si = si + 1
+    }
+
+    return sorted_list
+}
+
+// ─── Self-Test ──────────────────────────────────────────────────────────
+
+fn assert_eq(label: str, actual: any, expected: any) {
+    if str(actual) == str(expected) {
+        println("  PASS: " + label)
+    } else {
+        println("  FAIL: " + label)
+        println("    expected: " + str(expected))
+        println("    actual:   " + str(actual))
+    }
+}
+
+fn main() {
+    println("=== Profiler Self-Test ===")
+    println("")
+
+    // ── Clock Tests ─────────────────────────────────────────────────
+    println("-- Clock --")
+    reset_clock()
+    let t1 = tick()
+    let t2 = tick()
+    let t3 = tick()
+    assert_eq("tick monotonic", t2 > t1, true)
+    assert_eq("tick monotonic 2", t3 > t2, true)
+
+    // ── Timing Block Tests ──────────────────────────────────────────
+    println("")
+    println("-- Timing Blocks --")
+    reset_clock()
+    let block = timing_new("test_block")
+    // Simulate some work
+    let work = 0
+    let wi = 0
+    while wi < 100 {
+        work = work + 1
+        wi = wi + 1
+    }
+    timing_finish(block)
+    assert_eq("block has elapsed", timing_elapsed(block) > 0, true)
+    assert_eq("block name", block.name, "test_block")
+
+    // ── Profiler Tests ──────────────────────────────────────────────
+    println("")
+    println("-- Profiler --")
+    let p = profiler_new()
+
+    profiler_begin(p, "phase_a")
+    profiler_begin(p, "phase_a_child")
+    let elapsed_child = profiler_end(p)
+    let elapsed_a = profiler_end(p)
+
+    assert_eq("has timing root", len(p.timing_root), 1)
+    assert_eq("root name", p.timing_root[0].name, "phase_a")
+    assert_eq("root has child", len(p.timing_root[0].children), 1)
+
+    // Record some function calls
+    profiler_record_call(p, "tokenize", 500)
+    profiler_record_call(p, "parse", 1200)
+    profiler_record_call(p, "tokenize", 480)
+
+    assert_eq("func stats count", len(p.func_stats), 2)
+    assert_eq("tokenize calls", p.func_stats[0].calls, 2)
+    assert_eq("tokenize total", p.func_stats[0].total_ticks, 980)
+
+    // Allocation tracking
+    profiler_track_alloc(p, 100)
+    assert_eq("alloc count", p.alloc_count, 100)
+    profiler_track_alloc(p, 50)
+    assert_eq("peak allocs", p.peak_allocs, 150)
+    profiler_track_free(p, 30)
+    assert_eq("after free", p.alloc_count, 120)
+
+    // ── Sort Stats ──────────────────────────────────────────────────
+    println("")
+    println("-- Sort Stats --")
+    let stats = [
+        funcstat_new("a"),
+        funcstat_new("b"),
+        funcstat_new("c"),
+    ]
+    stats[0].cum_ticks = 100
+    stats[1].cum_ticks = 500
+    stats[2].cum_ticks = 200
+    let sorted_stats = sort_stats_by_cum(stats)
+    assert_eq("sorted[0] is b", sorted_stats[0].name, "b")
+    assert_eq("sorted[1] is c", sorted_stats[1].name, "c")
+    assert_eq("sorted[2] is a", sorted_stats[2].name, "a")
+
+    // ── Phase Profiler ──────────────────────────────────────────────
+    println("")
+    println("-- Phase Profiler --")
+    let pp = phase_profiler_new()
+    phase_record(pp, "lex", 100)
+    phase_record(pp, "parse", 200)
+    phase_record(pp, "lex", 110)
+    phase_record(pp, "codegen", 300)
+
+    assert_eq("phases count", len(pp.phases), 3)
+    assert_eq("lex timings", len(pp.phases[0].timings), 2)
+
+    let pr = phase_report(pp)
+    assert_eq("report non-empty", len(pr) > 0, true)
+    println(pr)
+
+    // ── Timing Report ───────────────────────────────────────────────
+    println("")
+    println("-- Timing Report --")
+    let tr = profiler_timing_report(p)
+    assert_eq("timing report non-empty", len(tr) > 0, true)
+    println(tr)
+
+    // ── Pipeline Fusion ─────────────────────────────────────────────
+    println("")
+    println("-- String Helpers --")
+    assert_eq("pad_right", pad_right("ab", 5), "ab   ")
+    assert_eq("pad_left", pad_left("42", 5), "   42")
+    assert_eq("repeat_char", repeat_char("-", 3), "---")
+
+    println("")
+    println("=== All Profiler Tests Complete ===")
+}
+
+main()

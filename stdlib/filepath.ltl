@@ -1,0 +1,159 @@
+// Lateralus Standard Library — filepath.ltl  (v2.2.0)
+// Path manipulation utilities
+
+module stdlib.filepath
+
+// ── Path components ──────────────────────────────────────────────────────────
+
+/// Get the directory part of a path.
+/// dirname("/home/user/file.txt") => "/home/user"
+/// dirname("file.txt")           => "."
+pub fn dirname(path: str) -> str {
+    let idx = last_index_of(path, "/")
+    if idx < 0 {
+        return "."
+    }
+    if idx == 0 {
+        return "/"
+    }
+    return substring(path, 0, idx)
+}
+
+/// Get the filename part of a path.
+/// basename("/home/user/file.txt") => "file.txt"
+/// basename("file.txt")           => "file.txt"
+pub fn basename(path: str) -> str {
+    let idx = last_index_of(path, "/")
+    if idx < 0 {
+        return path
+    }
+    return substring(path, idx + 1, len(path))
+}
+
+/// Get the file extension (including the dot).
+/// extension("file.txt")   => ".txt"
+/// extension("archive.tar.gz") => ".gz"
+/// extension("Makefile")    => ""
+pub fn extension(path: str) -> str {
+    let base = basename(path)
+    let idx = last_index_of(base, ".")
+    if idx <= 0 {
+        return ""
+    }
+    return substring(base, idx, len(base))
+}
+
+/// Get the filename without extension.
+/// stem("file.txt")   => "file"
+/// stem("archive.tar.gz") => "archive.tar"
+pub fn stem(path: str) -> str {
+    let base = basename(path)
+    let idx = last_index_of(base, ".")
+    if idx <= 0 {
+        return base
+    }
+    return substring(base, 0, idx)
+}
+
+// ── Path construction ────────────────────────────────────────────────────────
+
+/// Join path components with the path separator.
+/// join_path("/home", "user", "file.txt") => "/home/user/file.txt"
+pub fn join_path(parts: list) -> str {
+    let mut result = ""
+    for i in range(0, len(parts)) {
+        let part = str(parts[i])
+        if i == 0 {
+            result = part
+        } else {
+            // Strip trailing slash from result
+            while len(result) > 1 && result[len(result) - 1] == "/" {
+                result = substring(result, 0, len(result) - 1)
+            }
+            // Strip leading slash from part (unless result is empty)
+            let mut p = part
+            while len(p) > 0 && p[0] == "/" {
+                p = substring(p, 1, len(p))
+            }
+            result = result + "/" + p
+        }
+    }
+    return result
+}
+
+/// Normalize a path (resolve . and .., collapse multiple slashes).
+pub fn normalize(path: str) -> str {
+    let is_abs = len(path) > 0 && path[0] == "/"
+    let parts = split(path, "/")
+    let mut stack = []
+    for part in parts {
+        if part == "." || part == "" {
+            // skip
+        } else if part == ".." {
+            if len(stack) > 0 && stack[len(stack) - 1] != ".." {
+                stack = slice_list(stack, 0, len(stack) - 1)
+            } else if !is_abs {
+                stack = stack + [".."]
+            }
+        } else {
+            stack = stack + [part]
+        }
+    }
+    let joined = join(stack, "/")
+    if is_abs {
+        return "/" + joined
+    }
+    if len(joined) == 0 {
+        return "."
+    }
+    return joined
+}
+
+// ── Path queries ─────────────────────────────────────────────────────────────
+
+/// Check if a path is absolute (starts with /).
+pub fn is_absolute(path: str) -> bool {
+    return len(path) > 0 && path[0] == "/"
+}
+
+/// Check if a path is relative.
+pub fn is_relative(path: str) -> bool {
+    return !is_absolute(path)
+}
+
+/// Check if a path has a specific extension.
+/// has_extension("file.ltl", ".ltl") => true
+pub fn has_extension(path: str, ext: str) -> bool {
+    return extension(path) == ext
+}
+
+/// Replace the extension of a path.
+/// with_extension("file.ltl", ".py") => "file.py"
+pub fn with_extension(path: str, ext: str) -> str {
+    let dir = dirname(path)
+    let name = stem(path)
+    if dir == "." {
+        return name + ext
+    }
+    return dir + "/" + name + ext
+}
+
+// ── Helper functions ─────────────────────────────────────────────────────────
+
+fn last_index_of(s: str, ch: str) -> int {
+    let mut last = -1
+    for i in range(0, len(s)) {
+        if s[i] == ch {
+            last = i
+        }
+    }
+    return last
+}
+
+fn slice_list(lst: list, start: int, end_idx: int) -> list {
+    let mut result = []
+    for i in range(start, end_idx) {
+        result = result + [lst[i]]
+    }
+    return result
+}

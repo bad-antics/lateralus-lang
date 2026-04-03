@@ -1,0 +1,147 @@
+// ═══════════════════════════════════════════════════════════════════════
+// LateralusOS — Wallpaper Animation Engine (Lateralus Implementation)
+// ═══════════════════════════════════════════════════════════════════════
+// Animated desktop wallpaper with color-cycling gradient, Fibonacci
+// spiral rings, twinkling stars, and pulsing logo.
+//
+// Copyright (c) 2025 bad-antics. All rights reserved.
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Integer sine table — 64 entries mapping 0-63 to -127..127
+/// Covers one full period (0° to 360°)
+const SIN_TABLE: [Int] = [
+      0,  12,  25,  37,  49,  60,  71,  81,
+     90,  98, 106, 112, 117, 122, 125, 126,
+    127, 126, 125, 122, 117, 112, 106,  98,
+     90,  81,  71,  60,  49,  37,  25,  12,
+      0, -12, -25, -37, -49, -60, -71, -81,
+    -90, -98,-106,-112,-117,-122,-125,-126,
+   -127,-126,-125,-122,-117,-112,-106, -98,
+    -90, -81, -71, -60, -49, -37, -25, -12,
+]
+
+/// Integer sine (phase 0-63 covers full circle)
+fn isin(phase: Int) -> Int {
+    SIN_TABLE[phase & 63]
+}
+
+/// Integer cosine (phase offset by quarter)
+fn icos(phase: Int) -> Int {
+    SIN_TABLE[(phase + 16) & 63]
+}
+
+/// Catppuccin spiral ring colors
+const SPIRAL_COLORS = [
+    Color::ACCENT,     // Blue
+    Color::ACCENT2,    // Green
+    Color::ACCENT3,    // Yellow
+    Color::ACCENT4,    // Pink
+    Color::LAVENDER,   // Lavender
+]
+
+/// Wallpaper state
+struct Wallpaper {
+    phase: Int,   // animation phase counter
+}
+
+/// Create a new wallpaper animator
+fn wallpaper_init() -> Wallpaper {
+    Wallpaper { phase: 0 }
+}
+
+/// Render the animated wallpaper
+fn render(self: &mut Wallpaper, fb: &mut Framebuffer) {
+    self.phase += 1
+
+    // ── Animated gradient background ─────────────────────────────────
+    let r_shift = isin(self.phase / 4) / 8
+    let b_shift = icos(self.phase / 6) / 8
+
+    let top_color = rgb(
+        clamp(0x1E + r_shift, 0, 0x3F),
+        0x1E,
+        clamp(0x2E + b_shift, 0, 0x4E)
+    )
+    let bot_color = rgb(
+        0x11,
+        clamp(0x11 + max(r_shift / 2, 0), 0, 0x2F),
+        clamp(0x1B + b_shift / 2, 0, 0x3B)
+    )
+
+    fb.fill_gradient_v(0, 0, fb.width, fb.height - TASKBAR_H,
+                       top_color, bot_color)
+
+    // ── Twinkling stars ──────────────────────────────────────────────
+    for i in 0..12 {
+        let sx = (97 * i + 41) % (fb.width - 20) + 10
+        let sy = (163 * i + 73) % (fb.height - TASKBAR_H - 100) + 30
+        let bright = isin(self.phase / 2 + i * 10)
+        if bright > 40 {
+            let lum = 0x30 + bright / 3
+            let star = rgb(lum, lum, lum + 0x20)
+            fb.putpixel(sx, sy, star)
+            fb.putpixel(sx + 1, sy, star)
+            fb.putpixel(sx, sy + 1, star)
+        }
+    }
+
+    // ── Fibonacci spiral rings ───────────────────────────────────────
+    let cx = fb.width / 2
+    let cy = fb.height / 2 - 20
+
+    for ring in 0..5 {
+        let radius = 80 + ring * 35
+        for a in range(0, 64, 4) {
+            let angle = a + self.phase / 3 + ring * 8
+            let px = cx + icos(angle) * radius / 127
+            let py = cy + isin(angle) * radius / 127
+
+            if px > 0 && px < fb.width - 1 &&
+               py > 0 && py < fb.height - TASKBAR_H - 1 {
+                let bright = isin(angle * 2 + self.phase)
+                if bright > 20 {
+                    let color = blend(SPIRAL_COLORS[ring], top_color,
+                                     bright / 3 + 10)
+                    fb.putpixel(px, py, color)
+                    fb.putpixel(px + 1, py, color)
+                    fb.putpixel(px, py + 1, color)
+                }
+            }
+        }
+    }
+
+    // ── Logo with pulsing glow ───────────────────────────────────────
+    let logo = "LateralusOS"
+    let tw = fb.text_width(logo)
+    let lx = (fb.width - tw * 2) / 2
+    let ly = fb.height / 2 - 40
+
+    let glow = isin(self.phase / 3)
+    let logo_color = rgb(
+        0xB4 + glow / 4,
+        0xBE + glow / 6,
+        0xFE
+    )
+
+    // Draw 2x size logo with shadow
+    for (i, ch) in logo.chars().enumerate() {
+        // Shadow
+        fb.putchar(lx + i * 16 + 2, ly + 2, ch, Color::BLACK, Color::BLACK)
+        fb.putchar(lx + i * 16 + 10, ly + 2, ch, Color::BLACK, Color::BLACK)
+        // Main (2x via tiling)
+        fb.putchar(lx + i * 16, ly, ch, logo_color, top_color)
+        fb.putchar(lx + i * 16 + 8, ly, ch, logo_color, top_color)
+    }
+
+    // Subtitle
+    let sub = "v0.2.0 -- Spiral Out, Keep Going"
+    let sw = fb.text_width(sub)
+    fb.puts((fb.width - sw) / 2, ly + 40, sub, Color::SUBTEXT, top_color)
+}
+
+/// Helper: clamp value to range
+fn clamp(val: Int, lo: Int, hi: Int) -> Int {
+    if val < lo { lo }
+    else if val > hi { hi }
+    else { val }
+}

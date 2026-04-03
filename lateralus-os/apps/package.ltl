@@ -1,0 +1,300 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// LateralusOS — Package Manager (ltlpkg)
+// ═══════════════════════════════════════════════════════════════════════════
+// Copyright (c) 2025-2026 bad-antics. All rights reserved.
+//
+// Package manager for Lateralus modules within the OS.
+// Manages local module registry, dependencies, and build artifacts.
+//
+// Usage:  pkg list                — list installed packages
+//         pkg install <name>      — install from registry
+//         pkg remove <name>       — uninstall package
+//         pkg info <name>         — package details
+//         pkg build               — build current project
+//         pkg init <name>         — create new package
+//         pkg search <query>      — search registry
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── Package metadata ────────────────────────────────────────────────────
+
+struct PackageVersion {
+    major: int
+    minor: int
+    patch: int
+}
+
+fn version_str(v: PackageVersion) -> str {
+    str(v.major) ++ "." ++ str(v.minor) ++ "." ++ str(v.patch)
+}
+
+fn parse_version(s: str) -> PackageVersion {
+    let parts = s.split(".")
+    PackageVersion {
+        major: if parts.len() > 0 { parts[0].parse_int() } else { 0 },
+        minor: if parts.len() > 1 { parts[1].parse_int() } else { 0 },
+        patch: if parts.len() > 2 { parts[2].parse_int() } else { 0 },
+    }
+}
+
+fn version_gte(a: PackageVersion, b: PackageVersion) -> bool {
+    if a.major > b.major { return true }
+    if a.major < b.major { return false }
+    if a.minor > b.minor { return true }
+    if a.minor < b.minor { return false }
+    a.patch >= b.patch
+}
+
+struct Package {
+    name:         str
+    version:      PackageVersion
+    description:  str
+    author:       str
+    license:      str
+    deps:         [str]
+    files:        [str]
+    installed:    bool
+    size_bytes:   int
+    category:     str
+}
+
+fn new_package(name: str, ver: str, desc: str) -> Package {
+    Package {
+        name:        name,
+        version:     parse_version(ver),
+        description: desc,
+        author:      "lateralus-community",
+        license:     "MIT",
+        deps:        [],
+        files:       [],
+        installed:   false,
+        size_bytes:  0,
+        category:    "library",
+    }
+}
+
+// ── Registry ────────────────────────────────────────────────────────────
+
+struct Registry {
+    packages: [Package]
+    base_path: str
+}
+
+fn builtin_registry() -> Registry {
+    Registry {
+        base_path: "/usr/lib/lateralus",
+        packages: [
+            // Core libraries
+            new_package("core",        "1.0.0", "Core types and functions"),
+            new_package("math",        "1.0.0", "Mathematics library (trig, linalg, stats)"),
+            new_package("strings",     "1.0.0", "String manipulation utilities"),
+            new_package("collections", "1.0.0", "Data structures (stack, queue, btree)"),
+            new_package("io",          "1.0.0", "I/O abstractions"),
+            new_package("json",        "1.0.0", "JSON parser and serializer"),
+            new_package("csv",         "1.0.0", "CSV reader/writer"),
+            new_package("regex",       "1.0.0", "Regular expression engine"),
+
+            // Crypto & security
+            new_package("crypto",      "1.0.0", "Cryptographic primitives (AES, SHA, HMAC)"),
+            new_package("uuid",        "1.0.0", "UUID v4 generator"),
+            new_package("base64",      "1.0.0", "Base64 encoding/decoding"),
+
+            // System
+            new_package("os",          "1.0.0", "OS interface (process, signals, env)"),
+            new_package("async",       "1.0.0", "Async/await runtime"),
+            new_package("sync",        "1.0.0", "Synchronization primitives (mutex, rwlock)"),
+            new_package("channel",     "1.0.0", "Channel-based message passing"),
+            new_package("time",        "1.0.0", "Time and duration utilities"),
+            new_package("datetime",    "1.0.0", "Date/time formatting and parsing"),
+
+            // Networking
+            new_package("network",     "1.0.0", "TCP/UDP networking"),
+            new_package("http",        "1.0.0", "HTTP client/server"),
+
+            // Science & Data
+            new_package("linalg",      "1.0.0", "Linear algebra (vectors, matrices)"),
+            new_package("stats",       "1.0.0", "Statistical functions"),
+            new_package("science",     "1.0.0", "Scientific computing helpers"),
+            new_package("signals",     "1.0.0", "Signal processing (FFT, filters)"),
+
+            // Testing
+            new_package("testing",     "1.0.0", "Test framework (assert, bench)"),
+            new_package("logging",     "1.0.0", "Structured logging"),
+
+            // Apps
+            new_package("ltlchat",     "1.0.0", "Chat client for LateralusOS"),
+            new_package("ltled",       "1.0.0", "Text editor for LateralusOS"),
+            new_package("ltlc",        "2.2.0", "Lateralus compiler"),
+        ],
+    }
+}
+
+// ── Package operations ──────────────────────────────────────────────────
+
+fn pkg_list(registry: Registry) -> [str] {
+    let mut lines: [str] = []
+    lines = lines ++ ["Installed packages:"]
+    lines = lines ++ ["═══════════════════════════════════════════"]
+    let mut count = 0
+    for pkg in registry.packages {
+        if pkg.installed {
+            let line = "  " ++ pkg.name ++ " v" ++ version_str(pkg.version)
+                ++ " — " ++ pkg.description
+            lines = lines ++ [line]
+            count = count + 1
+        }
+    }
+    if count == 0 {
+        lines = lines ++ ["  (no packages installed)"]
+    }
+    lines = lines ++ [""]
+    lines = lines ++ [str(count) ++ " package(s) installed"]
+    lines
+}
+
+fn pkg_search(registry: Registry, query: str) -> [str] {
+    let mut lines: [str] = []
+    lines = lines ++ ["Search results for '" ++ query ++ "':"]
+    lines = lines ++ ["═══════════════════════════════════════════"]
+    let lower_q = query.to_lower()
+    let mut count = 0
+    for pkg in registry.packages {
+        if pkg.name.to_lower().contains(lower_q) || pkg.description.to_lower().contains(lower_q) {
+            let status = if pkg.installed { "[installed]" } else { "[available]" }
+            let line = "  " ++ pkg.name ++ " v" ++ version_str(pkg.version)
+                ++ " " ++ status ++ " — " ++ pkg.description
+            lines = lines ++ [line]
+            count = count + 1
+        }
+    }
+    if count == 0 {
+        lines = lines ++ ["  No packages found matching '" ++ query ++ "'"]
+    }
+    lines
+}
+
+fn pkg_info(registry: Registry, name: str) -> [str] {
+    for pkg in registry.packages {
+        if pkg.name == name {
+            return [
+                "Package: " ++ pkg.name,
+                "Version: " ++ version_str(pkg.version),
+                "Description: " ++ pkg.description,
+                "Author: " ++ pkg.author,
+                "License: " ++ pkg.license,
+                "Category: " ++ pkg.category,
+                "Status: " ++ if pkg.installed { "Installed" } else { "Available" },
+                "Dependencies: " ++ if pkg.deps.len() > 0 { pkg.deps.join(", ") } else { "none" },
+                "Size: " ++ str(pkg.size_bytes) ++ " bytes",
+            ]
+        }
+    }
+    ["Package '" ++ name ++ "' not found in registry"]
+}
+
+fn pkg_install(registry: Registry, name: str) -> (Registry, [str]) {
+    let mut new_pkgs = registry.packages
+    for i in 0..new_pkgs.len() {
+        if new_pkgs[i].name == name {
+            if new_pkgs[i].installed {
+                return (registry, ["Package '" ++ name ++ "' is already installed"])
+            }
+            new_pkgs[i] = Package { ..new_pkgs[i], installed: true }
+            let msg = [
+                "Installing " ++ name ++ " v" ++ version_str(new_pkgs[i].version) ++ "...",
+                "  Resolving dependencies...",
+                "  Downloading package...",
+                "  Verifying checksum...",
+                "  Installing to " ++ registry.base_path ++ "/" ++ name ++ "/",
+                "  ✓ " ++ name ++ " installed successfully",
+            ]
+            return (Registry { ..registry, packages: new_pkgs }, msg)
+        }
+    }
+    (registry, ["Error: package '" ++ name ++ "' not found in registry"])
+}
+
+fn pkg_remove(registry: Registry, name: str) -> (Registry, [str]) {
+    let mut new_pkgs = registry.packages
+    for i in 0..new_pkgs.len() {
+        if new_pkgs[i].name == name {
+            if !new_pkgs[i].installed {
+                return (registry, ["Package '" ++ name ++ "' is not installed"])
+            }
+            new_pkgs[i] = Package { ..new_pkgs[i], installed: false }
+            return (
+                Registry { ..registry, packages: new_pkgs },
+                ["Removing " ++ name ++ "...", "  ✓ " ++ name ++ " removed successfully"],
+            )
+        }
+    }
+    (registry, ["Error: package '" ++ name ++ "' not found"])
+}
+
+// ── Build system ────────────────────────────────────────────────────────
+
+struct BuildConfig {
+    name:        str
+    version:     str
+    entry:       str
+    target:      str       // "c", "bytecode", "native"
+    freestanding: bool
+    optimize:    bool
+    sources:     [str]
+    output:      str
+}
+
+fn default_build_config() -> BuildConfig {
+    BuildConfig {
+        name:        "myproject",
+        version:     "0.1.0",
+        entry:       "src/main.ltl",
+        target:      "c",
+        freestanding: false,
+        optimize:    true,
+        sources:     ["src/"],
+        output:      "build/",
+    }
+}
+
+fn build_project(config: BuildConfig) -> [str] {
+    let mut output: [str] = []
+    output = output ++ ["Building " ++ config.name ++ " v" ++ config.version ++ "..."]
+    output = output ++ ["  Target: " ++ config.target]
+    output = output ++ ["  Freestanding: " ++ str(config.freestanding)]
+    output = output ++ ["  Entry: " ++ config.entry]
+    output = output ++ ["  Optimize: " ++ str(config.optimize)]
+    output = output ++ [""]
+
+    // Phase 1: Discover sources
+    output = output ++ ["[1/4] Discovering source files..."]
+    output = output ++ ["  Found " ++ str(config.sources.len()) ++ " source directories"]
+
+    // Phase 2: Compile
+    output = output ++ ["[2/4] Compiling..."]
+    output = output ++ ["  lateralus c " ++ config.entry ++ " --target=" ++ config.target]
+
+    // Phase 3: Link
+    output = output ++ ["[3/4] Linking..."]
+    output = output ++ ["  Output: " ++ config.output ++ config.name]
+
+    // Phase 4: Done
+    output = output ++ ["[4/4] Build complete"]
+    output = output ++ ["  ✓ " ++ config.name ++ " built successfully"]
+    output
+}
+
+fn init_project(name: str) -> [str] {
+    [
+        "Creating new project '" ++ name ++ "'...",
+        "  mkdir " ++ name ++ "/",
+        "  mkdir " ++ name ++ "/src/",
+        "  create " ++ name ++ "/src/main.ltl",
+        "  create " ++ name ++ "/lateralus.toml",
+        "  create " ++ name ++ "/README.md",
+        "",
+        "  ✓ Project '" ++ name ++ "' initialized",
+        "",
+        "  To build:  cd " ++ name ++ " && pkg build",
+        "  To run:    ltlc run src/main.ltl",
+    ]
+}

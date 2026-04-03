@@ -1,0 +1,144 @@
+// ═══════════════════════════════════════════════════════════════════════
+// LateralusOS — PC Speaker Driver (Lateralus Implementation)
+// ═══════════════════════════════════════════════════════════════════════
+// PIT Channel 2 tone generation with non-blocking melody queue.
+// This is the Lateralus source that will eventually transpile to C.
+//
+// Copyright (c) 2025 bad-antics. All rights reserved.
+// ═══════════════════════════════════════════════════════════════════════
+
+/// PIT base frequency (1.193180 MHz)
+const PIT_FREQ = 1193180
+
+/// Maximum queued notes in a melody
+const MAX_NOTES = 8
+
+/// A single musical note
+struct Note {
+    freq:        Int,    // frequency in Hz (0 = rest)
+    duration_ms: Int,    // duration in milliseconds
+}
+
+/// Speaker state
+struct Speaker {
+    playing:      Bool,
+    melody_queue: [Note],
+    melody_idx:   Int,
+    note_end_tick: Int,
+}
+
+/// Initialize the speaker
+fn speaker_init() -> Speaker {
+    Speaker {
+        playing:      false,
+        melody_queue: [],
+        melody_idx:   0,
+        note_end_tick: 0,
+    }
+}
+
+/// Play a tone at given frequency (Hz)
+fn play_tone(freq: Int) {
+    if freq == 0 {
+        stop()
+        return
+    }
+
+    let divisor = PIT_FREQ / freq
+
+    // Program PIT channel 2
+    port_out(0x43, 0xB6)                    // Channel 2, mode 3
+    port_out(0x42, divisor & 0xFF)           // Low byte
+    port_out(0x42, (divisor >> 8) & 0xFF)    // High byte
+
+    // Enable speaker (bits 0 and 1 of port 0x61)
+    let tmp = port_in(0x61)
+    port_out(0x61, tmp | 0x03)
+}
+
+/// Stop the current tone
+fn stop() {
+    let tmp = port_in(0x61)
+    port_out(0x61, tmp & 0xFC)
+}
+
+/// Start a timed tone that auto-stops
+fn start_timed(self: &mut Speaker, freq: Int, duration_ms: Int, current_tick: Int) {
+    self.melody_queue = []
+    self.melody_idx = 0
+    play_tone(freq)
+    self.playing = true
+    self.note_end_tick = current_tick + duration_ms
+}
+
+/// Queue a melody (sequence of notes)
+fn queue_melody(self: &mut Speaker, notes: [Note], current_tick: Int) {
+    self.melody_queue = notes
+    self.melody_idx = 0
+
+    if notes.len() > 0 {
+        play_tone(notes[0].freq)
+        self.playing = true
+        self.note_end_tick = current_tick + notes[0].duration_ms
+    }
+}
+
+/// Tick — advance melody, auto-stop timed tones
+fn tick(self: &mut Speaker, current_tick: Int) {
+    if !self.playing && self.melody_idx >= self.melody_queue.len() {
+        return
+    }
+
+    if current_tick >= self.note_end_tick {
+        stop()
+        self.playing = false
+
+        // Advance to next note
+        self.melody_idx += 1
+        if self.melody_idx < self.melody_queue.len() {
+            let note = self.melody_queue[self.melody_idx]
+            if note.freq > 0 {
+                play_tone(note.freq)
+                self.playing = true
+            }
+            self.note_end_tick = current_tick + note.duration_ms
+        }
+    }
+}
+
+/// Boot chime — ascending C-E-G-C
+fn boot_chime(self: &mut Speaker, current_tick: Int) {
+    self.queue_melody([
+        Note { freq: 523,  duration_ms: 120 },   // C5
+        Note { freq: 659,  duration_ms: 120 },   // E5
+        Note { freq: 784,  duration_ms: 120 },   // G5
+        Note { freq: 1047, duration_ms: 200 },   // C6
+    ], current_tick)
+}
+
+/// Error beep — low warning tone
+fn error_beep(self: &mut Speaker, current_tick: Int) {
+    self.queue_melody([
+        Note { freq: 220, duration_ms: 300 },    // A3
+    ], current_tick)
+}
+
+/// Key click — ultra-short high tone
+fn keyclick(self: &mut Speaker, current_tick: Int) {
+    self.start_timed(1200, 3, current_tick)
+}
+
+/// Window open — pleasant two-note chime
+fn window_open(self: &mut Speaker, current_tick: Int) {
+    self.queue_melody([
+        Note { freq: 880,  duration_ms: 60 },    // A5
+        Note { freq: 1175, duration_ms: 80 },    // D6
+    ], current_tick)
+}
+
+/// Notification ding
+fn notify(self: &mut Speaker, current_tick: Int) {
+    self.queue_melody([
+        Note { freq: 1318, duration_ms: 100 },   // E6
+    ], current_tick)
+}

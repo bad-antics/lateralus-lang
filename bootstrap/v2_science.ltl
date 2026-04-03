@@ -1,0 +1,628 @@
+// ═══════════════════════════════════════════════════════════════════════
+// v2_science.ltl  —  LATERALUS Scientific Computing Library
+// Self-hosted port of lateralus_lang/science.py
+//
+// Provides:
+//   - Physical constants (CODATA 2018)
+//   - Unit system with dimensional analysis
+//   - ODE solvers (Euler, RK4)
+//   - Signal processing (moving average, convolution)
+//   - Statistical distributions (normal, Poisson, exponential, binomial)
+//   - Interpolation (Lagrange, linear spline)
+//
+// v2.3.0
+// ═══════════════════════════════════════════════════════════════════════
+
+import math
+
+// ─── Physical Constants (CODATA 2018) ───────────────────────────────────
+
+fn get_constant(name: str) -> float {
+    return match name {
+        // Fundamental
+        "c"         => 299792458.0,
+        "h"         => 6.62607015e-34,
+        "hbar"      => 1.054571817e-34,
+        "G"         => 6.67430e-11,
+        "e"         => 1.602176634e-19,
+        "k_B"       => 1.380649e-23,
+        "N_A"       => 6.02214076e23,
+        "R"         => 8.314462618,
+        "sigma"     => 5.670374419e-8,
+        "epsilon_0" => 8.8541878128e-12,
+        "mu_0"      => 1.25663706212e-6,
+
+        // Particle masses
+        "m_e"       => 9.1093837015e-31,
+        "m_p"       => 1.67262192369e-27,
+        "m_n"       => 1.67492749804e-27,
+
+        // Astronomical
+        "AU"        => 1.495978707e11,
+        "ly"        => 9.4607304725808e15,
+        "pc"        => 3.0856775814913673e16,
+        "M_sun"     => 1.989e30,
+        "R_sun"     => 6.957e8,
+        "L_sun"     => 3.828e26,
+        "M_earth"   => 5.972e24,
+        "R_earth"   => 6.371e6,
+        "g"         => 9.80665,
+
+        _           => 0.0,
+    }
+}
+
+
+// ─── Dimension (SI base units) ──────────────────────────────────────────
+
+struct Dimension {
+    l_dim: int
+    m_dim: int
+    t_dim: int
+    i_dim: int
+    theta: int
+    n_dim: int
+    j_dim: int
+}
+
+fn dim_new() -> Dimension {
+    return Dimension(0, 0, 0, 0, 0, 0, 0)
+}
+
+fn dim_mul(a: Dimension, b: Dimension) -> Dimension {
+    return Dimension(
+        a.l_dim + b.l_dim, a.m_dim + b.m_dim, a.t_dim + b.t_dim,
+        a.i_dim + b.i_dim, a.theta + b.theta, a.n_dim + b.n_dim, a.j_dim + b.j_dim
+    )
+}
+
+fn dim_div(a: Dimension, b: Dimension) -> Dimension {
+    return Dimension(
+        a.l_dim - b.l_dim, a.m_dim - b.m_dim, a.t_dim - b.t_dim,
+        a.i_dim - b.i_dim, a.theta - b.theta, a.n_dim - b.n_dim, a.j_dim - b.j_dim
+    )
+}
+
+fn dim_pow(d: Dimension, n: int) -> Dimension {
+    return Dimension(
+        d.l_dim * n, d.m_dim * n, d.t_dim * n,
+        d.i_dim * n, d.theta * n, d.n_dim * n, d.j_dim * n
+    )
+}
+
+fn dim_is_dimensionless(d: Dimension) -> bool {
+    return d.l_dim == 0 && d.m_dim == 0 && d.t_dim == 0 &&
+           d.i_dim == 0 && d.theta == 0 && d.n_dim == 0 && d.j_dim == 0
+}
+
+fn dim_str(d: Dimension) -> str {
+    let mut parts = []
+    let names = ["m", "kg", "s", "A", "K", "mol", "cd"]
+    let values = [d.l_dim, d.m_dim, d.t_dim, d.i_dim, d.theta, d.n_dim, d.j_dim]
+
+    for i in range(0, 7) {
+        if values[i] == 1 {
+            parts = parts + [names[i]]
+        } else if values[i] != 0 {
+            parts = parts + [names[i] + "^" + str(values[i])]
+        }
+    }
+
+    if len(parts) == 0 {
+        return "dimensionless"
+    }
+    return join(parts, "*")
+}
+
+
+// ─── Common Dimensions ──────────────────────────────────────────────────
+
+fn dim_meter() -> Dimension       { return Dimension(1, 0, 0, 0, 0, 0, 0) }
+fn dim_kilogram() -> Dimension    { return Dimension(0, 1, 0, 0, 0, 0, 0) }
+fn dim_second() -> Dimension      { return Dimension(0, 0, 1, 0, 0, 0, 0) }
+fn dim_ampere() -> Dimension      { return Dimension(0, 0, 0, 1, 0, 0, 0) }
+fn dim_kelvin() -> Dimension      { return Dimension(0, 0, 0, 0, 1, 0, 0) }
+fn dim_mole() -> Dimension        { return Dimension(0, 0, 0, 0, 0, 1, 0) }
+fn dim_newton() -> Dimension      { return Dimension(1, 1, -2, 0, 0, 0, 0) }
+fn dim_joule() -> Dimension       { return Dimension(2, 1, -2, 0, 0, 0, 0) }
+fn dim_watt() -> Dimension        { return Dimension(2, 1, -3, 0, 0, 0, 0) }
+fn dim_pascal() -> Dimension      { return Dimension(-1, 1, -2, 0, 0, 0, 0) }
+fn dim_velocity() -> Dimension    { return Dimension(1, 0, -1, 0, 0, 0, 0) }
+fn dim_acceleration() -> Dimension { return Dimension(1, 0, -2, 0, 0, 0, 0) }
+
+
+// ─── Quantity (value with units) ────────────────────────────────────────
+
+struct Quantity {
+    value: float
+    dimension: Dimension
+    unit_name: str
+}
+
+fn qty_new(value: float, dimension: Dimension) -> Quantity {
+    return Quantity(value, dimension, "")
+}
+
+fn qty_named(value: float, dimension: Dimension, name: str) -> Quantity {
+    return Quantity(value, dimension, name)
+}
+
+fn qty_add(a: Quantity, b: Quantity) -> Quantity {
+    // Dimensional analysis: can only add same dimensions
+    return Quantity(a.value + b.value, a.dimension, "")
+}
+
+fn qty_sub(a: Quantity, b: Quantity) -> Quantity {
+    return Quantity(a.value - b.value, a.dimension, "")
+}
+
+fn qty_mul(a: Quantity, b: Quantity) -> Quantity {
+    return Quantity(a.value * b.value, dim_mul(a.dimension, b.dimension), "")
+}
+
+fn qty_scale(q: Quantity, s: float) -> Quantity {
+    return Quantity(q.value * s, q.dimension, q.unit_name)
+}
+
+fn qty_div(a: Quantity, b: Quantity) -> Quantity {
+    return Quantity(a.value / b.value, dim_div(a.dimension, b.dimension), "")
+}
+
+fn qty_pow(q: Quantity, n: int) -> Quantity {
+    let mut result = 1.0
+    for i in range(0, n) {
+        result = result * q.value
+    }
+    return Quantity(result, dim_pow(q.dimension, n), "")
+}
+
+fn qty_str(q: Quantity) -> str {
+    if len(q.unit_name) > 0 {
+        return str(q.value) + " " + q.unit_name
+    }
+    return str(q.value) + " [" + dim_str(q.dimension) + "]"
+}
+
+fn qty_convert(q: Quantity, factor: float, name: str) -> Quantity {
+    return Quantity(q.value * factor, q.dimension, name)
+}
+
+
+// ─── Convenience Constructors ───────────────────────────────────────────
+
+fn meters(v: float) -> Quantity    { return qty_named(v, dim_meter(), "m") }
+fn kilograms(v: float) -> Quantity { return qty_named(v, dim_kilogram(), "kg") }
+fn seconds(v: float) -> Quantity   { return qty_named(v, dim_second(), "s") }
+fn newtons(v: float) -> Quantity   { return qty_named(v, dim_newton(), "N") }
+fn joules(v: float) -> Quantity    { return qty_named(v, dim_joule(), "J") }
+fn watts_qty(v: float) -> Quantity { return qty_named(v, dim_watt(), "W") }
+fn kelvin_qty(v: float) -> Quantity { return qty_named(v, dim_kelvin(), "K") }
+
+
+// ─── ODE Solvers ────────────────────────────────────────────────────────
+
+// Single Euler step: y_{n+1} = y_n + h * f(t_n, y_n)
+fn euler_step(f: fn, t: float, y: float, h: float) -> float {
+    return y + h * f(t, y)
+}
+
+// Single RK4 step
+fn rk4_step(f: fn, t: float, y: float, h: float) -> float {
+    let k1 = f(t, y)
+    let k2 = f(t + h / 2, y + h * k1 / 2)
+    let k3 = f(t + h / 2, y + h * k2 / 2)
+    let k4 = f(t + h, y + h * k3)
+    return y + (h / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
+}
+
+// Solve ODE: dy/dt = f(t, y), y(t0) = y0
+// Returns [t_values, y_values] as a list of two lists
+fn solve_ode(f: fn, y0: float, t0: float, t1: float,
+             n_steps: int, method: str) -> list {
+    let h = (t1 - t0) / n_steps
+
+    let mut ts = [t0]
+    let mut ys = [y0]
+
+    let mut t = t0
+    let mut y = y0
+
+    for i in range(0, n_steps) {
+        if method == "rk4" {
+            y = rk4_step(f, t, y, h)
+        } else {
+            y = euler_step(f, t, y, h)
+        }
+        t = t + h
+        ts = ts + [t]
+        ys = ys + [y]
+    }
+
+    return [ts, ys]
+}
+
+// Solve system of ODEs using RK4
+// f(t, y) -> list of derivatives, y0 is list of initial conditions
+// Returns [t_values, y_matrix] where y_matrix is list of state vectors
+fn solve_ode_system(f: fn, y0: list, t0: float, t1: float,
+                    n_steps: int) -> list {
+    let h = (t1 - t0) / n_steps
+    let dim = len(y0)
+
+    let mut ts = [t0]
+    let mut ys = [y0]
+
+    let mut t = t0
+    let mut y = []
+    for v in y0 {
+        y = y + [v]
+    }
+
+    for step in range(0, n_steps) {
+        let k1 = f(t, y)
+
+        let mut y2 = []
+        for i in range(0, dim) {
+            y2 = y2 + [y[i] + h * k1[i] / 2]
+        }
+        let k2 = f(t + h / 2, y2)
+
+        let mut y3 = []
+        for i in range(0, dim) {
+            y3 = y3 + [y[i] + h * k2[i] / 2]
+        }
+        let k3 = f(t + h / 2, y3)
+
+        let mut y4 = []
+        for i in range(0, dim) {
+            y4 = y4 + [y[i] + h * k3[i]]
+        }
+        let k4 = f(t + h, y4)
+
+        let mut y_new = []
+        for i in range(0, dim) {
+            y_new = y_new + [y[i] + (h / 6) * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i])]
+        }
+        y = y_new
+        t = t + h
+
+        ts = ts + [t]
+        ys = ys + [y]
+    }
+
+    return [ts, ys]
+}
+
+
+// ─── Signal Processing ──────────────────────────────────────────────────
+
+fn moving_average(data: list, window: int) -> list {
+    let mut result = []
+    for i in range(0, len(data)) {
+        let mut start = i - window + 1
+        if start < 0 {
+            start = 0
+        }
+        let mut total = 0.0
+        for j in range(start, i + 1) {
+            total = total + data[j]
+        }
+        result = result + [total / (i - start + 1)]
+    }
+    return result
+}
+
+fn convolve(signal: list, kernel: list) -> list {
+    let n = len(signal)
+    let m = len(kernel)
+    let mut result = []
+    for i in range(0, n + m - 1) {
+        result = result + [0.0]
+    }
+    for i in range(0, n) {
+        for j in range(0, m) {
+            result[i + j] = result[i + j] + signal[i] * kernel[j]
+        }
+    }
+    return result
+}
+
+fn cross_correlate(x: list, y: list) -> list {
+    let mut reversed_y = []
+    for i in range(len(y) - 1, -1, -1) {
+        reversed_y = reversed_y + [y[i]]
+    }
+    return convolve(x, reversed_y)
+}
+
+fn downsample(data: list, factor: int) -> list {
+    let mut result = []
+    let mut i = 0
+    while i < len(data) {
+        result = result + [data[i]]
+        i = i + factor
+    }
+    return result
+}
+
+fn upsample(data: list, factor: int) -> list {
+    let mut result = []
+    for v in data {
+        result = result + [v]
+        for j in range(0, factor - 1) {
+            result = result + [0.0]
+        }
+    }
+    return result
+}
+
+
+// ─── Statistical Distributions ──────────────────────────────────────────
+
+const PI = 3.14159265358979323846
+
+fn normal_pdf(x: float, mu: float, sigma: float) -> float {
+    let z = (x - mu) / sigma
+    return exp(-0.5 * z * z) / (sigma * sqrt(2.0 * PI))
+}
+
+fn normal_cdf(x: float, mu: float, sigma: float) -> float {
+    // Approximation using the error function
+    let z = (x - mu) / (sigma * sqrt(2.0))
+    return 0.5 * (1.0 + erf(z))
+}
+
+// Simple erf approximation (Abramowitz & Stegun 7.1.26)
+fn erf(x: float) -> float {
+    let mut sign = 1.0
+    let mut ax = x
+    if x < 0 {
+        sign = -1.0
+        ax = -x
+    }
+    let t = 1.0 / (1.0 + 0.3275911 * ax)
+    let poly = t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429))))
+    return sign * (1.0 - poly * exp(-ax * ax))
+}
+
+fn poisson_pmf(k: int, lam: float) -> float {
+    // P(X=k) = lam^k * e^(-lam) / k!
+    let mut lam_k = 1.0
+    for i in range(0, k) {
+        lam_k = lam_k * lam
+    }
+    let mut factorial = 1
+    for i in range(2, k + 1) {
+        factorial = factorial * i
+    }
+    return lam_k * exp(-lam) / factorial
+}
+
+fn exponential_pdf(x: float, lam: float) -> float {
+    if x < 0.0 {
+        return 0.0
+    }
+    return lam * exp(-lam * x)
+}
+
+fn binomial_pmf(k: int, n: int, p: float) -> float {
+    // C(n,k) * p^k * (1-p)^(n-k)
+    let c = combinations(n, k)
+    let mut p_k = 1.0
+    for i in range(0, k) {
+        p_k = p_k * p
+    }
+    let mut q_nk = 1.0
+    for i in range(0, n - k) {
+        q_nk = q_nk * (1.0 - p)
+    }
+    return c * p_k * q_nk
+}
+
+fn combinations(n: int, k: int) -> float {
+    if k > n {
+        return 0.0
+    }
+    let mut result = 1.0
+    let mut kk = k
+    if kk > n - kk {
+        kk = n - kk
+    }
+    for i in range(0, kk) {
+        result = result * (n - i) / (i + 1)
+    }
+    return result
+}
+
+fn chi_squared_pdf(x: float, k: int) -> float {
+    if x <= 0.0 {
+        return 0.0
+    }
+    let half_k = k / 2.0
+    let numerator = pow(x, half_k - 1.0) * exp(-x / 2.0)
+    let denominator = pow(2.0, half_k) * gamma_approx(half_k)
+    return numerator / denominator
+}
+
+// Stirling approximation for gamma function
+fn gamma_approx(x: float) -> float {
+    if x <= 0.0 {
+        return 1.0
+    }
+    if x < 1.0 {
+        return gamma_approx(x + 1.0) / x
+    }
+    // Stirling: Gamma(x) ~ sqrt(2*pi/x) * (x/e)^x
+    return sqrt(2.0 * PI / x) * pow(x / 2.718281828, x)
+}
+
+
+// ─── Interpolation ──────────────────────────────────────────────────────
+
+// Lagrange polynomial interpolation
+// points is a list of [x, y] pairs
+fn lagrange_interpolate(points: list, x: float) -> float {
+    let n = len(points)
+    let mut result = 0.0
+
+    for i in range(0, n) {
+        let xi = points[i][0]
+        let yi = points[i][1]
+        let mut basis = yi
+
+        for j in range(0, n) {
+            if i != j {
+                let xj = points[j][0]
+                basis = basis * (x - xj) / (xi - xj)
+            }
+        }
+        result = result + basis
+    }
+    return result
+}
+
+// Linear spline interpolation
+// points is a list of [x, y] pairs sorted by x
+fn linear_interpolate(points: list, x: float) -> float {
+    let n = len(points)
+    if n < 2 {
+        if n > 0 {
+            return points[0][1]
+        }
+        return 0.0
+    }
+
+    // Find interval
+    for i in range(0, n - 1) {
+        let x0 = points[i][0]
+        let x1 = points[i + 1][0]
+        if x >= x0 && x <= x1 {
+            let t = (x - x0) / (x1 - x0)
+            return points[i][1] * (1.0 - t) + points[i + 1][1] * t
+        }
+    }
+
+    // Extrapolate
+    if x < points[0][0] {
+        return points[0][1]
+    }
+    return points[n - 1][1]
+}
+
+
+// ─── Helper Functions ───────────────────────────────────────────────────
+
+fn pow(base: float, exponent: float) -> float {
+    // Integer exponent fast path
+    if exponent == int(exponent) && exponent >= 0 {
+        let mut result = 1.0
+        for i in range(0, int(exponent)) {
+            result = result * base
+        }
+        return result
+    }
+    // For fractional exponents, use exp(exponent * ln(base))
+    return exp(exponent * ln(base))
+}
+
+fn ln(x: float) -> float {
+    // Natural logarithm via series expansion
+    // ln(x) = 2 * sum((z^(2k+1)) / (2k+1)) where z = (x-1)/(x+1)
+    if x <= 0.0 {
+        return -999999.0
+    }
+    if x == 1.0 {
+        return 0.0
+    }
+    // Reduce to near 1
+    let mut n = 0
+    let mut val = x
+    while val > 2.0 {
+        val = val / 2.718281828
+        n = n + 1
+    }
+    while val < 0.5 {
+        val = val * 2.718281828
+        n = n - 1
+    }
+
+    let z = (val - 1.0) / (val + 1.0)
+    let z2 = z * z
+    let mut result = 0.0
+    let mut term = z
+    for k in range(0, 20) {
+        result = result + term / (2 * k + 1)
+        term = term * z2
+    }
+    return 2.0 * result + n
+}
+
+
+// ─── Demo / Self-test ───────────────────────────────────────────────────
+
+fn main() {
+    println("=== Lateralus Science Library (self-hosted) ===")
+    println("")
+
+    // Physical constants
+    println("-- Physical Constants --")
+    println("Speed of light: " + str(get_constant("c")) + " m/s")
+    println("Planck constant: " + str(get_constant("h")) + " J*s")
+    println("Boltzmann: " + str(get_constant("k_B")) + " J/K")
+    println("Avogadro: " + str(get_constant("N_A")) + " /mol")
+    println("")
+
+    // Units
+    println("-- Unit System --")
+    let mass = kilograms(75.0)
+    let dist = meters(100.0)
+    println("Mass: " + qty_str(mass))
+    println("Distance: " + qty_str(dist))
+    let force = qty_mul(mass, qty_named(9.81, dim_acceleration(), "m/s2"))
+    println("Force (weight): " + qty_str(force))
+    println("")
+
+    // ODE solver: dy/dt = -0.5 * y (exponential decay)
+    println("-- ODE Solver (exponential decay) --")
+    let result = solve_ode(fn(t, y) { -0.5 * y }, 1.0, 0.0, 4.0, 4, "rk4")
+    let ts = result[0]
+    let ys = result[1]
+    for i in range(0, len(ts)) {
+        println("  t=" + str(round(ts[i], 2)) + "  y=" + str(round(ys[i], 4)))
+    }
+    println("")
+
+    // Signal processing
+    println("-- Signal Processing --")
+    let signal = [1.0, 3.0, 5.0, 7.0, 9.0, 7.0, 5.0, 3.0, 1.0]
+    let smoothed = moving_average(signal, 3)
+    println("Signal:   " + str(signal))
+    println("Smoothed: " + str(smoothed))
+
+    let kernel = [0.25, 0.5, 0.25]
+    let conv = convolve(signal, kernel)
+    println("Convolved: " + str(conv))
+    println("")
+
+    // Statistics
+    println("-- Statistical Distributions --")
+    println("N(0,1) pdf at 0: " + str(round(normal_pdf(0.0, 0.0, 1.0), 6)))
+    println("N(0,1) pdf at 1: " + str(round(normal_pdf(1.0, 0.0, 1.0), 6)))
+    println("N(0,1) cdf at 0: " + str(round(normal_cdf(0.0, 0.0, 1.0), 6)))
+    println("Poisson(k=3, lam=2): " + str(round(poisson_pmf(3, 2.0), 6)))
+    println("Exponential(x=1, lam=1): " + str(round(exponential_pdf(1.0, 1.0), 6)))
+    println("Binomial(k=3, n=10, p=0.5): " + str(round(binomial_pmf(3, 10, 0.5), 6)))
+    println("")
+
+    // Interpolation
+    println("-- Interpolation --")
+    let points = [[0.0, 0.0], [1.0, 1.0], [2.0, 4.0], [3.0, 9.0]]
+    println("Lagrange at x=1.5: " + str(lagrange_interpolate(points, 1.5)))
+    println("Lagrange at x=2.5: " + str(lagrange_interpolate(points, 2.5)))
+    println("Linear   at x=1.5: " + str(linear_interpolate(points, 1.5)))
+    println("")
+
+    println("=== Science Library OK ===")
+}
+
+main()

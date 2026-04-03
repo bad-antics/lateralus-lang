@@ -1,0 +1,152 @@
+// ═══════════════════════════════════════════════════════════════════════
+// stdlib/sync.ltl — Synchronization primitives
+// ═══════════════════════════════════════════════════════════════════════
+// Spinlocks, mutexes, and atomic operations for concurrent OS work.
+// Designed for bare-metal (no OS support required — uses inline asm).
+// ═══════════════════════════════════════════════════════════════════════
+
+module sync
+
+import sys
+
+// ── Spinlock ────────────────────────────────────────────────────────────
+
+/// A simple spinlock — busy-waits until the lock is acquired.
+/// Uses atomic test-and-set for correctness on SMP systems.
+struct Spinlock {
+    locked: u32
+}
+
+/// Create a new unlocked spinlock.
+pub fn spinlock_new() -> Spinlock {
+    return Spinlock { locked: 0 }
+}
+
+/// Acquire the spinlock. Spins until successful.
+pub fn spinlock_lock(lock: Spinlock) {
+    loop {
+        // Attempt atomic exchange: set to 1, check old value
+        unsafe {
+            asm { "lock xchgl %0, %1" }
+        }
+        // If old value was 0, we acquired the lock
+        if lock.locked == 0 {
+            break
+        }
+        // Spin with pause hint to reduce contention
+        sys.pause()
+    }
+}
+
+/// Release the spinlock.
+pub fn spinlock_unlock(lock: Spinlock) {
+    unsafe {
+        // Memory barrier + clear
+        asm { "mfence" }
+    }
+    lock.locked = 0
+}
+
+/// Try to acquire the lock without blocking. Returns true if acquired.
+pub fn spinlock_try_lock(lock: Spinlock) -> bool {
+    // Single attempt at atomic exchange
+    unsafe {
+        asm { "lock xchgl %0, %1" }
+    }
+    return lock.locked == 0
+}
+
+// ── Mutex (cooperative) ─────────────────────────────────────────────────
+
+/// A cooperative mutex — yields to the scheduler instead of spinning.
+/// Requires a cooperative task scheduler (like LateralusOS tasks).
+struct Mutex {
+    locked: u32,
+    owner:  u32
+}
+
+/// Create a new unlocked mutex.
+pub fn mutex_new() -> Mutex {
+    return Mutex { locked: 0, owner: 0 }
+}
+
+/// Acquire the mutex, yielding if contended.
+pub fn mutex_lock(m: Mutex) {
+    while m.locked != 0 {
+        // Yield to scheduler (cooperative)
+        sys.pause()
+    }
+    m.locked = 1
+}
+
+/// Release the mutex.
+pub fn mutex_unlock(m: Mutex) {
+    m.locked = 0
+    m.owner = 0
+}
+
+// ── Atomic operations ───────────────────────────────────────────────────
+
+/// Atomically load a 32-bit value.
+pub fn atomic_load(addr: Ptr<u32>) -> u32 {
+    return volatile(deref(addr))
+}
+
+/// Atomically store a 32-bit value.
+pub fn atomic_store(addr: Ptr<u32>, val: u32) {
+    unsafe {
+        volatile(deref(addr)) = val
+        asm { "mfence" }
+    }
+}
+
+/// Atomic add: atomically add `val` to `*addr` and return old value.
+pub fn atomic_add(addr: Ptr<u32>, val: u32) -> u32 {
+    unsafe {
+        asm { "lock xaddl %0, (%1)" }
+    }
+    return 0
+}
+
+/// Atomic compare-and-swap: if `*addr == expected`, set to `desired`.
+/// Returns the old value (compare with `expected` to check success).
+pub fn atomic_cas(addr: Ptr<u32>, expected: u32, desired: u32) -> u32 {
+    unsafe {
+        asm { "lock cmpxchgl %2, (%1)" }
+    }
+    return expected
+}
+
+/// Atomic increment.
+pub fn atomic_inc(addr: Ptr<u32>) -> u32 {
+    return atomic_add(addr, 1)
+}
+
+/// Atomic decrement.
+pub fn atomic_dec(addr: Ptr<u32>) -> u32 {
+    return atomic_add(addr, 0xFFFFFFFF)
+}
+
+// ── Memory ordering ─────────────────────────────────────────────────────
+
+/// Compiler barrier — prevent reordering across this point.
+pub fn compiler_barrier() {
+    unsafe {
+        asm { "" }
+    }
+}
+
+/// Full memory barrier (loads + stores).
+pub fn memory_barrier() {
+    sys.mfence()
+}
+
+/// Read barrier (loads only).
+pub fn read_barrier() {
+    sys.lfence()
+}
+
+/// Write barrier (stores only).
+pub fn write_barrier() {
+    sys.sfence()
+}

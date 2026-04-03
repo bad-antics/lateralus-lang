@@ -1,0 +1,414 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// LateralusOS — Virtual File System
+// ═══════════════════════════════════════════════════════════════════════════
+// Copyright (c) 2025 bad-antics. All rights reserved.
+//
+// Provides a unified file system interface that dispatches to concrete
+// FS implementations (LateralusFS, FAT32, devfs, procfs).
+// ═══════════════════════════════════════════════════════════════════════════
+
+import hal::serial
+import kernel::memory
+
+const MAX_OPEN_FILES  = 256
+const MAX_MOUNTPOINTS = 16
+const MAX_PATH_LEN    = 512
+const MAX_NAME_LEN    = 255
+
+enum FileType {
+    Regular,
+    Directory,
+    CharDevice,
+    BlockDevice,
+    Pipe,
+    Socket,
+    Symlink,
+}
+
+struct FileNode {
+    name:        str,
+    file_type:   FileType,
+    size:        int,
+    permissions: int,    // rwxrwxrwx as 9-bit mask
+    owner_uid:   int,
+    group_gid:   int,
+    created_at:  int,
+    modified_at: int,
+    accessed_at: int,
+    inode:       int,
+    fs_data:     int,    // FS-specific data pointer
+}
+
+struct FileDescriptor {
+    node:      FileNode,
+    offset:    int,
+    flags:     int,    // O_RDONLY, O_WRONLY, O_RDWR, O_APPEND, etc.
+    active:    bool,
+    pid:       int,
+}
+
+struct MountPoint {
+    path:      str,
+    fs_type:   str,      // "ltlfs", "fat32", "devfs", "procfs"
+    device:    int,      // block device number
+    active:    bool,
+}
+
+// File access flags
+const O_RDONLY  = 0x00
+const O_WRONLY  = 0x01
+const O_RDWR    = 0x02
+const O_APPEND  = 0x08
+const O_CREAT   = 0x40
+const O_TRUNC   = 0x200
+const O_EXCL    = 0x80
+
+// Permission bits
+const PERM_READ    = 0x04
+const PERM_WRITE   = 0x02
+const PERM_EXEC    = 0x01
+
+let mut open_files:  [FileDescriptor; MAX_OPEN_FILES] = [FileDescriptor{}; MAX_OPEN_FILES]
+let mut mount_table: [MountPoint; MAX_MOUNTPOINTS]    = [MountPoint{}; MAX_MOUNTPOINTS]
+let mut mount_count: int = 0
+
+pub fn init() {
+    serial::log("[vfs] Initializing Virtual File System")
+
+    // Mount root filesystem
+    mount("/", "ltlfs", 0)
+
+    // Mount special filesystems
+    mount("/dev", "devfs", 0)
+    mount("/proc", "procfs", 0)
+    mount("/tmp", "tmpfs", 0)
+
+    serial::log("[vfs] VFS ready ({mount_count} mount points)")
+}
+
+pub fn mount(path: str, fs_type: str, device: int) -> Result<bool, str> {
+    if mount_count >= MAX_MOUNTPOINTS {
+        return Result::Err("Mount table full")
+    }
+
+    mount_table[mount_count] = MountPoint {
+        path:    path,
+        fs_type: fs_type,
+        device:  device,
+        active:  true,
+    }
+    mount_count = mount_count + 1
+
+    serial::log("[vfs] Mounted {fs_type} at {path}")
+    return Result::Ok(true)
+}
+
+pub fn open(path: str, flags: int) -> Result<int, str> {
+    // Find free file descriptor
+    let fd = 3  // 0,1,2 reserved for stdin/stdout/stderr
+    while fd < MAX_OPEN_FILES {
+        if !open_files[fd].active {
+            open_files[fd] = FileDescriptor {
+                node: FileNode {
+                    name:        path,
+                    file_type:   FileType::Regular,
+                    size:        0,
+                    permissions: 0x1FF,   // rwxrwxrwx
+                    owner_uid:   0,
+                    group_gid:   0,
+                    created_at:  0,
+                    modified_at: 0,
+                    accessed_at: 0,
+                    inode:       0,
+                    fs_data:     0,
+                },
+                offset: 0,
+                flags:  flags,
+                active: true,
+                pid:    0,
+            }
+            return Result::Ok(fd)
+        }
+        fd = fd + 1
+    }
+    return Result::Err("Too many open files")
+}
+
+pub fn close(fd: int) -> Result<bool, str> {
+    if fd < 0 || fd >= MAX_OPEN_FILES || !open_files[fd].active {
+        return Result::Err("Invalid file descriptor")
+    }
+    open_files[fd].active = false
+    return Result::Ok(true)
+}
+
+pub fn read(fd: int, buffer: int, count: int) -> Result<int, str> {
+    if fd < 0 || fd >= MAX_OPEN_FILES || !open_files[fd].active {
+        return Result::Err("Invalid file descriptor")
+    }
+    // Dispatch to FS implementation based on mount point
+    // TODO: implement actual read via FS driver
+    return Result::Ok(0)
+}
+
+pub fn write(fd: int, buffer: int, count: int) -> Result<int, str> {
+    if fd < 0 || fd >= MAX_OPEN_FILES || !open_files[fd].active {
+        return Result::Err("Invalid file descriptor")
+    }
+    return Result::Ok(count)
+}
+
+pub fn stat(path: str) -> Result<FileNode, str> {
+    let idx = ramfs_resolve_path(path)
+    if idx < 0 {
+        return Result::Err("No such file or directory: {path}")
+    }
+    return Result::Ok(ramfs_nodes[idx])
+}
+
+pub fn mkdir(path: str) -> Result<bool, str> {
+    let last_slash = path.rfind("/")
+    if last_slash < 0 { return Result::Err("Invalid path") }
+    let parent_path = if last_slash == 0 { "/" } else { path[..last_slash] }
+    let name = path[last_slash + 1..]
+    let parent_idx = ramfs_resolve_path(parent_path)
+    if parent_idx < 0 { return Result::Err("Parent not found") }
+    let idx = ramfs_mkdir_at(parent_idx, name)
+    if idx < 0 { return Result::Err("Failed to create directory") }
+    return Result::Ok(true)
+}
+
+pub fn unlink(path: str) -> Result<bool, str> {
+    return ramfs_remove(path)
+}
+
+pub fn list_dir(path: str) -> Result<[FileNode], str> {
+    let node_idx = ramfs_resolve_path(path)
+    if node_idx < 0 {
+        return Result::Err("No such directory: {path}")
+    }
+    let node = ramfs_nodes[node_idx]
+    if node.file_type != FileType::Directory {
+        return Result::Err("Not a directory: {path}")
+    }
+    let entries: [FileNode] = []
+    let i = 0
+    while i < node.child_count {
+        let child = ramfs_nodes[node.children[i]]
+        if child.active {
+            entries.push(child)
+        }
+        i = i + 1
+    }
+    return Result::Ok(entries)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RAM Filesystem — In-Memory inode-based FS (mirrors ramfs.c)
+// ═══════════════════════════════════════════════════════════════════════════
+// This is the working in-memory filesystem used by the GUI terminal.
+// Pre-populated with /home, /etc, /tmp and default files.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const RAMFS_MAX_NODES    = 64
+const RAMFS_MAX_NAME     = 32
+const RAMFS_MAX_CONTENT  = 2048
+const RAMFS_MAX_CHILDREN = 16
+
+struct RamfsNode {
+    name:        str,
+    file_type:   FileType,
+    active:      bool,
+    content:     str,            // file content (max RAMFS_MAX_CONTENT)
+    content_len: int,
+    children:    [int; RAMFS_MAX_CHILDREN],
+    child_count: int,
+    parent:      int,            // parent node index (-1 for root)
+}
+
+let mut ramfs_nodes: [RamfsNode; RAMFS_MAX_NODES] = [RamfsNode{}; RAMFS_MAX_NODES]
+let mut ramfs_count: int = 0
+
+/// Allocate a new ramfs node
+fn ramfs_alloc(name: str, ftype: FileType, parent: int) -> int {
+    if ramfs_count >= RAMFS_MAX_NODES {
+        return -1
+    }
+    let idx = ramfs_count
+    ramfs_nodes[idx] = RamfsNode {
+        name:        name,
+        file_type:   ftype,
+        active:      true,
+        content:     "",
+        content_len: 0,
+        children:    [0; RAMFS_MAX_CHILDREN],
+        child_count: 0,
+        parent:      parent,
+    }
+    ramfs_count = ramfs_count + 1
+    return idx
+}
+
+/// Initialize the RAM filesystem with default structure
+pub fn ramfs_init() {
+    serial::log("[ramfs] Initializing RAM filesystem")
+
+    // Root /
+    let root = ramfs_alloc("/", FileType::Directory, -1)
+
+    // /home, /etc, /tmp
+    let home = ramfs_mkdir_at(root, "home")
+    let etc  = ramfs_mkdir_at(root, "etc")
+    let tmp  = ramfs_mkdir_at(root, "tmp")
+
+    // Default files
+    ramfs_create_file(etc, "hostname", "lateralus")
+    ramfs_create_file(etc, "motd",
+        "Welcome to LateralusOS v0.2.0\nSpiral Out, Keep Going\n")
+    ramfs_create_file(home, "readme.txt",
+        "LateralusOS README\n"
+        "═══════════════════\n\n"
+        "A bare-metal x86_64 operating system\n"
+        "built with the Lateralus language.\n\n"
+        "Features:\n"
+        "  - RAM filesystem (ramfs)\n"
+        "  - Framebuffer GUI (1024x768)\n"
+        "  - Interactive terminal with 17 commands\n"
+        "  - Catppuccin Mocha theme\n"
+        "  - PC speaker audio\n"
+        "  - Cooperative task scheduler\n")
+    ramfs_create_file(home, "hello.ltl",
+        "// Hello World in Lateralus\n"
+        "fn main() {\n"
+        "    println(\"Hello from LateralusOS!\")\n"
+        "    let x = 42\n"
+        "    println(\"The answer is: {x}\")\n"
+        "}\n")
+    ramfs_create_file(home, "spiral.txt",
+        "     *\n"
+        "    * *\n"
+        "   *   *\n"
+        "  *     *\n"
+        "   *   *\n"
+        "    * *\n"
+        "     *\n")
+
+    serial::log("[ramfs] Ready ({ramfs_count} nodes)")
+}
+
+/// Create a directory inside a parent
+fn ramfs_mkdir_at(parent: int, name: str) -> int {
+    if parent < 0 || parent >= ramfs_count { return -1 }
+    if ramfs_nodes[parent].file_type != FileType::Directory { return -1 }
+    if ramfs_find_child(parent, name) >= 0 { return -1 }
+
+    let idx = ramfs_alloc(name, FileType::Directory, parent)
+    if idx >= 0 {
+        let p = ramfs_nodes[parent]
+        p.children[p.child_count] = idx
+        p.child_count = p.child_count + 1
+    }
+    return idx
+}
+
+/// Create a file inside a parent directory
+fn ramfs_create_file(parent: int, name: str, content: str) -> int {
+    if parent < 0 || parent >= ramfs_count { return -1 }
+    if ramfs_nodes[parent].file_type != FileType::Directory { return -1 }
+    if ramfs_find_child(parent, name) >= 0 { return -1 }
+
+    let idx = ramfs_alloc(name, FileType::Regular, parent)
+    if idx >= 0 {
+        ramfs_nodes[idx].content = content
+        ramfs_nodes[idx].content_len = content.len()
+        let p = ramfs_nodes[parent]
+        p.children[p.child_count] = idx
+        p.child_count = p.child_count + 1
+    }
+    return idx
+}
+
+/// Find a child by name
+fn ramfs_find_child(parent: int, name: str) -> int {
+    let node = ramfs_nodes[parent]
+    let i = 0
+    while i < node.child_count {
+        let child_idx = node.children[i]
+        if ramfs_nodes[child_idx].active && ramfs_nodes[child_idx].name == name {
+            return child_idx
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+/// Resolve a full path (e.g. "/home/readme.txt") to a node index
+pub fn ramfs_resolve_path(path: str) -> int {
+    if path == "/" { return 0 }
+    if !path.starts_with("/") { return -1 }
+
+    let current = 0  // root
+    let parts = path.trim("/").split("/")
+    for part in parts {
+        if part == ".." {
+            let p = ramfs_nodes[current].parent
+            if p >= 0 { current = p }
+        } else if part != "." && part != "" {
+            current = ramfs_find_child(current, part)
+            if current < 0 { return -1 }
+        }
+    }
+    return current
+}
+
+/// Read file content by path
+pub fn ramfs_read(path: str) -> Result<str, str> {
+    let idx = ramfs_resolve_path(path)
+    if idx < 0 { return Result::Err("No such file: {path}") }
+    if ramfs_nodes[idx].file_type != FileType::Regular {
+        return Result::Err("Not a file: {path}")
+    }
+    return Result::Ok(ramfs_nodes[idx].content)
+}
+
+/// Write content to a file (overwrite)
+pub fn ramfs_write(path: str, data: str) -> Result<int, str> {
+    let idx = ramfs_resolve_path(path)
+    if idx < 0 { return Result::Err("No such file: {path}") }
+    if ramfs_nodes[idx].file_type != FileType::Regular {
+        return Result::Err("Not a file: {path}")
+    }
+    ramfs_nodes[idx].content = data
+    ramfs_nodes[idx].content_len = data.len()
+    return Result::Ok(data.len())
+}
+
+/// Remove a node (file or empty directory)
+pub fn ramfs_remove(path: str) -> Result<bool, str> {
+    let idx = ramfs_resolve_path(path)
+    if idx <= 0 { return Result::Err("Cannot remove root or invalid path") }
+    let node = ramfs_nodes[idx]
+    if node.file_type == FileType::Directory && node.child_count > 0 {
+        return Result::Err("Directory not empty")
+    }
+    // Remove from parent's children list
+    let parent = node.parent
+    if parent >= 0 {
+        let p = ramfs_nodes[parent]
+        let i = 0
+        while i < p.child_count {
+            if p.children[i] == idx {
+                // Shift remaining children
+                while i < p.child_count - 1 {
+                    p.children[i] = p.children[i + 1]
+                    i = i + 1
+                }
+                p.child_count = p.child_count - 1
+                break
+            }
+            i = i + 1
+        }
+    }
+    ramfs_nodes[idx].active = false
+    return Result::Ok(true)
+}

@@ -1,0 +1,226 @@
+// Lateralus Standard Library — datetime.ltl  (v1.5.0)
+// Date, time, and duration utilities
+
+module stdlib.datetime
+
+// ── Current time ─────────────────────────────────────────────────────────────
+
+pub fn now() -> map {
+    // Returns {year, month, day, hour, minute, second, ms, timestamp}
+    return time_now()
+}
+
+pub fn timestamp() -> float {
+    // Unix epoch seconds (float with sub-second precision)
+    return time_timestamp()
+}
+
+pub fn timestamp_ms() -> int {
+    // Unix epoch milliseconds
+    return time_timestamp_ms()
+}
+
+// ── Date construction ────────────────────────────────────────────────────────
+
+pub fn date(year: int, month: int, day: int) -> map {
+    if month < 1 || month > 12 { throw ValueError("month must be 1..12") }
+    if day < 1 || day > days_in_month(year, month) {
+        throw ValueError("day out of range for given month")
+    }
+    return {"year": year, "month": month, "day": day,
+            "hour": 0, "minute": 0, "second": 0, "ms": 0}
+}
+
+pub fn datetime(year: int, month: int, day: int,
+                hour: int, minute: int, second: int) -> map {
+    let d = date(year, month, day)
+    if hour < 0 || hour > 23 { throw ValueError("hour must be 0..23") }
+    if minute < 0 || minute > 59 { throw ValueError("minute must be 0..59") }
+    if second < 0 || second > 59 { throw ValueError("second must be 0..59") }
+    d["hour"] = hour
+    d["minute"] = minute
+    d["second"] = second
+    return d
+}
+
+// ── Calendar helpers ─────────────────────────────────────────────────────────
+
+pub fn is_leap_year(year: int) -> bool {
+    if year % 400 == 0 { return true }
+    if year % 100 == 0 { return false }
+    return year % 4 == 0
+}
+
+pub fn days_in_month(year: int, month: int) -> int {
+    let days = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    if month == 2 && is_leap_year(year) { return 29 }
+    return days[month]
+}
+
+pub fn days_in_year(year: int) -> int {
+    if is_leap_year(year) { return 366 }
+    return 365
+}
+
+pub fn day_of_year(year: int, month: int, day: int) -> int {
+    let mut total = 0
+    let mut m = 1
+    while m < month {
+        total += days_in_month(year, m)
+        m += 1
+    }
+    return total + day
+}
+
+pub fn day_of_week(year: int, month: int, day: int) -> int {
+    // Zeller-like formula → 0=Monday .. 6=Sunday
+    let mut y = year
+    let mut m = month
+    if m < 3 {
+        m += 12
+        y -= 1
+    }
+    let k = y % 100
+    let j = y / 100
+    let h = (day + (13 * (m + 1)) / 5 + k + k / 4 + j / 4 - 2 * j) % 7
+    // Convert h (0=Sat) to 0=Mon
+    return (h + 5) % 7
+}
+
+pub fn weekday_name(dow: int) -> str {
+    let names = ["Monday", "Tuesday", "Wednesday", "Thursday",
+                 "Friday", "Saturday", "Sunday"]
+    return names[dow % 7]
+}
+
+pub fn month_name(month: int) -> str {
+    let names = ["", "January", "February", "March", "April", "May",
+                 "June", "July", "August", "September", "October",
+                 "November", "December"]
+    return names[month]
+}
+
+// ── Formatting ───────────────────────────────────────────────────────────────
+
+pub fn format_date(dt: map) -> str {
+    let y = to_str(dt["year"])
+    let m = pad_left(to_str(dt["month"]), 2, "0")
+    let d = pad_left(to_str(dt["day"]), 2, "0")
+    return y + "-" + m + "-" + d
+}
+
+pub fn format_datetime(dt: map) -> str {
+    let date_part = format_date(dt)
+    let h = pad_left(to_str(dt["hour"]), 2, "0")
+    let mi = pad_left(to_str(dt["minute"]), 2, "0")
+    let s = pad_left(to_str(dt["second"]), 2, "0")
+    return date_part + "T" + h + ":" + mi + ":" + s
+}
+
+pub fn format_time(dt: map) -> str {
+    let h = pad_left(to_str(dt["hour"]), 2, "0")
+    let m = pad_left(to_str(dt["minute"]), 2, "0")
+    let s = pad_left(to_str(dt["second"]), 2, "0")
+    return h + ":" + m + ":" + s
+}
+
+pub fn format_iso8601(dt: map) -> str {
+    return format_datetime(dt) + "Z"
+}
+
+// ── Duration ─────────────────────────────────────────────────────────────────
+
+pub fn duration(hours: int, minutes: int, seconds: int) -> map {
+    return {"hours": hours, "minutes": minutes, "seconds": seconds,
+            "total_seconds": hours * 3600 + minutes * 60 + seconds}
+}
+
+pub fn duration_from_seconds(total: int) -> map {
+    let h = total / 3600
+    let m = (total % 3600) / 60
+    let s = total % 60
+    return {"hours": h, "minutes": m, "seconds": s, "total_seconds": total}
+}
+
+pub fn format_duration(d: map) -> str {
+    let h = pad_left(to_str(d["hours"]), 2, "0")
+    let m = pad_left(to_str(d["minutes"]), 2, "0")
+    let s = pad_left(to_str(d["seconds"]), 2, "0")
+    return h + ":" + m + ":" + s
+}
+
+// ── Arithmetic ───────────────────────────────────────────────────────────────
+
+pub fn add_days(dt: map, n: int) -> map {
+    let mut d = dt["day"] + n
+    let mut m = dt["month"]
+    let mut y = dt["year"]
+
+    while d > days_in_month(y, m) {
+        d -= days_in_month(y, m)
+        m += 1
+        if m > 12 {
+            m = 1
+            y += 1
+        }
+    }
+    while d < 1 {
+        m -= 1
+        if m < 1 {
+            m = 12
+            y -= 1
+        }
+        d += days_in_month(y, m)
+    }
+
+    return {"year": y, "month": m, "day": d,
+            "hour": dt["hour"], "minute": dt["minute"],
+            "second": dt["second"], "ms": 0}
+}
+
+pub fn add_hours(dt: map, n: int) -> map {
+    let total_secs = dt["hour"] * 3600 + dt["minute"] * 60 + dt["second"] + n * 3600
+    let days = total_secs / 86400
+    let rem = total_secs % 86400
+    let mut result = add_days(dt, days)
+    result["hour"] = rem / 3600
+    result["minute"] = (rem % 3600) / 60
+    result["second"] = rem % 60
+    return result
+}
+
+pub fn diff_days(a: map, b: map) -> int {
+    // Approximate: (year diff * 365) + day-of-year diff
+    let a_days = a["year"] * 365 + day_of_year(a["year"], a["month"], a["day"])
+    let b_days = b["year"] * 365 + day_of_year(b["year"], b["month"], b["day"])
+    return b_days - a_days
+}
+
+// ── Comparisons ──────────────────────────────────────────────────────────────
+
+pub fn is_before(a: map, b: map) -> bool {
+    if a["year"] != b["year"] { return a["year"] < b["year"] }
+    if a["month"] != b["month"] { return a["month"] < b["month"] }
+    if a["day"] != b["day"] { return a["day"] < b["day"] }
+    if a["hour"] != b["hour"] { return a["hour"] < b["hour"] }
+    if a["minute"] != b["minute"] { return a["minute"] < b["minute"] }
+    return a["second"] < b["second"]
+}
+
+pub fn is_after(a: map, b: map) -> bool {
+    return is_before(b, a)
+}
+
+pub fn is_same_day(a: map, b: map) -> bool {
+    return a["year"] == b["year"] && a["month"] == b["month"] && a["day"] == b["day"]
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+fn pad_left(s: str, width: int, ch: str) -> str {
+    let mut result = s
+    while len(result) < width {
+        result = ch + result
+    }
+    return result
+}

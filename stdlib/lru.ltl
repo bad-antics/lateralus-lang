@@ -1,0 +1,208 @@
+// ═══════════════════════════════════════════════════════════════════
+// Lateralus stdlib — lru
+// Least Recently Used (LRU) cache with configurable capacity
+// ═══════════════════════════════════════════════════════════════════
+
+// LRU cache represented as map:
+//   { "data": map[key -> value], "order": list[key],
+//     "capacity": int, "hits": int, "misses": int }
+
+// ── Construction ────────────────────────────────────────────────────
+
+/// Create a new LRU cache with the given capacity.
+pub fn new(capacity: int) -> map {
+    let cache = {}
+    cache["data"] = {}
+    cache["order"] = []
+    cache["capacity"] = capacity
+    cache["hits"] = 0
+    cache["misses"] = 0
+    return cache
+}
+
+/// Create with initial entries.  If entries exceed capacity, oldest
+/// are evicted.
+pub fn from_pairs(pairs: list, capacity: int) -> map {
+    let c = new(capacity)
+    for pair in pairs {
+        c = put(c, pair[0], pair[1])
+    }
+    return c
+}
+
+// ── Core operations ─────────────────────────────────────────────────
+
+/// Get a value by key.  Moves the key to most-recently-used.
+/// Returns [cache, value] — value is nil if not found.
+pub fn get(c: map, key: str) -> list {
+    let data = c["data"]
+    if contains(keys(data), key) {
+        c["hits"] = c["hits"] + 1
+        c = _move_to_end(c, key)
+        return [c, data[key]]
+    }
+    c["misses"] = c["misses"] + 1
+    return [c, nil]
+}
+
+/// Put a key-value pair into the cache.
+/// If at capacity, evicts the least recently used entry.
+pub fn put(c: map, key: str, value) -> map {
+    let data = c["data"]
+
+    // If key already exists, update and move to end
+    if contains(keys(data), key) {
+        data[key] = value
+        c["data"] = data
+        c = _move_to_end(c, key)
+        return c
+    }
+
+    // Evict if at capacity
+    let order = c["order"]
+    if len(order) >= c["capacity"] and c["capacity"] > 0 {
+        let evict_key = order[0]
+        order = slice(order, 1, len(order))
+        let new_data = {}
+        for k in keys(data) {
+            if k != evict_key {
+                new_data[k] = data[k]
+            }
+        }
+        data = new_data
+    }
+
+    // Insert new entry
+    data[key] = value
+    order = order + [key]
+    c["data"] = data
+    c["order"] = order
+    return c
+}
+
+/// Remove a key from the cache.
+pub fn remove(c: map, key: str) -> map {
+    let data = c["data"]
+    if not contains(keys(data), key) {
+        return c
+    }
+    let new_data = {}
+    for k in keys(data) {
+        if k != key {
+            new_data[k] = data[k]
+        }
+    }
+    c["data"] = new_data
+    c["order"] = _remove_from_list(c["order"], key)
+    return c
+}
+
+/// Check if a key exists (does NOT update recency).
+pub fn has(c: map, key: str) -> bool {
+    return contains(keys(c["data"]), key)
+}
+
+// ── Query ───────────────────────────────────────────────────────────
+
+/// Number of entries in the cache.
+pub fn size(c: map) -> int {
+    return len(c["order"])
+}
+
+/// Maximum capacity.
+pub fn capacity(c: map) -> int {
+    return c["capacity"]
+}
+
+/// Whether the cache is empty.
+pub fn is_empty(c: map) -> bool {
+    return len(c["order"]) == 0
+}
+
+/// Whether the cache is at capacity.
+pub fn is_full(c: map) -> bool {
+    return len(c["order"]) >= c["capacity"]
+}
+
+/// Cache hit count.
+pub fn hits(c: map) -> int {
+    return c["hits"]
+}
+
+/// Cache miss count.
+pub fn misses(c: map) -> int {
+    return c["misses"]
+}
+
+/// Hit rate (0.0 to 1.0).
+pub fn hit_rate(c: map) -> float {
+    let total = c["hits"] + c["misses"]
+    if total == 0 {
+        return 0.0
+    }
+    return float(c["hits"]) / float(total)
+}
+
+/// Get all keys in order from least to most recently used.
+pub fn all_keys(c: map) -> list {
+    return c["order"]
+}
+
+/// Get cache statistics.
+pub fn stats(c: map) -> map {
+    let s = {}
+    s["size"] = size(c)
+    s["capacity"] = capacity(c)
+    s["hits"] = hits(c)
+    s["misses"] = misses(c)
+    s["hit_rate"] = hit_rate(c)
+    return s
+}
+
+// ── Lifecycle ───────────────────────────────────────────────────────
+
+/// Clear all entries.
+pub fn clear(c: map) -> map {
+    c["data"] = {}
+    c["order"] = []
+    c["hits"] = 0
+    c["misses"] = 0
+    return c
+}
+
+/// Resize the cache capacity.  Evicts oldest entries if shrinking.
+pub fn resize(c: map, new_capacity: int) -> map {
+    c["capacity"] = new_capacity
+    let order = c["order"]
+    while len(order) > new_capacity {
+        let evict_key = order[0]
+        order = slice(order, 1, len(order))
+        let data = c["data"]
+        let new_data = {}
+        for k in keys(data) {
+            if k != evict_key {
+                new_data[k] = data[k]
+            }
+        }
+        c["data"] = new_data
+    }
+    c["order"] = order
+    return c
+}
+
+// ── Internal helpers ────────────────────────────────────────────────
+
+fn _move_to_end(c: map, key: str) -> map {
+    c["order"] = _remove_from_list(c["order"], key) + [key]
+    return c
+}
+
+fn _remove_from_list(lst: list, value) -> list {
+    let result = []
+    for item in lst {
+        if item != value {
+            result = result + [item]
+        }
+    }
+    return result
+}

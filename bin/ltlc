@@ -1,0 +1,226 @@
+#!/usr/bin/env python3
+"""
+bin/ltlc  ─  LATERALUS Language Compiler / Runner  (CLI entry point)
+═══════════════════════════════════════════════════════════════════════
+Usage
+─────
+  ltlc run   <file.ltl>              Execute a .ltl script
+  ltlc run   <file.ltasm>            Execute a .ltasm program
+  ltlc build <file.ltl>  [-o out]    Compile to LTasm bytecode file
+  ltlc py    <file.ltl>  [-o out]    Transpile to Python 3
+  ltlc c     <file.ltl>  [-o out]    Transpile to C99
+  ltlc check <file.ltl>              Lex/parse/type-check only
+  ltlc repl                          Launch interactive REPL
+  ltlc asm   <file.ltasm> [-o out]   Assemble .ltasm to bytecode file
+  ltlc disasm <bytecode>             Disassemble a bytecode file
+  ltlc --version                     Print version
+
+Options
+───────
+  -v, --verbose    Verbose output
+  --no-colour      Disable ANSI colour codes
+"""
+from __future__ import annotations
+
+import argparse
+import pathlib
+import pickle
+import sys
+import os
+
+# Ensure the project root is on the path when running directly
+_HERE = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_HERE))
+
+from lateralus_lang import (
+    __version__, Compiler, Target,
+    start_repl, assemble, VM,
+)
+from lateralus_lang.errors import ErrorReporter, Severity
+
+
+def _make_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="ltlc",
+        description="LATERALUS Language Compiler & Runner",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("--version", action="store_true", help="Print version")
+    p.add_argument("-v", "--verbose", action="store_true")
+    p.add_argument("--no-colour", action="store_true", dest="no_colour")
+
+    sub = p.add_subparsers(dest="command")
+
+    # run
+    r = sub.add_parser("run", help="Execute a .ltl or .ltasm file")
+    r.add_argument("file")
+    r.add_argument("args", nargs="*", help="Arguments passed to the script")
+
+    # build
+    b = sub.add_parser("build", help="Compile to LTasm bytecode")
+    b.add_argument("file")
+    b.add_argument("-o", "--output", default=None)
+
+    # py
+    py = sub.add_parser("py", help="Transpile to Python 3")
+    py.add_argument("file")
+    py.add_argument("-o", "--output", default=None)
+
+    # c
+    cc = sub.add_parser("c", help="Transpile to C99")
+    cc.add_argument("file")
+    cc.add_argument("-o", "--output", default=None)
+    cc.add_argument("--freestanding", action="store_true",
+                    help="Emit freestanding C (no libc, for OS/embedded)")
+    cc.add_argument("--arch", default="x86_64",
+                    help="Target architecture (default: x86_64)")
+
+    # check
+    ck = sub.add_parser("check", help="Lex/parse/type-check only")
+    ck.add_argument("file")
+
+    # repl
+    sub.add_parser("repl", help="Launch interactive REPL")
+
+    # asm
+    a = sub.add_parser("asm", help="Assemble .ltasm to bytecode")
+    a.add_argument("file")
+    a.add_argument("-o", "--output", default=None)
+
+    # disasm
+    d = sub.add_parser("disasm", help="Disassemble a bytecode file")
+    d.add_argument("file")
+
+    return p
+
+
+def main(argv=None) -> int:
+    parser = _make_parser()
+    args   = parser.parse_args(argv)
+
+    if args.version:
+        print(f"ltlc  {__version__}  (LATERALUS Language Toolkit)")
+        return 0
+
+    if args.command is None:
+        parser.print_help()
+        return 1
+
+    if args.command == "repl":
+        start_repl()
+        return 0
+
+    compiler = Compiler(verbose=getattr(args, "verbose", False))
+
+    # ── run ───────────────────────────────────────────────────────────────────
+    if args.command == "run":
+        result = compiler.run_file(args.file)
+        _print_summary(result, args)
+        return result.exit_code if result.ok else 1
+
+    # ── build ─────────────────────────────────────────────────────────────────
+    if args.command == "build":
+        result = compiler.compile_file(args.file, Target.BYTECODE)
+        if not result.ok:
+            _print_summary(result, args); return 1
+        out = args.output or pathlib.Path(args.file).with_suffix(".ltbc")
+        with open(out, "wb") as f:
+            pickle.dump(result.bytecode, f)
+        _ok(f"Wrote bytecode → {out}  ({result.elapsed_ms:.1f}ms)")
+        return 0
+
+    # ── py ────────────────────────────────────────────────────────────────────
+    if args.command == "py":
+        result = compiler.compile_file(args.file, Target.PYTHON)
+        if not result.ok:
+            _print_summary(result, args); return 1
+        py_src = result.python_src or ""
+        if args.output:
+            pathlib.Path(args.output).write_text(py_src, encoding="utf-8")
+            _ok(f"Wrote Python → {args.output}")
+        else:
+            print(py_src)
+        return 0
+
+    # ── c ─────────────────────────────────────────────────────────────────────
+    if args.command == "c":
+        if getattr(args, "freestanding", False):
+            compiler.freestanding = True
+        result = compiler.compile_file(args.file, Target.C)
+        if not result.ok:
+            _print_summary(result, args); return 1
+        c_src = result.c_src or ""
+        if args.output:
+            pathlib.Path(args.output).write_text(c_src, encoding="utf-8")
+            _ok(f"Wrote C → {args.output}")
+        else:
+            print(c_src)
+        return 0
+
+    # ── check ─────────────────────────────────────────────────────────────────
+    if args.command == "check":
+        result = compiler.compile_file(args.file, Target.CHECK)
+        _print_summary(result, args)
+        return 0 if result.ok else 1
+
+    # ── asm ───────────────────────────────────────────────────────────────────
+    if args.command == "asm":
+        source = pathlib.Path(args.file).read_text(encoding="utf-8")
+        try:
+            bc = assemble(source, args.file)
+        except Exception as exc:
+            _err(str(exc)); return 1
+        out = args.output or pathlib.Path(args.file).with_suffix(".ltbc")
+        with open(out, "wb") as f:
+            pickle.dump(bc, f)
+        _ok(f"Assembled → {out}")
+        return 0
+
+    # ── disasm ────────────────────────────────────────────────────────────────
+    if args.command == "disasm":
+        try:
+            with open(args.file, "rb") as f:
+                bc = pickle.load(f)
+        except Exception as exc:
+            _err(f"Cannot load bytecode: {exc}"); return 1
+        from lateralus_lang.vm.opcodes import Op
+        import struct
+        code = bc.code
+        i = 0
+        while i < len(code):
+            try:
+                op = Op(code[i])
+            except ValueError:
+                print(f"  {i:04X}  0x{code[i]:02X}  ???")
+                i += 1
+                continue
+            print(f"  {i:04X}  {op.name}")
+            i += 1
+        return 0
+
+    parser.print_help()
+    return 1
+
+
+def _print_summary(result, args) -> None:
+    if result.ok:
+        if getattr(args, "verbose", False):
+            _ok(result.summary())
+    else:
+        reporter = ErrorReporter()
+        for ec in result.errors:
+            reporter.add(ec)
+        reporter.render()
+
+
+def _ok(msg: str) -> None:
+    print(f"\033[32m✓\033[0m {msg}" if sys.stdout.isatty() else f"✓ {msg}")
+
+
+def _err(msg: str) -> None:
+    print(f"\033[31m✗ {msg}\033[0m" if sys.stderr.isatty() else f"✗ {msg}",
+          file=sys.stderr)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

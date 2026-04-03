@@ -1,0 +1,1248 @@
+// ═══════════════════════════════════════════════════════════════════════
+// v2_query_engine.ltl  —  LATERALUS Query Language (LQL)
+// Self-hosted port of lateralus_lang/query_engine.py
+//
+// Provides an SQL-like query interface for Lateralus collections:
+//   - Fluent query builder: query_new() |> q_from(data) |> q_where(...) |> q_execute()
+//   - Aggregations: count, sum, avg, min, max, first, last, collect
+//   - Joins: inner, left, cross
+//   - GROUP BY / ORDER BY / LIMIT / OFFSET / DISTINCT
+//   - Simple string-based condition parser
+//   - LQL string parser for "SELECT ... FROM ... WHERE ..."
+//
+// v2.3.0
+// ═══════════════════════════════════════════════════════════════════════
+
+import strings
+
+// ─── Aggregation Functions ─────────────────────────────────────────────
+
+fn agg_count(rows: list) -> int {
+    return len(rows)
+}
+
+fn agg_sum(rows: list) -> float {
+    let total = 0.0
+    for v in rows {
+        total = total + v
+    }
+    return total
+}
+
+fn agg_avg(rows: list) -> float {
+    if len(rows) == 0 {
+        return 0.0
+    }
+    return agg_sum(rows) / len(rows)
+}
+
+fn agg_min(rows: list) -> any {
+    if len(rows) == 0 {
+        return none
+    }
+    let result = rows[0]
+    let i = 1
+    while i < len(rows) {
+        if rows[i] < result {
+            result = rows[i]
+        }
+        i = i + 1
+    }
+    return result
+}
+
+fn agg_max(rows: list) -> any {
+    if len(rows) == 0 {
+        return none
+    }
+    let result = rows[0]
+    let i = 1
+    while i < len(rows) {
+        if rows[i] > result {
+            result = rows[i]
+        }
+        i = i + 1
+    }
+    return result
+}
+
+fn agg_first(rows: list) -> any {
+    if len(rows) == 0 {
+        return none
+    }
+    return rows[0]
+}
+
+fn agg_last(rows: list) -> any {
+    if len(rows) == 0 {
+        return none
+    }
+    return rows[len(rows) - 1]
+}
+
+fn agg_collect(rows: list) -> list {
+    return rows
+}
+
+fn _get_agg_fn(name: str) -> any {
+    return match name {
+        "count"   => agg_count,
+        "sum"     => agg_sum,
+        "avg"     => agg_avg,
+        "mean"    => agg_avg,
+        "min"     => agg_min,
+        "max"     => agg_max,
+        "first"   => agg_first,
+        "last"    => agg_last,
+        "collect" => agg_collect,
+        _         => none,
+    }
+}
+
+// ─── Join Clause ───────────────────────────────────────────────────────
+
+const JOIN_INNER = "inner"
+const JOIN_LEFT  = "left"
+const JOIN_CROSS = "cross"
+
+fn join_clause_new(right: list, on_left: str, on_right: str, kind: str) -> map {
+    let j = {}
+    j["right"]    = right
+    j["on_left"]  = on_left
+    j["on_right"] = on_right
+    j["kind"]     = kind
+    j["has_cond"] = false
+    return j
+}
+
+fn join_clause_lambda(right: list, condition: any, kind: str) -> map {
+    let j = {}
+    j["right"]     = right
+    j["condition"]  = condition
+    j["kind"]       = kind
+    j["has_cond"]   = true
+    return j
+}
+
+// ─── Record helpers ────────────────────────────────────────────────────
+
+fn get_field(record: map, key_path: str) -> any {
+    // Support dotted paths: "user.name" → record["user"]["name"]
+    let parts = split(key_path, ".")
+    let val = record
+    for p in parts {
+        if has_key(val, p) {
+            val = val[p]
+        } else {
+            return none
+        }
+    }
+    return val
+}
+
+fn project_record(record: map, columns: list) -> map {
+    let out = {}
+    for col in columns {
+        out[col] = get_field(record, col)
+    }
+    return out
+}
+
+fn merge_records(a: map, b: map) -> map {
+    let out = {}
+    for k in keys(a) {
+        out[k] = a[k]
+    }
+    for k in keys(b) {
+        out[k] = b[k]
+    }
+    return out
+}
+
+// ─── Aggregation descriptor ───────────────────────────────────────────
+
+fn agg_desc(alias: str, fn_name: str, field_name: str) -> map {
+    let d = {}
+    d["alias"] = alias
+    d["fn"]    = fn_name
+    d["field"] = field_name
+    return d
+}
+
+// ─── Order descriptor ─────────────────────────────────────────────────
+
+fn order_desc(key_name: str, descending: bool) -> map {
+    let d = {}
+    d["key"]  = key_name
+    d["desc"] = descending
+    return d
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// QUERY BUILDER
+// ═══════════════════════════════════════════════════════════════════════
+
+struct Query {
+    source: list
+    columns: list
+    predicates: list
+    joins: list
+    group_by_keys: list
+    aggregations: list
+    having_preds: list
+    order_keys: list
+    limit_val: int
+    offset_val: int
+    is_distinct: bool
+    computed_cols: list
+}
+
+fn query_new() -> Query {
+    return Query {
+        source: [],
+        columns: [],
+        predicates: [],
+        joins: [],
+        group_by_keys: [],
+        aggregations: [],
+        having_preds: [],
+        order_keys: [],
+        limit_val: -1,
+        offset_val: 0,
+        is_distinct: false,
+        computed_cols: [],
+    }
+}
+
+// ── Source ──────────────────────────────────────────────────────────────
+
+fn q_from(q: Query, data: list) -> Query {
+    q.source = data
+    return q
+}
+
+// ── Column selection ───────────────────────────────────────────────────
+
+fn q_select(q: Query, cols: list) -> Query {
+    q.columns = cols
+    return q
+}
+
+fn q_select_all(q: Query) -> Query {
+    q.columns = []
+    return q
+}
+
+fn q_add_column(q: Query, alias: str, expr: any) -> Query {
+    let cc = {}
+    cc["alias"] = alias
+    cc["expr"]  = expr
+    q.computed_cols = q.computed_cols + [cc]
+    return q
+}
+
+// ── Filtering ──────────────────────────────────────────────────────────
+
+fn q_where(q: Query, predicate: any) -> Query {
+    q.predicates = q.predicates + [predicate]
+    return q
+}
+
+fn q_where_field(q: Query, field_name: str, op: str, value: any) -> Query {
+    let pred = fn(r) {
+        let fv = get_field(r, field_name)
+        return match op {
+            "==" => fv == value,
+            "!=" => fv != value,
+            ">"  => fv > value,
+            ">=" => fv >= value,
+            "<"  => fv < value,
+            "<=" => fv <= value,
+            _    => false,
+        }
+    }
+    q.predicates = q.predicates + [pred]
+    return q
+}
+
+// ── Joins ──────────────────────────────────────────────────────────────
+
+fn q_join(q: Query, right: list, on_left: str, on_right: str) -> Query {
+    q.joins = q.joins + [join_clause_new(right, on_left, on_right, JOIN_INNER)]
+    return q
+}
+
+fn q_left_join(q: Query, right: list, on_left: str, on_right: str) -> Query {
+    q.joins = q.joins + [join_clause_new(right, on_left, on_right, JOIN_LEFT)]
+    return q
+}
+
+fn q_cross_join(q: Query, right: list) -> Query {
+    q.joins = q.joins + [join_clause_new(right, "", "", JOIN_CROSS)]
+    return q
+}
+
+fn q_join_on(q: Query, right: list, condition: any, kind: str) -> Query {
+    q.joins = q.joins + [join_clause_lambda(right, condition, kind)]
+    return q
+}
+
+// ── Grouping & Aggregation ─────────────────────────────────────────────
+
+fn q_group_by(q: Query, group_keys: list) -> Query {
+    q.group_by_keys = group_keys
+    return q
+}
+
+fn q_aggregate(q: Query, alias: str, fn_name: str, field_name: str) -> Query {
+    q.aggregations = q.aggregations + [agg_desc(alias, fn_name, field_name)]
+    return q
+}
+
+fn q_having(q: Query, predicate: any) -> Query {
+    q.having_preds = q.having_preds + [predicate]
+    return q
+}
+
+fn q_count_as(q: Query, alias: str) -> Query {
+    return q_aggregate(q, alias, "count", "*")
+}
+
+fn q_sum_as(q: Query, field_name: str, alias: str) -> Query {
+    return q_aggregate(q, alias, "sum", field_name)
+}
+
+fn q_avg_as(q: Query, field_name: str, alias: str) -> Query {
+    return q_aggregate(q, alias, "avg", field_name)
+}
+
+// ── Ordering ───────────────────────────────────────────────────────────
+
+fn q_order_by(q: Query, key_name: str, descending: bool) -> Query {
+    q.order_keys = q.order_keys + [order_desc(key_name, descending)]
+    return q
+}
+
+fn q_order_asc(q: Query, key_name: str) -> Query {
+    return q_order_by(q, key_name, false)
+}
+
+fn q_order_desc(q: Query, key_name: str) -> Query {
+    return q_order_by(q, key_name, true)
+}
+
+// ── Pagination ─────────────────────────────────────────────────────────
+
+fn q_limit(q: Query, n: int) -> Query {
+    q.limit_val = n
+    return q
+}
+
+fn q_offset(q: Query, n: int) -> Query {
+    q.offset_val = n
+    return q
+}
+
+fn q_page(q: Query, page_num: int, page_size: int) -> Query {
+    q.offset_val = (page_num - 1) * page_size
+    q.limit_val = page_size
+    return q
+}
+
+fn q_distinct(q: Query) -> Query {
+    q.is_distinct = true
+    return q
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// JOIN EXECUTION
+// ═══════════════════════════════════════════════════════════════════════
+
+fn _apply_join(left: list, clause: map) -> list {
+    if clause["has_cond"] {
+        // Lambda join
+        let result = []
+        let cond = clause["condition"]
+        for l in left {
+            for r in clause["right"] {
+                if cond(l, r) {
+                    result = result + [merge_records(l, r)]
+                }
+            }
+        }
+        return result
+    }
+
+    let right = clause["right"]
+    let kind  = clause["kind"]
+
+    // Cross join
+    if kind == JOIN_CROSS {
+        let result = []
+        for l in left {
+            for r in right {
+                result = result + [merge_records(l, r)]
+            }
+        }
+        return result
+    }
+
+    // Index right side by key
+    let right_idx = {}
+    for r in right {
+        let k = str(get_field(r, clause["on_right"]))
+        if has_key(right_idx, k) {
+            right_idx[k] = right_idx[k] + [r]
+        } else {
+            right_idx[k] = [r]
+        }
+    }
+
+    let result = []
+    for l in left {
+        let lk = str(get_field(l, clause["on_left"]))
+        if has_key(right_idx, lk) {
+            let matches = right_idx[lk]
+            for r in matches {
+                result = result + [merge_records(l, r)]
+            }
+        } else {
+            if kind == JOIN_LEFT {
+                // Left join: keep left row, right columns null
+                let null_right = {}
+                if len(right) > 0 {
+                    for k in keys(right[0]) {
+                        null_right[k] = none
+                    }
+                }
+                result = result + [merge_records(l, null_right)]
+            }
+        }
+    }
+
+    return result
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// GROUP BY EXECUTION
+// ═══════════════════════════════════════════════════════════════════════
+
+fn _make_group_key(record: map, group_keys: list) -> str {
+    let parts = []
+    for k in group_keys {
+        parts = parts + [str(get_field(record, k))]
+    }
+    return join(parts, "|")
+}
+
+fn _apply_grouping(rows: list, group_keys: list, aggregations: list) -> list {
+    // Build groups
+    let groups = {}
+    let group_order = []  // preserve insertion order
+    for r in rows {
+        let gk = _make_group_key(r, group_keys)
+        if has_key(groups, gk) {
+            groups[gk] = groups[gk] + [r]
+        } else {
+            groups[gk] = [r]
+            group_order = group_order + [gk]
+        }
+    }
+
+    let result = []
+    for gk in group_order {
+        let group_rows = groups[gk]
+        let out = {}
+
+        // Restore group key values from first row
+        for k in group_keys {
+            out[k] = get_field(group_rows[0], k)
+        }
+
+        // Apply aggregations
+        for agg in aggregations {
+            let fn_impl = _get_agg_fn(agg["fn"])
+            if fn_impl != none {
+                let vals = []
+                if agg["field"] == "*" {
+                    // count: just use indices
+                    let i = 0
+                    while i < len(group_rows) {
+                        vals = vals + [i]
+                        i = i + 1
+                    }
+                } else {
+                    for r in group_rows {
+                        let v = get_field(r, agg["field"])
+                        if v != none {
+                            vals = vals + [v]
+                        }
+                    }
+                }
+                out[agg["alias"]] = fn_impl(vals)
+            }
+        }
+
+        result = result + [out]
+    }
+    return result
+}
+
+fn _apply_global_agg(rows: list, aggregations: list) -> list {
+    let out = {}
+    for agg in aggregations {
+        let fn_impl = _get_agg_fn(agg["fn"])
+        if fn_impl != none {
+            let vals = []
+            if agg["field"] == "*" {
+                let i = 0
+                while i < len(rows) {
+                    vals = vals + [i]
+                    i = i + 1
+                }
+            } else {
+                for r in rows {
+                    let v = get_field(r, agg["field"])
+                    if v != none {
+                        vals = vals + [v]
+                    }
+                }
+            }
+            out[agg["alias"]] = fn_impl(vals)
+        }
+    }
+    return [out]
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// QUERY EXECUTION
+// ═══════════════════════════════════════════════════════════════════════
+
+fn q_execute(q: Query) -> list {
+    let rows = []
+    for r in q.source {
+        rows = rows + [r]
+    }
+
+    // Apply joins
+    for j in q.joins {
+        rows = _apply_join(rows, j)
+    }
+
+    // Apply computed columns
+    for cc in q.computed_cols {
+        let new_rows = []
+        for r in rows {
+            r[cc["alias"]] = cc["expr"](r)
+            new_rows = new_rows + [r]
+        }
+        rows = new_rows
+    }
+
+    // Apply WHERE predicates
+    for pred in q.predicates {
+        let filtered = []
+        for r in rows {
+            if pred(r) {
+                filtered = filtered + [r]
+            }
+        }
+        rows = filtered
+    }
+
+    // Apply GROUP BY + aggregations
+    if len(q.group_by_keys) > 0 {
+        rows = _apply_grouping(rows, q.group_by_keys, q.aggregations)
+    } else {
+        if len(q.aggregations) > 0 {
+            rows = _apply_global_agg(rows, q.aggregations)
+        }
+    }
+
+    // Apply HAVING
+    for pred in q.having_preds {
+        let filtered = []
+        for r in rows {
+            if pred(r) {
+                filtered = filtered + [r]
+            }
+        }
+        rows = filtered
+    }
+
+    // Apply DISTINCT
+    if q.is_distinct {
+        let seen = []
+        let unique_rows = []
+        for r in rows {
+            let sig = _record_sig(r)
+            let found = false
+            for s in seen {
+                if s == sig {
+                    found = true
+                }
+            }
+            if not found {
+                seen = seen + [sig]
+                unique_rows = unique_rows + [r]
+            }
+        }
+        rows = unique_rows
+    }
+
+    // Apply ORDER BY (last key has highest priority via stable sort)
+    let oi = len(q.order_keys) - 1
+    while oi >= 0 {
+        let ok = q.order_keys[oi]
+        rows = _sort_rows(rows, ok["key"], ok["desc"])
+        oi = oi - 1
+    }
+
+    // Apply OFFSET
+    if q.offset_val > 0 {
+        rows = slice(rows, q.offset_val, len(rows))
+    }
+
+    // Apply LIMIT
+    if q.limit_val >= 0 {
+        if q.limit_val < len(rows) {
+            rows = slice(rows, 0, q.limit_val)
+        }
+    }
+
+    // Apply column projection
+    if len(q.columns) > 0 {
+        let projected = []
+        for r in rows {
+            projected = projected + [project_record(r, q.columns)]
+        }
+        rows = projected
+    }
+
+    return rows
+}
+
+fn _record_sig(r: map) -> str {
+    let parts = []
+    for k in sorted(keys(r)) {
+        parts = parts + [k + "=" + str(r[k])]
+    }
+    return join(parts, ",")
+}
+
+// ── Sorting helper ─────────────────────────────────────────────────────
+
+fn _sort_rows(rows: list, key_name: str, descending: bool) -> list {
+    // Simple insertion sort by field
+    let result = []
+    for r in rows {
+        result = result + [r]
+    }
+    let n = len(result)
+    let i = 1
+    while i < n {
+        let j = i
+        while j > 0 {
+            let a = get_field(result[j - 1], key_name)
+            let b = get_field(result[j], key_name)
+            let should_swap = false
+            if descending {
+                if b > a {
+                    should_swap = true
+                }
+            } else {
+                if a > b {
+                    should_swap = true
+                }
+            }
+            if should_swap {
+                let tmp = result[j - 1]
+                result[j - 1] = result[j]
+                result[j] = tmp
+                j = j - 1
+            } else {
+                j = 0  // break
+            }
+        }
+        i = i + 1
+    }
+    return result
+}
+
+// ── Convenience methods ────────────────────────────────────────────────
+
+fn q_first(q: Query) -> any {
+    q.limit_val = 1
+    let results = q_execute(q)
+    if len(results) > 0 {
+        return results[0]
+    }
+    return none
+}
+
+fn q_count(q: Query) -> int {
+    return len(q_execute(q))
+}
+
+fn q_pluck(q: Query, field_name: str) -> list {
+    let rows = q_execute(q)
+    let result = []
+    for r in rows {
+        result = result + [get_field(r, field_name)]
+    }
+    return result
+}
+
+fn q_exists(q: Query) -> bool {
+    return q_first(q) != none
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// STRING-BASED CONDITION PARSER
+// ═══════════════════════════════════════════════════════════════════════
+
+fn _parse_literal(s: str) -> any {
+    let trimmed = trim(s)
+    if trimmed == "null" or trimmed == "none" or trimmed == "None" {
+        return none
+    }
+    if trimmed == "true" or trimmed == "True" {
+        return true
+    }
+    if trimmed == "false" or trimmed == "False" {
+        return false
+    }
+    // Quoted string
+    if len(trimmed) >= 2 {
+        let first = str_at(trimmed, 0)
+        let last_char = str_at(trimmed, len(trimmed) - 1)
+        if first == "'" and last_char == "'" {
+            return substr(trimmed, 1, len(trimmed) - 1)
+        }
+        if first == "\"" and last_char == "\"" {
+            return substr(trimmed, 1, len(trimmed) - 1)
+        }
+    }
+    // Try integer
+    let is_num = true
+    let has_dot = false
+    let ci = 0
+    while ci < len(trimmed) {
+        let ch = str_at(trimmed, ci)
+        if ch == "-" and ci == 0 {
+            ci = ci + 1
+        } else {
+            if ch == "." {
+                has_dot = true
+                ci = ci + 1
+            } else {
+                if ch >= "0" and ch <= "9" {
+                    ci = ci + 1
+                } else {
+                    is_num = false
+                    ci = len(trimmed)  // break
+                }
+            }
+        }
+    }
+    if is_num and len(trimmed) > 0 {
+        if has_dot {
+            return float(trimmed)
+        }
+        return int(trimmed)
+    }
+    return trimmed
+}
+
+fn _find_op(expr: str) -> list {
+    // Returns [lhs, op, rhs] or empty list
+    // Check operators longest first
+    let ops = [">=", "<=", "!=", "==", ">", "<"]
+    for op in ops {
+        let idx = index_of(expr, op)
+        if idx >= 0 {
+            let lhs = trim(substr(expr, 0, idx))
+            let rhs = trim(substr(expr, idx + len(op), len(expr)))
+            return [lhs, op, rhs]
+        }
+    }
+    return []
+}
+
+fn parse_condition(expr: str) -> any {
+    let trimmed = trim(expr)
+
+    // AND split
+    let and_idx = index_of(upper(trimmed), " AND ")
+    if and_idx >= 0 {
+        let left_str  = substr(trimmed, 0, and_idx)
+        let right_str = substr(trimmed, and_idx + 5, len(trimmed))
+        let left_pred  = parse_condition(left_str)
+        let right_pred = parse_condition(right_str)
+        return fn(r) {
+            return left_pred(r) and right_pred(r)
+        }
+    }
+
+    // OR split
+    let or_idx = index_of(upper(trimmed), " OR ")
+    if or_idx >= 0 {
+        let left_str  = substr(trimmed, 0, or_idx)
+        let right_str = substr(trimmed, or_idx + 4, len(trimmed))
+        let left_pred  = parse_condition(left_str)
+        let right_pred = parse_condition(right_str)
+        return fn(r) {
+            return left_pred(r) or right_pred(r)
+        }
+    }
+
+    // NOT prefix
+    if starts_with(upper(trimmed), "NOT ") {
+        let inner_pred = parse_condition(substr(trimmed, 4, len(trimmed)))
+        return fn(r) {
+            return not inner_pred(r)
+        }
+    }
+
+    // IS NULL / IS NOT NULL
+    let is_not_null_idx = index_of(upper(trimmed), " IS NOT NULL")
+    if is_not_null_idx >= 0 {
+        let fname = trim(substr(trimmed, 0, is_not_null_idx))
+        return fn(r) {
+            return get_field(r, fname) != none
+        }
+    }
+
+    let is_null_idx = index_of(upper(trimmed), " IS NULL")
+    if is_null_idx >= 0 {
+        let fname = trim(substr(trimmed, 0, is_null_idx))
+        return fn(r) {
+            return get_field(r, fname) == none
+        }
+    }
+
+    // Comparison operators
+    let parts = _find_op(trimmed)
+    if len(parts) == 3 {
+        let field_name = parts[0]
+        let op_str     = parts[1]
+        let rhs_val    = _parse_literal(parts[2])
+        return fn(r) {
+            let fv = get_field(r, field_name)
+            return match op_str {
+                "==" => fv == rhs_val,
+                "!=" => fv != rhs_val,
+                ">"  => fv > rhs_val,
+                ">=" => fv >= rhs_val,
+                "<"  => fv < rhs_val,
+                "<=" => fv <= rhs_val,
+                _    => false,
+            }
+        }
+    }
+
+    // Truthy field reference
+    let f_name = trimmed
+    return fn(r) {
+        let v = get_field(r, f_name)
+        return v != none and v != false and v != 0
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// LQL STRING PARSER
+// ═══════════════════════════════════════════════════════════════════════
+// Parses: SELECT [DISTINCT] col1, col2 FROM source WHERE cond
+//         ORDER BY col1 [DESC] LIMIT n OFFSET n
+
+struct LQLStatement {
+    columns: list
+    source_name: str
+    where_clause: str
+    group_by_keys: list
+    order_by_keys: list
+    limit_val: int
+    offset_val: int
+    is_distinct: bool
+}
+
+fn _extract_clause(s: str, keyword: str, stop_words: list) -> list {
+    // Returns [remaining_str, extracted_value_str]
+    let upper_s = upper(s)
+    let kw_idx = index_of(upper_s, keyword)
+    if kw_idx < 0 {
+        return [s, ""]
+    }
+    let after = substr(s, kw_idx + len(keyword), len(s))
+    // Find the earliest stop word
+    let end_idx = len(after)
+    for sw in stop_words {
+        let sw_idx = index_of(upper(after), sw)
+        if sw_idx >= 0 and sw_idx < end_idx {
+            end_idx = sw_idx
+        }
+    }
+    let value = trim(substr(after, 0, end_idx))
+    let remaining = trim(substr(s, 0, kw_idx) + substr(after, end_idx, len(after)))
+    return [remaining, value]
+}
+
+fn parse_lql(lql_string: str) -> LQLStatement {
+    let s = trim(lql_string)
+
+    // Extract LIMIT
+    let limit_val = -1
+    let r1 = _extract_clause(s, " LIMIT ", [" OFFSET ", " ORDER ", " GROUP "])
+    s = r1[0]
+    if len(r1[1]) > 0 {
+        limit_val = int(r1[1])
+    }
+
+    // Extract OFFSET
+    let offset_val = 0
+    let r2 = _extract_clause(s, " OFFSET ", [" LIMIT ", " ORDER ", " GROUP "])
+    s = r2[0]
+    if len(r2[1]) > 0 {
+        offset_val = int(r2[1])
+    }
+
+    // Extract ORDER BY
+    let order_by_keys = []
+    let r3 = _extract_clause(s, " ORDER BY ", [" WHERE ", " GROUP ", " HAVING ", " LIMIT "])
+    s = r3[0]
+    if len(r3[1]) > 0 {
+        let order_parts = split(r3[1], ",")
+        for part in order_parts {
+            let tp = trim(part)
+            let desc_flag = false
+            if ends_with(upper(tp), " DESC") {
+                desc_flag = true
+                tp = trim(substr(tp, 0, len(tp) - 5))
+            }
+            if ends_with(upper(tp), " ASC") {
+                tp = trim(substr(tp, 0, len(tp) - 4))
+            }
+            order_by_keys = order_by_keys + [order_desc(tp, desc_flag)]
+        }
+    }
+
+    // Extract GROUP BY
+    let group_by_keys = []
+    let r4 = _extract_clause(s, " GROUP BY ", [" WHERE ", " HAVING ", " ORDER "])
+    s = r4[0]
+    if len(r4[1]) > 0 {
+        let gp = split(r4[1], ",")
+        for g in gp {
+            group_by_keys = group_by_keys + [trim(g)]
+        }
+    }
+
+    // Extract WHERE
+    let where_clause = ""
+    let r5 = _extract_clause(s, " WHERE ", [" GROUP ", " ORDER ", " HAVING "])
+    s = r5[0]
+    where_clause = r5[1]
+
+    // Extract FROM
+    let source_name = ""
+    let r6 = _extract_clause(s, " FROM ", [" WHERE ", " GROUP ", " ORDER "])
+    s = r6[0]
+    source_name = r6[1]
+
+    // Extract SELECT [DISTINCT] columns
+    let is_distinct = false
+    let upper_s2 = upper(s)
+    if starts_with(upper_s2, "SELECT ") {
+        s = trim(substr(s, 7, len(s)))
+    }
+    if starts_with(upper(s), "DISTINCT ") {
+        is_distinct = true
+        s = trim(substr(s, 9, len(s)))
+    }
+
+    let columns = []
+    if trim(s) != "*" and len(trim(s)) > 0 {
+        let col_parts = split(s, ",")
+        for c in col_parts {
+            columns = columns + [trim(c)]
+        }
+    }
+
+    return LQLStatement {
+        columns: columns,
+        source_name: source_name,
+        where_clause: where_clause,
+        group_by_keys: group_by_keys,
+        order_by_keys: order_by_keys,
+        limit_val: limit_val,
+        offset_val: offset_val,
+        is_distinct: is_distinct,
+    }
+}
+
+// ── Execute LQL from string ────────────────────────────────────────────
+
+fn lql(query_string: str, context: map) -> list {
+    let stmt = parse_lql(query_string)
+    let source = []
+    if has_key(context, stmt.source_name) {
+        source = context[stmt.source_name]
+    }
+
+    let q = query_new()
+    q = q_from(q, source)
+
+    // WHERE
+    if len(stmt.where_clause) > 0 {
+        let pred = parse_condition(stmt.where_clause)
+        q = q_where(q, pred)
+    }
+
+    // GROUP BY
+    if len(stmt.group_by_keys) > 0 {
+        q = q_group_by(q, stmt.group_by_keys)
+    }
+
+    // ORDER BY
+    for ok in stmt.order_by_keys {
+        q = q_order_by(q, ok["key"], ok["desc"])
+    }
+
+    // DISTINCT
+    if stmt.is_distinct {
+        q = q_distinct(q)
+    }
+
+    // OFFSET
+    if stmt.offset_val > 0 {
+        q = q_offset(q, stmt.offset_val)
+    }
+
+    // LIMIT
+    if stmt.limit_val >= 0 {
+        q = q_limit(q, stmt.limit_val)
+    }
+
+    // SELECT columns
+    if len(stmt.columns) > 0 {
+        q = q_select(q, stmt.columns)
+    }
+
+    return q_execute(q)
+}
+
+// ── Convenience factories ──────────────────────────────────────────────
+
+fn select_cols(cols: list) -> Query {
+    let q = query_new()
+    q.columns = cols
+    return q
+}
+
+fn from_data(data: list) -> Query {
+    let q = query_new()
+    q.source = data
+    return q
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// SELF-TEST
+// ═══════════════════════════════════════════════════════════════════════
+
+fn _self_test() {
+    let pass_count = 0
+    let fail_count = 0
+
+    fn check(label: str, ok: bool) {
+        if ok {
+            pass_count = pass_count + 1
+        } else {
+            println("[FAIL] " + label)
+            fail_count = fail_count + 1
+        }
+    }
+
+    // ── Test data ──────────────────────────────────────────────────
+
+    fn make_user(name: str, age: int, city: str) -> map {
+        let u = {}
+        u["name"] = name
+        u["age"]  = age
+        u["city"] = city
+        return u
+    }
+
+    let users = [
+        make_user("Alice",   30, "NYC"),
+        make_user("Bob",     17, "LA"),
+        make_user("Charlie", 25, "NYC"),
+        make_user("Diana",   40, "LA"),
+        make_user("Eve",     22, "NYC"),
+    ]
+
+    // ── Basic select + where ───────────────────────────────────────
+
+    let adults = q_execute(
+        q_where(q_from(query_new(), users), fn(r) { r["age"] >= 18 })
+    )
+    check("where filter", len(adults) == 4)
+
+    // ── Order by ───────────────────────────────────────────────────
+
+    let by_age = q_execute(
+        q_order_asc(q_from(query_new(), users), "age")
+    )
+    check("order asc", by_age[0]["name"] == "Bob")
+    check("order asc last", by_age[len(by_age) - 1]["name"] == "Diana")
+
+    let by_age_desc = q_execute(
+        q_order_desc(q_from(query_new(), users), "age")
+    )
+    check("order desc", by_age_desc[0]["name"] == "Diana")
+
+    // ── Limit + offset ─────────────────────────────────────────────
+
+    let first_two = q_execute(
+        q_limit(q_from(query_new(), users), 2)
+    )
+    check("limit", len(first_two) == 2)
+
+    let offset_two = q_execute(
+        q_offset(q_from(query_new(), users), 2)
+    )
+    check("offset", len(offset_two) == 3)
+
+    // ── Select columns ─────────────────────────────────────────────
+
+    let names_only = q_execute(
+        q_select(q_from(query_new(), users), ["name"])
+    )
+    check("select cols", has_key(names_only[0], "name"))
+    check("select no age", not has_key(names_only[0], "age"))
+
+    // ── Distinct ───────────────────────────────────────────────────
+
+    let cities = q_execute(
+        q_distinct(q_select(q_from(query_new(), users), ["city"]))
+    )
+    check("distinct", len(cities) == 2)
+
+    // ── Aggregations ───────────────────────────────────────────────
+
+    check("agg count", agg_count([1, 2, 3]) == 3)
+    check("agg sum",   agg_sum([10.0, 20.0, 30.0]) == 60.0)
+    check("agg avg",   agg_avg([10.0, 20.0, 30.0]) == 20.0)
+    check("agg min",   agg_min([5, 3, 8]) == 3)
+    check("agg max",   agg_max([5, 3, 8]) == 8)
+    check("agg first", agg_first([10, 20]) == 10)
+    check("agg last",  agg_last([10, 20]) == 20)
+
+    // ── Group by ───────────────────────────────────────────────────
+
+    let city_counts = q_execute(
+        q_count_as(
+            q_group_by(q_from(query_new(), users), ["city"]),
+            "total"
+        )
+    )
+    check("group by", len(city_counts) == 2)
+
+    // ── Join ───────────────────────────────────────────────────────
+
+    fn make_order(user_name: str, amount: float) -> map {
+        let o = {}
+        o["user_name"] = user_name
+        o["amount"]    = amount
+        return o
+    }
+
+    let orders = [
+        make_order("Alice", 100.0),
+        make_order("Bob",   50.0),
+        make_order("Alice", 200.0),
+    ]
+
+    let joined = q_execute(
+        q_join(q_from(query_new(), users), orders, "name", "user_name")
+    )
+    check("join", len(joined) == 3)
+
+    // ── Computed column ────────────────────────────────────────────
+
+    let with_label = q_execute(
+        q_add_column(q_from(query_new(), users), "label",
+            fn(r) { return r["name"] + " (" + str(r["age"]) + ")" }
+        )
+    )
+    check("computed col", has_key(with_label[0], "label"))
+
+    // ── Field helpers ──────────────────────────────────────────────
+
+    let nested = {}
+    let inner = {}
+    inner["name"] = "test"
+    nested["user"] = inner
+    check("nested field", get_field(nested, "user.name") == "test")
+
+    // ── Condition parser ───────────────────────────────────────────
+
+    let pred1 = parse_condition("age > 18")
+    check("cond >", pred1(make_user("X", 25, "Y")))
+    check("cond > false", not pred1(make_user("X", 15, "Y")))
+
+    let pred2 = parse_condition("age >= 25 AND city == 'NYC'")
+    check("cond AND", pred2(make_user("X", 30, "NYC")))
+    check("cond AND false", not pred2(make_user("X", 30, "LA")))
+
+    let pred3 = parse_condition("NOT active")
+    let inactive = {}
+    inactive["active"] = false
+    check("cond NOT", pred3(inactive))
+
+    // ── LQL parser ─────────────────────────────────────────────────
+
+    let stmt = parse_lql("SELECT name, age FROM users WHERE age > 18 ORDER BY name LIMIT 10")
+    check("lql cols",    len(stmt.columns) == 2)
+    check("lql source",  stmt.source_name == "users")
+    check("lql where",   len(stmt.where_clause) > 0)
+    check("lql limit",   stmt.limit_val == 10)
+
+    let stmt2 = parse_lql("SELECT DISTINCT city FROM users")
+    check("lql distinct", stmt2.is_distinct)
+
+    // ── LQL execution ──────────────────────────────────────────────
+
+    let ctx = {}
+    ctx["users"] = users
+    let result = lql("SELECT name FROM users WHERE age > 20 ORDER BY name LIMIT 3", ctx)
+    check("lql exec", len(result) <= 3)
+    check("lql exec cols", has_key(result[0], "name"))
+
+    // ── Convenience ────────────────────────────────────────────────
+
+    let q1 = from_data(users)
+    let first = q_first(q1)
+    check("first", first != none)
+
+    let q2 = from_data(users)
+    check("count", q_count(q2) == 5)
+
+    let q3 = from_data(users)
+    let plucked = q_pluck(q3, "name")
+    check("pluck", len(plucked) == 5)
+
+    let q4 = from_data(users)
+    check("exists", q_exists(q4))
+
+    let q5 = from_data([])
+    check("not exists", not q_exists(q5))
+
+    // ── Summary ────────────────────────────────────────────────────
+    println("")
+    println("v2_query_engine self-test: " + str(pass_count) + " passed, " + str(fail_count) + " failed")
+    if fail_count == 0 {
+        println("All tests passed!")
+    }
+}
+
+_self_test()

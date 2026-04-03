@@ -1,0 +1,350 @@
+-- stdlib/network.ltl
+-- LATERALUS Network Standard Library
+-- HTTP client, WebSocket support, URL utilities, and async request patterns
+
+module Network
+
+import "core"
+import "json"
+import "strings"
+
+-- ============================================================
+-- Types
+-- ============================================================
+
+struct Response {
+    status: int
+    headers: dict
+    body: str
+    url: str
+    ok: bool
+}
+
+struct Request {
+    method: str
+    url: str
+    headers: dict
+    body: str
+    timeout: float
+}
+
+struct WebhookPayload {
+    event: str
+    data: any
+    timestamp: str
+    signature: str
+}
+
+-- ============================================================
+-- HTTP Client
+-- ============================================================
+
+-- Perform an HTTP GET request
+fn http_get(url: str, headers: dict = {}, timeout: float = 30.0) -> Response {
+    @python("
+import urllib.request as _req, urllib.error as _uerr, json as _json
+try:
+    req = _req.Request(url, headers=headers)
+    with _req.urlopen(req, timeout=timeout) as resp:
+        body = resp.read().decode('utf-8', errors='replace')
+        status = resp.status
+        hdrs = dict(resp.headers)
+        _result = {'status': status, 'headers': hdrs, 'body': body,
+                   'url': url, 'ok': 200 <= status < 300}
+except _uerr.HTTPError as e:
+    body = e.read().decode('utf-8', errors='replace') if hasattr(e, 'read') else str(e)
+    _result = {'status': e.code, 'headers': {}, 'body': body, 'url': url, 'ok': False}
+except Exception as e:
+    _result = {'status': 0, 'headers': {}, 'body': str(e), 'url': url, 'ok': False}
+")
+    return Response {
+        status: @result["status"],
+        headers: @result["headers"],
+        body: @result["body"],
+        url: @result["url"],
+        ok: @result["ok"]
+    }
+}
+
+-- Perform an HTTP POST request
+fn http_post(url: str, body: str = "", headers: dict = {}, timeout: float = 30.0) -> Response {
+    @python("
+import urllib.request as _req, urllib.error as _uerr
+try:
+    data = body.encode('utf-8') if isinstance(body, str) else body
+    if 'Content-Type' not in headers:
+        headers = {**headers, 'Content-Type': 'application/json'}
+    req = _req.Request(url, data=data, headers=headers, method='POST')
+    with _req.urlopen(req, timeout=timeout) as resp:
+        resp_body = resp.read().decode('utf-8', errors='replace')
+        status = resp.status
+        hdrs = dict(resp.headers)
+        _result = {'status': status, 'headers': hdrs, 'body': resp_body,
+                   'url': url, 'ok': 200 <= status < 300}
+except _uerr.HTTPError as e:
+    err_body = e.read().decode('utf-8', errors='replace') if hasattr(e, 'read') else str(e)
+    _result = {'status': e.code, 'headers': {}, 'body': err_body, 'url': url, 'ok': False}
+except Exception as e:
+    _result = {'status': 0, 'headers': {}, 'body': str(e), 'url': url, 'ok': False}
+")
+    return Response {
+        status: @result["status"],
+        headers: @result["headers"],
+        body: @result["body"],
+        url: @result["url"],
+        ok: @result["ok"]
+    }
+}
+
+-- PUT request
+fn http_put(url: str, body: str = "", headers: dict = {}, timeout: float = 30.0) -> Response {
+    @python("
+import urllib.request as _req, urllib.error as _uerr
+try:
+    data = body.encode('utf-8') if isinstance(body, str) else body
+    req = _req.Request(url, data=data, headers=headers, method='PUT')
+    with _req.urlopen(req, timeout=timeout) as resp:
+        resp_body = resp.read().decode('utf-8', errors='replace')
+        _result = {'status': resp.status, 'headers': dict(resp.headers),
+                   'body': resp_body, 'url': url, 'ok': 200 <= resp.status < 300}
+except _uerr.HTTPError as e:
+    _result = {'status': e.code, 'headers': {}, 'body': str(e), 'url': url, 'ok': False}
+except Exception as e:
+    _result = {'status': 0, 'headers': {}, 'body': str(e), 'url': url, 'ok': False}
+")
+    return Response {
+        status: @result["status"], headers: @result["headers"],
+        body: @result["body"], url: @result["url"], ok: @result["ok"]
+    }
+}
+
+-- DELETE request
+fn http_delete(url: str, headers: dict = {}, timeout: float = 30.0) -> Response {
+    @python("
+import urllib.request as _req, urllib.error as _uerr
+try:
+    req = _req.Request(url, headers=headers, method='DELETE')
+    with _req.urlopen(req, timeout=timeout) as resp:
+        resp_body = resp.read().decode('utf-8', errors='replace')
+        _result = {'status': resp.status, 'headers': dict(resp.headers),
+                   'body': resp_body, 'url': url, 'ok': 200 <= resp.status < 300}
+except _uerr.HTTPError as e:
+    _result = {'status': e.code, 'headers': {}, 'body': str(e), 'url': url, 'ok': False}
+except Exception as e:
+    _result = {'status': 0, 'headers': {}, 'body': str(e), 'url': url, 'ok': False}
+")
+    return Response {
+        status: @result["status"], headers: @result["headers"],
+        body: @result["body"], url: @result["url"], ok: @result["ok"]
+    }
+}
+
+-- ============================================================
+-- JSON API helpers
+-- ============================================================
+
+-- GET request that parses JSON response
+fn get_json(url: str, headers: dict = {}) -> any {
+    let h = {**headers, "Accept": "application/json"}
+    let resp = http_get(url, headers: h)
+    if resp.ok {
+        return json.try_parse(resp.body)
+    }
+    return None
+}
+
+-- POST JSON data and parse JSON response
+fn post_json(url: str, data: any, headers: dict = {}) -> any {
+    let body = json.stringify(data)
+    let h = {**headers, "Content-Type": "application/json", "Accept": "application/json"}
+    let resp = http_post(url, body: body, headers: h)
+    if resp.ok {
+        return json.try_parse(resp.body)
+    }
+    return None
+}
+
+-- ============================================================
+-- URL utilities
+-- ============================================================
+
+fn url_encode(s: str) -> str {
+    @python("
+import urllib.parse as _up
+_result = _up.quote(s, safe='')
+")
+    return @result
+}
+
+fn url_decode(s: str) -> str {
+    @python("
+import urllib.parse as _up
+_result = _up.unquote(s)
+")
+    return @result
+}
+
+fn build_url(base: str, path: str, params: dict = {}) -> str {
+    @python("
+import urllib.parse as _up
+url = base.rstrip('/') + '/' + path.lstrip('/')
+if params:
+    url = url + '?' + _up.urlencode(params)
+_result = url
+")
+    return @result
+}
+
+fn parse_url(url: str) -> dict {
+    @python("
+import urllib.parse as _up
+parsed = _up.urlparse(url)
+_result = {
+    'scheme': parsed.scheme,
+    'host': parsed.hostname,
+    'port': parsed.port,
+    'path': parsed.path,
+    'query': dict(_up.parse_qsl(parsed.query)),
+    'fragment': parsed.fragment,
+}
+")
+    return @result
+}
+
+-- ============================================================
+-- Auth helpers
+-- ============================================================
+
+fn bearer_token(token: str) -> dict {
+    return {"Authorization": "Bearer " + token}
+}
+
+fn basic_auth(username: str, password: str) -> dict {
+    @python("
+import base64 as _b64
+creds = f'{username}:{password}'.encode('utf-8')
+encoded = _b64.b64encode(creds).decode('ascii')
+_result = {'Authorization': 'Basic ' + encoded}
+")
+    return @result
+}
+
+fn api_key_header(key: str, header: str = "X-API-Key") -> dict {
+    return {header: key}
+}
+
+-- ============================================================
+-- REST API client builder
+-- ============================================================
+
+struct ApiClient {
+    base_url: str
+    default_headers: dict
+    timeout: float
+}
+
+fn new_client(base_url: str, headers: dict = {}, timeout: float = 30.0) -> ApiClient {
+    return ApiClient { base_url: base_url, default_headers: headers, timeout: timeout }
+}
+
+fn client_get(client: ApiClient, path: str, params: dict = {}) -> Response {
+    let url = build_url(client.base_url, path, params)
+    return http_get(url, headers: client.default_headers, timeout: client.timeout)
+}
+
+fn client_post(client: ApiClient, path: str, data: any) -> Response {
+    let url = build_url(client.base_url, path)
+    let body = json.stringify(data)
+    let h = {**client.default_headers, "Content-Type": "application/json"}
+    return http_post(url, body: body, headers: h, timeout: client.timeout)
+}
+
+fn client_get_json(client: ApiClient, path: str, params: dict = {}) -> any {
+    let resp = client_get(client, path, params)
+    if resp.ok { return json.try_parse(resp.body) }
+    return None
+}
+
+-- ============================================================
+-- Retry and circuit breaker
+-- ============================================================
+
+-- Retry a request function up to `max_attempts` times with exponential backoff
+fn with_retry(request_fn: fn, max_attempts: int = 3, base_delay: float = 1.0) -> Response {
+    @python("
+import time as _time
+last_resp = None
+for attempt in range(max_attempts):
+    try:
+        last_resp = request_fn()
+        if isinstance(last_resp, dict) and last_resp.get('ok', False):
+            break
+    except Exception as e:
+        last_resp = {'status': 0, 'headers': {}, 'body': str(e),
+                     'url': '', 'ok': False}
+    if attempt < max_attempts - 1:
+        _time.sleep(base_delay * (2 ** attempt))
+_result = last_resp
+")
+    return Response {
+        status: @result["status"], headers: @result["headers"],
+        body: @result["body"], url: @result["url"], ok: @result["ok"]
+    }
+}
+
+-- ============================================================
+-- Webhook utilities
+-- ============================================================
+
+-- Validate an HMAC-SHA256 webhook signature
+fn verify_webhook(payload: str, signature: str, secret: str) -> bool {
+    @python("
+import hmac as _hmac, hashlib as _hl
+expected = _hmac.new(secret.encode(), payload.encode(), _hl.sha256).hexdigest()
+_result = _hmac.compare_digest(expected, signature.lstrip('sha256='))
+")
+    return @result
+}
+
+-- ============================================================
+-- DNS / ping utilities
+-- ============================================================
+
+fn resolve_host(hostname: str) -> list[str] {
+    @python("
+import socket as _sock
+try:
+    results = _sock.getaddrinfo(hostname, None)
+    _result = list(set(r[4][0] for r in results))
+except Exception as e:
+    _result = []
+")
+    return @result
+}
+
+fn is_reachable(host: str, port: int = 80, timeout: float = 3.0) -> bool {
+    @python("
+import socket as _sock
+try:
+    s = _sock.create_connection((host, port), timeout=timeout)
+    s.close()
+    _result = True
+except (OSError, _sock.timeout):
+    _result = False
+")
+    return @result
+}
+
+-- ============================================================
+-- Pipeline helpers
+-- ============================================================
+
+-- Fetch a URL and parse JSON in a single pipeline step
+fn fetch_json(url: str) -> any {
+    return url |> get_json
+}
+
+-- Fetch and apply a transform in one step
+fn fetch_and_map(url: str, transform: fn) -> any {
+    return url |> get_json |? transform
+}

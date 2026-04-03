@@ -1,0 +1,445 @@
+// ═══════════════════════════════════════════════════════════════════════
+// Lateralus v2.3.0 Showcase
+// Demonstrates: sort algorithms, set operations, ring buffers,
+//   semantic versioning, event emitters, template engines, and more
+// ═══════════════════════════════════════════════════════════════════════
+
+import math
+import strings
+
+// ── Sorting Algorithms ──────────────────────────────────────────────────
+
+fn sorting_demo() {
+    println("=== Sorting Algorithms ===")
+
+    let data = [38, 27, 43, 3, 9, 82, 10]
+    println("Original: " + str(data))
+
+    // Quicksort implementation
+    fn quicksort(arr: list) -> list {
+        if len(arr) <= 1 {
+            return arr
+        }
+        let pivot = arr[0]
+        let rest = slice(arr, 1, len(arr))
+        let less = filter(rest, fn(x) { x <= pivot })
+        let greater = filter(rest, fn(x) { x > pivot })
+        return quicksort(less) + [pivot] + quicksort(greater)
+    }
+
+    let sorted_data = quicksort(data)
+    println("Sorted:   " + str(sorted_data))
+
+    // Binary search
+    fn binary_search(arr: list, target: int) -> int {
+        let lo = 0
+        let hi = len(arr) - 1
+        while lo <= hi {
+            let mid = (lo + hi) / 2
+            if arr[mid] == target {
+                return mid
+            } else if arr[mid] < target {
+                lo = mid + 1
+            } else {
+                hi = mid - 1
+            }
+        }
+        return -1
+    }
+
+    let idx = binary_search(sorted_data, 27)
+    println("Index of 27: " + str(idx))
+
+    // Count inversions (measure of unsortedness)
+    fn count_inversions(arr: list) -> int {
+        let count = 0
+        for i in range(0, len(arr)) {
+            for j in range(i + 1, len(arr)) {
+                if arr[i] > arr[j] {
+                    count = count + 1
+                }
+            }
+        }
+        return count
+    }
+
+    println("Inversions in original: " + str(count_inversions(data)))
+    println("Inversions in sorted:   " + str(count_inversions(sorted_data)))
+    println("")
+}
+
+// ── Set Operations ──────────────────────────────────────────────────────
+
+fn set_demo() {
+    println("=== Set Operations ===")
+
+    // Deduplicate + sort for set representation
+    fn make_set(items: list) -> list {
+        let result = []
+        let sorted_items = sorted(items)
+        for item in sorted_items {
+            if len(result) == 0 {
+                result = result + [item]
+            } else if result[len(result) - 1] != item {
+                result = result + [item]
+            }
+        }
+        return result
+    }
+
+    let a = make_set([1, 2, 3, 4, 5, 3, 2])
+    let b = make_set([4, 5, 6, 7, 8, 5])
+
+    println("Set A: " + str(a))
+    println("Set B: " + str(b))
+
+    // Union
+    let union_set = make_set(a + b)
+    println("Union: " + str(union_set))
+
+    // Intersection
+    let inter = filter(a, fn(x) { contains(b, x) })
+    println("Intersection: " + str(inter))
+
+    // Difference A - B
+    let diff = filter(a, fn(x) { !contains(b, x) })
+    println("A - B: " + str(diff))
+
+    // Symmetric difference
+    let sym = filter(union_set, fn(x) {
+        !contains(a, x) || !contains(b, x)
+    })
+    println("Symmetric diff: " + str(sym))
+    println("")
+}
+
+// ── Ring Buffer ─────────────────────────────────────────────────────────
+
+fn ringbuf_demo() {
+    println("=== Ring Buffer ===")
+
+    // Ring buffer as [capacity, head, tail, count, ...items]
+    fn rb_new(cap: int) -> list {
+        let items = []
+        for _i in range(0, cap) {
+            items = items + [0]
+        }
+        return [cap, 0, 0, 0] + items
+    }
+
+    fn rb_push(buf: list, value: int) -> list {
+        let cap = buf[0]
+        let tail = buf[2]
+        let count = buf[3]
+        buf[4 + tail] = value
+        buf[2] = (tail + 1) % cap
+        if count < cap {
+            buf[3] = count + 1
+        } else {
+            buf[1] = (buf[1] + 1) % cap
+        }
+        return buf
+    }
+
+    fn rb_to_list(buf: list) -> list {
+        let cap = buf[0]
+        let head = buf[1]
+        let count = buf[3]
+        let result = []
+        for i in range(0, count) {
+            let idx = (head + i) % cap
+            result = result + [buf[4 + idx]]
+        }
+        return result
+    }
+
+    // Create a ring buffer of capacity 5
+    let buf = rb_new(5)
+
+    // Push 1..7 (should wrap around, keeping last 5)
+    for i in range(1, 8) {
+        buf = rb_push(buf, i)
+    }
+
+    println("Ring buffer (cap=5, pushed 1-7): " + str(rb_to_list(buf)))
+    println("")
+}
+
+// ── Semantic Versioning ─────────────────────────────────────────────────
+
+fn semver_demo() {
+    println("=== Semantic Versioning ===")
+
+    // Represent version as [major, minor, patch]
+    fn ver(major: int, minor: int, patch: int) -> list {
+        return [major, minor, patch]
+    }
+
+    fn ver_str(v: list) -> str {
+        return str(v[0]) + "." + str(v[1]) + "." + str(v[2])
+    }
+
+    fn ver_compare(a: list, b: list) -> int {
+        if a[0] != b[0] {
+            if a[0] > b[0] {
+                return 1
+            }
+            return -1
+        }
+        if a[1] != b[1] {
+            if a[1] > b[1] {
+                return 1
+            }
+            return -1
+        }
+        if a[2] != b[2] {
+            if a[2] > b[2] {
+                return 1
+            }
+            return -1
+        }
+        return 0
+    }
+
+    fn bump_major(v: list) -> list {
+        return [v[0] + 1, 0, 0]
+    }
+
+    fn bump_minor(v: list) -> list {
+        return [v[0], v[1] + 1, 0]
+    }
+
+    fn bump_patch(v: list) -> list {
+        return [v[0], v[1], v[2] + 1]
+    }
+
+    let current = ver(2, 3, 0)
+    println("Current:     " + ver_str(current))
+    println("Next patch:  " + ver_str(bump_patch(current)))
+    println("Next minor:  " + ver_str(bump_minor(current)))
+    println("Next major:  " + ver_str(bump_major(current)))
+
+    // Compare versions
+    let v1 = ver(1, 9, 3)
+    let v2 = ver(2, 0, 0)
+    let cmp = ver_compare(v1, v2)
+    let relation = "unknown"
+    if cmp == -1 {
+        relation = "older"
+    } else if cmp == 0 {
+        relation = "same"
+    } else if cmp == 1 {
+        relation = "newer"
+    }
+    println(ver_str(v1) + " is " + relation + " than " + ver_str(v2))
+    println("")
+}
+
+// ── Event Emitter ───────────────────────────────────────────────────────
+
+fn event_demo() {
+    println("=== Event Emitter ===")
+
+    // Simple event log
+    let log = []
+
+    fn on_click(data: str) -> str {
+        return "clicked: " + data
+    }
+
+    fn on_hover(data: str) -> str {
+        return "hovered: " + data
+    }
+
+    // Simulate event dispatch
+    let events = [
+        ["click", "button-1"],
+        ["hover", "menu-3"],
+        ["click", "submit"],
+        ["hover", "logo"],
+    ]
+
+    for event in events {
+        let name = event[0]
+        let data = event[1]
+        let result = match name {
+            "click" => on_click(data),
+            "hover" => on_hover(data),
+            _       => "unknown: " + data,
+        }
+        log = log + [result]
+    }
+
+    println("Event log:")
+    for entry in log {
+        println("  " + entry)
+    }
+    println("")
+}
+
+// ── Template Engine ─────────────────────────────────────────────────────
+
+fn template_demo() {
+    println("=== Template Engine ===")
+
+    // Simple string substitution (using markers)
+    fn render(template: str, key: str, value: str) -> str {
+        let marker = "<<" + key + ">>"
+        let result = ""
+        let i = 0
+        while i < len(template) {
+            if i + len(marker) <= len(template) {
+                let slice = substr(template, i, i + len(marker))
+                if slice == marker {
+                    result = result + value
+                    i = i + len(marker)
+                    continue
+                }
+            }
+            result = result + template[i]
+            i = i + 1
+        }
+        return result
+    }
+
+    let greeting = "Hello, <<name>>! Welcome to <<place>>."
+    let rendered = render(render(greeting, "name", "Alice"), "place", "Lateralus")
+    println(rendered)
+
+    // Batch rendering
+    let rows = [
+        ["Alice", "Engineering"],
+        ["Bob", "Design"],
+        ["Carol", "Research"],
+    ]
+
+    let row_template = "<<name>> works in <<dept>>"
+    println("\nTeam roster:")
+    for row in rows {
+        let line = render(render(row_template, "name", row[0]), "dept", row[1])
+        println("  " + line)
+    }
+    println("")
+}
+
+// ── Pipeline Composition ────────────────────────────────────────────────
+
+fn pipeline_demo() {
+    println("=== Pipeline Composition ===")
+
+    fn double(x: int) -> int { return x * 2 }
+    fn square(x: int) -> int { return x * x }
+    fn is_even(x: int) -> bool { return x % 2 == 0 }
+
+    // Multi-stage pipeline
+    let result = range(1, 11)
+        |> filter(is_even)
+        |> map(square)
+        |> map(double)
+
+    println("range(1,11) |> filter(even) |> square |> double = " + str(result))
+
+    // Sum with fold
+    let total = fold(result, 0, fn(acc, x) { acc + x })
+    println("Sum: " + str(total))
+
+    // Pipeline with string processing
+    let words = ["hello", "world", "from", "lateralus"]
+    let shouted = words
+        |> map(fn(w) { upper(w) })
+        |> join(" ")
+    println("Shouted: " + shouted)
+    println("")
+}
+
+// ── Matrix Operations ───────────────────────────────────────────────────
+
+fn matrix_demo() {
+    println("=== Matrix Operations ===")
+
+    // 3x3 matrix as list of rows
+    let mat_a = [
+        [1, 2, 3],
+        [4, 5, 6],
+        [7, 8, 9],
+    ]
+
+    let mat_b = [
+        [9, 8, 7],
+        [6, 5, 4],
+        [3, 2, 1],
+    ]
+
+    // Matrix addition
+    fn mat_add(a: list, b: list) -> list {
+        let result = []
+        for i in range(0, len(a)) {
+            let row = []
+            for j in range(0, len(a[i])) {
+                row = row + [a[i][j] + b[i][j]]
+            }
+            result = result + [row]
+        }
+        return result
+    }
+
+    // Matrix transpose
+    fn mat_transpose(m: list) -> list {
+        let rows = len(m)
+        let cols = len(m[0])
+        let result = []
+        for j in range(0, cols) {
+            let row = []
+            for i in range(0, rows) {
+                row = row + [m[i][j]]
+            }
+            result = result + [row]
+        }
+        return result
+    }
+
+    // Trace (sum of diagonal)
+    fn mat_trace(m: list) -> int {
+        let total = 0
+        for i in range(0, len(m)) {
+            total = total + m[i][i]
+        }
+        return total
+    }
+
+    let sum = mat_add(mat_a, mat_b)
+    println("A + B:")
+    for row in sum {
+        println("  " + str(row))
+    }
+
+    println("Transpose of A:")
+    let at = mat_transpose(mat_a)
+    for row in at {
+        println("  " + str(row))
+    }
+
+    println("Trace(A) = " + str(mat_trace(mat_a)))
+    println("Trace(B) = " + str(mat_trace(mat_b)))
+    println("")
+}
+
+// ── Main ────────────────────────────────────────────────────────────────
+
+fn main() {
+    println("Lateralus v2.3.0 Feature Showcase")
+    println("═════════════════════════════════════════\n")
+
+    sorting_demo()
+    set_demo()
+    ringbuf_demo()
+    semver_demo()
+    event_demo()
+    template_demo()
+    pipeline_demo()
+    matrix_demo()
+
+    println("All v2.3.0 demos complete!")
+}
+
+main()

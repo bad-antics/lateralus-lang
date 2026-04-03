@@ -1,0 +1,559 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// LateralusOS — Chat Client (ltlchat)
+// ═══════════════════════════════════════════════════════════════════════════
+// Copyright (c) 2025-2026 bad-antics. All rights reserved.
+//
+// Retro IRC-style terminal chat client built in Lateralus.
+// Features:
+//   • Local loopback chat (always available)
+//   • IRC-style commands (/nick, /join, /msg, /quit, /users, /help)
+//   • Message history with timestamps
+//   • Multi-channel support
+//   • User presence tracking
+//   • Network chat when TCP stack is available
+//
+// Usage:  chat                — start in local loopback mode
+//         chat connect <ip>   — connect to remote chat server
+//         chat server         — start local chat server
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── Color palette (Catppuccin Mocha retro terminal) ─────────────────────
+
+const COLOR_BG       = 0x1E1E2E    // base
+const COLOR_FG       = 0xCDD6F4    // text
+const COLOR_ACCENT   = 0x7487E8    // lavender
+const COLOR_GREEN    = 0xA6E3A1    // green (joins, success)
+const COLOR_RED      = 0xF38BA8    // red (errors, parts)
+const COLOR_YELLOW   = 0xF9E2AF    // yellow (warnings, system)
+const COLOR_TEAL     = 0x94E2D5    // teal (timestamps)
+const COLOR_PINK     = 0xF5C2E7    // pink (private msgs)
+const COLOR_PEACH    = 0xFAB387    // peach (nicks)
+const COLOR_SURFACE  = 0x313244    // surface0 (input area)
+
+// ── Message types ───────────────────────────────────────────────────────
+
+enum MessageKind {
+    Chat          // regular message
+    System        // system notification
+    Join          // user joined
+    Part          // user left
+    PrivateMsg    // direct message
+    Action        // /me action
+    Error         // error message
+    Motd          // message of the day
+}
+
+struct Message {
+    kind:      MessageKind
+    sender:    str
+    channel:   str
+    text:      str
+    timestamp: int        // ticks since boot
+    color:     int        // display color
+}
+
+fn message_color(kind: MessageKind) -> int {
+    match kind {
+        MessageKind::Chat       => COLOR_FG
+        MessageKind::System     => COLOR_YELLOW
+        MessageKind::Join       => COLOR_GREEN
+        MessageKind::Part       => COLOR_RED
+        MessageKind::PrivateMsg => COLOR_PINK
+        MessageKind::Action     => COLOR_PEACH
+        MessageKind::Error      => COLOR_RED
+        MessageKind::Motd       => COLOR_ACCENT
+    }
+}
+
+fn format_message(msg: Message) -> str {
+    let time_str = format_timestamp(msg.timestamp)
+    match msg.kind {
+        MessageKind::Chat       => time_str ++ " <" ++ msg.sender ++ "> " ++ msg.text
+        MessageKind::System     => time_str ++ " *** " ++ msg.text
+        MessageKind::Join       => time_str ++ " --> " ++ msg.sender ++ " has joined " ++ msg.channel
+        MessageKind::Part       => time_str ++ " <-- " ++ msg.sender ++ " has left " ++ msg.channel
+        MessageKind::PrivateMsg => time_str ++ " [PM:" ++ msg.sender ++ "] " ++ msg.text
+        MessageKind::Action     => time_str ++ " * " ++ msg.sender ++ " " ++ msg.text
+        MessageKind::Error      => time_str ++ " !!! " ++ msg.text
+        MessageKind::Motd       => "  | " ++ msg.text
+    }
+}
+
+fn format_timestamp(ticks: int) -> str {
+    let secs = ticks / 1000
+    let mins = secs / 60
+    let hrs  = mins / 60
+    let m = mins % 60
+    let s = secs % 60
+    "[" ++ pad_zero(hrs % 24) ++ ":" ++ pad_zero(m) ++ ":" ++ pad_zero(s) ++ "]"
+}
+
+fn pad_zero(n: int) -> str {
+    if n < 10 { "0" ++ str(n) } else { str(n) }
+}
+
+// ── Channel ─────────────────────────────────────────────────────────────
+
+const MAX_CHANNELS   = 8
+const MAX_USERS      = 32
+const MAX_HISTORY    = 200
+
+struct Channel {
+    name:     str
+    topic:    str
+    users:    [str]
+    messages: [Message]
+    unread:   int
+}
+
+fn new_channel(name: str, topic: str) -> Channel {
+    Channel {
+        name:     name,
+        topic:    topic,
+        users:    [],
+        messages: [],
+        unread:   0,
+    }
+}
+
+fn channel_add_message(ch: Channel, msg: Message) -> Channel {
+    let new_msgs = if ch.messages.len() >= MAX_HISTORY {
+        ch.messages.slice(1, ch.messages.len()) ++ [msg]
+    } else {
+        ch.messages ++ [msg]
+    }
+    Channel {
+        name: ch.name, topic: ch.topic, users: ch.users,
+        messages: new_msgs, unread: ch.unread + 1,
+    }
+}
+
+fn channel_add_user(ch: Channel, nick: str) -> Channel {
+    if ch.users.contains(nick) { return ch }
+    Channel {
+        name: ch.name, topic: ch.topic,
+        users: ch.users ++ [nick],
+        messages: ch.messages, unread: ch.unread,
+    }
+}
+
+fn channel_remove_user(ch: Channel, nick: str) -> Channel {
+    Channel {
+        name: ch.name, topic: ch.topic,
+        users: ch.users |> filter(fn(u) { u != nick }),
+        messages: ch.messages, unread: ch.unread,
+    }
+}
+
+// ── Chat State ──────────────────────────────────────────────────────────
+
+enum ConnState {
+    Disconnected
+    Connecting
+    Connected
+    Loopback        // local-only mode
+}
+
+struct ChatState {
+    nick:          str
+    channels:      [Channel]
+    active_ch:     int           // index of current channel
+    conn_state:    ConnState
+    server_addr:   str
+    server_port:   int
+    running:       bool
+    input_buf:     str
+    status_line:   str
+    motd:          [str]
+}
+
+fn new_chat_state() -> ChatState {
+    let lobby = new_channel("#lobby", "Welcome to LateralusOS Chat!")
+    let lobby_with_bot = channel_add_user(lobby, "LtlBot")
+    ChatState {
+        nick:        "user",
+        channels:    [lobby_with_bot],
+        active_ch:   0,
+        conn_state:  ConnState::Loopback,
+        server_addr: "127.0.0.1",
+        server_port: 6667,
+        running:     true,
+        input_buf:   "",
+        status_line: "ltlchat v1.0 — /help for commands",
+        motd: [
+            "╔══════════════════════════════════════════╗",
+            "║     Welcome to LateralusOS Chat!         ║",
+            "║                                          ║",
+            "║  Built with Lateralus v2.2.0             ║",
+            "║  Running on LateralusOS v0.3.0           ║",
+            "║                                          ║",
+            "║  Type /help for available commands        ║",
+            "║  Type /nick <name> to set your name      ║",
+            "║  Type /quit to exit                       ║",
+            "╚══════════════════════════════════════════╝",
+        ],
+    }
+}
+
+// ── Command Processing ──────────────────────────────────────────────────
+
+enum ChatCmd {
+    Say(str)                    // regular message
+    Nick(str)                   // change nickname
+    Join(str)                   // join channel
+    Part(str)                   // leave channel
+    Msg(str, str)               // private message (target, text)
+    Me(str)                     // action (/me does something)
+    Topic(str)                  // set channel topic
+    Users                       // list users
+    Channels                    // list channels
+    Switch(int)                 // switch to channel by index
+    Clear                       // clear history
+    Help                        // show help
+    Quit                        // exit chat
+    Unknown(str)                // unknown command
+}
+
+fn parse_chat_input(input: str) -> ChatCmd {
+    if input.len() == 0 { return ChatCmd::Say("") }
+
+    if input[0] != "/" { return ChatCmd::Say(input) }
+
+    let parts = input.slice(1, input.len()).split(" ")
+    let cmd = parts[0]
+
+    match cmd {
+        "nick" => {
+            if parts.len() > 1 { ChatCmd::Nick(parts[1]) }
+            else { ChatCmd::Unknown("Usage: /nick <name>") }
+        }
+        "join" => {
+            if parts.len() > 1 { ChatCmd::Join(parts[1]) }
+            else { ChatCmd::Unknown("Usage: /join #channel") }
+        }
+        "part" => {
+            if parts.len() > 1 { ChatCmd::Part(parts[1]) }
+            else { ChatCmd::Part("") }
+        }
+        "msg" => {
+            if parts.len() > 2 {
+                let text = parts.slice(2, parts.len()).join(" ")
+                ChatCmd::Msg(parts[1], text)
+            } else {
+                ChatCmd::Unknown("Usage: /msg <user> <message>")
+            }
+        }
+        "me" => {
+            if parts.len() > 1 {
+                let text = parts.slice(1, parts.len()).join(" ")
+                ChatCmd::Me(text)
+            } else {
+                ChatCmd::Unknown("Usage: /me <action>")
+            }
+        }
+        "topic" => {
+            if parts.len() > 1 {
+                let text = parts.slice(1, parts.len()).join(" ")
+                ChatCmd::Topic(text)
+            } else {
+                ChatCmd::Unknown("Usage: /topic <new topic>")
+            }
+        }
+        "users"    => ChatCmd::Users
+        "channels" => ChatCmd::Channels
+        "clear"    => ChatCmd::Clear
+        "help"     => ChatCmd::Help
+        "quit"     => ChatCmd::Quit
+        "exit"     => ChatCmd::Quit
+        "sw" => {
+            if parts.len() > 1 {
+                ChatCmd::Switch(parts[1].parse_int())
+            } else {
+                ChatCmd::Unknown("Usage: /sw <channel_number>")
+            }
+        }
+        _ => ChatCmd::Unknown("Unknown command: /" ++ cmd)
+    }
+}
+
+fn handle_chat_cmd(state: ChatState, cmd: ChatCmd, ticks: int) -> ChatState {
+    match cmd {
+        ChatCmd::Say(text) => {
+            if text.len() == 0 { return state }
+            let msg = Message {
+                kind: MessageKind::Chat, sender: state.nick,
+                channel: state.channels[state.active_ch].name,
+                text: text, timestamp: ticks, color: COLOR_FG,
+            }
+            let ch = channel_add_message(state.channels[state.active_ch], msg)
+            let mut new_channels = state.channels
+            new_channels[state.active_ch] = ch
+
+            // In loopback mode, echo back from bot
+            if state.conn_state == ConnState::Loopback {
+                let bot_reply = bot_respond(text)
+                if bot_reply.len() > 0 {
+                    let bot_msg = Message {
+                        kind: MessageKind::Chat, sender: "LtlBot",
+                        channel: ch.name, text: bot_reply,
+                        timestamp: ticks + 100, color: COLOR_ACCENT,
+                    }
+                    new_channels[state.active_ch] = channel_add_message(new_channels[state.active_ch], bot_msg)
+                }
+            }
+
+            ChatState { ..state, channels: new_channels }
+        }
+
+        ChatCmd::Nick(new_nick) => {
+            let old = state.nick
+            let msg = Message {
+                kind: MessageKind::System, sender: "",
+                channel: "", text: old ++ " is now known as " ++ new_nick,
+                timestamp: ticks, color: COLOR_YELLOW,
+            }
+            let ch = channel_add_message(state.channels[state.active_ch], msg)
+            let mut channels = state.channels
+            channels[state.active_ch] = ch
+            ChatState { ..state, nick: new_nick, channels: channels }
+        }
+
+        ChatCmd::Join(channel_name) => {
+            let name = if channel_name[0] != "#" { "#" ++ channel_name } else { channel_name }
+            // Check if already in channel
+            for i in 0..state.channels.len() {
+                if state.channels[i].name == name {
+                    return ChatState { ..state, active_ch: i }
+                }
+            }
+            let new_ch = new_channel(name, "")
+                |> channel_add_user(state.nick)
+            let msg = Message {
+                kind: MessageKind::Join, sender: state.nick,
+                channel: name, text: "",
+                timestamp: ticks, color: COLOR_GREEN,
+            }
+            let ch_with_msg = channel_add_message(new_ch, msg)
+            let channels = state.channels ++ [ch_with_msg]
+            ChatState { ..state, channels: channels, active_ch: channels.len() - 1 }
+        }
+
+        ChatCmd::Part(ch_name) => {
+            let idx = if ch_name.len() == 0 { state.active_ch }
+                      else {
+                          let mut found = -1
+                          for i in 0..state.channels.len() {
+                              if state.channels[i].name == ch_name { found = i }
+                          }
+                          found
+                      }
+            if idx <= 0 { return state }  // can't leave #lobby
+            let mut channels = state.channels
+            channels = channels.slice(0, idx) ++ channels.slice(idx + 1, channels.len())
+            let new_active = if state.active_ch >= channels.len() { channels.len() - 1 } else { state.active_ch }
+            ChatState { ..state, channels: channels, active_ch: new_active }
+        }
+
+        ChatCmd::Msg(target, text) => {
+            let msg = Message {
+                kind: MessageKind::PrivateMsg, sender: state.nick,
+                channel: target, text: text,
+                timestamp: ticks, color: COLOR_PINK,
+            }
+            let ch = channel_add_message(state.channels[state.active_ch], msg)
+            let mut channels = state.channels
+            channels[state.active_ch] = ch
+            ChatState { ..state, channels: channels }
+        }
+
+        ChatCmd::Me(action) => {
+            let msg = Message {
+                kind: MessageKind::Action, sender: state.nick,
+                channel: state.channels[state.active_ch].name,
+                text: action, timestamp: ticks, color: COLOR_PEACH,
+            }
+            let ch = channel_add_message(state.channels[state.active_ch], msg)
+            let mut channels = state.channels
+            channels[state.active_ch] = ch
+            ChatState { ..state, channels: channels }
+        }
+
+        ChatCmd::Topic(new_topic) => {
+            let mut channels = state.channels
+            channels[state.active_ch] = Channel {
+                ..channels[state.active_ch], topic: new_topic,
+            }
+            let msg = Message {
+                kind: MessageKind::System, sender: state.nick,
+                channel: channels[state.active_ch].name,
+                text: state.nick ++ " set the topic to: " ++ new_topic,
+                timestamp: ticks, color: COLOR_YELLOW,
+            }
+            channels[state.active_ch] = channel_add_message(channels[state.active_ch], msg)
+            ChatState { ..state, channels: channels }
+        }
+
+        ChatCmd::Users => {
+            let ch = state.channels[state.active_ch]
+            let user_list = ch.users.join(", ")
+            let msg = Message {
+                kind: MessageKind::System, sender: "",
+                channel: ch.name,
+                text: "Users in " ++ ch.name ++ ": " ++ user_list,
+                timestamp: ticks, color: COLOR_YELLOW,
+            }
+            let mut channels = state.channels
+            channels[state.active_ch] = channel_add_message(ch, msg)
+            ChatState { ..state, channels: channels }
+        }
+
+        ChatCmd::Channels => {
+            let mut lines: [str] = ["Channels:"]
+            for i in 0..state.channels.len() {
+                let ch = state.channels[i]
+                let marker = if i == state.active_ch { " *" } else { "  " }
+                lines = lines ++ [marker ++ str(i) ++ ". " ++ ch.name ++ " (" ++ str(ch.users.len()) ++ " users)"]
+            }
+            let msg = Message {
+                kind: MessageKind::System, sender: "",
+                channel: "", text: lines.join("\n"),
+                timestamp: ticks, color: COLOR_YELLOW,
+            }
+            let mut channels = state.channels
+            channels[state.active_ch] = channel_add_message(channels[state.active_ch], msg)
+            ChatState { ..state, channels: channels }
+        }
+
+        ChatCmd::Switch(idx) => {
+            if idx >= 0 && idx < state.channels.len() {
+                ChatState { ..state, active_ch: idx }
+            } else {
+                state
+            }
+        }
+
+        ChatCmd::Clear => {
+            let mut channels = state.channels
+            channels[state.active_ch] = Channel {
+                ..channels[state.active_ch], messages: [], unread: 0,
+            }
+            ChatState { ..state, channels: channels }
+        }
+
+        ChatCmd::Help => {
+            let help_lines = [
+                "╔══════════════════════════════════════════╗",
+                "║         ltlchat — Command Reference      ║",
+                "╠══════════════════════════════════════════╣",
+                "║  /nick <name>      Change your nickname  ║",
+                "║  /join #channel    Join a channel         ║",
+                "║  /part [#channel]  Leave current channel  ║",
+                "║  /msg <user> <text> Private message       ║",
+                "║  /me <action>      Action message         ║",
+                "║  /topic <text>     Set channel topic      ║",
+                "║  /users            List channel users     ║",
+                "║  /channels         List all channels      ║",
+                "║  /sw <n>           Switch to channel n    ║",
+                "║  /clear            Clear message history  ║",
+                "║  /quit             Exit chat client       ║",
+                "╚══════════════════════════════════════════╝",
+            ]
+            let mut channels = state.channels
+            for line in help_lines {
+                let msg = Message {
+                    kind: MessageKind::Motd, sender: "",
+                    channel: "", text: line,
+                    timestamp: ticks, color: COLOR_ACCENT,
+                }
+                channels[state.active_ch] = channel_add_message(channels[state.active_ch], msg)
+            }
+            ChatState { ..state, channels: channels }
+        }
+
+        ChatCmd::Quit => ChatState { ..state, running: false }
+
+        ChatCmd::Unknown(err) => {
+            let msg = Message {
+                kind: MessageKind::Error, sender: "",
+                channel: "", text: err,
+                timestamp: ticks, color: COLOR_RED,
+            }
+            let mut channels = state.channels
+            channels[state.active_ch] = channel_add_message(channels[state.active_ch], msg)
+            ChatState { ..state, channels: channels }
+        }
+    }
+}
+
+// ── Bot responses (loopback mode) ───────────────────────────────────────
+
+fn bot_respond(text: str) -> str {
+    let lower = text.to_lower()
+    if lower.contains("hello") || lower.contains("hi") {
+        "Hey there! Welcome to LateralusOS Chat 👋"
+    } else if lower.contains("help") {
+        "Type /help to see available commands!"
+    } else if lower.contains("lateralus") {
+        "Lateralus v2.2.0 — the language that powers this OS! 🔧"
+    } else if lower.contains("os") || lower.contains("system") {
+        "LateralusOS v0.3.0 — a research OS built from scratch in C + Lateralus 🖥️"
+    } else if lower.contains("time") || lower.contains("uptime") {
+        "Check the system clock with the 'uptime' or 'date' command in the shell!"
+    } else if lower.contains("music") || lower.contains("tool") {
+        "🌀 Spiral out, keep going... 🌀"
+    } else if lower == "ping" {
+        "pong! 🏓"
+    } else if lower.contains("thank") {
+        "You're welcome! Happy hacking! 🚀"
+    } else {
+        ""   // no response for unrecognized input
+    }
+}
+
+// ── Render state (for terminal display) ─────────────────────────────────
+
+struct ChatView {
+    visible_lines: int
+    scroll_offset: int
+    input_cursor:  int
+    show_sidebar:  bool
+}
+
+fn new_chat_view() -> ChatView {
+    ChatView {
+        visible_lines: 20,
+        scroll_offset: 0,
+        input_cursor:  0,
+        show_sidebar:  true,
+    }
+}
+
+fn render_status_bar(state: ChatState) -> str {
+    let ch = state.channels[state.active_ch]
+    let conn_str = match state.conn_state {
+        ConnState::Disconnected => "[OFFLINE]"
+        ConnState::Connecting   => "[CONNECTING...]"
+        ConnState::Connected    => "[CONNECTED]"
+        ConnState::Loopback     => "[LOCAL]"
+    }
+    "─── " ++ ch.name ++ " │ " ++ ch.topic ++ " │ " ++ conn_str ++ " │ " ++ state.nick ++ " ───"
+}
+
+fn render_input_prompt(state: ChatState) -> str {
+    let ch = state.channels[state.active_ch]
+    "[" ++ ch.name ++ "] " ++ state.nick ++ "> "
+}
+
+fn get_visible_messages(state: ChatState, view: ChatView) -> [Message] {
+    let ch = state.channels[state.active_ch]
+    let total = ch.messages.len()
+    if total <= view.visible_lines {
+        ch.messages
+    } else {
+        let start = total - view.visible_lines - view.scroll_offset
+        let end = start + view.visible_lines
+        let s = if start < 0 { 0 } else { start }
+        let e = if end > total { total } else { end }
+        ch.messages.slice(s, e)
+    }
+}

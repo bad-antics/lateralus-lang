@@ -1,0 +1,458 @@
+# ═══════════════════════════════════════════════════════════════════════
+# LATERALUS Formal Grammar Specification
+# EBNF Notation — Complete Language Grammar v2.0
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Versions:  v1.0 core → v1.1 modules + async → v1.2 decorators + match
+#            v1.3 pattern matching → v1.4 pipeline + comprehensions
+#            v1.5 ADT enums + full pattern language + type inference
+#            v1.6 structured concurrency → v1.7 pattern refinements
+#            v1.8 metaprogramming → v1.9 FFI + ecosystem → v2.0 self-hosting
+
+# ─── Lexical Grammar ──────────────────────────────────────────────────
+
+# Whitespace & Comments
+WHITESPACE   = { ' ' | '\t' | '\r' } ;
+NEWLINE      = '\n' ;
+LINE_COMMENT = '//' { any - '\n' } ;
+
+# Identifiers
+IDENT        = ( ALPHA | '_' ) { ALPHA | DIGIT | '_' } ;
+ALPHA        = 'a'..'z' | 'A'..'Z' ;
+DIGIT        = '0'..'9' ;
+
+# Literals
+INT_LIT      = DIGIT { DIGIT }
+             | '0x' HEX_DIGIT { HEX_DIGIT }
+             | '0b' BIN_DIGIT { BIN_DIGIT }
+             | '0o' OCT_DIGIT { OCT_DIGIT } ;
+
+FLOAT_LIT    = DIGIT { DIGIT } '.' DIGIT { DIGIT } [ EXPONENT ]
+             | DIGIT { DIGIT } EXPONENT ;
+EXPONENT     = ( 'e' | 'E' ) [ '+' | '-' ] DIGIT { DIGIT } ;
+
+STRING_LIT   = '"' { CHAR | ESCAPE } '"'
+             | "'" { CHAR | ESCAPE } "'" ;
+CHAR         = any - ( '"' | "'" | '\\' | '\n' ) ;
+ESCAPE       = '\\' ( 'n' | 't' | 'r' | '\\' | '"' | "'" | '0' ) ;
+
+BOOL_LIT     = 'true' | 'false' ;
+NONE_LIT     = 'none' ;
+
+HEX_DIGIT    = DIGIT | 'a'..'f' | 'A'..'F' ;
+BIN_DIGIT    = '0' | '1' ;
+OCT_DIGIT    = '0'..'7' ;
+
+# Keywords
+KEYWORD      = 'fn' | 'let' | 'const' | 'if' | 'else' | 'for' | 'while'
+             | 'return' | 'match' | 'struct' | 'interface' | 'import'
+             | 'from' | 'as' | 'in' | 'throw' | 'try' | 'catch'
+             | 'emit' | 'probe' | 'measure' | 'pass' | 'break'
+             | 'continue' | 'and' | 'or' | 'not'
+             | 'true' | 'false' | 'none'
+             | 'async' | 'await' | 'pub' | 'guard' | 'where'     # v1.4+
+             | 'enum' | 'impl' | 'self' | 'yield' | 'spawn'     # v1.1+
+             | 'loop' | 'foreign'                                  # v1.2+
+             | 'select' | 'nursery' | 'cancel'                    # v1.6
+             | 'unsafe' | 'static' | 'extern' | 'mut'             # v1.6
+             | 'macro' | 'comptime' | 'type'                      # v1.8
+             | 'trait'                                             # v1.5+
+             ;
+
+# Operators (ordered by length, longest first)
+OP_PIPE_BIND = '|>=' ;                                   # v1.4: bind pipeline
+OP_PIPE_OPT  = '|?' ;
+OP_PIPE      = '|>' ;
+OP_SCOPE     = '::' ;                                    # v1.5: scope operator
+OP_FAT_ARROW = '=>' ;
+OP_ARROW     = '->' ;
+OP_RANGE     = '..' ;                                    # v1.3: range
+OP_POWER     = '**' ;
+OP_EQ        = '==' ;
+OP_NEQ       = '!=' ;
+OP_LTE       = '<=' ;
+OP_GTE       = '>=' ;
+OP_SPREAD    = '...' ;                                   # v1.4: spread
+OP_PROPAGATE = '?' ;                                     # v1.4: error propagation
+OP_TERNARY   = '? :' ;                                   # v1.4: ternary
+OP_PLUS      = '+' ;
+OP_MINUS     = '-' ;
+OP_STAR      = '*' ;
+OP_SLASH     = '/' ;
+OP_PERCENT   = '%' ;
+OP_LT        = '<' ;
+OP_GT        = '>' ;
+OP_ASSIGN    = '=' ;
+OP_DOT       = '.' ;
+OP_AT        = '@' ;
+
+# Delimiters
+DELIM        = '(' | ')' | '{' | '}' | '[' | ']' | ',' | ':' | ';' ;
+
+
+# ─── Syntactic Grammar ────────────────────────────────────────────────
+
+# Program
+program      = { statement } EOF ;
+
+# ─── Statements ───────────────────────────────────────────────────────
+
+statement    = fn_decl
+             | let_decl
+             | const_decl
+             | struct_decl
+             | enum_decl                                 # v1.1
+             | interface_decl
+             | impl_block                                # v1.1
+             | import_stmt
+             | if_stmt
+             | for_stmt
+             | while_stmt
+             | loop_stmt                                 # v1.2
+             | match_stmt
+             | return_stmt
+             | throw_stmt
+             | emit_stmt
+             | try_catch_stmt
+             | guard_stmt                                # v1.4
+             | break_stmt
+             | continue_stmt
+             | pass_stmt
+             | select_stmt                               # v1.6
+             | nursery_block                             # v1.6
+             | async_for_stmt                            # v1.6
+             | foreign_block                             # v1.9
+             | extern_decl                               # v1.9
+             | unsafe_block                              # v1.6
+             | static_decl                               # v1.6
+             | macro_decl                                # v1.8
+             | comptime_block                            # v1.8
+             | const_fn_decl                             # v1.8
+             | type_alias                                # v1.5
+             | trait_decl                                # v1.5
+             | expr_stmt ;
+
+expr_stmt    = expression NEWLINE ;
+
+# ─── Declarations ─────────────────────────────────────────────────────
+
+fn_decl      = { decorator } [ 'pub' ] [ 'async' ] 'fn' IDENT
+               [ '<' type_params '>' ]                   # v1.1: generics
+               '(' [ param_list ] ')' [ '->' type_expr ] block ;
+param_list   = param { ',' param } ;
+param        = IDENT [ ':' type_expr ] [ '=' expression ] ;
+
+let_decl     = 'let' IDENT [ ':' type_expr ] '=' expression ;
+const_decl   = 'const' IDENT [ ':' type_expr ] '=' expression ;
+
+struct_decl  = 'struct' IDENT [ '<' type_params '>' ] '{' struct_body '}' ;
+struct_body  = { field_decl ',' } ;
+field_decl   = IDENT ':' type_expr [ '=' expression ] ;
+
+enum_decl    = 'enum' IDENT '{' enum_body '}' ;          # v1.1
+enum_body    = enum_variant { ',' enum_variant } ;
+enum_variant = IDENT [ '(' type_list ')' ]                # tuple variant
+             | IDENT [ '{' struct_body '}' ]              # record variant
+             | IDENT [ '=' expression ] ;                 # valued variant
+
+interface_decl = 'interface' IDENT '{' { method_sig ',' } '}' ;
+method_sig   = 'fn' IDENT '(' [ param_list ] ')' [ '->' type_expr ] ;
+
+impl_block   = 'impl' IDENT [ ':' IDENT ] '{' { fn_decl } '}' ; # v1.1
+
+type_params  = IDENT { ',' IDENT } ;
+
+decorator    = '@' IDENT [ '(' [ arg_list ] ')' ] ;
+
+# ─── Import ───────────────────────────────────────────────────────────
+
+import_stmt  = 'import' import_path
+             | 'from' import_path 'import' import_names ;
+import_path  = IDENT { '/' IDENT } ;
+import_names = IDENT { ',' IDENT }
+             | '*' ;
+
+# ─── Control Flow ─────────────────────────────────────────────────────
+
+if_stmt      = 'if' expression block [ 'else' ( if_stmt | block ) ] ;
+for_stmt     = 'for' IDENT 'in' expression block ;
+while_stmt   = 'while' expression block ;
+loop_stmt    = 'loop' block ;                            # v1.2
+
+# Match — both statement and expression (v1.5)
+match_stmt   = 'match' expression '{' { match_arm } '}' ;
+match_arm    = pattern [ 'if' expression ] '=>' ( expression | block ) ',' ;
+
+# Full pattern language (v1.5: 8 pattern types)
+pattern      = or_pattern ;
+or_pattern   = base_pattern { '|' base_pattern } ;       # v1.5: or-patterns
+base_pattern = literal_pattern                            # 42, "hello", true
+             | wildcard_pattern                           # _
+             | rest_pattern                               # ...x (list rest)
+             | constructor_pattern                        # v1.5: Result::Ok(v)
+             | tuple_pattern                              # (a, b)
+             | list_pattern                               # [h, ...t]
+             | range_pattern                              # 1..10
+             | binding_pattern ;                          # x (capture)
+
+literal_pattern   = INT_LIT | FLOAT_LIT | STRING_LIT | BOOL_LIT | NONE_LIT ;
+wildcard_pattern  = '_' ;
+binding_pattern   = IDENT ;
+rest_pattern      = '...' IDENT ;
+
+# v1.5: ADT constructor destructuring
+constructor_pattern = IDENT '::' IDENT [ '(' [ pattern { ',' pattern } ] ')' ] ;
+
+tuple_pattern     = '(' pattern ',' pattern { ',' pattern } ')' ;
+list_pattern      = '[' [ pattern { ',' pattern } [ ',' '...' IDENT ] ] ']' ;
+range_pattern     = INT_LIT '..' INT_LIT ;               # v1.3
+
+return_stmt  = 'return' [ expression ] ;
+break_stmt   = 'break' ;
+continue_stmt = 'continue' ;
+pass_stmt    = 'pass' ;
+
+# ─── Error Handling ───────────────────────────────────────────────────
+
+throw_stmt   = 'throw' expression ;
+try_catch_stmt = 'try' block { 'recover' IDENT [ ':' type_expr ] block }
+               [ 'ensure' block ] ;                      # v1.3: recover/ensure
+
+# v1.4: guard clause
+guard_stmt   = 'guard' expression 'else' block ;
+
+# ─── Event System ─────────────────────────────────────────────────────
+
+emit_stmt    = 'emit' IDENT '(' [ arg_list ] ')' ;
+
+# ─── v1.6: Structured Concurrency ────────────────────────────────────
+
+# select — multiplexed channel operations
+select_stmt  = 'select' '{' { select_arm } '}' ;
+select_arm   = recv_arm | send_arm | timeout_arm | default_arm ;
+recv_arm     = IDENT 'from' expression '=>' block ;
+send_arm     = 'send' '(' expression ',' expression ')' '=>' block ;
+timeout_arm  = 'after' expression '=>' block ;
+default_arm  = '_' '=>' block ;
+
+# nursery — structured task group
+nursery_block = 'nursery' [ IDENT ] block ;
+
+# async for — asynchronous stream iteration
+async_for_stmt = 'async' 'for' IDENT 'in' expression block ;
+
+# unsafe — low-level memory operations
+unsafe_block = 'unsafe' block ;
+
+# static — module-level mutable state
+static_decl  = 'static' [ 'mut' ] IDENT [ ':' type_expr ] [ '=' expression ] ;
+
+# ─── v1.8: Metaprogramming ───────────────────────────────────────────
+
+# macro — declarative macro definition
+macro_decl   = [ 'pub' ] 'macro' IDENT '!' '(' [ ident_list ] ')' block ;
+ident_list   = IDENT { ',' IDENT } ;
+
+# comptime — compile-time evaluation block
+comptime_block = 'comptime' block ;
+
+# const fn — compile-time evaluated function
+const_fn_decl = [ 'pub' ] 'const' 'fn' IDENT
+                [ '<' type_params '>' ]
+                '(' [ param_list ] ')' [ '->' type_expr ] block ;
+
+# macro invocation (in expression position)
+# See primary → macro_invocation
+
+# ─── v1.9: FFI — Foreign Function Interface ──────────────────────────
+
+# foreign — inline polyglot code block
+foreign_block = 'foreign' STRING_LIT [ '(' foreign_params ')' ] '{' STRING_LIT '}' ;
+foreign_params = foreign_param { ',' foreign_param } ;
+foreign_param  = IDENT ':' expression ;
+
+# extern — external function declaration (no body)
+extern_decl  = 'extern' [ 'fn' ] IDENT '(' [ param_list ] ')' [ '->' type_expr ] ;
+
+# ─── v1.5: Traits & Type Aliases ─────────────────────────────────────
+
+# trait — interface with optional default methods
+trait_decl   = [ 'pub' ] 'trait' IDENT [ '<' type_params '>' ] '{'
+               { trait_method } '}' ;
+trait_method = [ 'pub' ] 'fn' IDENT '(' [ param_list ] ')' [ '->' type_expr ]
+               ( block | ';' ) ;                         # body optional for abstract
+
+# type alias
+type_alias   = [ 'pub' ] 'type' IDENT [ '<' type_params '>' ] '=' type_expr ;
+
+# ─── Block ─────────────────────────────────────────────────────────────
+
+block        = '{' { statement } '}' ;
+
+# ─── Expressions ──────────────────────────────────────────────────────
+
+expression   = where_expr ;                              # v1.4
+
+# v1.4: where clause
+where_expr   = pipe_expr [ 'where' '{' { let_decl } '}' ] ;
+
+pipe_expr    = or_expr { ( '|>' | '|?' | '|>=' ) or_expr } ;  # v1.4: |>=
+
+or_expr      = and_expr { 'or' and_expr } ;
+and_expr     = not_expr { 'and' not_expr } ;
+not_expr     = 'not' not_expr | comparison ;
+
+comparison   = addition { ( '==' | '!=' | '<' | '>' | '<=' | '>=' ) addition } ;
+
+addition     = multiplication { ( '+' | '-' ) multiplication } ;
+multiplication = power { ( '*' | '/' | '%' ) power } ;
+power        = unary { '**' unary } ;
+
+unary        = ( '-' | 'not' ) unary
+             | postfix ;
+
+postfix      = primary { call_expr | index_expr | field_expr | scope_expr
+                       | propagate_expr } ;              # v1.4+
+call_expr    = '(' [ arg_list ] ')' ;
+index_expr   = '[' expression ']' ;
+field_expr   = '.' IDENT ;
+scope_expr   = '::' IDENT [ '(' [ arg_list ] ')' ] ;    # v1.5: Result::Ok(v)
+propagate_expr = '?' ;                                   # v1.4: error propagation
+
+arg_list     = expression { ',' expression } ;
+
+# ─── Primary Expressions ──────────────────────────────────────────────
+
+primary      = INT_LIT
+             | FLOAT_LIT
+             | STRING_LIT
+             | BOOL_LIT
+             | NONE_LIT
+             | IDENT
+             | list_literal
+             | comprehension                             # v1.4
+             | map_literal
+             | struct_literal
+             | lambda_expr
+             | if_expr
+             | match_expr                                # v1.5: match as expression
+             | try_expr
+             | ternary_expr                              # v1.4
+             | probe_expr
+             | measure_expr
+             | spread_expr                               # v1.4
+             | await_expr                                # v1.1
+             | yield_expr                                # v1.1
+             | spawn_expr                                # v1.1
+             | cancel_expr                               # v1.6
+             | channel_expr                              # v1.6
+             | parallel_expr                             # v1.6
+             | inline_asm                                # v1.9
+             | macro_invocation                          # v1.8
+             | addr_of_expr                              # v1.9
+             | deref_expr                                # v1.9
+             | alignof_expr                              # v1.9
+             | '(' expression ')' ;
+
+list_literal = '[' [ expression { ',' expression } ] ']' ;
+
+# v1.4: List / set / map comprehensions
+comprehension = '[' expression 'for' IDENT 'in' expression [ 'if' expression ] ']'
+              | '{' expression 'for' IDENT 'in' expression [ 'if' expression ] '}'
+              | '{' expression ':' expression 'for' IDENT 'in' expression [ 'if' expression ] '}' ;
+
+map_literal  = '{' [ map_entry { ',' map_entry } ] '}' ;
+map_entry    = ( STRING_LIT | IDENT ) ':' expression ;
+
+struct_literal = IDENT '{' [ field_init { ',' field_init } ] '}' ;
+field_init   = IDENT ':' expression ;
+
+lambda_expr  = '(' [ param_list ] ')' '=>' ( expression | block )
+             | 'fn' '(' [ param_list ] ')' ( expression | block ) ; # legacy
+
+# v1.5: Match expression (returns value)
+match_expr   = 'match' expression '{' { match_arm } '}' ;
+
+# If-expression (used as value)
+if_expr      = 'if' expression '{' expression '}' 'else' '{' expression '}' ;
+
+# v1.4: Ternary expression
+ternary_expr = expression '?' expression ':' expression ;
+
+# Try-expression (used as value)
+try_expr     = 'try' expression 'catch' IDENT '=>' expression ;
+
+# Probe-expression (reactive observation)
+probe_expr   = 'probe' IDENT ;
+
+# Measure-expression (profiling block)
+measure_expr = 'measure' STRING_LIT block ;
+
+# v1.4: Spread expression
+spread_expr  = '...' expression ;
+
+# v1.1: Async/concurrency
+await_expr   = 'await' expression ;
+yield_expr   = 'yield' [ expression ] ;
+spawn_expr   = 'spawn' expression ;
+
+# v1.6: Structured concurrency expressions
+cancel_expr  = 'cancel' expression ;
+channel_expr = 'channel' [ '<' type_expr '>' ] '(' [ expression ] ')' ;
+parallel_expr = 'parallel' '{' { spawn_expr } '}' ;
+
+# v1.9: Low-level / FFI expressions
+inline_asm   = 'asm' '{' { STRING_LIT } '}' ;
+addr_of_expr = '&' expression ;                          # address-of
+deref_expr   = '*' expression ;                          # dereference
+alignof_expr = 'alignof' '(' type_expr ')' ;
+
+# v1.8: Macro invocation (in expression position)
+macro_invocation = IDENT '!' '(' [ arg_list ] ')' ;
+
+# ─── Type Expressions ─────────────────────────────────────────────────
+
+type_expr    = type_union ;
+type_union   = type_primary { '|' type_primary } ;
+type_primary = 'int' | 'float' | 'str' | 'bool' | 'none' | 'any'
+             | 'list' '<' type_expr '>'
+             | 'map' '<' type_expr ',' type_expr '>'
+             | 'Result' '<' type_expr ',' type_expr '>'  # v1.5: Result<T, E>
+             | 'Option' '<' type_expr '>'                # v1.5: Option<T>
+             | '(' [ type_expr { ',' type_expr } ] ')' '->' type_expr
+             | IDENT [ '<' type_list '>' ]               # v1.1: generics
+             | type_expr '?' ;                           # nullable shorthand
+
+type_list    = type_expr { ',' type_expr } ;
+
+# ─── Operator Precedence (lowest to highest) ──────────────────────────
+#
+#  0.  where           Where clause (v1.4)
+#  1.  |>  |?  |>=     Pipeline (left-to-right)
+#  2.  or              Logical OR
+#  3.  and             Logical AND
+#  4.  not             Logical NOT (prefix)
+#  5.  == != < > <= >= Comparison
+#  6.  + -             Addition
+#  7.  * / %           Multiplication
+#  8.  **              Exponentiation (right-to-left)
+#  9.  - not & *       Unary (prefix, includes addr-of & deref)
+# 10.  () [] . :: ? !  Postfix (call, index, field, scope, propagate, macro)
+#
+# ─── Decorators ───────────────────────────────────────────────────────
+#
+# Decorators may precede fn_decl, struct_decl, enum_decl, impl_block,
+# const_fn_decl, or trait_decl.
+#
+# decorator    = '@' IDENT [ '(' arg_list ')' ] ;
+#
+# Built-in decorators:
+#   @memo          — memoize function results
+#   @foreign("L")  — mark as foreign-language callable
+#   @derive(T1,T2) — auto-derive trait implementations (v1.8)
+#   @test          — mark function as a test case
+#   @benchmark     — mark function as a benchmark
+#   @inline        — hint for inlining (v1.6)
+#   @no_mangle     — prevent name mangling in FFI (v1.9)
+#
+# ─── End of Grammar ───────────────────────────────────────────────────

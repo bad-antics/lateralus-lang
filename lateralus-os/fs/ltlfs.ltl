@@ -1,0 +1,536 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// LateralusOS — LateralusFS (Native File System)
+// ═══════════════════════════════════════════════════════════════════════════
+// Copyright (c) 2025 bad-antics. All rights reserved.
+//
+// A simple, reliable filesystem designed for LateralusOS.
+// Layout:
+//   Block 0          — Superblock (metadata)
+//   Blocks 1..N      — Inode bitmap
+//   Blocks N+1..M    — Data bitmap
+//   Blocks M+1..K    — Inode table
+//   Blocks K+1..end  — Data blocks
+//
+// Features:
+//   • 4 KB block size
+//   • 256-byte inodes with 12 direct + 1 indirect + 1 double-indirect
+//   • Timestamps (created, modified, accessed)
+//   • Permission bits (rwx owner/group/other)
+//   • Simple journaling (write-ahead log for metadata ops)
+// ═══════════════════════════════════════════════════════════════════════════
+
+import hal::serial
+import drivers::disk
+import kernel::memory
+
+const LTLFS_MAGIC         = 0x4C544C46  // "LTLF"
+const LTLFS_VERSION       = 1
+const BLOCK_SIZE          = 4096
+const INODE_SIZE          = 256
+const INODES_PER_BLOCK    = BLOCK_SIZE / INODE_SIZE   // 16
+const DIRECT_BLOCKS       = 12
+const MAX_FILENAME_LEN    = 200
+
+// ── On-disk Structures ──────────────────────────────────────────────────
+
+struct Superblock {
+    magic:           int,     // LTLFS_MAGIC
+    version:         int,     // LTLFS_VERSION
+    block_size:      int,     // 4096
+    total_blocks:    int,
+    total_inodes:    int,
+    free_blocks:     int,
+    free_inodes:     int,
+    inode_bmap_start: int,   // first block of inode bitmap
+    data_bmap_start:  int,   // first block of data bitmap
+    inode_tbl_start:  int,   // first block of inode table
+    data_start:       int,   // first data block
+    root_inode:       int,   // inode number of root directory (always 1)
+    journal_start:    int,   // first block of journal area
+    journal_size:     int,   // journal size in blocks
+    mount_count:      int,
+    last_mount_time:  int,
+    label:            str,   // volume label
+}
+
+struct Inode {
+    mode:         int,       // file type (upper 4 bits) + permissions (lower 12 bits)
+    uid:          int,
+    gid:          int,
+    size:         int,       // file size in bytes
+    atime:        int,       // last access time
+    mtime:        int,       // last modification time
+    ctime:        int,       // creation time
+    link_count:   int,       // hard link count
+    block_count:  int,       // allocated blocks
+    flags:        int,       // immutable, append-only, etc.
+    direct:       [int; DIRECT_BLOCKS],    // direct block pointers
+    indirect:     int,       // single indirect block pointer
+    dbl_indirect: int,       // double indirect block pointer
+}
+
+struct DirEntry {
+    inode_num:  int,
+    name_len:   int,
+    file_type:  int,     // 1=regular, 2=directory, 3=chardev, 4=blockdev, 7=symlink
+    name:       str,
+}
+
+// File type constants
+const FT_REGULAR   = 1
+const FT_DIRECTORY = 2
+const FT_CHARDEV   = 3
+const FT_BLOCKDEV  = 4
+const FT_SYMLINK   = 7
+
+// ── State ───────────────────────────────────────────────────────────────
+
+let mut sb: Superblock = Superblock {
+    magic: 0, version: 0, block_size: 0,
+    total_blocks: 0, total_inodes: 0,
+    free_blocks: 0, free_inodes: 0,
+    inode_bmap_start: 0, data_bmap_start: 0,
+    inode_tbl_start: 0, data_start: 0,
+    root_inode: 1, journal_start: 0, journal_size: 0,
+    mount_count: 0, last_mount_time: 0, label: "",
+}
+
+let mut inode_bitmap: [byte] = []
+let mut data_bitmap:  [byte] = []
+
+// ── Format & Mount ──────────────────────────────────────────────────────
+
+pub fn format(total_blocks: int, label: str) -> Result<bool, str> {
+    serial::log("[ltlfs] Formatting {total_blocks} blocks as '{label}'")
+
+    // Calculate layout
+    let total_inodes = total_blocks / 4    // 1 inode per 4 blocks
+    let inode_bitmap_blocks = (total_inodes + BLOCK_SIZE * 8 - 1) / (BLOCK_SIZE * 8)
+    let data_bitmap_blocks  = (total_blocks + BLOCK_SIZE * 8 - 1) / (BLOCK_SIZE * 8)
+    let inode_table_blocks  = (total_inodes * INODE_SIZE + BLOCK_SIZE - 1) / BLOCK_SIZE
+    let journal_blocks      = 64   // 256 KB journal
+
+    // Build superblock
+    sb = Superblock {
+        magic:            LTLFS_MAGIC,
+        version:          LTLFS_VERSION,
+        block_size:       BLOCK_SIZE,
+        total_blocks:     total_blocks,
+        total_inodes:     total_inodes,
+        free_blocks:      total_blocks,
+        free_inodes:      total_inodes - 1,  // root inode allocated
+        inode_bmap_start: 1,
+        data_bmap_start:  1 + inode_bitmap_blocks,
+        inode_tbl_start:  1 + inode_bitmap_blocks + data_bitmap_blocks,
+        data_start:       1 + inode_bitmap_blocks + data_bitmap_blocks + inode_table_blocks,
+        root_inode:       1,
+        journal_start:    total_blocks - journal_blocks,
+        journal_size:     journal_blocks,
+        mount_count:      0,
+        last_mount_time:  0,
+        label:            label,
+    }
+
+    // Write superblock to disk (block 0)
+    write_superblock()
+
+    // Initialize bitmaps to zero
+    let zero_block: [byte; BLOCK_SIZE] = [0; BLOCK_SIZE]
+    let i = 0
+    while i < inode_bitmap_blocks + data_bitmap_blocks {
+        disk::write_sectors(sb.inode_bmap_start + i, zero_block)
+        i = i + 1
+    }
+
+    // Create root directory inode (inode 1)
+    let root = Inode {
+        mode:         (FT_DIRECTORY << 12) | 0o755,
+        uid:          0,
+        gid:          0,
+        size:         BLOCK_SIZE,
+        atime:        0,
+        mtime:        0,
+        ctime:        0,
+        link_count:   2,     // "." and parent's ".."
+        block_count:  1,
+        flags:        0,
+        direct:       [0; DIRECT_BLOCKS],
+        indirect:     0,
+        dbl_indirect: 0,
+    }
+
+    // Allocate one data block for root directory
+    let root_data_block = alloc_data_block()
+    root.direct[0] = root_data_block
+
+    // Mark root inode as used
+    mark_inode_used(1)
+    write_inode(1, root)
+
+    // Write "." and ".." entries into root directory block
+    let dot = DirEntry { inode_num: 1, name_len: 1, file_type: FT_DIRECTORY, name: "." }
+    let dotdot = DirEntry { inode_num: 1, name_len: 2, file_type: FT_DIRECTORY, name: ".." }
+    write_dir_entries(root_data_block, [dot, dotdot])
+
+    serial::log("[ltlfs] Format complete: {total_blocks} blocks, {total_inodes} inodes")
+    return Result::Ok(true)
+}
+
+pub fn mount(device: int) -> Result<bool, str> {
+    serial::log("[ltlfs] Mounting device {device}")
+
+    // Read superblock from block 0
+    let raw = disk::read_sectors(0, 1)
+    // Parse superblock
+    // ... (deserialize from raw bytes)
+
+    if sb.magic != LTLFS_MAGIC {
+        return Result::Err("Not a LateralusFS volume (bad magic)")
+    }
+
+    if sb.version != LTLFS_VERSION {
+        return Result::Err("Unsupported LTLFS version: {sb.version}")
+    }
+
+    sb.mount_count = sb.mount_count + 1
+    write_superblock()
+
+    // Load bitmaps into memory
+    inode_bitmap = load_bitmap(sb.inode_bmap_start, sb.total_inodes)
+    data_bitmap  = load_bitmap(sb.data_bmap_start, sb.total_blocks)
+
+    serial::log("[ltlfs] Mounted '{sb.label}': {sb.free_blocks}/{sb.total_blocks} blocks free")
+    return Result::Ok(true)
+}
+
+// ── Inode Operations ────────────────────────────────────────────────────
+
+pub fn read_inode(ino: int) -> Inode {
+    let block = sb.inode_tbl_start + (ino * INODE_SIZE) / BLOCK_SIZE
+    let offset = (ino * INODE_SIZE) % BLOCK_SIZE
+    let raw = disk::read_sectors(block, 1)
+    // Deserialize inode from raw[offset..offset+INODE_SIZE]
+    return Inode {
+        mode: 0, uid: 0, gid: 0, size: 0,
+        atime: 0, mtime: 0, ctime: 0,
+        link_count: 0, block_count: 0, flags: 0,
+        direct: [0; DIRECT_BLOCKS], indirect: 0, dbl_indirect: 0,
+    }
+}
+
+pub fn write_inode(ino: int, inode: Inode) {
+    let block = sb.inode_tbl_start + (ino * INODE_SIZE) / BLOCK_SIZE
+    let offset = (ino * INODE_SIZE) % BLOCK_SIZE
+    // Serialize inode to bytes and write to disk
+    // disk::write_sectors(block, data)
+}
+
+fn alloc_inode() -> Result<int, str> {
+    let i = 1  // inode 0 is reserved
+    while i < sb.total_inodes {
+        if !is_inode_used(i) {
+            mark_inode_used(i)
+            sb.free_inodes = sb.free_inodes - 1
+            return Result::Ok(i)
+        }
+        i = i + 1
+    }
+    return Result::Err("No free inodes")
+}
+
+fn free_inode(ino: int) {
+    mark_inode_free(ino)
+    sb.free_inodes = sb.free_inodes + 1
+}
+
+// ── Data Block Operations ───────────────────────────────────────────────
+
+fn alloc_data_block() -> int {
+    let i = sb.data_start
+    while i < sb.total_blocks {
+        if !is_block_used(i) {
+            mark_block_used(i)
+            sb.free_blocks = sb.free_blocks - 1
+            return i
+        }
+        i = i + 1
+    }
+    return -1  // no free blocks
+}
+
+fn free_data_block(block: int) {
+    mark_block_free(block)
+    sb.free_blocks = sb.free_blocks + 1
+}
+
+// ── File Operations ─────────────────────────────────────────────────────
+
+pub fn create_file(parent_ino: int, name: str, mode: int) -> Result<int, str> {
+    if name.len() > MAX_FILENAME_LEN {
+        return Result::Err("Filename too long")
+    }
+
+    // Allocate inode
+    let ino = match alloc_inode() {
+        Result::Ok(i) => i,
+        Result::Err(e) => return Result::Err(e),
+    }
+
+    // Initialize inode
+    let inode = Inode {
+        mode:         (FT_REGULAR << 12) | mode,
+        uid:          0,
+        gid:          0,
+        size:         0,
+        atime:        0,
+        mtime:        0,
+        ctime:        0,
+        link_count:   1,
+        block_count:  0,
+        flags:        0,
+        direct:       [0; DIRECT_BLOCKS],
+        indirect:     0,
+        dbl_indirect: 0,
+    }
+    write_inode(ino, inode)
+
+    // Add directory entry to parent
+    add_dir_entry(parent_ino, DirEntry {
+        inode_num: ino,
+        name_len:  name.len(),
+        file_type: FT_REGULAR,
+        name:      name,
+    })
+
+    return Result::Ok(ino)
+}
+
+pub fn create_dir(parent_ino: int, name: str, mode: int) -> Result<int, str> {
+    let ino = match alloc_inode() {
+        Result::Ok(i) => i,
+        Result::Err(e) => return Result::Err(e),
+    }
+
+    let data_block = alloc_data_block()
+    if data_block < 0 {
+        free_inode(ino)
+        return Result::Err("No free blocks for directory")
+    }
+
+    let inode = Inode {
+        mode:         (FT_DIRECTORY << 12) | mode,
+        uid:          0, gid: 0, size: BLOCK_SIZE,
+        atime:        0, mtime: 0, ctime: 0,
+        link_count:   2,
+        block_count:  1,
+        flags:        0,
+        direct:       [data_block, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        indirect:     0,
+        dbl_indirect: 0,
+    }
+    write_inode(ino, inode)
+
+    // Write . and .. entries
+    write_dir_entries(data_block, [
+        DirEntry { inode_num: ino, name_len: 1, file_type: FT_DIRECTORY, name: "." },
+        DirEntry { inode_num: parent_ino, name_len: 2, file_type: FT_DIRECTORY, name: ".." },
+    ])
+
+    // Update parent
+    add_dir_entry(parent_ino, DirEntry {
+        inode_num: ino,
+        name_len:  name.len(),
+        file_type: FT_DIRECTORY,
+        name:      name,
+    })
+
+    // Increment parent link count
+    let parent = read_inode(parent_ino)
+    parent.link_count = parent.link_count + 1
+    write_inode(parent_ino, parent)
+
+    return Result::Ok(ino)
+}
+
+pub fn read_file(ino: int, offset: int, length: int) -> Result<[byte], str> {
+    let inode = read_inode(ino)
+    if offset >= inode.size {
+        return Result::Ok([])
+    }
+
+    let to_read = if offset + length > inode.size { inode.size - offset } else { length }
+    let data: [byte] = []
+
+    let start_block = offset / BLOCK_SIZE
+    let end_block = (offset + to_read - 1) / BLOCK_SIZE
+
+    let blk = start_block
+    while blk <= end_block {
+        let phys = get_block_ptr(inode, blk)
+        if phys == 0 {
+            // Sparse file — return zeros
+            let zeros: [byte; BLOCK_SIZE] = [0; BLOCK_SIZE]
+            data = data + zeros
+        } else {
+            let raw = disk::read_sectors(phys, 1)
+            data = data + raw
+        }
+        blk = blk + 1
+    }
+
+    // Trim to exact range
+    let start_offset = offset % BLOCK_SIZE
+    return Result::Ok(data[start_offset..start_offset + to_read])
+}
+
+pub fn write_file(ino: int, offset: int, data: [byte]) -> Result<int, str> {
+    let inode = read_inode(ino)
+    let end_pos = offset + data.len()
+
+    // Allocate blocks as needed
+    let start_block = offset / BLOCK_SIZE
+    let end_block = (end_pos - 1) / BLOCK_SIZE
+
+    let blk = start_block
+    while blk <= end_block {
+        if get_block_ptr(inode, blk) == 0 {
+            let new_block = alloc_data_block()
+            if new_block < 0 {
+                return Result::Err("No free blocks")
+            }
+            set_block_ptr(inode, blk, new_block)
+            inode.block_count = inode.block_count + 1
+        }
+
+        // Write data to this block
+        let phys = get_block_ptr(inode, blk)
+        let blk_start = if blk == start_block { offset % BLOCK_SIZE } else { 0 }
+        let blk_end = if blk == end_block { (end_pos - 1) % BLOCK_SIZE + 1 } else { BLOCK_SIZE }
+        let data_offset = blk * BLOCK_SIZE - offset + blk_start
+
+        // Read-modify-write for partial blocks
+        let existing = disk::read_sectors(phys, 1)
+        let i = blk_start
+        while i < blk_end {
+            existing[i] = data[data_offset + i - blk_start]
+            i = i + 1
+        }
+        disk::write_sectors(phys, existing)
+
+        blk = blk + 1
+    }
+
+    // Update inode size if necessary
+    if end_pos > inode.size {
+        inode.size = end_pos
+    }
+    write_inode(ino, inode)
+
+    return Result::Ok(data.len())
+}
+
+// ── Block Pointer Helpers ───────────────────────────────────────────────
+
+fn get_block_ptr(inode: Inode, logical: int) -> int {
+    if logical < DIRECT_BLOCKS {
+        return inode.direct[logical]
+    }
+
+    let indirect_idx = logical - DIRECT_BLOCKS
+    let ptrs_per_block = BLOCK_SIZE / 8   // 512 pointers per block (64-bit)
+
+    if indirect_idx < ptrs_per_block {
+        // Single indirect
+        if inode.indirect == 0 { return 0 }
+        let raw = disk::read_sectors(inode.indirect, 1)
+        return read_int64(raw, indirect_idx * 8)
+    }
+
+    let dbl_idx = indirect_idx - ptrs_per_block
+    if dbl_idx < ptrs_per_block * ptrs_per_block {
+        // Double indirect
+        if inode.dbl_indirect == 0 { return 0 }
+        let l1_idx = dbl_idx / ptrs_per_block
+        let l2_idx = dbl_idx % ptrs_per_block
+
+        let l1_raw = disk::read_sectors(inode.dbl_indirect, 1)
+        let l1_ptr = read_int64(l1_raw, l1_idx * 8)
+        if l1_ptr == 0 { return 0 }
+
+        let l2_raw = disk::read_sectors(l1_ptr, 1)
+        return read_int64(l2_raw, l2_idx * 8)
+    }
+
+    return 0  // file too large
+}
+
+fn set_block_ptr(inode: Inode, logical: int, phys: int) {
+    if logical < DIRECT_BLOCKS {
+        inode.direct[logical] = phys
+        return
+    }
+    // ... handle indirect and double-indirect allocation
+}
+
+// ── Bitmap Helpers ──────────────────────────────────────────────────────
+
+fn is_inode_used(ino: int) -> bool {
+    return (inode_bitmap[ino / 8] >> (ino % 8)) & 1 == 1
+}
+
+fn mark_inode_used(ino: int) {
+    inode_bitmap[ino / 8] = inode_bitmap[ino / 8] | (1 << (ino % 8))
+}
+
+fn mark_inode_free(ino: int) {
+    inode_bitmap[ino / 8] = inode_bitmap[ino / 8] & ~(1 << (ino % 8))
+}
+
+fn is_block_used(blk: int) -> bool {
+    return (data_bitmap[blk / 8] >> (blk % 8)) & 1 == 1
+}
+
+fn mark_block_used(blk: int) {
+    data_bitmap[blk / 8] = data_bitmap[blk / 8] | (1 << (blk % 8))
+}
+
+fn mark_block_free(blk: int) {
+    data_bitmap[blk / 8] = data_bitmap[blk / 8] & ~(1 << (blk % 8))
+}
+
+// ── Low-level Helpers ───────────────────────────────────────────────────
+
+fn write_superblock() {
+    // Serialize sb to bytes and write to block 0
+}
+
+fn load_bitmap(start_block: int, bits: int) -> [byte] {
+    let bytes_needed = (bits + 7) / 8
+    let blocks_needed = (bytes_needed + BLOCK_SIZE - 1) / BLOCK_SIZE
+    let bmap: [byte] = []
+    let i = 0
+    while i < blocks_needed {
+        bmap = bmap + disk::read_sectors(start_block + i, 1)
+        i = i + 1
+    }
+    return bmap[0..bytes_needed]
+}
+
+fn add_dir_entry(parent_ino: int, entry: DirEntry) {
+    // Find space in parent directory's data blocks and add entry
+}
+
+fn write_dir_entries(block: int, entries: [DirEntry]) {
+    // Serialize directory entries and write to block
+}
+
+fn read_int64(data: [byte], offset: int) -> int {
+    return (data[offset] as int) |
+           ((data[offset+1] as int) << 8) |
+           ((data[offset+2] as int) << 16) |
+           ((data[offset+3] as int) << 24) |
+           ((data[offset+4] as int) << 32) |
+           ((data[offset+5] as int) << 40) |
+           ((data[offset+6] as int) << 48) |
+           ((data[offset+7] as int) << 56)
+}

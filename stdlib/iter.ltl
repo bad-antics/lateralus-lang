@@ -1,0 +1,300 @@
+// Lateralus Standard Library — iter.ltl  (v1.5.0)
+// Lazy iterator combinators for efficient data processing
+
+module stdlib.iter
+
+// ── Iterator construction ────────────────────────────────────────────────────
+
+pub fn from_list(lst: list) -> map {
+    return {"_type": "iter", "source": lst, "index": 0,
+            "transforms": [], "len": len(lst)}
+}
+
+pub fn range_iter(start: int, stop: int) -> map {
+    let mut items = []
+    let mut i = start
+    while i < stop {
+        items = push(items, i)
+        i += 1
+    }
+    return from_list(items)
+}
+
+pub fn range_step(start: int, stop: int, step: int) -> map {
+    let mut items = []
+    let mut i = start
+    if step > 0 {
+        while i < stop {
+            items = push(items, i)
+            i += step
+        }
+    } else if step < 0 {
+        while i > stop {
+            items = push(items, i)
+            i += step
+        }
+    }
+    return from_list(items)
+}
+
+pub fn repeat(value, n: int) -> map {
+    let mut items = []
+    let mut i = 0
+    while i < n {
+        items = push(items, value)
+        i += 1
+    }
+    return from_list(items)
+}
+
+pub fn empty() -> map {
+    return from_list([])
+}
+
+pub fn once(value) -> map {
+    return from_list([value])
+}
+
+// ── Transforms (chainable) ──────────────────────────────────────────────────
+
+pub fn iter_map(it: map, f) -> map {
+    let items = collect(it)
+    let mut result = []
+    for x in items {
+        result = push(result, f(x))
+    }
+    return from_list(result)
+}
+
+pub fn iter_filter(it: map, pred) -> map {
+    let items = collect(it)
+    let mut result = []
+    for x in items {
+        if pred(x) { result = push(result, x) }
+    }
+    return from_list(result)
+}
+
+pub fn iter_take(it: map, n: int) -> map {
+    let items = collect(it)
+    let mut result = []
+    let mut i = 0
+    for x in items {
+        if i >= n { break }
+        result = push(result, x)
+        i += 1
+    }
+    return from_list(result)
+}
+
+pub fn iter_skip(it: map, n: int) -> map {
+    let items = collect(it)
+    if n >= len(items) { return empty() }
+    return from_list(slice_list(items, n, len(items)))
+}
+
+pub fn iter_take_while(it: map, pred) -> map {
+    let items = collect(it)
+    let mut result = []
+    for x in items {
+        if !pred(x) { break }
+        result = push(result, x)
+    }
+    return from_list(result)
+}
+
+pub fn iter_skip_while(it: map, pred) -> map {
+    let items = collect(it)
+    let mut result = []
+    let mut skipping = true
+    for x in items {
+        if skipping && pred(x) { continue }
+        skipping = false
+        result = push(result, x)
+    }
+    return from_list(result)
+}
+
+pub fn iter_flat_map(it: map, f) -> map {
+    let items = collect(it)
+    let mut result = []
+    for x in items {
+        let sub = f(x)
+        for y in sub {
+            result = push(result, y)
+        }
+    }
+    return from_list(result)
+}
+
+pub fn iter_enumerate(it: map) -> map {
+    let items = collect(it)
+    let mut result = []
+    let mut i = 0
+    for x in items {
+        result = push(result, {"index": i, "value": x})
+        i += 1
+    }
+    return from_list(result)
+}
+
+pub fn iter_zip(a: map, b: map) -> map {
+    let items_a = collect(a)
+    let items_b = collect(b)
+    let mut result = []
+    let n = min(len(items_a), len(items_b))
+    let mut i = 0
+    while i < n {
+        result = push(result, [items_a[i], items_b[i]])
+        i += 1
+    }
+    return from_list(result)
+}
+
+pub fn iter_chain(a: map, b: map) -> map {
+    let items_a = collect(a)
+    let items_b = collect(b)
+    return from_list(items_a + items_b)
+}
+
+pub fn iter_unique(it: map) -> map {
+    let items = collect(it)
+    let mut seen = {}
+    let mut result = []
+    for x in items {
+        let key = to_str(x)
+        if !(key in seen) {
+            seen[key] = true
+            result = push(result, x)
+        }
+    }
+    return from_list(result)
+}
+
+pub fn iter_chunks(it: map, size: int) -> map {
+    let items = collect(it)
+    let mut result = []
+    let mut i = 0
+    while i < len(items) {
+        let end = min(i + size, len(items))
+        result = push(result, slice_list(items, i, end))
+        i += size
+    }
+    return from_list(result)
+}
+
+pub fn iter_windows(it: map, size: int) -> map {
+    let items = collect(it)
+    let mut result = []
+    let mut i = 0
+    while i + size <= len(items) {
+        result = push(result, slice_list(items, i, i + size))
+        i += 1
+    }
+    return from_list(result)
+}
+
+// ── Terminal operations ──────────────────────────────────────────────────────
+
+pub fn collect(it: map) -> list {
+    if it["_type"] != "iter" {
+        throw TypeError("collect requires an iterator")
+    }
+    return it["source"]
+}
+
+pub fn iter_reduce(it: map, init, f) {
+    let items = collect(it)
+    let mut acc = init
+    for x in items {
+        acc = f(acc, x)
+    }
+    return acc
+}
+
+pub fn iter_fold(it: map, init, f) {
+    return iter_reduce(it, init, f)
+}
+
+pub fn iter_sum(it: map) -> float {
+    return iter_reduce(it, 0, fn(a, b) { a + b })
+}
+
+pub fn iter_product(it: map) -> float {
+    return iter_reduce(it, 1, fn(a, b) { a * b })
+}
+
+pub fn iter_count(it: map) -> int {
+    return len(collect(it))
+}
+
+pub fn iter_any(it: map, pred) -> bool {
+    for x in collect(it) {
+        if pred(x) { return true }
+    }
+    return false
+}
+
+pub fn iter_all(it: map, pred) -> bool {
+    for x in collect(it) {
+        if !pred(x) { return false }
+    }
+    return true
+}
+
+pub fn iter_find(it: map, pred) -> map {
+    for x in collect(it) {
+        if pred(x) { return {"_tag": "Some", "value": x, "is_some": true} }
+    }
+    return {"_tag": "None", "is_some": false}
+}
+
+pub fn iter_position(it: map, pred) -> int {
+    let mut i = 0
+    for x in collect(it) {
+        if pred(x) { return i }
+        i += 1
+    }
+    return -1
+}
+
+pub fn iter_min(it: map) {
+    let items = collect(it)
+    if len(items) == 0 { throw ValueError("min of empty iterator") }
+    let mut m = items[0]
+    for x in items {
+        if x < m { m = x }
+    }
+    return m
+}
+
+pub fn iter_max(it: map) {
+    let items = collect(it)
+    if len(items) == 0 { throw ValueError("max of empty iterator") }
+    let mut m = items[0]
+    for x in items {
+        if x > m { m = x }
+    }
+    return m
+}
+
+pub fn iter_for_each(it: map, f) {
+    for x in collect(it) {
+        f(x)
+    }
+}
+
+pub fn iter_to_map(it: map, key_fn, val_fn) -> map {
+    let mut result = {}
+    for x in collect(it) {
+        result[key_fn(x)] = val_fn(x)
+    }
+    return result
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+fn min(a: int, b: int) -> int {
+    if a < b { return a }
+    return b
+}

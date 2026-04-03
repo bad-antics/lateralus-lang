@@ -1,0 +1,206 @@
+// Lateralus Standard Library — fmt.ltl  (v2.2.0)
+// String formatting and output utilities
+
+module stdlib.fmt
+
+// ── Format specifiers ────────────────────────────────────────────────────────
+
+/// Format a value as a string with optional width/precision.
+/// format("hello")          => "hello"
+/// format(3.14159, ".2f")   => "3.14"
+/// format(42, "05d")        => "00042"
+/// format(255, "x")         => "ff"
+/// format(255, "X")         => "FF"
+/// format(7, "08b")         => "00000111"
+pub fn format(value: any, spec: str) -> str {
+    if spec == "" {
+        return str(value)
+    }
+    return __builtin_format(value, spec)
+}
+
+/// Formatted print — like printf.
+/// printf("Hello, {}!\n", name)
+/// printf("x={}, y={}\n", x, y)
+pub fn printf(template: str, args: list) -> void {
+    let result = sprintf(template, args)
+    print(result)
+}
+
+/// Formatted string — substitutes {} placeholders with args.
+/// sprintf("Hello, {}!", ["world"])   => "Hello, world!"
+/// sprintf("{} + {} = {}", [1, 2, 3]) => "1 + 2 = 3"
+pub fn sprintf(template: str, args: list) -> str {
+    let mut result = ""
+    let mut i = 0
+    let mut arg_idx = 0
+    while i < len(template) {
+        if i + 1 < len(template) && template[i] == "{" && template[i + 1] == "}" {
+            if arg_idx < len(args) {
+                result = result + str(args[arg_idx])
+                arg_idx = arg_idx + 1
+            } else {
+                result = result + "{" + "}"
+            }
+            i = i + 2
+        } else {
+            result = result + template[i]
+            i = i + 1
+        }
+    }
+    return result
+}
+
+// ── Padding and alignment ────────────────────────────────────────────────────
+
+/// Left-pad a string to width with a fill character.
+/// pad_left("42", 5, "0")   => "00042"
+/// pad_left("hi", 10, " ")  => "        hi"
+pub fn pad_left(s: str, width: int, fill: str) -> str {
+    let mut result = s
+    while len(result) < width {
+        result = fill + result
+    }
+    return result
+}
+
+/// Right-pad a string to width with a fill character.
+/// pad_right("hi", 10, " ") => "hi        "
+pub fn pad_right(s: str, width: int, fill: str) -> str {
+    let mut result = s
+    while len(result) < width {
+        result = result + fill
+    }
+    return result
+}
+
+/// Center a string within a given width.
+/// center("hi", 10, "-") => "----hi----"
+pub fn center(s: str, width: int, fill: str) -> str {
+    let diff = width - len(s)
+    if diff <= 0 {
+        return s
+    }
+    let left = diff / 2
+    let right = diff - left
+    return repeat(fill, left) + s + repeat(fill, right)
+}
+
+// ── Number formatting ────────────────────────────────────────────────────────
+
+/// Format an integer in hexadecimal.
+/// hex(255)    => "ff"
+/// hex(255, 1) => "FF"
+pub fn hex(n: int, upper: bool) -> str {
+    let digits = "0123456789abcdef"
+    let digits_upper = "0123456789ABCDEF"
+    let chars = upper ? digits_upper : digits
+    if n == 0 {
+        return "0"
+    }
+    let mut result = ""
+    let mut val = abs(n)
+    while val > 0 {
+        result = chars[val % 16] + result
+        val = val / 16
+    }
+    if n < 0 {
+        result = "-" + result
+    }
+    return result
+}
+
+/// Format an integer in binary.
+/// bin(42) => "101010"
+pub fn bin(n: int) -> str {
+    if n == 0 {
+        return "0"
+    }
+    let mut result = ""
+    let mut val = abs(n)
+    while val > 0 {
+        result = str(val % 2) + result
+        val = val / 2
+    }
+    if n < 0 {
+        result = "-" + result
+    }
+    return result
+}
+
+/// Format an integer in octal.
+/// oct(42) => "52"
+pub fn oct(n: int) -> str {
+    if n == 0 {
+        return "0"
+    }
+    let mut result = ""
+    let mut val = abs(n)
+    while val > 0 {
+        result = str(val % 8) + result
+        val = val / 8
+    }
+    if n < 0 {
+        result = "-" + result
+    }
+    return result
+}
+
+// ── Table formatting ─────────────────────────────────────────────────────────
+
+/// Format a list of rows as an aligned table.
+/// table([["Name", "Age"], ["Alice", 30], ["Bob", 25]])
+pub fn table(rows: list, separator: str) -> str {
+    if len(rows) == 0 {
+        return ""
+    }
+    // Compute column widths
+    let num_cols = len(rows[0])
+    let mut widths = []
+    for col in range(0, num_cols) {
+        let mut max_w = 0
+        for row in rows {
+            if col < len(row) {
+                let w = len(str(row[col]))
+                if w > max_w {
+                    max_w = w
+                }
+            }
+        }
+        widths = widths + [max_w]
+    }
+    // Build output
+    let mut lines = []
+    for row in rows {
+        let mut parts = []
+        for col in range(0, num_cols) {
+            let cell = col < len(row) ? str(row[col]) : ""
+            parts = parts + [pad_right(cell, widths[col], " ")]
+        }
+        lines = lines + [join(parts, separator)]
+    }
+    return join(lines, "\n")
+}
+
+/// Repeat a string n times.
+/// repeat("ab", 3) => "ababab"
+pub fn repeat(s: str, n: int) -> str {
+    let mut result = ""
+    for _ in range(0, n) {
+        result = result + s
+    }
+    return result
+}
+
+/// Join a list of strings with a separator.
+/// join(["a", "b", "c"], ", ") => "a, b, c"
+pub fn join(parts: list, sep: str) -> str {
+    let mut result = ""
+    for i in range(0, len(parts)) {
+        if i > 0 {
+            result = result + sep
+        }
+        result = result + str(parts[i])
+    }
+    return result
+}

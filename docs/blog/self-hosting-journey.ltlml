@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The Self-Hosting Journey — Writing LATERALUS in LATERALUS</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+# The Self-Hosting Journey
+
+@meta {
+  title: "The Self-Hosting Journey — Writing LATERALUS in LATERALUS"
+  date: "2024-11-20"
+  author: "bad-antics"
+  tags: ["compiler", "self-hosting", "bootstrap", "internals"]
+  reading_time: "10 min"
+}
+
+@heading level=1 {
+  The Self-Hosting Journey
+}
+
+@subtitle {
+  What it means to write a compiler in the language it compiles
+}
+
+---
+
+@heading level=2 {
+  What Is Self-Hosting?
+}
+
+@paragraph {
+  A programming language is *self-hosted* when its compiler is written in
+  the language itself. C compilers are written in C. Go is compiled by Go.
+  Rust is compiled by Rust.
+}
+
+@paragraph {
+  This milestone matters for practical and philosophical reasons:
+}
+
+@paragraph {
+  *Practically*: a self-hosted compiler is the most comprehensive test of
+  the language. If the language can express its own compiler — parsing,
+  AST traversal, code generation, optimization — it can express anything.
+}
+
+@paragraph {
+  *Philosophically*: self-hosting is the moment a language becomes real.
+  It's the language proving it believes in itself enough to be its own
+  foundation.
+}
+
+---
+
+@heading level=2 {
+  The Bootstrap Problem
+}
+
+@paragraph {
+  There's a chicken-and-egg problem: you can't compile LATERALUS code with
+  a LATERALUS compiler until you have a LATERALUS compiler. The solution is
+  a *bootstrap compiler* — a version of the compiler written in another language
+  (in our case, Python) that can compile LATERALUS code, including the
+  LATERALUS-written compiler.
+}
+
+@paragraph {
+  The process has three stages:
+}
+
+@code lang=text {
+  Stage 1: Bootstrap compiler (Python)
+    → Can compile basic LATERALUS
+    → Written and maintained by humans
+
+  Stage 2: v2 compiler written in LATERALUS
+    → Compiled by Stage 1 bootstrap
+    → Produces Python code (or eventually native code)
+
+  Stage 3: Self-hosted
+    → v2 compiler compiled by v2 compiler
+    → Bootstrap Python compiler no longer needed for production
+}
+
+---
+
+@heading level=2 {
+  Where We Are Today
+}
+
+@paragraph {
+  The LATERALUS v1.3.0 release includes the bootstrap directory:
+  three files that form the beginning of the v2 self-hosted compiler,
+  all written in LATERALUS:
+}
+
+@code lang=text {
+  bootstrap/
+    v2_lexer.ltl      — Tokenizes LATERALUS source code
+    v2_parser.ltl     — Builds the AST from token streams
+    v2_codegen.ltl    — Generates output from the AST
+}
+
+@paragraph {
+  These files can be run by the current Python bootstrap compiler.
+  They're not production-ready yet — they don't handle every edge case,
+  and they're significantly slower than the Python implementation.
+  But they're *real*: they correctly parse and process LATERALUS programs.
+}
+
+---
+
+@heading level=2 {
+  What the v2 Lexer Looks Like
+}
+
+@paragraph {
+  The v2 lexer is itself a pipeline. Token recognition flows naturally:
+}
+
+@code lang=lateralus {
+  fn tokenize(source: str) -> list {
+    source
+      |> split_chars()
+      |> scan(lex_step, LexState.new())
+      |> filter((tok) => tok.kind != TokenKind.Whitespace)
+      |> filter((tok) => tok.kind != TokenKind.Comment)
+      |> collect()
+  }
+}
+
+@paragraph {
+  This is the key insight: when you write a lexer in a pipeline-oriented
+  language, the lexer *becomes* a pipeline. The structure of the code
+  mirrors the structure of the algorithm.
+}
+
+---
+
+@heading level=2 {
+  Challenges We've Encountered
+}
+
+@heading level=3 {
+  Challenge 1: Recursive Types
+}
+
+@paragraph {
+  AST nodes reference other AST nodes. An @code{IfExpr} contains a
+  condition expression, a then-body, and an else-body — all of which
+  are themselves expressions. Without algebraic data types or generics
+  (coming in v1.5), we represent these with tagged maps.
+}
+
+@code lang=lateralus {
+  // v2 AST nodes as tagged maps
+  fn make_if_expr(cond, then_body, else_body) {
+    {
+      "kind":      "if_expr",
+      "condition": cond,
+      "then":      then_body,
+      "else":      else_body,
+    }
+  }
+}
+
+@heading level=3 {
+  Challenge 2: Error Recovery
+}
+
+@paragraph {
+  A production compiler needs to report *multiple* errors, not just the
+  first one. Error recovery — continuing to parse after an error is found —
+  is subtle to implement correctly. Our v2 parser currently stops at the
+  first error. Resilient parsing is a v1.5 goal.
+}
+
+@heading level=3 {
+  Challenge 3: Performance
+}
+
+@paragraph {
+  The Python bootstrap compiler has ~15 years of CPython optimization behind
+  it. The LATERALUS v2 compiler, transpiled to Python, is slower. This is
+  expected and acceptable for now — correctness before performance.
+}
+
+---
+
+@heading level=2 {
+  The Road to Full Self-Hosting
+}
+
+@paragraph {
+  Full self-hosting — where LATERALUS produces native machine code and
+  compiles itself to native — is a v2.0 goal. The path:
+}
+
+@code lang=text {
+  v1.3  → Bootstrap in Python; v2 lexer/parser/codegen in LATERALUS (partial)
+  v1.4  → v2 compiler handles all language features except generics
+  v1.5  → Generics + ADTs; v2 compiler handles full language
+  v2.0  → v2 compiler compiles itself; Python bootstrap retired
+}
+
+---
+
+@heading level=2 {
+  Why This Matters for Users
+}
+
+@paragraph {
+  You might wonder: why should users care about the compiler implementation
+  language?
+}
+
+@paragraph {
+  The answer is: the v2 compiler will be easier to contribute to. Right now,
+  improving the LATERALUS compiler requires knowing Python well. Once the
+  compiler is self-hosted, it requires only knowing LATERALUS.
+}
+
+@paragraph {
+  The language becomes its own best tool. Everything — from the runtime to
+  the tooling to the compiler itself — is written in LATERALUS.
+  That's the goal. Spiral out. Keep going.
+}
+
+@footer {
+  Filed under: compiler, self-hosting · November 2024
+}
+
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>

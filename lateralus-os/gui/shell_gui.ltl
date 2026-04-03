@@ -1,0 +1,124 @@
+/// ═══════════════════════════════════════════════════════════════════════
+/// LateralusOS — Graphical Shell (Lateralus Language)
+/// ═══════════════════════════════════════════════════════════════════════
+/// Terminal emulator widget for the GUI desktop, written in Lateralus.
+///
+/// Usage: lateralus c gui/shell_gui.ltl --freestanding -o build/gui/shell_gui.c
+/// ═══════════════════════════════════════════════════════════════════════
+
+/// ── Terminal buffer ──────────────────────────────────────────────────
+
+struct TermLine {
+    text: String
+    color: Int
+}
+
+struct TermBuffer {
+    lines: [TermLine]
+    max_lines: Int
+    cursor_x: Int
+    cursor_y: Int
+    input_buf: String
+    prompt: String
+}
+
+fn new_term_buffer() -> TermBuffer {
+    TermBuffer {
+        lines: [],
+        max_lines: 200,
+        cursor_x: 0,
+        cursor_y: 0,
+        input_buf: "",
+        prompt: "lateralus> ",
+    }
+}
+
+fn term_add_line(buf: TermBuffer, text: String, color: Int) -> TermBuffer {
+    let line = TermLine { text: text, color: color }
+    let new_lines = buf.lines ++ [line]
+    TermBuffer {
+        lines: new_lines,
+        max_lines: buf.max_lines,
+        cursor_x: 0,
+        cursor_y: buf.cursor_y + 1,
+        input_buf: buf.input_buf,
+        prompt: buf.prompt,
+    }
+}
+
+/// ── Shell commands ───────────────────────────────────────────────────
+
+enum ShellCmd {
+    Help
+    Clear
+    Uname
+    Echo(String)
+    Unknown(String)
+}
+
+fn parse_command(input: String) -> ShellCmd {
+    match input {
+        "help"  => ShellCmd::Help
+        "clear" => ShellCmd::Clear
+        "uname" => ShellCmd::Uname
+        _       => {
+            if input.starts_with("echo ") {
+                ShellCmd::Echo(input.slice(5, input.len()))
+            } else {
+                ShellCmd::Unknown(input)
+            }
+        }
+    }
+}
+
+fn execute_command(cmd: ShellCmd) -> [TermLine] {
+    match cmd {
+        ShellCmd::Help => [
+            TermLine { text: "LateralusOS GUI Shell", color: rgb(249, 226, 175) },
+            TermLine { text: "Commands: help, clear, uname, echo <msg>", color: rgb(205, 214, 244) },
+        ]
+        ShellCmd::Clear => []
+        ShellCmd::Uname => [
+            TermLine { text: "LateralusOS v0.2.0 (x86_64) — built with Lateralus", color: rgb(166, 227, 161) },
+        ]
+        ShellCmd::Echo(msg) => [
+            TermLine { text: msg, color: rgb(205, 214, 244) },
+        ]
+        ShellCmd::Unknown(cmd) => [
+            TermLine { text: "Unknown command: " ++ cmd, color: rgb(243, 139, 168) },
+        ]
+    }
+}
+
+/// ── Terminal rendering config ────────────────────────────────────────
+
+struct TermTheme {
+    bg: Int
+    fg: Int
+    prompt_color: Int
+    cursor_color: Int
+    selection_color: Int
+    font_w: Int
+    font_h: Int
+    padding: Int
+}
+
+fn default_term_theme() -> TermTheme {
+    TermTheme {
+        bg: rgb(18, 18, 18),
+        fg: rgb(205, 214, 244),
+        prompt_color: rgb(116, 135, 232),
+        cursor_color: rgb(249, 226, 175),
+        selection_color: rgb(88, 91, 112),
+        font_w: 8,
+        font_h: 16,
+        padding: 6,
+    }
+}
+
+/// ── Visible lines calculation ────────────────────────────────────────
+
+fn visible_lines(window_h: Int, title_bar_h: Int, theme: TermTheme) -> Int {
+    let content_h = window_h - title_bar_h - theme.padding * 2
+    content_h / (theme.font_h + 2)
+}

@@ -1,0 +1,185 @@
+// Lateralus Standard Library — result.ltl  (v1.5.0)
+// Result/Option types for safe error handling (functional style)
+
+module stdlib.result
+
+// ── Result constructors ──────────────────────────────────────────────────────
+
+pub fn ok(value) -> map {
+    return {"_tag": "Ok", "value": value, "is_ok": true, "is_err": false}
+}
+
+pub fn err(error) -> map {
+    return {"_tag": "Err", "error": error, "is_ok": false, "is_err": true}
+}
+
+// ── Result operations ────────────────────────────────────────────────────────
+
+pub fn is_ok(r: map) -> bool {
+    return r["_tag"] == "Ok"
+}
+
+pub fn is_err(r: map) -> bool {
+    return r["_tag"] == "Err"
+}
+
+pub fn unwrap(r: map) {
+    if r["_tag"] == "Ok" { return r["value"] }
+    throw ValueError("unwrap called on Err: " + to_str(r["error"]))
+}
+
+pub fn unwrap_or(r: map, default) {
+    if r["_tag"] == "Ok" { return r["value"] }
+    return default
+}
+
+pub fn unwrap_err(r: map) {
+    if r["_tag"] == "Err" { return r["error"] }
+    throw ValueError("unwrap_err called on Ok")
+}
+
+pub fn map_result(r: map, f) -> map {
+    if r["_tag"] == "Ok" {
+        return ok(f(r["value"]))
+    }
+    return r
+}
+
+pub fn map_err(r: map, f) -> map {
+    if r["_tag"] == "Err" {
+        return err(f(r["error"]))
+    }
+    return r
+}
+
+pub fn and_then(r: map, f) -> map {
+    if r["_tag"] == "Ok" {
+        return f(r["value"])
+    }
+    return r
+}
+
+pub fn or_else(r: map, f) -> map {
+    if r["_tag"] == "Err" {
+        return f(r["error"])
+    }
+    return r
+}
+
+pub fn flatten(r: map) -> map {
+    if r["_tag"] == "Ok" && is_result(r["value"]) {
+        return r["value"]
+    }
+    return r
+}
+
+pub fn is_result(v) -> bool {
+    if type_of(v) != "map" { return false }
+    return "_tag" in v && (v["_tag"] == "Ok" || v["_tag"] == "Err")
+}
+
+// ── Option constructors ──────────────────────────────────────────────────────
+
+pub fn some(value) -> map {
+    return {"_tag": "Some", "value": value, "is_some": true, "is_none": false}
+}
+
+pub fn none() -> map {
+    return {"_tag": "None", "is_some": false, "is_none": true}
+}
+
+// ── Option operations ────────────────────────────────────────────────────────
+
+pub fn is_some(o: map) -> bool {
+    return o["_tag"] == "Some"
+}
+
+pub fn is_none(o: map) -> bool {
+    return o["_tag"] == "None"
+}
+
+pub fn unwrap_option(o: map) {
+    if o["_tag"] == "Some" { return o["value"] }
+    throw ValueError("unwrap called on None")
+}
+
+pub fn unwrap_option_or(o: map, default) {
+    if o["_tag"] == "Some" { return o["value"] }
+    return default
+}
+
+pub fn map_option(o: map, f) -> map {
+    if o["_tag"] == "Some" {
+        return some(f(o["value"]))
+    }
+    return o
+}
+
+pub fn option_and_then(o: map, f) -> map {
+    if o["_tag"] == "Some" {
+        return f(o["value"])
+    }
+    return o
+}
+
+pub fn option_or(o: map, alternative: map) -> map {
+    if o["_tag"] == "Some" { return o }
+    return alternative
+}
+
+pub fn option_to_result(o: map, error) -> map {
+    if o["_tag"] == "Some" { return ok(o["value"]) }
+    return err(error)
+}
+
+pub fn result_to_option(r: map) -> map {
+    if r["_tag"] == "Ok" { return some(r["value"]) }
+    return none()
+}
+
+// ── Try/catch wrapper ────────────────────────────────────────────────────────
+
+pub fn try_call(f) -> map {
+    try {
+        let value = f()
+        return ok(value)
+    } catch e {
+        return err(e)
+    }
+}
+
+pub fn try_call_with(f, arg) -> map {
+    try {
+        let value = f(arg)
+        return ok(value)
+    } catch e {
+        return err(e)
+    }
+}
+
+// ── Collection helpers ───────────────────────────────────────────────────────
+
+pub fn collect_results(results: list) -> map {
+    // Convert list of Results to Result of list
+    // Returns Err on first error encountered
+    let mut values = []
+    for r in results {
+        if r["_tag"] == "Err" { return r }
+        values = push(values, r["value"])
+    }
+    return ok(values)
+}
+
+pub fn partition_results(results: list) -> map {
+    // Split into {oks: list, errs: list}
+    let mut oks = []
+    let mut errs = []
+    for r in results {
+        if r["_tag"] == "Ok" {
+            oks = push(oks, r["value"])
+        } else {
+            errs = push(errs, r["error"])
+        }
+    }
+    return {"oks": oks, "errs": errs}
+}

@@ -1,0 +1,1190 @@
+// ═══════════════════════════════════════════════════════════════════
+// LATERALUS v2.2 — IRC Chat Server & Client
+// A server-based IRC-style chat system with channels, nicks,
+// private messaging, and the full RFC-inspired command set.
+// ═══════════════════════════════════════════════════════════════════
+//
+// Usage:
+//   lateralus run irc_chat.ltl --server --port 6667
+//   lateralus run irc_chat.ltl --client --host 127.0.0.1 --port 6667
+//
+// Supported IRC commands:
+//   NICK <name>           — set or change nickname
+//   JOIN #channel          — join a channel
+//   PART #channel          — leave a channel
+//   PRIVMSG <target> :msg  — send message to channel or user
+//   TOPIC #channel :topic  — set channel topic
+//   NAMES #channel         — list users in a channel
+//   LIST                   — list all channels
+//   WHO #channel           — list users + info in channel
+//   WHOIS <nick>           — query user info
+//   KICK #channel <nick>   — kick a user from a channel
+//   QUIT :message          — disconnect from server
+//   PING / PONG            — keepalive
+// ═══════════════════════════════════════════════════════════════════
+
+import strings
+import collections
+
+// ─── Data Structures ──────────────────────────────────────────────
+
+struct IRCUser {
+    nick: str,
+    username: str,
+    hostname: str,
+    realname: str,
+    socket_id: int,
+    channels: list,
+    registered: bool,
+    away_msg: str
+}
+
+struct Channel {
+    name: str,
+    topic: str,
+    users: list,
+    ops: list,
+    mode: str,
+    created_at: int
+}
+
+struct IRCMessage {
+    prefix: str,
+    command: str,
+    params: list,
+    trailing: str
+}
+
+struct IRCServer {
+    host: str,
+    port: int,
+    name: str,
+    motd: list,
+    channels: map,
+    users: map,
+    max_nick_len: int,
+    max_channels: int
+}
+
+// ─── Message Parsing ──────────────────────────────────────────────
+
+fn parse_irc_message(raw: str) -> IRCMessage {
+    // Parse raw IRC protocol line into structured message
+    // Format: [:prefix] COMMAND [params] [:trailing]
+    let line = trim(raw)
+    let prefix = ""
+    let rest = line
+
+    // Extract prefix (starts with :)
+    if starts_with(line, ":") {
+        let space_idx = index_of(line, " ")
+        if space_idx > 0 {
+            prefix = slice(line, 1, space_idx)
+            rest = slice(line, space_idx + 1, len(line))
+        }
+    }
+
+    // Extract trailing (after " :")
+    let trailing = ""
+    let colon_idx = index_of(rest, " :")
+    if colon_idx >= 0 {
+        trailing = slice(rest, colon_idx + 2, len(rest))
+        rest = slice(rest, 0, colon_idx)
+    }
+
+    // Split remaining into command + params
+    let parts = split(rest, " ")
+    let command = ""
+    let params = []
+
+    if len(parts) > 0 {
+        command = upper(parts[0])
+        let mut i = 1
+        while i < len(parts) {
+            if len(parts[i]) > 0 {
+                params = params + [parts[i]]
+            }
+            i = i + 1
+        }
+    }
+
+    return IRCMessage {
+        prefix: prefix,
+        command: command,
+        params: params,
+        trailing: trailing
+    }
+}
+
+fn format_irc_message(msg: IRCMessage) -> str {
+    let result = ""
+
+    if len(msg.prefix) > 0 {
+        result = ":" + msg.prefix + " "
+    }
+
+    result = result + msg.command
+
+    for param in msg.params {
+        result = result + " " + param
+    }
+
+    if len(msg.trailing) > 0 {
+        result = result + " :" + msg.trailing
+    }
+
+    return result
+}
+
+// ─── Server Logic ─────────────────────────────────────────────────
+
+fn create_server(host: str, port: int) -> IRCServer {
+    return IRCServer {
+        host: host,
+        port: port,
+        name: "lateralus.irc.local",
+        motd: [
+            "═══════════════════════════════════════",
+            "  Welcome to the LATERALUS IRC Server",
+            "  Built with Lateralus v2.2.0",
+            "  Type /help for commands",
+            "═══════════════════════════════════════",
+            "",
+            "  🌀 The language that spirals outward",
+            "  Channels: #lateralus #dev #help",
+            "",
+            "═══════════════════════════════════════"
+        ],
+        channels: {},
+        users: {},
+        max_nick_len: 16,
+        max_channels: 50
+    }
+}
+
+fn create_user(nick: str, socket_id: int) -> IRCUser {
+    return IRCUser {
+        nick: nick,
+        username: nick,
+        hostname: "localhost",
+        realname: nick,
+        socket_id: socket_id,
+        channels: [],
+        registered: false,
+        away_msg: ""
+    }
+}
+
+fn create_channel(name: str) -> Channel {
+    return Channel {
+        name: name,
+        topic: "Welcome to " + name,
+        users: [],
+        ops: [],
+        mode: "+nt",
+        created_at: 0
+    }
+}
+
+fn user_prefix(user: IRCUser) -> str {
+    return user.nick + "!" + user.username + "@" + user.hostname
+}
+
+// ─── Server Command Handlers ─────────────────────────────────────
+
+fn handle_nick(server: IRCServer, user: IRCUser, msg: IRCMessage) -> list {
+    let new_nick = ""
+    if len(msg.params) > 0 {
+        new_nick = msg.params[0]
+    } else if len(msg.trailing) > 0 {
+        new_nick = msg.trailing
+    }
+
+    if len(new_nick) == 0 {
+        return [":server 431 " + user.nick + " :No nickname given"]
+    }
+
+    if len(new_nick) > server.max_nick_len {
+        return [":server 432 " + user.nick + " " + new_nick + " :Nickname too long"]
+    }
+
+    // Check if nick is already in use
+    if contains_key(server.users, new_nick) {
+        return [":server 433 " + user.nick + " " + new_nick + " :Nickname is already in use"]
+    }
+
+    let old_prefix = user_prefix(user)
+    let old_nick = user.nick
+
+    // Notify all channels this user is in
+    let responses = []
+    responses = responses + [":" + old_prefix + " NICK :" + new_nick]
+
+    for channel_name in user.channels {
+        if contains_key(server.channels, channel_name) {
+            let ch = server.channels[channel_name]
+            for member_nick in ch.users {
+                if member_nick != old_nick {
+                    responses = responses + [
+                        "RELAY:" + member_nick + "::" + old_prefix + " NICK :" + new_nick
+                    ]
+                }
+            }
+        }
+    }
+
+    return responses
+}
+
+fn handle_join(server: IRCServer, user: IRCUser, msg: IRCMessage) -> list {
+    let channel_name = ""
+    if len(msg.params) > 0 {
+        channel_name = msg.params[0]
+    }
+
+    if len(channel_name) == 0 {
+        return [":server 461 " + user.nick + " JOIN :Not enough parameters"]
+    }
+
+    // Ensure channel name starts with #
+    if not starts_with(channel_name, "#") {
+        channel_name = "#" + channel_name
+    }
+
+    // Create channel if it doesn't exist
+    if not contains_key(server.channels, channel_name) {
+        server.channels[channel_name] = create_channel(channel_name)
+    }
+
+    let ch = server.channels[channel_name]
+    let prefix = user_prefix(user)
+
+    // Add user to channel
+    let responses = []
+    responses = responses + [":" + prefix + " JOIN " + channel_name]
+
+    // Send topic
+    if len(ch.topic) > 0 {
+        responses = responses + [
+            ":server 332 " + user.nick + " " + channel_name + " :" + ch.topic
+        ]
+    }
+
+    // Send names list
+    let names = join(ch.users, " ")
+    responses = responses + [
+        ":server 353 " + user.nick + " = " + channel_name + " :" + names + " " + user.nick,
+        ":server 366 " + user.nick + " " + channel_name + " :End of /NAMES list"
+    ]
+
+    // Notify existing channel members
+    for member_nick in ch.users {
+        responses = responses + [
+            "RELAY:" + member_nick + "::" + prefix + " JOIN " + channel_name
+        ]
+    }
+
+    return responses
+}
+
+fn handle_privmsg(server: IRCServer, user: IRCUser, msg: IRCMessage) -> list {
+    let target = ""
+    if len(msg.params) > 0 {
+        target = msg.params[0]
+    }
+
+    let text = msg.trailing
+
+    if len(target) == 0 {
+        return [":server 411 " + user.nick + " :No recipient given (PRIVMSG)"]
+    }
+
+    if len(text) == 0 {
+        return [":server 412 " + user.nick + " :No text to send"]
+    }
+
+    let prefix = user_prefix(user)
+    let responses = []
+
+    if starts_with(target, "#") {
+        // Channel message — relay to all members except sender
+        if contains_key(server.channels, target) {
+            let ch = server.channels[target]
+            for member_nick in ch.users {
+                if member_nick != user.nick {
+                    responses = responses + [
+                        "RELAY:" + member_nick + "::" + prefix + " PRIVMSG " + target + " :" + text
+                    ]
+                }
+            }
+        } else {
+            responses = [":server 403 " + user.nick + " " + target + " :No such channel"]
+        }
+    } else {
+        // Private message — relay to target user
+        if contains_key(server.users, target) {
+            responses = [
+                "RELAY:" + target + "::" + prefix + " PRIVMSG " + target + " :" + text
+            ]
+
+            // If user is away, send away notification
+            let target_user = server.users[target]
+            if len(target_user.away_msg) > 0 {
+                responses = responses + [
+                    ":server 301 " + user.nick + " " + target + " :" + target_user.away_msg
+                ]
+            }
+        } else {
+            responses = [":server 401 " + user.nick + " " + target + " :No such nick/channel"]
+        }
+    }
+
+    return responses
+}
+
+fn handle_part(server: IRCServer, user: IRCUser, msg: IRCMessage) -> list {
+    let channel_name = ""
+    if len(msg.params) > 0 {
+        channel_name = msg.params[0]
+    }
+
+    let part_msg = msg.trailing
+    if len(part_msg) == 0 {
+        part_msg = "Leaving"
+    }
+
+    if len(channel_name) == 0 {
+        return [":server 461 " + user.nick + " PART :Not enough parameters"]
+    }
+
+    let prefix = user_prefix(user)
+    let responses = [":" + prefix + " PART " + channel_name + " :" + part_msg]
+
+    // Notify channel members
+    if contains_key(server.channels, channel_name) {
+        let ch = server.channels[channel_name]
+        for member_nick in ch.users {
+            if member_nick != user.nick {
+                responses = responses + [
+                    "RELAY:" + member_nick + "::" + prefix + " PART " + channel_name + " :" + part_msg
+                ]
+            }
+        }
+    }
+
+    return responses
+}
+
+fn handle_topic(server: IRCServer, user: IRCUser, msg: IRCMessage) -> list {
+    let channel_name = ""
+    if len(msg.params) > 0 {
+        channel_name = msg.params[0]
+    }
+
+    if len(channel_name) == 0 {
+        return [":server 461 " + user.nick + " TOPIC :Not enough parameters"]
+    }
+
+    if not contains_key(server.channels, channel_name) {
+        return [":server 403 " + user.nick + " " + channel_name + " :No such channel"]
+    }
+
+    let ch = server.channels[channel_name]
+
+    // If no trailing, just report current topic
+    if len(msg.trailing) == 0 {
+        if len(ch.topic) > 0 {
+            return [":server 332 " + user.nick + " " + channel_name + " :" + ch.topic]
+        } else {
+            return [":server 331 " + user.nick + " " + channel_name + " :No topic is set"]
+        }
+    }
+
+    // Set new topic
+    let prefix = user_prefix(user)
+    let responses = [":" + prefix + " TOPIC " + channel_name + " :" + msg.trailing]
+
+    // Notify channel
+    for member_nick in ch.users {
+        if member_nick != user.nick {
+            responses = responses + [
+                "RELAY:" + member_nick + "::" + prefix + " TOPIC " + channel_name + " :" + msg.trailing
+            ]
+        }
+    }
+
+    return responses
+}
+
+fn handle_names(server: IRCServer, user: IRCUser, msg: IRCMessage) -> list {
+    let channel_name = ""
+    if len(msg.params) > 0 {
+        channel_name = msg.params[0]
+    }
+
+    if len(channel_name) == 0 {
+        return [":server 461 " + user.nick + " NAMES :Not enough parameters"]
+    }
+
+    if not contains_key(server.channels, channel_name) {
+        return [":server 403 " + user.nick + " " + channel_name + " :No such channel"]
+    }
+
+    let ch = server.channels[channel_name]
+    let names = join(ch.users, " ")
+
+    return [
+        ":server 353 " + user.nick + " = " + channel_name + " :" + names,
+        ":server 366 " + user.nick + " " + channel_name + " :End of /NAMES list"
+    ]
+}
+
+fn handle_list(server: IRCServer, user: IRCUser) -> list {
+    let responses = [":server 321 " + user.nick + " Channel :Users  Topic"]
+
+    for channel_name in keys(server.channels) {
+        let ch = server.channels[channel_name]
+        let user_count = len(ch.users)
+        responses = responses + [
+            ":server 322 " + user.nick + " " + channel_name + " " + str(user_count) + " :" + ch.topic
+        ]
+    }
+
+    responses = responses + [":server 323 " + user.nick + " :End of /LIST"]
+    return responses
+}
+
+fn handle_whois(server: IRCServer, user: IRCUser, msg: IRCMessage) -> list {
+    let target_nick = ""
+    if len(msg.params) > 0 {
+        target_nick = msg.params[0]
+    }
+
+    if len(target_nick) == 0 {
+        return [":server 431 " + user.nick + " :No nickname given"]
+    }
+
+    if not contains_key(server.users, target_nick) {
+        return [":server 401 " + user.nick + " " + target_nick + " :No such nick/channel"]
+    }
+
+    let target = server.users[target_nick]
+
+    let responses = [
+        ":server 311 " + user.nick + " " + target.nick + " " + target.username + " " + target.hostname + " * :" + target.realname,
+        ":server 312 " + user.nick + " " + target.nick + " " + server.name + " :LATERALUS IRC Server",
+        ":server 319 " + user.nick + " " + target.nick + " :" + join(target.channels, " ")
+    ]
+
+    if len(target.away_msg) > 0 {
+        responses = responses + [
+            ":server 301 " + user.nick + " " + target.nick + " :" + target.away_msg
+        ]
+    }
+
+    responses = responses + [
+        ":server 318 " + user.nick + " " + target.nick + " :End of /WHOIS list"
+    ]
+
+    return responses
+}
+
+fn handle_quit(server: IRCServer, user: IRCUser, msg: IRCMessage) -> list {
+    let quit_msg = msg.trailing
+    if len(quit_msg) == 0 {
+        quit_msg = "Client quit"
+    }
+
+    let prefix = user_prefix(user)
+    let responses = [":" + prefix + " QUIT :" + quit_msg]
+
+    // Notify all channels
+    for channel_name in user.channels {
+        if contains_key(server.channels, channel_name) {
+            let ch = server.channels[channel_name]
+            for member_nick in ch.users {
+                if member_nick != user.nick {
+                    responses = responses + [
+                        "RELAY:" + member_nick + "::" + prefix + " QUIT :" + quit_msg
+                    ]
+                }
+            }
+        }
+    }
+
+    return responses
+}
+
+fn handle_kick(server: IRCServer, user: IRCUser, msg: IRCMessage) -> list {
+    if len(msg.params) < 2 {
+        return [":server 461 " + user.nick + " KICK :Not enough parameters"]
+    }
+
+    let channel_name = msg.params[0]
+    let target_nick = msg.params[1]
+    let reason = msg.trailing
+    if len(reason) == 0 {
+        reason = user.nick
+    }
+
+    if not contains_key(server.channels, channel_name) {
+        return [":server 403 " + user.nick + " " + channel_name + " :No such channel"]
+    }
+
+    let prefix = user_prefix(user)
+    let responses = [
+        ":" + prefix + " KICK " + channel_name + " " + target_nick + " :" + reason
+    ]
+
+    // Notify kicked user
+    responses = responses + [
+        "RELAY:" + target_nick + "::" + prefix + " KICK " + channel_name + " " + target_nick + " :" + reason
+    ]
+
+    // Notify channel
+    let ch = server.channels[channel_name]
+    for member_nick in ch.users {
+        if member_nick != user.nick {
+            if member_nick != target_nick {
+                responses = responses + [
+                    "RELAY:" + member_nick + "::" + prefix + " KICK " + channel_name + " " + target_nick + " :" + reason
+                ]
+            }
+        }
+    }
+
+    return responses
+}
+
+fn send_motd(server: IRCServer, user: IRCUser) -> list {
+    let responses = [
+        ":server 375 " + user.nick + " :- " + server.name + " Message of the Day -"
+    ]
+
+    for line in server.motd {
+        responses = responses + [
+            ":server 372 " + user.nick + " :- " + line
+        ]
+    }
+
+    responses = responses + [
+        ":server 376 " + user.nick + " :End of /MOTD command"
+    ]
+
+    return responses
+}
+
+// ─── Main Command Dispatcher ─────────────────────────────────────
+
+fn dispatch_command(server: IRCServer, user: IRCUser, raw_line: str) -> list {
+    let msg = parse_irc_message(raw_line)
+
+    return match msg.command {
+        "NICK"    => handle_nick(server, user, msg),
+        "JOIN"    => handle_join(server, user, msg),
+        "PRIVMSG" => handle_privmsg(server, user, msg),
+        "PART"    => handle_part(server, user, msg),
+        "TOPIC"   => handle_topic(server, user, msg),
+        "NAMES"   => handle_names(server, user, msg),
+        "LIST"    => handle_list(server, user),
+        "WHOIS"   => handle_whois(server, user, msg),
+        "QUIT"    => handle_quit(server, user, msg),
+        "KICK"    => handle_kick(server, user, msg),
+        "PING"    => [":server PONG :" + msg.trailing],
+        "PONG"    => [],
+        "MOTD"    => send_motd(server, user),
+        _         => [":server 421 " + user.nick + " " + msg.command + " :Unknown command"],
+    }
+}
+
+// ─── Server Entry Point ──────────────────────────────────────────
+
+async fn start_server(host: str, port: int) {
+    let server = create_server(host, port)
+
+    // Create default channels
+    server.channels["#lateralus"] = create_channel("#lateralus")
+    server.channels["#lateralus"].topic = "LATERALUS Language — The spiral that keeps expanding"
+    server.channels["#dev"] = create_channel("#dev")
+    server.channels["#dev"].topic = "Development discussion — PRs, bugs, features"
+    server.channels["#help"] = create_channel("#help")
+    server.channels["#help"].topic = "Need help? Ask here. Be patient and kind."
+
+    println("╔═══════════════════════════════════════════╗")
+    println("║   LATERALUS IRC Server v2.2.0             ║")
+    println("║   Listening on " + host + ":" + str(port) + "           ║")
+    println("║   Channels: #lateralus #dev #help         ║")
+    println("╚═══════════════════════════════════════════╝")
+
+    let listener = await tcp_listen(host, port)
+
+    while true {
+        let client_socket = await accept(listener)
+        let socket_id = client_socket.id
+
+        // Create a guest user
+        let guest_nick = "guest_" + str(socket_id)
+        let user = create_user(guest_nick, socket_id)
+        server.users[guest_nick] = user
+
+        // Send welcome banner
+        let welcome = [
+            ":server 001 " + guest_nick + " :Welcome to the LATERALUS IRC Network " + guest_nick,
+            ":server 002 " + guest_nick + " :Your host is " + server.name + ", running LATERALUS IRC v2.2",
+            ":server 003 " + guest_nick + " :This server was created with the Lateralus programming language",
+            ":server 004 " + guest_nick + " " + server.name + " lateralus-irc-2.2 o o"
+        ]
+
+        for line in welcome {
+            await send(client_socket, line + "\r\n")
+        }
+
+        // Send MOTD
+        let motd_lines = send_motd(server, user)
+        for line in motd_lines {
+            await send(client_socket, line + "\r\n")
+        }
+
+        // Spawn client handler
+        spawn handle_client(server, user, client_socket)
+    }
+}
+
+async fn handle_client(server: IRCServer, user: IRCUser, socket: any) {
+    println("[+] Client connected: " + user.nick + " (socket " + str(user.socket_id) + ")")
+
+    while true {
+        let raw = await recv_line(socket)
+
+        if raw == "" {
+            // Client disconnected
+            println("[-] Client disconnected: " + user.nick)
+            let quit_responses = handle_quit(server, user, parse_irc_message("QUIT :Connection closed"))
+            break
+        }
+
+        let responses = dispatch_command(server, user, raw)
+
+        for response in responses {
+            if starts_with(response, "RELAY:") {
+                // Extract target nick and message for relay
+                let relay_data = slice(response, 6, len(response))
+                let sep_idx = index_of(relay_data, "::")
+                if sep_idx > 0 {
+                    let target_nick = slice(relay_data, 0, sep_idx)
+                    let relay_msg = slice(relay_data, sep_idx + 2, len(relay_data))
+                    // Find target socket and send
+                    if contains_key(server.users, target_nick) {
+                        let target = server.users[target_nick]
+                        // In a real server, look up socket by target.socket_id
+                        println("[relay -> " + target_nick + "] " + relay_msg)
+                    }
+                }
+            } else {
+                await send(socket, response + "\r\n")
+            }
+        }
+    }
+
+    // Clean up: remove user from all channels
+    for channel_name in user.channels {
+        if contains_key(server.channels, channel_name) {
+            let ch = server.channels[channel_name]
+            ch.users = filter(ch.users, fn(n) { n != user.nick })
+        }
+    }
+
+    // Remove from users map
+    delete(server.users, user.nick)
+    println("[cleanup] Removed user: " + user.nick)
+}
+
+// ─── Client ───────────────────────────────────────────────────────
+
+struct IRCClient {
+    host: str,
+    port: int,
+    nick: str,
+    current_channel: str,
+    connected: bool
+}
+
+fn create_client(host: str, port: int, nick: str) -> IRCClient {
+    return IRCClient {
+        host: host,
+        port: port,
+        nick: nick,
+        current_channel: "",
+        connected: false
+    }
+}
+
+fn format_client_display(line: str) -> str {
+    // Parse a server message for pretty display
+    let msg = parse_irc_message(line)
+
+    match msg.command {
+        "PRIVMSG" => {
+            let sender = msg.prefix
+            let bang = index_of(sender, "!")
+            if bang > 0 {
+                sender = slice(sender, 0, bang)
+            }
+            let target = ""
+            if len(msg.params) > 0 {
+                target = msg.params[0]
+            }
+            if starts_with(target, "#") {
+                return "[" + target + "] <" + sender + "> " + msg.trailing
+            } else {
+                return "*" + sender + "* " + msg.trailing
+            }
+        },
+        "JOIN" => {
+            let who = msg.prefix
+            let bang = index_of(who, "!")
+            if bang > 0 {
+                who = slice(who, 0, bang)
+            }
+            let chan = ""
+            if len(msg.params) > 0 {
+                chan = msg.params[0]
+            }
+            return "--> " + who + " has joined " + chan
+        },
+        "PART" => {
+            let who = msg.prefix
+            let bang = index_of(who, "!")
+            if bang > 0 {
+                who = slice(who, 0, bang)
+            }
+            let chan = ""
+            if len(msg.params) > 0 {
+                chan = msg.params[0]
+            }
+            return "<-- " + who + " has left " + chan + " (" + msg.trailing + ")"
+        },
+        "QUIT" => {
+            let who = msg.prefix
+            let bang = index_of(who, "!")
+            if bang > 0 {
+                who = slice(who, 0, bang)
+            }
+            return "<-- " + who + " has quit (" + msg.trailing + ")"
+        },
+        "NICK" => {
+            let who = msg.prefix
+            let bang = index_of(who, "!")
+            if bang > 0 {
+                who = slice(who, 0, bang)
+            }
+            return "--- " + who + " is now known as " + msg.trailing
+        },
+        "TOPIC" => {
+            let chan = ""
+            if len(msg.params) > 0 {
+                chan = msg.params[0]
+            }
+            return "--- Topic for " + chan + ": " + msg.trailing
+        },
+        "KICK" => {
+            let chan = ""
+            let kicked = ""
+            if len(msg.params) > 0 {
+                chan = msg.params[0]
+            }
+            if len(msg.params) > 1 {
+                kicked = msg.params[1]
+            }
+            return "<<< " + kicked + " was kicked from " + chan + " (" + msg.trailing + ")"
+        },
+        _ => {
+            // Numeric replies or unknown — show trailing
+            if len(msg.trailing) > 0 {
+                return "* " + msg.trailing
+            }
+            return line
+        },
+    }
+}
+
+fn parse_user_input(client: IRCClient, input: str) -> str {
+    // Convert user-friendly input to IRC protocol
+    let line = trim(input)
+
+    if len(line) == 0 {
+        return ""
+    }
+
+    if starts_with(line, "/") {
+        // Command mode
+        let cmd_line = slice(line, 1, len(line))
+        let parts = split(cmd_line, " ")
+        let cmd = upper(parts[0])
+
+        match cmd {
+            "NICK" => {
+                if len(parts) > 1 {
+                    return "NICK " + parts[1]
+                }
+                return ""
+            },
+            "JOIN" => {
+                if len(parts) > 1 {
+                    return "JOIN " + parts[1]
+                }
+                return ""
+            },
+            "PART" => {
+                if len(parts) > 1 {
+                    let reason = "Leaving"
+                    if len(parts) > 2 {
+                        reason = join(slice(parts, 2, len(parts)), " ")
+                    }
+                    return "PART " + parts[1] + " :" + reason
+                }
+                return ""
+            },
+            "MSG" => {
+                if len(parts) > 2 {
+                    let text = join(slice(parts, 2, len(parts)), " ")
+                    return "PRIVMSG " + parts[1] + " :" + text
+                }
+                return ""
+            },
+            "TOPIC" => {
+                if len(parts) > 2 {
+                    let topic_text = join(slice(parts, 2, len(parts)), " ")
+                    return "TOPIC " + parts[1] + " :" + topic_text
+                } else if len(parts) > 1 {
+                    return "TOPIC " + parts[1]
+                }
+                return ""
+            },
+            "NAMES" => {
+                if len(parts) > 1 {
+                    return "NAMES " + parts[1]
+                }
+                return ""
+            },
+            "LIST"  => {
+                return "LIST"
+            },
+            "WHOIS" => {
+                if len(parts) > 1 {
+                    return "WHOIS " + parts[1]
+                }
+                return ""
+            },
+            "KICK" => {
+                if len(parts) > 2 {
+                    let reason = ""
+                    if len(parts) > 3 {
+                        reason = join(slice(parts, 3, len(parts)), " ")
+                    } else {
+                        reason = "Kicked"
+                    }
+                    return "KICK " + parts[1] + " " + parts[2] + " :" + reason
+                }
+                return ""
+            },
+            "QUIT" => {
+                let quit_msg = "Goodbye"
+                if len(parts) > 1 {
+                    quit_msg = join(slice(parts, 1, len(parts)), " ")
+                }
+                return "QUIT :" + quit_msg
+            },
+            "HELP" => {
+                println("╔═════════════════════════════════════════╗")
+                println("║         IRC Commands Reference          ║")
+                println("╠═════════════════════════════════════════╣")
+                println("║ /nick <name>        Change nickname     ║")
+                println("║ /join #channel      Join a channel      ║")
+                println("║ /part #channel      Leave a channel     ║")
+                println("║ /msg <target> text  Send a message      ║")
+                println("║ /topic #ch text     Set channel topic   ║")
+                println("║ /names #channel     List users           ║")
+                println("║ /list               List channels        ║")
+                println("║ /whois <nick>       User info            ║")
+                println("║ /kick #ch <nick>    Kick a user          ║")
+                println("║ /quit [message]     Disconnect           ║")
+                println("╚═════════════════════════════════════════╝")
+                return ""
+            },
+            _ => {
+                return cmd_line
+            },
+        }
+    } else {
+        // Plain text — send to current channel
+        if len(client.current_channel) > 0 {
+            return "PRIVMSG " + client.current_channel + " :" + line
+        } else {
+            println("* Not in a channel. Use /join #channel first.")
+            return ""
+        }
+    }
+}
+
+async fn start_client(host: str, port: int, nick: str) {
+    let client = create_client(host, port, nick)
+
+    println("╔═══════════════════════════════════════════╗")
+    println("║   LATERALUS IRC Client v2.2.0             ║")
+    println("║   Connecting to " + host + ":" + str(port) + "...          ║")
+    println("╚═══════════════════════════════════════════╝")
+
+    let socket = await tcp_connect(host, port)
+    client.connected = true
+
+    // Register with server
+    await send(socket, "NICK " + nick + "\r\n")
+    await send(socket, "USER " + nick + " 0 * :" + nick + "\r\n")
+
+    // Start receive loop in background
+    spawn receive_loop(client, socket)
+
+    // Input loop
+    println("* Connected! Type /help for commands.")
+    println("* Try: /join #lateralus")
+    println("")
+
+    while client.connected {
+        let input = await read_line()
+
+        let protocol_line = parse_user_input(client, input)
+
+        if len(protocol_line) > 0 {
+            await send(socket, protocol_line + "\r\n")
+
+            // Track current channel for plain-text messages
+            let parsed = parse_irc_message(protocol_line)
+            if parsed.command == "JOIN" {
+                if len(parsed.params) > 0 {
+                    client.current_channel = parsed.params[0]
+                }
+            }
+            if parsed.command == "QUIT" {
+                client.connected = false
+            }
+        }
+    }
+
+    println("* Disconnected.")
+}
+
+async fn receive_loop(client: IRCClient, socket: any) {
+    while client.connected {
+        let line = await recv_line(socket)
+
+        if line == "" {
+            println("* Server closed connection.")
+            client.connected = false
+            break
+        }
+
+        // Handle PING/PONG automatically
+        if starts_with(line, "PING") {
+            let msg = parse_irc_message(line)
+            await send(socket, "PONG :" + msg.trailing + "\r\n")
+        } else {
+            // Display formatted message
+            let display = format_client_display(line)
+            println(display)
+        }
+    }
+}
+
+// ─── Demo Mode ────────────────────────────────────────────────────
+// When run without --server or --client, show a demo of the protocol
+
+fn demo() {
+    println("═══════════════════════════════════════════")
+    println("  LATERALUS IRC Chat — Protocol Demo")
+    println("═══════════════════════════════════════════")
+    println("")
+
+    let server = create_server("127.0.0.1", 6667)
+    server.channels["#lateralus"] = create_channel("#lateralus")
+    server.channels["#lateralus"].topic = "The spiral that keeps expanding"
+
+    let alice = create_user("alice", 1)
+    let bob = create_user("bob", 2)
+    server.users["alice"] = alice
+    server.users["bob"] = bob
+
+    println("--- Server created: " + server.name)
+    println("--- Default channel: #lateralus")
+    println("")
+
+    // Simulate alice joining
+    println(">>> alice sends: JOIN #lateralus")
+    let responses = dispatch_command(server, alice, "JOIN #lateralus")
+    for r in responses {
+        println("  <- " + r)
+    }
+    alice.channels = alice.channels + ["#lateralus"]
+    server.channels["#lateralus"].users = server.channels["#lateralus"].users + ["alice"]
+    println("")
+
+    // Bob joins
+    println(">>> bob sends: JOIN #lateralus")
+    responses = dispatch_command(server, bob, "JOIN #lateralus")
+    for r in responses {
+        println("  <- " + r)
+    }
+    bob.channels = bob.channels + ["#lateralus"]
+    server.channels["#lateralus"].users = server.channels["#lateralus"].users + ["bob"]
+    println("")
+
+    // Alice sends a message
+    println(">>> alice sends: PRIVMSG #lateralus :Hello bob! Welcome to LATERALUS!")
+    responses = dispatch_command(server, alice, "PRIVMSG #lateralus :Hello bob! Welcome to LATERALUS!")
+    for r in responses {
+        let display = format_client_display(r)
+        if starts_with(r, "RELAY:") {
+            let relay_data = slice(r, 6, len(r))
+            let sep_idx = index_of(relay_data, "::")
+            if sep_idx > 0 {
+                let target = slice(relay_data, 0, sep_idx)
+                let msg_part = slice(relay_data, sep_idx + 2, len(relay_data))
+                println("  -> [to " + target + "] " + format_client_display(msg_part))
+            }
+        } else {
+            println("  <- " + r)
+        }
+    }
+    println("")
+
+    // Bob replies
+    println(">>> bob sends: PRIVMSG #lateralus :Thanks alice! The pipeline operator is amazing!")
+    responses = dispatch_command(server, bob, "PRIVMSG #lateralus :Thanks alice! The pipeline operator is amazing!")
+    for r in responses {
+        if starts_with(r, "RELAY:") {
+            let relay_data = slice(r, 6, len(r))
+            let sep_idx = index_of(relay_data, "::")
+            if sep_idx > 0 {
+                let target = slice(relay_data, 0, sep_idx)
+                let msg_part = slice(relay_data, sep_idx + 2, len(relay_data))
+                println("  -> [to " + target + "] " + format_client_display(msg_part))
+            }
+        }
+    }
+    println("")
+
+    // Private message
+    println(">>> alice sends: PRIVMSG bob :Hey, wanna work on the C backend?")
+    responses = dispatch_command(server, alice, "PRIVMSG bob :Hey, wanna work on the C backend?")
+    for r in responses {
+        if starts_with(r, "RELAY:") {
+            let relay_data = slice(r, 6, len(r))
+            let sep_idx = index_of(relay_data, "::")
+            if sep_idx > 0 {
+                let target = slice(relay_data, 0, sep_idx)
+                let msg_part = slice(relay_data, sep_idx + 2, len(relay_data))
+                println("  -> [DM to " + target + "] " + format_client_display(msg_part))
+            }
+        }
+    }
+    println("")
+
+    // Topic change
+    println(">>> alice sends: TOPIC #lateralus :Lateralus v2.2 — Now with IRC chat!")
+    responses = dispatch_command(server, alice, "TOPIC #lateralus :Lateralus v2.2 — Now with IRC chat!")
+    for r in responses {
+        if starts_with(r, "RELAY:") {
+            let relay_data = slice(r, 6, len(r))
+            let sep_idx = index_of(relay_data, "::")
+            if sep_idx > 0 {
+                let target = slice(relay_data, 0, sep_idx)
+                let msg_part = slice(relay_data, sep_idx + 2, len(relay_data))
+                println("  -> [to " + target + "] " + format_client_display(msg_part))
+            }
+        } else {
+            println("  <- " + r)
+        }
+    }
+    println("")
+
+    // Names
+    println(">>> alice sends: NAMES #lateralus")
+    responses = dispatch_command(server, alice, "NAMES #lateralus")
+    for r in responses {
+        println("  <- " + r)
+    }
+    println("")
+
+    // List channels
+    println(">>> bob sends: LIST")
+    responses = dispatch_command(server, bob, "LIST")
+    for r in responses {
+        println("  <- " + r)
+    }
+    println("")
+
+    // WHOIS
+    println(">>> bob sends: WHOIS alice")
+    responses = dispatch_command(server, bob, "WHOIS alice")
+    for r in responses {
+        println("  <- " + r)
+    }
+    println("")
+
+    // Nick change
+    println(">>> bob sends: NICK spiral_bob")
+    responses = dispatch_command(server, bob, "NICK spiral_bob")
+    for r in responses {
+        if starts_with(r, "RELAY:") {
+            let relay_data = slice(r, 6, len(r))
+            let sep_idx = index_of(relay_data, "::")
+            if sep_idx > 0 {
+                let target = slice(relay_data, 0, sep_idx)
+                let msg_part = slice(relay_data, sep_idx + 2, len(relay_data))
+                println("  -> [to " + target + "] " + format_client_display(msg_part))
+            }
+        } else {
+            println("  <- " + format_client_display(r))
+        }
+    }
+    println("")
+
+    // PING/PONG
+    println(">>> server sends: PING :lateralus.irc.local")
+    responses = dispatch_command(server, alice, "PING :lateralus.irc.local")
+    for r in responses {
+        println("  <- " + r)
+    }
+    println("")
+
+    // Quit
+    println(">>> alice sends: QUIT :Going to hack on LateralusOS!")
+    responses = dispatch_command(server, alice, "QUIT :Going to hack on LateralusOS!")
+    for r in responses {
+        if starts_with(r, "RELAY:") {
+            let relay_data = slice(r, 6, len(r))
+            let sep_idx = index_of(relay_data, "::")
+            if sep_idx > 0 {
+                let target = slice(relay_data, 0, sep_idx)
+                let msg_part = slice(relay_data, sep_idx + 2, len(relay_data))
+                println("  -> [to " + target + "] " + format_client_display(msg_part))
+            }
+        } else {
+            println("  <- " + format_client_display(r))
+        }
+    }
+    println("")
+
+    println("═══════════════════════════════════════════")
+    println("  Demo complete. Run with --server or")
+    println("  --client for live IRC chat.")
+    println("═══════════════════════════════════════════")
+}
+
+// ─── Main ─────────────────────────────────────────────────────────
+
+fn main() {
+    demo()
+}
+
+main()

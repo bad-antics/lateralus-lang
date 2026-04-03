@@ -1,0 +1,92 @@
+// ═══════════════════════════════════════════════════════════════════════
+// stdlib/mem.ltl — Memory management primitives
+// ═══════════════════════════════════════════════════════════════════════
+// Low-level memory operations for OS development and systems programming.
+// These functions map directly to C equivalents in freestanding mode.
+// ═══════════════════════════════════════════════════════════════════════
+
+module mem
+
+// ── Allocation ──────────────────────────────────────────────────────────
+
+/// Allocate `size` bytes from the heap. Returns Ptr<u8> or nil on failure.
+pub fn alloc(size: usize) -> Ptr<u8> {
+    foreign "C" { "return ltl_alloc(size);" }
+}
+
+/// Free a previously allocated pointer. No-op for bump allocators.
+pub fn free(ptr: Ptr<u8>) {
+    foreign "C" { "ltl_free(ptr);" }
+}
+
+/// Allocate and zero-initialize `size` bytes.
+pub fn alloc_zeroed(size: usize) -> Ptr<u8> {
+    let p = alloc(size)
+    zero(p, size)
+    return p
+}
+
+/// Reset the heap allocator (reclaim all memory).
+pub fn heap_reset() {
+    foreign "C" { "ltl_heap_reset();" }
+}
+
+// ── Copy / Set / Compare ────────────────────────────────────────────────
+
+/// Copy `n` bytes from `src` to `dst`. Regions must not overlap.
+pub fn copy(dst: Ptr<u8>, src: Ptr<u8>, n: usize) -> Ptr<u8> {
+    foreign "C" { "return ltl_memcpy(dst, src, n);" }
+}
+
+/// Set `n` bytes at `dst` to `val`.
+pub fn set(dst: Ptr<u8>, val: u8, n: usize) -> Ptr<u8> {
+    foreign "C" { "return ltl_memset(dst, val, n);" }
+}
+
+/// Zero `n` bytes at `dst`.
+pub fn zero(dst: Ptr<u8>, n: usize) -> Ptr<u8> {
+    return set(dst, 0, n)
+}
+
+/// Compare `n` bytes of `a` and `b`. Returns 0 if equal.
+pub fn compare(a: Ptr<u8>, b: Ptr<u8>, n: usize) -> int {
+    for i in 0..n {
+        let ab = deref(a + i)
+        let bb = deref(b + i)
+        if ab != bb {
+            return ab as int - bb as int
+        }
+    }
+    return 0
+}
+
+// ── Volatile access ─────────────────────────────────────────────────────
+
+/// Read a value from a memory-mapped I/O register (never elided).
+pub fn read_volatile(addr: Ptr<u32>) -> u32 {
+    return volatile(deref(addr))
+}
+
+/// Write a value to a memory-mapped I/O register (never elided).
+pub fn write_volatile(addr: Ptr<u32>, val: u32) {
+    unsafe {
+        volatile(deref(addr)) = val
+    }
+}
+
+// ── Alignment helpers ───────────────────────────────────────────────────
+
+/// Align `addr` up to the next multiple of `align` (must be power of 2).
+pub fn align_up(addr: usize, align: usize) -> usize {
+    return (addr + align - 1) & ~(align - 1)
+}
+
+/// Align `addr` down to the previous multiple of `align`.
+pub fn align_down(addr: usize, align: usize) -> usize {
+    return addr & ~(align - 1)
+}
+
+/// Check if `addr` is aligned to `align`.
+pub fn is_aligned(addr: usize, align: usize) -> bool {
+    return (addr & (align - 1)) == 0
+}

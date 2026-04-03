@@ -1,0 +1,493 @@
+"""
+lateralus_lang/markup/__init__.py  ─  LTLM (Lateralus Markup Language)
+═══════════════════════════════════════════════════════════════════════════
+A hybrid Markdown + TOML front-matter format with executable .ltl code
+blocks.  Designed for literate programming, documentation, and notebooks.
+
+File extension: .ltlm
+
+Structure
+─────────
+  +++
+  title = "My Document"
+  author = "LATERALUS"
+  version = "1.0"
+  +++
+
+  # Heading
+
+  Regular **Markdown** text.
+
+  ```ltl
+  let x = 42
+  io.println("Hello from LATERALUS!")
+  ```
+
+  The code blocks above can be executed by the `ltlc doc --run` command.
+
+Exports
+───────
+  parse(source) → Document
+  to_html(doc)  → str
+  to_ansi(doc)  → str
+═══════════════════════════════════════════════════════════════════════════
+"""
+from __future__ import annotations
+
+import re
+import html as _html
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AST
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class FrontMatter:
+    """TOML-style key=value front matter between +++ fences."""
+    data: Dict[str, str] = field(default_factory=dict)
+
+    @property
+    def title(self) -> str:
+        return self.data.get("title", "Untitled")
+
+    @property
+    def author(self) -> str:
+        return self.data.get("author", "")
+
+    @property
+    def version(self) -> str:
+        return self.data.get("version", "")
+
+
+@dataclass
+class Block:
+    """Base class for document blocks."""
+    pass
+
+
+@dataclass
+class TextBlock(Block):
+    """Markdown text block."""
+    content: str = ""
+
+
+@dataclass
+class HeadingBlock(Block):
+    """Heading (# to ######)."""
+    level: int = 1
+    text: str = ""
+
+
+@dataclass
+class CodeBlock(Block):
+    """Fenced code block — may be executable if lang is 'ltl'."""
+    lang: str = ""
+    source: str = ""
+    executable: bool = False
+    output: Optional[str] = None   # filled in after execution
+
+
+@dataclass
+class ListBlock(Block):
+    """Bullet or numbered list."""
+    items: List[str] = field(default_factory=list)
+    ordered: bool = False
+
+
+@dataclass
+class HorizontalRule(Block):
+    """--- or *** or ___"""
+    pass
+
+
+@dataclass
+class BlockquoteBlock(Block):
+    """Lines prefixed with >"""
+    content: str = ""
+
+
+@dataclass
+class TableBlock(Block):
+    """Markdown-style table."""
+    headers: List[str] = field(default_factory=list)
+    rows: List[List[str]] = field(default_factory=list)
+
+
+@dataclass
+class Document:
+    """Root of the LTLM document tree."""
+    front_matter: Optional[FrontMatter] = None
+    blocks: List[Block] = field(default_factory=list)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Parser
+# ─────────────────────────────────────────────────────────────────────────────
+
+_FRONT_MATTER_FENCE = re.compile(r'^\+\+\+\s*$')
+_HEADING = re.compile(r'^(#{1,6})\s+(.+)$')
+_CODE_FENCE = re.compile(r'^```(\w*)(.*)$')
+_HR = re.compile(r'^(---+|\*\*\*+|___+)\s*$')
+_BLOCKQUOTE = re.compile(r'^>\s?(.*)')
+_ORDERED_LIST = re.compile(r'^\d+\.\s+(.+)')
+_UNORDERED_LIST = re.compile(r'^[-*+]\s+(.+)')
+_TABLE_ROW = re.compile(r'^\|(.+)\|$')
+_TABLE_SEP = re.compile(r'^\|[-:| ]+\|$')
+_TOML_KV = re.compile(r'^(\w[\w.-]*)\s*=\s*"([^"]*)"')
+
+
+def parse(source: str) -> Document:
+    """Parse an LTLM source string into a Document."""
+    lines = source.split('\n')
+    doc = Document()
+    i = 0
+    n = len(lines)
+
+    # ── front matter ─────────────────────────────────────────────────────
+    if i < n and _FRONT_MATTER_FENCE.match(lines[i]):
+        i += 1
+        fm = FrontMatter()
+        while i < n and not _FRONT_MATTER_FENCE.match(lines[i]):
+            m = _TOML_KV.match(lines[i].strip())
+            if m:
+                fm.data[m.group(1)] = m.group(2)
+            i += 1
+        i += 1  # skip closing +++
+        doc.front_matter = fm
+
+    # ── body blocks ──────────────────────────────────────────────────────
+    text_buf: List[str] = []
+
+    def flush_text():
+        nonlocal text_buf
+        content = '\n'.join(text_buf).strip()
+        if content:
+            doc.blocks.append(TextBlock(content=content))
+        text_buf = []
+
+    while i < n:
+        line = lines[i]
+
+        # Code fence
+        m = _CODE_FENCE.match(line)
+        if m:
+            flush_text()
+            lang = m.group(1)
+            code_lines: List[str] = []
+            i += 1
+            while i < n and not line.startswith('```'):
+                code_lines.append(lines[i])
+                i += 1
+                if i < n:
+                    line = lines[i]
+            i += 1  # skip closing ```
+            source_code = '\n'.join(code_lines)
+            doc.blocks.append(CodeBlock(
+                lang=lang,
+                source=source_code,
+                executable=(lang.lower() in ('ltl', 'lateralus'))
+            ))
+            continue
+
+        # Heading
+        m = _HEADING.match(line)
+        if m:
+            flush_text()
+            doc.blocks.append(HeadingBlock(level=len(m.group(1)), text=m.group(2)))
+            i += 1
+            continue
+
+        # Horizontal rule
+        if _HR.match(line):
+            flush_text()
+            doc.blocks.append(HorizontalRule())
+            i += 1
+            continue
+
+        # Blockquote
+        m = _BLOCKQUOTE.match(line)
+        if m:
+            flush_text()
+            bq_lines = [m.group(1)]
+            i += 1
+            while i < n:
+                m2 = _BLOCKQUOTE.match(lines[i])
+                if m2:
+                    bq_lines.append(m2.group(1))
+                    i += 1
+                else:
+                    break
+            doc.blocks.append(BlockquoteBlock(content='\n'.join(bq_lines)))
+            continue
+
+        # Table
+        if _TABLE_ROW.match(line):
+            flush_text()
+            headers = [c.strip() for c in line.strip('|').split('|')]
+            i += 1
+            if i < n and _TABLE_SEP.match(lines[i]):
+                i += 1
+            rows: List[List[str]] = []
+            while i < n and _TABLE_ROW.match(lines[i]):
+                rows.append([c.strip() for c in lines[i].strip('|').split('|')])
+                i += 1
+            doc.blocks.append(TableBlock(headers=headers, rows=rows))
+            continue
+
+        # Ordered list
+        m = _ORDERED_LIST.match(line)
+        if m:
+            flush_text()
+            items = [m.group(1)]
+            i += 1
+            while i < n:
+                m2 = _ORDERED_LIST.match(lines[i])
+                if m2:
+                    items.append(m2.group(1))
+                    i += 1
+                else:
+                    break
+            doc.blocks.append(ListBlock(items=items, ordered=True))
+            continue
+
+        # Unordered list
+        m = _UNORDERED_LIST.match(line)
+        if m:
+            flush_text()
+            items = [m.group(1)]
+            i += 1
+            while i < n:
+                m2 = _UNORDERED_LIST.match(lines[i])
+                if m2:
+                    items.append(m2.group(1))
+                    i += 1
+                else:
+                    break
+            doc.blocks.append(ListBlock(items=items, ordered=False))
+            continue
+
+        # Regular text
+        text_buf.append(line)
+        i += 1
+
+    flush_text()
+    return doc
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Inline Markdown → HTML  (bold, italic, code, links)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _inline_md(text: str) -> str:
+    """Convert inline Markdown to HTML."""
+    t = _html.escape(text)
+    t = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', t)
+    t = re.sub(r'__(.+?)__', r'<strong>\1</strong>', t)
+    t = re.sub(r'\*(.+?)\*', r'<em>\1</em>', t)
+    t = re.sub(r'_(.+?)_', r'<em>\1</em>', t)
+    t = re.sub(r'`(.+?)`', r'<code>\1</code>', t)
+    t = re.sub(r'\[(.+?)\]\((.+?)\)', r'<a href="\2">\1</a>', t)
+    return t
+
+
+def _inline_ansi(text: str) -> str:
+    """Convert inline Markdown to ANSI terminal codes."""
+    t = re.sub(r'\*\*(.+?)\*\*', r'\033[1m\1\033[0m', text)
+    t = re.sub(r'__(.+?)__', r'\033[1m\1\033[0m', t)
+    t = re.sub(r'\*(.+?)\*', r'\033[3m\1\033[0m', t)
+    t = re.sub(r'_(.+?)_', r'\033[3m\1\033[0m', t)
+    t = re.sub(r'`(.+?)`', r'\033[36m\1\033[0m', t)
+    t = re.sub(r'\[(.+?)\]\((.+?)\)', r'\033[4;34m\1\033[0m (\2)', t)
+    return t
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HTML Renderer
+# ─────────────────────────────────────────────────────────────────────────────
+
+_CSS = """
+<style>
+:root { --bg: #0d1117; --fg: #c9d1d9; --accent: #58a6ff; --code-bg: #161b22;
+        --border: #30363d; --heading: #f0f6fc; --link: #58a6ff; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: 'JetBrains Mono', 'Fira Code', monospace;
+       max-width: 900px; margin: 2rem auto; padding: 0 1.5rem; line-height: 1.7; }
+h1,h2,h3,h4,h5,h6 { color: var(--heading); margin: 1.5em 0 0.5em; border-bottom: 1px solid var(--border);
+                      padding-bottom: 0.3em; }
+h1 { font-size: 2em; } h2 { font-size: 1.5em; } h3 { font-size: 1.25em; }
+p { margin: 0.8em 0; }
+code { background: var(--code-bg); padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.9em; }
+pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+      padding: 1em; overflow-x: auto; margin: 1em 0; }
+pre code { background: none; padding: 0; }
+a { color: var(--link); text-decoration: none; } a:hover { text-decoration: underline; }
+blockquote { border-left: 4px solid var(--accent); padding: 0.5em 1em; margin: 1em 0;
+             background: var(--code-bg); border-radius: 0 6px 6px 0; }
+table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+th, td { border: 1px solid var(--border); padding: 0.5em 0.8em; text-align: left; }
+th { background: var(--code-bg); font-weight: 600; }
+ul, ol { margin: 0.5em 0; padding-left: 2em; }
+li { margin: 0.25em 0; }
+hr { border: none; border-top: 1px solid var(--border); margin: 2em 0; }
+.output { background: #1a2332; border: 1px solid #264f78; border-radius: 6px;
+          padding: 0.8em 1em; margin: 0.5em 0; font-size: 0.85em; color: #7ee787; }
+.meta { color: #8b949e; font-size: 0.85em; margin-bottom: 2em; }
+.ltl-badge { display: inline-block; background: linear-gradient(135deg, #238636, #1f6feb);
+             color: #fff; padding: 0.15em 0.6em; border-radius: 12px; font-size: 0.75em;
+             font-weight: 600; vertical-align: middle; margin-left: 0.5em; }
+</style>
+"""
+
+
+def to_html(doc: Document) -> str:
+    """Render a Document to a complete HTML page."""
+    parts = ['<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="utf-8">']
+
+    title = "LTLM Document"
+    if doc.front_matter:
+        title = doc.front_matter.title
+    parts.append(f'<title>{_html.escape(title)}</title>')
+    parts.append(_CSS)
+    parts.append('</head>\n<body>')
+
+    if doc.front_matter:
+        fm = doc.front_matter
+        parts.append(f'<h1>{_html.escape(fm.title)}'
+                     f'<span class="ltl-badge">LTLM</span></h1>')
+        meta_parts = []
+        if fm.author:
+            meta_parts.append(f'Author: {_html.escape(fm.author)}')
+        if fm.version:
+            meta_parts.append(f'Version: {_html.escape(fm.version)}')
+        if meta_parts:
+            parts.append(f'<p class="meta">{" &middot; ".join(meta_parts)}</p>')
+
+    for block in doc.blocks:
+        if isinstance(block, HeadingBlock):
+            tag = f'h{block.level}'
+            parts.append(f'<{tag}>{_inline_md(block.text)}</{tag}>')
+
+        elif isinstance(block, TextBlock):
+            for para in block.content.split('\n\n'):
+                para = para.strip()
+                if para:
+                    parts.append(f'<p>{_inline_md(para)}</p>')
+
+        elif isinstance(block, CodeBlock):
+            lang_label = f' data-lang="{_html.escape(block.lang)}"' if block.lang else ''
+            badge = ' <span class="ltl-badge">executable</span>' if block.executable else ''
+            escaped_src = _html.escape(block.source)
+            parts.append(f'<pre{lang_label}><code>{escaped_src}</code>{badge}</pre>')
+            if block.output is not None:
+                parts.append(f'<div class="output">{_html.escape(block.output)}</div>')
+
+        elif isinstance(block, ListBlock):
+            tag = 'ol' if block.ordered else 'ul'
+            items = ''.join(f'<li>{_inline_md(item)}</li>' for item in block.items)
+            parts.append(f'<{tag}>{items}</{tag}>')
+
+        elif isinstance(block, BlockquoteBlock):
+            parts.append(f'<blockquote><p>{_inline_md(block.content)}</p></blockquote>')
+
+        elif isinstance(block, TableBlock):
+            thead = '<tr>' + ''.join(f'<th>{_inline_md(h)}</th>' for h in block.headers) + '</tr>'
+            tbody_rows = ''.join(
+                '<tr>' + ''.join(f'<td>{_inline_md(c)}</td>' for c in row) + '</tr>'
+                for row in block.rows
+            )
+            parts.append(f'<table><thead>{thead}</thead><tbody>{tbody_rows}</tbody></table>')
+
+        elif isinstance(block, HorizontalRule):
+            parts.append('<hr>')
+
+    parts.append('</body>\n</html>')
+    return '\n'.join(parts)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ANSI Terminal Renderer
+# ─────────────────────────────────────────────────────────────────────────────
+
+_ANSI_RESET   = '\033[0m'
+_ANSI_BOLD    = '\033[1m'
+_ANSI_DIM     = '\033[2m'
+_ANSI_ITALIC  = '\033[3m'
+_ANSI_UNDERLINE = '\033[4m'
+_ANSI_BLUE    = '\033[34m'
+_ANSI_CYAN    = '\033[36m'
+_ANSI_GREEN   = '\033[32m'
+_ANSI_YELLOW  = '\033[33m'
+_ANSI_MAGENTA = '\033[35m'
+_ANSI_BG_CODE = '\033[48;5;236m'
+
+
+def to_ansi(doc: Document) -> str:
+    """Render a Document to ANSI-coloured terminal output."""
+    parts: List[str] = []
+
+    if doc.front_matter:
+        fm = doc.front_matter
+        parts.append(f'\n{_ANSI_BOLD}{_ANSI_CYAN}  {fm.title}{_ANSI_RESET}')
+        meta = []
+        if fm.author:
+            meta.append(fm.author)
+        if fm.version:
+            meta.append(f'v{fm.version}')
+        if meta:
+            parts.append(f'{_ANSI_DIM}  {" · ".join(meta)}{_ANSI_RESET}')
+        parts.append(f'{_ANSI_DIM}  {"─" * 60}{_ANSI_RESET}\n')
+
+    for block in doc.blocks:
+        if isinstance(block, HeadingBlock):
+            prefix = '━' * block.level
+            parts.append(f'\n{_ANSI_BOLD}{_ANSI_YELLOW}  {prefix} {_inline_ansi(block.text)}{_ANSI_RESET}\n')
+
+        elif isinstance(block, TextBlock):
+            for para in block.content.split('\n\n'):
+                para = para.strip()
+                if para:
+                    parts.append(f'  {_inline_ansi(para)}\n')
+
+        elif isinstance(block, CodeBlock):
+            lang_tag = f'{_ANSI_DIM}[{block.lang}]{_ANSI_RESET}' if block.lang else ''
+            parts.append(f'\n  {_ANSI_BG_CODE}{_ANSI_GREEN}  ┌{"─" * 56}┐{_ANSI_RESET} {lang_tag}')
+            for line in block.source.split('\n'):
+                parts.append(f'  {_ANSI_BG_CODE}{_ANSI_GREEN}  │ {line:<54} │{_ANSI_RESET}')
+            parts.append(f'  {_ANSI_BG_CODE}{_ANSI_GREEN}  └{"─" * 56}┘{_ANSI_RESET}\n')
+            if block.output is not None:
+                parts.append(f'  {_ANSI_CYAN}→ {block.output}{_ANSI_RESET}\n')
+
+        elif isinstance(block, ListBlock):
+            for i, item in enumerate(block.items):
+                marker = f'{i + 1}.' if block.ordered else '•'
+                parts.append(f'  {_ANSI_DIM}{marker}{_ANSI_RESET} {_inline_ansi(item)}')
+            parts.append('')
+
+        elif isinstance(block, BlockquoteBlock):
+            for line in block.content.split('\n'):
+                parts.append(f'  {_ANSI_DIM}│{_ANSI_RESET} {_ANSI_ITALIC}{_inline_ansi(line)}{_ANSI_RESET}')
+            parts.append('')
+
+        elif isinstance(block, TableBlock):
+            widths = [max(len(h), *(len(row[j]) if j < len(row) else 0
+                                     for row in block.rows))
+                      for j, h in enumerate(block.headers)]
+            header = ' │ '.join(h.ljust(w) for h, w in zip(block.headers, widths))
+            sep = '─┼─'.join('─' * w for w in widths)
+            parts.append(f'  {_ANSI_BOLD}{header}{_ANSI_RESET}')
+            parts.append(f'  {_ANSI_DIM}{sep}{_ANSI_RESET}')
+            for row in block.rows:
+                cells = ' │ '.join(
+                    (row[j] if j < len(row) else '').ljust(widths[j])
+                    for j in range(len(widths))
+                )
+                parts.append(f'  {cells}')
+            parts.append('')
+
+        elif isinstance(block, HorizontalRule):
+            parts.append(f'  {_ANSI_DIM}{"─" * 60}{_ANSI_RESET}\n')
+
+    return '\n'.join(parts)

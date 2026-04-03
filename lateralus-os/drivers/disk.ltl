@@ -1,0 +1,212 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// LateralusOS — ATA/IDE Disk Driver
+// ═══════════════════════════════════════════════════════════════════════════
+// Copyright (c) 2025 bad-antics. All rights reserved.
+//
+// Supports PIO mode ATA disk access (read/write sectors).
+// Used for boot and basic file system operations.
+// ═══════════════════════════════════════════════════════════════════════════
+
+import hal::cpu
+import hal::serial
+import hal::interrupts
+
+// ATA I/O ports (primary controller)
+const ATA_DATA       = 0x1F0
+const ATA_ERROR      = 0x1F1
+const ATA_SECT_COUNT = 0x1F2
+const ATA_LBA_LO     = 0x1F3
+const ATA_LBA_MID    = 0x1F4
+const ATA_LBA_HI     = 0x1F5
+const ATA_DRIVE_HEAD = 0x1F6
+const ATA_STATUS     = 0x1F7
+const ATA_COMMAND    = 0x1F7
+
+// ATA commands
+const ATA_CMD_READ    = 0x20
+const ATA_CMD_WRITE   = 0x30
+const ATA_CMD_IDENTIFY = 0xEC
+const ATA_CMD_FLUSH   = 0xE7
+
+// Status bits
+const ATA_BSY   = 0x80
+const ATA_DRDY  = 0x40
+const ATA_DRQ   = 0x08
+const ATA_ERR   = 0x01
+
+const SECTOR_SIZE = 512
+
+struct DiskInfo {
+    present:      bool,
+    model:        str,
+    serial_num:   str,
+    sectors:      int,      // total sector count (LBA28)
+    size_mb:      int,
+    lba48:        bool,
+}
+
+let mut primary_master = DiskInfo {
+    present:    false,
+    model:      "",
+    serial_num: "",
+    sectors:    0,
+    size_mb:    0,
+    lba48:      false,
+}
+
+// ── Init ────────────────────────────────────────────────────────────────
+
+pub fn init() {
+    serial::log("[disk] Probing ATA primary master")
+    identify(0)
+}
+
+fn wait_not_busy() {
+    let timeout = 100000
+    while timeout > 0 {
+        let status = cpu::inb(ATA_STATUS)
+        if (status & ATA_BSY) == 0 { return }
+        timeout = timeout - 1
+    }
+    serial::log("[disk] WARNING: ATA timeout waiting for not-busy")
+}
+
+fn wait_drq() {
+    let timeout = 100000
+    while timeout > 0 {
+        let status = cpu::inb(ATA_STATUS)
+        if (status & ATA_DRQ) != 0 { return }
+        if (status & ATA_ERR) != 0 {
+            serial::log("[disk] ATA error during DRQ wait")
+            return
+        }
+        timeout = timeout - 1
+    }
+}
+
+fn identify(drive: int) {
+    // Select drive (0 = master, 1 = slave)
+    cpu::outb(ATA_DRIVE_HEAD, 0xA0 | (drive << 4))
+
+    // Zero out sector count and LBA fields
+    cpu::outb(ATA_SECT_COUNT, 0)
+    cpu::outb(ATA_LBA_LO, 0)
+    cpu::outb(ATA_LBA_MID, 0)
+    cpu::outb(ATA_LBA_HI, 0)
+
+    // Send IDENTIFY command
+    cpu::outb(ATA_COMMAND, ATA_CMD_IDENTIFY)
+
+    let status = cpu::inb(ATA_STATUS)
+    if status == 0 {
+        serial::log("[disk] No drive on primary master")
+        return
+    }
+
+    wait_not_busy()
+
+    // Check if it's an ATA drive (LBA_MID and LBA_HI should be 0)
+    if cpu::inb(ATA_LBA_MID) != 0 || cpu::inb(ATA_LBA_HI) != 0 {
+        serial::log("[disk] Not an ATA drive (possibly ATAPI)")
+        return
+    }
+
+    wait_drq()
+
+    // Read 256 words of identification data
+    let ident_data: [int; 256] = [0; 256]
+    let i = 0
+    while i < 256 {
+        ident_data[i] = cpu::inb(ATA_DATA)  // Should be inw (16-bit)
+        i = i + 1
+    }
+
+    primary_master.present = true
+    primary_master.sectors = ident_data[60] | (ident_data[61] << 16)
+    primary_master.size_mb = (primary_master.sectors * SECTOR_SIZE) / (1024 * 1024)
+    primary_master.lba48 = (ident_data[83] & (1 << 10)) != 0
+
+    serial::log("[disk] ATA drive detected: {primary_master.size_mb} MB, LBA48={primary_master.lba48}")
+}
+
+// ── Sector Read/Write ───────────────────────────────────────────────────
+
+pub fn read_sectors(lba: int, count: int, buffer: int) -> Result<int, str> {
+    if !primary_master.present {
+        return Result::Err("No disk present")
+    }
+    if count == 0 || count > 256 {
+        return Result::Err("Invalid sector count")
+    }
+
+    wait_not_busy()
+
+    // LBA28 mode
+    cpu::outb(ATA_DRIVE_HEAD, 0xE0 | ((lba >> 24) & 0x0F))
+    cpu::outb(ATA_SECT_COUNT, count & 0xFF)
+    cpu::outb(ATA_LBA_LO, lba & 0xFF)
+    cpu::outb(ATA_LBA_MID, (lba >> 8) & 0xFF)
+    cpu::outb(ATA_LBA_HI, (lba >> 16) & 0xFF)
+
+    cpu::outb(ATA_COMMAND, ATA_CMD_READ)
+
+    let sector = 0
+    while sector < count {
+        wait_drq()
+
+        let word = 0
+        while word < 256 {
+            let data = cpu::inb(ATA_DATA)  // Should be inw (16-bit)
+            let offset = buffer + sector * SECTOR_SIZE + word * 2
+            cpu::write_mem8(offset, data & 0xFF)
+            cpu::write_mem8(offset + 1, (data >> 8) & 0xFF)
+            word = word + 1
+        }
+
+        sector = sector + 1
+    }
+
+    return Result::Ok(count * SECTOR_SIZE)
+}
+
+pub fn write_sectors(lba: int, count: int, buffer: int) -> Result<int, str> {
+    if !primary_master.present {
+        return Result::Err("No disk present")
+    }
+
+    wait_not_busy()
+
+    cpu::outb(ATA_DRIVE_HEAD, 0xE0 | ((lba >> 24) & 0x0F))
+    cpu::outb(ATA_SECT_COUNT, count & 0xFF)
+    cpu::outb(ATA_LBA_LO, lba & 0xFF)
+    cpu::outb(ATA_LBA_MID, (lba >> 8) & 0xFF)
+    cpu::outb(ATA_LBA_HI, (lba >> 16) & 0xFF)
+
+    cpu::outb(ATA_COMMAND, ATA_CMD_WRITE)
+
+    let sector = 0
+    while sector < count {
+        wait_drq()
+
+        let word = 0
+        while word < 256 {
+            let offset = buffer + sector * SECTOR_SIZE + word * 2
+            let lo = cpu::read_mem8(offset)
+            let hi = cpu::read_mem8(offset + 1)
+            cpu::outb(ATA_DATA, lo | (hi << 8))  // Should be outw
+            word = word + 1
+        }
+
+        sector = sector + 1
+    }
+
+    // Flush cache
+    cpu::outb(ATA_COMMAND, ATA_CMD_FLUSH)
+    wait_not_busy()
+
+    return Result::Ok(count * SECTOR_SIZE)
+}
+
+pub fn get_info() -> DiskInfo {
+    return primary_master
+}

@@ -1,0 +1,219 @@
+// ═══════════════════════════════════════════════════════════════════
+// Lateralus stdlib — ini
+// INI / config file parser and writer
+// ═══════════════════════════════════════════════════════════════════
+
+// Config represented as map[section -> map[key -> value]]
+
+// ── Construction ────────────────────────────────────────────────────
+
+/// Create a new empty config.
+pub fn new() -> map {
+    return {}
+}
+
+/// Create a config with a single section.
+pub fn with_section(name: str, entries: map) -> map {
+    let cfg = {}
+    cfg[name] = entries
+    return cfg
+}
+
+// ── Parsing ─────────────────────────────────────────────────────────
+
+/// Parse an INI-format string into a config map.
+///
+/// Supports:
+///   [section]
+///   key = value
+///   ; comments
+///   # comments
+pub fn parse(text: str) -> map {
+    let cfg = {}
+    let current_section = "default"
+    cfg[current_section] = {}
+
+    let lines = split(text, "\n")
+    for line in lines {
+        let trimmed = trim(line)
+
+        // Skip empty lines and comments
+        if len(trimmed) == 0 {
+            continue
+        }
+        if starts_with(trimmed, ";") or starts_with(trimmed, "#") {
+            continue
+        }
+
+        // Section header: [name]
+        if starts_with(trimmed, "[") and ends_with(trimmed, "]") {
+            current_section = substr(trimmed, 1, len(trimmed) - 2)
+            if not contains(keys(cfg), current_section) {
+                cfg[current_section] = {}
+            }
+            continue
+        }
+
+        // Key = value
+        let eq_pos = index_of(trimmed, "=")
+        if eq_pos >= 0 {
+            let k = trim(substr(trimmed, 0, eq_pos))
+            let v = trim(substr(trimmed, eq_pos + 1, len(trimmed) - eq_pos - 1))
+            // Remove quotes if present
+            if len(v) >= 2 and starts_with(v, "\"") and ends_with(v, "\"") {
+                v = substr(v, 1, len(v) - 2)
+            }
+            let section = cfg[current_section]
+            section[k] = _parse_value(v)
+            cfg[current_section] = section
+        }
+    }
+    return cfg
+}
+
+// ── Access ──────────────────────────────────────────────────────────
+
+/// Get a value from section.key.  Returns `default` if not found.
+pub fn get(cfg: map, section: str, key: str, default) {
+    if not contains(keys(cfg), section) {
+        return default
+    }
+    let sec = cfg[section]
+    if not contains(keys(sec), key) {
+        return default
+    }
+    return sec[key]
+}
+
+/// Get an integer value, with default.
+pub fn get_int(cfg: map, section: str, key: str, default: int) -> int {
+    let val = get(cfg, section, key, nil)
+    if val == nil {
+        return default
+    }
+    return int(val)
+}
+
+/// Get a boolean value, with default.
+pub fn get_bool(cfg: map, section: str, key: str, default: bool) -> bool {
+    let val = get(cfg, section, key, nil)
+    if val == nil {
+        return default
+    }
+    if val == true or val == "true" or val == "yes" or val == "1" {
+        return true
+    }
+    return false
+}
+
+/// Get a float value, with default.
+pub fn get_float(cfg: map, section: str, key: str, default: float) -> float {
+    let val = get(cfg, section, key, nil)
+    if val == nil {
+        return default
+    }
+    return float(val)
+}
+
+/// Set a value in section.key.
+pub fn set(cfg: map, section: str, key: str, value) -> map {
+    if not contains(keys(cfg), section) {
+        cfg[section] = {}
+    }
+    let sec = cfg[section]
+    sec[key] = value
+    cfg[section] = sec
+    return cfg
+}
+
+/// Delete a key from a section.
+pub fn delete(cfg: map, section: str, key: str) -> map {
+    if contains(keys(cfg), section) {
+        let sec = cfg[section]
+        let new_sec = {}
+        for k in keys(sec) {
+            if k != key {
+                new_sec[k] = sec[k]
+            }
+        }
+        cfg[section] = new_sec
+    }
+    return cfg
+}
+
+/// List all section names.
+pub fn sections(cfg: map) -> list {
+    return sorted(keys(cfg))
+}
+
+/// List all keys in a section.
+pub fn section_keys(cfg: map, section: str) -> list {
+    if not contains(keys(cfg), section) {
+        return []
+    }
+    return sorted(keys(cfg[section]))
+}
+
+/// Check if a section exists.
+pub fn has_section(cfg: map, section: str) -> bool {
+    return contains(keys(cfg), section)
+}
+
+/// Check if a key exists in a section.
+pub fn has_key(cfg: map, section: str, key: str) -> bool {
+    if not contains(keys(cfg), section) {
+        return false
+    }
+    return contains(keys(cfg[section]), key)
+}
+
+// ── Serialisation ───────────────────────────────────────────────────
+
+/// Serialise a config map to INI format string.
+pub fn to_string(cfg: map) -> str {
+    let lines = []
+    for section in sorted(keys(cfg)) {
+        lines = lines + ["[" + section + "]"]
+        let sec = cfg[section]
+        for key in sorted(keys(sec)) {
+            let val = sec[key]
+            lines = lines + [key + " = " + str(val)]
+        }
+        lines = lines + [""]
+    }
+    return join(lines, "\n")
+}
+
+/// Merge two configs.  Values in `other` override values in `base`.
+pub fn merge(base: map, other: map) -> map {
+    let result = base
+    for section in keys(other) {
+        if not contains(keys(result), section) {
+            result[section] = {}
+        }
+        let sec = other[section]
+        for key in keys(sec) {
+            let r_sec = result[section]
+            r_sec[key] = sec[key]
+            result[section] = r_sec
+        }
+    }
+    return result
+}
+
+// ── Internal ────────────────────────────────────────────────────────
+
+fn _parse_value(s: str) {
+    // Try to parse as int
+    if s == "true" or s == "yes" {
+        return true
+    }
+    if s == "false" or s == "no" {
+        return false
+    }
+    if s == "nil" or s == "null" {
+        return nil
+    }
+    // Return as string
+    return s
+}

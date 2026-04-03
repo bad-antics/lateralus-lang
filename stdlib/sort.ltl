@@ -1,0 +1,211 @@
+// ═══════════════════════════════════════════════════════════════════
+// Lateralus stdlib — sort
+// Sorting algorithms: quicksort, mergesort, insertion sort,
+// selection sort, heapsort, plus utilities
+// ═══════════════════════════════════════════════════════════════════
+
+import math
+
+// ── High-level API ──────────────────────────────────────────────────
+
+/// Sort a list in ascending order (default: quicksort).
+pub fn sorted(items: list) -> list {
+    return quicksort(items)
+}
+
+/// Sort a list in descending order.
+pub fn sorted_desc(items: list) -> list {
+    let s = quicksort(items)
+    return reverse(s)
+}
+
+/// Sort by a key function.
+pub fn sort_by_key(items: list, key_fn: fn) -> list {
+    // Decorate-sort-undecorate (Schwartzian transform)
+    let decorated = items |> map(fn(item) { [key_fn(item), item] })
+    let s = quicksort_pairs(decorated)
+    return s |> map(fn(pair) { pair[1] })
+}
+
+/// Check if a list is already sorted in ascending order.
+pub fn is_sorted(items: list) -> bool {
+    for i in range(0, len(items) - 1) {
+        if items[i] > items[i + 1] {
+            return false
+        }
+    }
+    return true
+}
+
+// ── Quicksort ───────────────────────────────────────────────────────
+
+/// Classic quicksort with three-way partition.
+pub fn quicksort(items: list) -> list {
+    if len(items) <= 1 {
+        return items
+    }
+    let pivot = items[len(items) / 2]
+    let lo  = items |> filter(fn(x) { x < pivot })
+    let mid = items |> filter(fn(x) { x == pivot })
+    let hi  = items |> filter(fn(x) { x > pivot })
+    return quicksort(lo) + mid + quicksort(hi)
+}
+
+/// Quicksort for [key, value] pairs, comparing by key.
+fn quicksort_pairs(pairs: list) -> list {
+    if len(pairs) <= 1 {
+        return pairs
+    }
+    let pivot = pairs[len(pairs) / 2][0]
+    let lo  = pairs |> filter(fn(p) { p[0] < pivot })
+    let mid = pairs |> filter(fn(p) { p[0] == pivot })
+    let hi  = pairs |> filter(fn(p) { p[0] > pivot })
+    return quicksort_pairs(lo) + mid + quicksort_pairs(hi)
+}
+
+// ── Merge sort ──────────────────────────────────────────────────────
+
+/// Stable merge sort.
+pub fn mergesort(items: list) -> list {
+    if len(items) <= 1 {
+        return items
+    }
+    let mid = len(items) / 2
+    let left  = mergesort(slice(items, 0, mid))
+    let right = mergesort(slice(items, mid, len(items)))
+    return merge(left, right)
+}
+
+/// Merge two sorted lists.
+pub fn merge(a: list, b: list) -> list {
+    let result = []
+    let i = 0
+    let j = 0
+    while i < len(a) && j < len(b) {
+        if a[i] <= b[j] {
+            result = result + [a[i]]
+            i = i + 1
+        } else {
+            result = result + [b[j]]
+            j = j + 1
+        }
+    }
+    while i < len(a) {
+        result = result + [a[i]]
+        i = i + 1
+    }
+    while j < len(b) {
+        result = result + [b[j]]
+        j = j + 1
+    }
+    return result
+}
+
+// ── Insertion sort ──────────────────────────────────────────────────
+
+/// Insertion sort — efficient for small or nearly-sorted lists.
+pub fn insertion_sort(items: list) -> list {
+    let arr = items |> map(fn(x) { x })   // copy
+    for i in range(1, len(arr)) {
+        let key = arr[i]
+        let j = i - 1
+        let shifted = []
+        while j >= 0 && arr[j] > key {
+            shifted = [j] + shifted
+            j = j - 1
+        }
+        // Rebuild with key inserted at correct position
+        let result = []
+        let inserted = false
+        for k in range(0, len(arr)) {
+            if k == j + 1 && !inserted {
+                result = result + [key]
+                inserted = true
+            }
+            if k != i {
+                result = result + [arr[k]]
+            }
+        }
+        if !inserted {
+            result = result + [key]
+        }
+        arr = result
+    }
+    return arr
+}
+
+// ── Selection sort ──────────────────────────────────────────────────
+
+/// Selection sort — O(n^2) but minimal swaps.
+pub fn selection_sort(items: list) -> list {
+    let arr = items |> map(fn(x) { x })   // copy
+    for i in range(0, len(arr)) {
+        let min_idx = i
+        for j in range(i + 1, len(arr)) {
+            if arr[j] < arr[min_idx] {
+                min_idx = j
+            }
+        }
+        if min_idx != i {
+            let tmp = arr[i]
+            // Functional swap via rebuild
+            let swapped = []
+            for k in range(0, len(arr)) {
+                if k == i {
+                    swapped = swapped + [arr[min_idx]]
+                } else if k == min_idx {
+                    swapped = swapped + [tmp]
+                } else {
+                    swapped = swapped + [arr[k]]
+                }
+            }
+            arr = swapped
+        }
+    }
+    return arr
+}
+
+// ── Utilities ───────────────────────────────────────────────────────
+
+/// Return the n smallest elements.
+pub fn nsmallest(items: list, n: int) -> list {
+    let s = quicksort(items)
+    return slice(s, 0, min(n, len(s)))
+}
+
+/// Return the n largest elements.
+pub fn nlargest(items: list, n: int) -> list {
+    let s = quicksort(items)
+    let start = max(0, len(s) - n)
+    return slice(s, start, len(s))
+}
+
+/// Binary search in a sorted list. Returns index or -1.
+pub fn binary_search(items: list, target) -> int {
+    let lo = 0
+    let hi = len(items) - 1
+    while lo <= hi {
+        let mid = (lo + hi) / 2
+        if items[mid] == target {
+            return mid
+        } else if items[mid] < target {
+            lo = mid + 1
+        } else {
+            hi = mid - 1
+        }
+    }
+    return -1
+}
+
+/// Count inversions (how far from sorted).
+pub fn count_inversions(items: list) -> int {
+    let count = 0
+    for i in range(0, len(items)) {
+        for j in range(i + 1, len(items)) {
+            if items[i] > items[j] {
+                count = count + 1
+            }
+        }
+    }
+    return count
+}

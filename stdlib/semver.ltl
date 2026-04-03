@@ -1,0 +1,214 @@
+// ═══════════════════════════════════════════════════════════════════
+// Lateralus stdlib — semver
+// Semantic Versioning 2.0.0 (semver.org) parsing and comparison
+// ═══════════════════════════════════════════════════════════════════
+
+import strings
+
+// ── Parsing ─────────────────────────────────────────────────────────
+
+/// Parse a semver string like "1.2.3" or "1.2.3-beta.1+build.42"
+/// into [major, minor, patch, prerelease_str, build_str].
+pub fn parse(version: str) -> list {
+    let s = version
+    // Strip leading 'v' or 'V'
+    if len(s) > 0 && (s[0] == "v" || s[0] == "V") {
+        s = slice(s, 1, len(s))
+    }
+
+    // Split off build metadata (+...)
+    let build = ""
+    let plus_idx = index_of(s, "+")
+    if plus_idx >= 0 {
+        build = slice(s, plus_idx + 1, len(s))
+        s = slice(s, 0, plus_idx)
+    }
+
+    // Split off pre-release (-...)
+    let pre = ""
+    let dash_idx = index_of(s, "-")
+    if dash_idx >= 0 {
+        pre = slice(s, dash_idx + 1, len(s))
+        s = slice(s, 0, dash_idx)
+    }
+
+    // Parse major.minor.patch
+    let parts = split(s, ".")
+    let major = int(parts[0])
+    let minor = 0
+    let patch = 0
+    if len(parts) > 1 {
+        minor = int(parts[1])
+    }
+    if len(parts) > 2 {
+        patch = int(parts[2])
+    }
+
+    return [major, minor, patch, pre, build]
+}
+
+/// Create a version string from components.
+pub fn format(major: int, minor: int, patch: int) -> str {
+    return str(major) + "." + str(minor) + "." + str(patch)
+}
+
+/// Create a version string with pre-release and build.
+pub fn format_full(major: int, minor: int, patch: int, pre: str, build: str) -> str {
+    let s = format(major, minor, patch)
+    if len(pre) > 0 {
+        s = s + "-" + pre
+    }
+    if len(build) > 0 {
+        s = s + "+" + build
+    }
+    return s
+}
+
+// ── Accessors ───────────────────────────────────────────────────────
+
+/// Get the major version number.
+pub fn major(v: list) -> int {
+    return v[0]
+}
+
+/// Get the minor version number.
+pub fn minor(v: list) -> int {
+    return v[1]
+}
+
+/// Get the patch version number.
+pub fn patch(v: list) -> int {
+    return v[2]
+}
+
+/// Get the pre-release string (empty if stable).
+pub fn prerelease(v: list) -> str {
+    return v[3]
+}
+
+/// Get the build metadata string.
+pub fn build_meta(v: list) -> str {
+    return v[4]
+}
+
+/// Check if this is a stable release (no pre-release tag).
+pub fn is_stable(v: list) -> bool {
+    return len(v[3]) == 0
+}
+
+/// Check if this is a pre-release.
+pub fn is_prerelease(v: list) -> bool {
+    return len(v[3]) > 0
+}
+
+// ── Comparison ──────────────────────────────────────────────────────
+
+/// Compare two version lists.  Returns -1, 0, or 1.
+/// Pre-release versions have lower precedence than stable.
+pub fn compare(a: list, b: list) -> int {
+    // Compare major.minor.patch
+    if a[0] < b[0] { return -1 }
+    if a[0] > b[0] { return 1 }
+    if a[1] < b[1] { return -1 }
+    if a[1] > b[1] { return 1 }
+    if a[2] < b[2] { return -1 }
+    if a[2] > b[2] { return 1 }
+    // Pre-release comparisons
+    let a_pre = a[3]
+    let b_pre = b[3]
+    if len(a_pre) == 0 && len(b_pre) == 0 {
+        return 0
+    }
+    if len(a_pre) == 0 {
+        return 1   // stable > pre-release
+    }
+    if len(b_pre) == 0 {
+        return -1
+    }
+    // Both have pre-release, compare lexicographically
+    if a_pre < b_pre {
+        return -1
+    }
+    if a_pre > b_pre {
+        return 1
+    }
+    return 0
+}
+
+/// Check if two versions are equal (ignoring build metadata).
+pub fn eq(a: list, b: list) -> bool {
+    return compare(a, b) == 0
+}
+
+/// Check if a < b.
+pub fn lt(a: list, b: list) -> bool {
+    return compare(a, b) < 0
+}
+
+/// Check if a > b.
+pub fn gt(a: list, b: list) -> bool {
+    return compare(a, b) > 0
+}
+
+/// Check if a <= b.
+pub fn lte(a: list, b: list) -> bool {
+    return compare(a, b) <= 0
+}
+
+/// Check if a >= b.
+pub fn gte(a: list, b: list) -> bool {
+    return compare(a, b) >= 0
+}
+
+// ── Bumping ─────────────────────────────────────────────────────────
+
+/// Bump the major version (resets minor and patch to 0).
+pub fn bump_major(v: list) -> list {
+    return [v[0] + 1, 0, 0, "", ""]
+}
+
+/// Bump the minor version (resets patch to 0).
+pub fn bump_minor(v: list) -> list {
+    return [v[0], v[1] + 1, 0, "", ""]
+}
+
+/// Bump the patch version.
+pub fn bump_patch(v: list) -> list {
+    return [v[0], v[1], v[2] + 1, "", ""]
+}
+
+/// Set the pre-release tag.
+pub fn with_prerelease(v: list, pre: str) -> list {
+    return [v[0], v[1], v[2], pre, v[4]]
+}
+
+/// Set the build metadata.
+pub fn with_build(v: list, build: str) -> list {
+    return [v[0], v[1], v[2], v[3], build]
+}
+
+// ── Validation ──────────────────────────────────────────────────────
+
+/// Check if a string is a valid semver.
+pub fn is_valid(s: str) -> bool {
+    let v = parse(s)
+    return v[0] >= 0 && v[1] >= 0 && v[2] >= 0
+}
+
+/// Check if version satisfies "^major.minor" (compatible range).
+pub fn satisfies_caret(v: list, major: int, minor: int) -> bool {
+    if v[0] != major {
+        return false
+    }
+    return v[1] >= minor
+}
+
+/// Check if version satisfies "~major.minor" (patch-level range).
+pub fn satisfies_tilde(v: list, major: int, minor: int) -> bool {
+    return v[0] == major && v[1] == minor
+}
+
+/// Convert a parsed version back to a string.
+pub fn to_string(v: list) -> str {
+    return format_full(v[0], v[1], v[2], v[3], v[4])
+}

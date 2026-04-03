@@ -1,0 +1,554 @@
+// ═══════════════════════════════════════════════════════════════════════
+// v2_bench.ltl  —  LATERALUS Benchmark Framework
+// Self-hosted port of lateralus_lang/bench.py
+//
+// Provides performance benchmarking infrastructure:
+//   - BenchmarkResult with timing statistics
+//   - run_benchmark() with warmup + timed runs
+//   - BenchmarkSuite for grouping results
+//   - Built-in micro-benchmarks for core operations
+//
+// v2.3.0
+// ═══════════════════════════════════════════════════════════════════════
+
+import strings
+import math
+
+// ─── Benchmark Result ──────────────────────────────────────────────────
+
+struct BenchResult {
+    name: str
+    iterations: int
+    total_time: float
+    mean_time: float
+    median_time: float
+    std_dev: float
+    min_time: float
+    max_time: float
+    ops_per_sec: float
+}
+
+fn result_to_str(r: BenchResult) -> str {
+    let mean_ms = round(r.mean_time * 1000.0, 3)
+    let sd_ms   = round(r.std_dev * 1000.0, 3)
+    let ops     = round(r.ops_per_sec, 0)
+    return "  " + r.name + ": " + str(mean_ms) + "ms (+/- " + str(sd_ms) + "ms) [" + str(ops) + " ops/s]"
+}
+
+fn result_to_map(r: BenchResult) -> map {
+    let d = {}
+    d["name"]         = r.name
+    d["iterations"]   = r.iterations
+    d["total_time_ms"] = round(r.total_time * 1000.0, 3)
+    d["mean_ms"]      = round(r.mean_time * 1000.0, 6)
+    d["median_ms"]    = round(r.median_time * 1000.0, 6)
+    d["std_dev_ms"]   = round(r.std_dev * 1000.0, 6)
+    d["min_ms"]       = round(r.min_time * 1000.0, 6)
+    d["max_ms"]       = round(r.max_time * 1000.0, 6)
+    d["ops_per_sec"]  = round(r.ops_per_sec, 1)
+    return d
+}
+
+// ─── Statistics helpers ────────────────────────────────────────────────
+
+fn _stats_mean(vals: list) -> float {
+    if len(vals) == 0 {
+        return 0.0
+    }
+    let total = 0.0
+    for v in vals {
+        total = total + v
+    }
+    return total / len(vals)
+}
+
+fn _stats_median(vals: list) -> float {
+    if len(vals) == 0 {
+        return 0.0
+    }
+    let sorted_vals = _insertion_sort(vals)
+    let n = len(sorted_vals)
+    if n % 2 == 1 {
+        return sorted_vals[n / 2]
+    }
+    let a = sorted_vals[n / 2 - 1]
+    let b = sorted_vals[n / 2]
+    return (a + b) / 2.0
+}
+
+fn _stats_stdev(vals: list) -> float {
+    if len(vals) <= 1 {
+        return 0.0
+    }
+    let m = _stats_mean(vals)
+    let sum_sq = 0.0
+    for v in vals {
+        let diff = v - m
+        sum_sq = sum_sq + diff * diff
+    }
+    return sqrt(sum_sq / (len(vals) - 1))
+}
+
+fn _stats_min(vals: list) -> float {
+    let result = vals[0]
+    let i = 1
+    while i < len(vals) {
+        if vals[i] < result {
+            result = vals[i]
+        }
+        i = i + 1
+    }
+    return result
+}
+
+fn _stats_max(vals: list) -> float {
+    let result = vals[0]
+    let i = 1
+    while i < len(vals) {
+        if vals[i] > result {
+            result = vals[i]
+        }
+        i = i + 1
+    }
+    return result
+}
+
+fn _insertion_sort(vals: list) -> list {
+    let result = []
+    for v in vals {
+        result = result + [v]
+    }
+    let n = len(result)
+    let i = 1
+    while i < n {
+        let j = i
+        while j > 0 and result[j - 1] > result[j] {
+            let tmp = result[j - 1]
+            result[j - 1] = result[j]
+            result[j] = tmp
+            j = j - 1
+        }
+        i = i + 1
+    }
+    return result
+}
+
+// ─── Run Benchmark ─────────────────────────────────────────────────────
+
+fn run_benchmark(name: str, bench_fn: any, iterations: int, warmup: int) -> BenchResult {
+    // Warmup
+    let w = 0
+    while w < warmup {
+        bench_fn()
+        w = w + 1
+    }
+
+    // Timed runs
+    let times = []
+    let i = 0
+    while i < iterations {
+        let start = clock()
+        bench_fn()
+        let elapsed = clock() - start
+        times = times + [elapsed]
+        i = i + 1
+    }
+
+    let total = 0.0
+    for t in times {
+        total = total + t
+    }
+
+    let mean_t   = _stats_mean(times)
+    let median_t = _stats_median(times)
+    let stdev_t  = _stats_stdev(times)
+    let min_t    = _stats_min(times)
+    let max_t    = _stats_max(times)
+    let ops = 0.0
+    if total > 0.0 {
+        ops = iterations / total
+    }
+
+    return BenchResult {
+        name: name,
+        iterations: iterations,
+        total_time: total,
+        mean_time: mean_t,
+        median_time: median_t,
+        std_dev: stdev_t,
+        min_time: min_t,
+        max_time: max_t,
+        ops_per_sec: ops,
+    }
+}
+
+// ─── Benchmark Suite ───────────────────────────────────────────────────
+
+struct BenchSuite {
+    name: str
+    results: list
+}
+
+fn suite_new(name: str) -> BenchSuite {
+    return BenchSuite {
+        name: name,
+        results: [],
+    }
+}
+
+fn suite_add(suite: BenchSuite, result: BenchResult) {
+    suite.results = suite.results + [result]
+}
+
+fn suite_summary(suite: BenchSuite) -> str {
+    let lines = [
+        "",
+        "  Benchmark Suite: " + suite.name,
+        "  ══════════════════════════════════════════════════════════════",
+    ]
+    for r in suite.results {
+        lines = lines + [result_to_str(r)]
+    }
+    lines = lines + [
+        "  ══════════════════════════════════════════════════════════════",
+        "  Total benchmarks: " + str(len(suite.results)),
+    ]
+    return join(lines, "\n")
+}
+
+fn suite_to_map(suite: BenchSuite) -> map {
+    let d = {}
+    d["suite"] = suite.name
+    let benchmarks = []
+    for r in suite.results {
+        benchmarks = benchmarks + [result_to_map(r)]
+    }
+    d["benchmarks"] = benchmarks
+    return d
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// BUILT-IN MICRO-BENCHMARKS
+// ═══════════════════════════════════════════════════════════════════════
+
+// ── Arithmetic ─────────────────────────────────────────────────────────
+
+fn bench_arithmetic(iters: int) -> BenchSuite {
+    let suite = suite_new("Arithmetic")
+
+    suite_add(suite, run_benchmark("integer add (1000 ops)", fn() {
+        let x = 0
+        let i = 0
+        while i < 1000 {
+            x = x + i
+            i = i + 1
+        }
+    }, iters, 5))
+
+    suite_add(suite, run_benchmark("float mul (1000 ops)", fn() {
+        let x = 1.0
+        let i = 0
+        while i < 1000 {
+            x = x * 1.001
+            i = i + 1
+        }
+    }, iters, 5))
+
+    suite_add(suite, run_benchmark("modulo (1000 ops)", fn() {
+        let x = 0
+        let i = 0
+        while i < 1000 {
+            x = i % 7
+            i = i + 1
+        }
+    }, iters, 5))
+
+    return suite
+}
+
+// ── List Operations ────────────────────────────────────────────────────
+
+fn bench_list_ops(iters: int) -> BenchSuite {
+    let suite = suite_new("List Operations")
+
+    suite_add(suite, run_benchmark("list build (100 items)", fn() {
+        let lst = []
+        let i = 0
+        while i < 100 {
+            lst = lst + [i]
+            i = i + 1
+        }
+    }, iters, 5))
+
+    suite_add(suite, run_benchmark("list index (100 reads)", fn() {
+        let lst = range(0, 100)
+        let total = 0
+        let i = 0
+        while i < 100 {
+            total = total + lst[i]
+            i = i + 1
+        }
+    }, iters, 5))
+
+    suite_add(suite, run_benchmark("list iterate (100 items)", fn() {
+        let lst = range(0, 100)
+        let total = 0
+        for x in lst {
+            total = total + x
+        }
+    }, iters, 5))
+
+    return suite
+}
+
+// ── Map Operations ─────────────────────────────────────────────────────
+
+fn bench_map_ops(iters: int) -> BenchSuite {
+    let suite = suite_new("Map Operations")
+
+    suite_add(suite, run_benchmark("map insert (50 keys)", fn() {
+        let m = {}
+        let i = 0
+        while i < 50 {
+            m[str(i)] = i * i
+            i = i + 1
+        }
+    }, iters, 5))
+
+    suite_add(suite, run_benchmark("map lookup (50 keys)", fn() {
+        let m = {}
+        let i = 0
+        while i < 50 {
+            m[str(i)] = i
+            i = i + 1
+        }
+        let total = 0
+        i = 0
+        while i < 50 {
+            total = total + m[str(i)]
+            i = i + 1
+        }
+    }, iters, 5))
+
+    suite_add(suite, run_benchmark("map keys iterate", fn() {
+        let m = {}
+        let i = 0
+        while i < 50 {
+            m[str(i)] = i
+            i = i + 1
+        }
+        let total = 0
+        for k in keys(m) {
+            total = total + m[k]
+        }
+    }, iters, 5))
+
+    return suite
+}
+
+// ── String Operations ──────────────────────────────────────────────────
+
+fn bench_string_ops(iters: int) -> BenchSuite {
+    let suite = suite_new("String Operations")
+
+    suite_add(suite, run_benchmark("string concat (100 items)", fn() {
+        let s = ""
+        let i = 0
+        while i < 100 {
+            s = s + "x"
+            i = i + 1
+        }
+    }, iters, 5))
+
+    suite_add(suite, run_benchmark("str() conversion (100)", fn() {
+        let i = 0
+        while i < 100 {
+            let s = str(i * 42)
+            i = i + 1
+        }
+    }, iters, 5))
+
+    return suite
+}
+
+// ── Recursion ──────────────────────────────────────────────────────────
+
+fn bench_recursion(iters: int) -> BenchSuite {
+    let suite = suite_new("Recursion")
+
+    fn fib(n: int) -> int {
+        if n <= 1 {
+            return n
+        }
+        return fib(n - 1) + fib(n - 2)
+    }
+
+    suite_add(suite, run_benchmark("fibonacci(15)", fn() {
+        fib(15)
+    }, iters, 5))
+
+    fn factorial(n: int) -> int {
+        if n <= 1 {
+            return 1
+        }
+        return n * factorial(n - 1)
+    }
+
+    suite_add(suite, run_benchmark("factorial(20)", fn() {
+        factorial(20)
+    }, iters, 5))
+
+    return suite
+}
+
+// ── Function Calls ─────────────────────────────────────────────────────
+
+fn bench_function_calls(iters: int) -> BenchSuite {
+    let suite = suite_new("Function Calls")
+
+    fn identity(x: int) -> int {
+        return x
+    }
+
+    suite_add(suite, run_benchmark("function call (1000 calls)", fn() {
+        let i = 0
+        while i < 1000 {
+            identity(i)
+            i = i + 1
+        }
+    }, iters, 5))
+
+    fn add_three(a: int, b: int, c: int) -> int {
+        return a + b + c
+    }
+
+    suite_add(suite, run_benchmark("3-arg call (1000 calls)", fn() {
+        let i = 0
+        while i < 1000 {
+            add_three(i, i + 1, i + 2)
+            i = i + 1
+        }
+    }, iters, 5))
+
+    // Higher-order function call
+    suite_add(suite, run_benchmark("higher-order (100 calls)", fn() {
+        let apply_fn = fn(f, x) { return f(x) }
+        let double = fn(x) { return x * 2 }
+        let i = 0
+        while i < 100 {
+            apply_fn(double, i)
+            i = i + 1
+        }
+    }, iters, 5))
+
+    return suite
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// SUITE RUNNER
+// ═══════════════════════════════════════════════════════════════════════
+
+fn run_all_benchmarks(iterations: int) -> list {
+    println("")
+    println("  LATERALUS Benchmark Suite")
+    println("  Spiraling Performance Measurements")
+    println("  ════════════════════════════════════════════════════════════")
+
+    let all_suites = []
+    let suite_fns = [
+        bench_arithmetic,
+        bench_list_ops,
+        bench_map_ops,
+        bench_string_ops,
+        bench_recursion,
+        bench_function_calls,
+    ]
+
+    for sfn in suite_fns {
+        let s = sfn(iterations)
+        all_suites = all_suites + [s]
+        println(suite_summary(s))
+    }
+
+    let total_benchmarks = 0
+    for s in all_suites {
+        total_benchmarks = total_benchmarks + len(s.results)
+    }
+    println("")
+    println("  Total: " + str(total_benchmarks) + " benchmarks across " + str(len(all_suites)) + " suites")
+
+    return all_suites
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// SELF-TEST
+// ═══════════════════════════════════════════════════════════════════════
+
+fn _self_test() {
+    let pass_count = 0
+    let fail_count = 0
+
+    fn check(label: str, ok: bool) {
+        if ok {
+            pass_count = pass_count + 1
+        } else {
+            println("[FAIL] " + label)
+            fail_count = fail_count + 1
+        }
+    }
+
+    // ── Statistics helpers ──────────────────────────────────────────
+    check("mean",   _stats_mean([1.0, 2.0, 3.0]) == 2.0)
+    check("median odd", _stats_median([3.0, 1.0, 2.0]) == 2.0)
+    check("median even", _stats_median([1.0, 2.0, 3.0, 4.0]) == 2.5)
+    check("stdev",  _stats_stdev([2.0, 2.0, 2.0]) == 0.0)
+    check("min",    _stats_min([3.0, 1.0, 2.0]) == 1.0)
+    check("max",    _stats_max([3.0, 1.0, 2.0]) == 3.0)
+    check("sort",   _insertion_sort([3.0, 1.0, 2.0]) == [1.0, 2.0, 3.0])
+
+    // ── Run a benchmark ────────────────────────────────────────────
+    let r = run_benchmark("test_add", fn() {
+        let x = 1 + 2
+    }, 50, 5)
+    check("result name",    r.name == "test_add")
+    check("result iters",   r.iterations == 50)
+    check("result total",   r.total_time >= 0.0)
+    check("result mean",    r.mean_time >= 0.0)
+    check("result ops",     r.ops_per_sec > 0.0)
+
+    // ── Result formatting ──────────────────────────────────────────
+    let s = result_to_str(r)
+    check("result str", len(s) > 0)
+
+    let d = result_to_map(r)
+    check("result map", has_key(d, "name"))
+    check("result map iters", d["iterations"] == 50)
+
+    // ── Suite ──────────────────────────────────────────────────────
+    let suite = suite_new("TestSuite")
+    check("suite name", suite.name == "TestSuite")
+    check("suite empty", len(suite.results) == 0)
+
+    suite_add(suite, r)
+    check("suite add", len(suite.results) == 1)
+
+    let summary = suite_summary(suite)
+    check("suite summary", len(summary) > 0)
+
+    let sm = suite_to_map(suite)
+    check("suite map", has_key(sm, "suite"))
+    check("suite map benches", len(sm["benchmarks"]) == 1)
+
+    // ── Run a micro-benchmark suite ────────────────────────────────
+    let arith = bench_arithmetic(10)
+    check("arith suite", len(arith.results) > 0)
+
+    // ── Summary ────────────────────────────────────────────────────
+    println("")
+    println("v2_bench self-test: " + str(pass_count) + " passed, " + str(fail_count) + " failed")
+    if fail_count == 0 {
+        println("All tests passed!")
+    }
+}
+
+_self_test()

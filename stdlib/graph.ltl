@@ -1,0 +1,524 @@
+-- stdlib/graph.ltl
+-- LATERALUS Graph Theory Standard Library
+-- Directed and undirected weighted graphs with algorithm suite
+
+module Graph
+
+import "core"
+import "collections"
+import "math"
+
+-- ============================================================
+-- Core types
+-- ============================================================
+
+struct Vertex {
+    id: any
+    label: str
+    data: any
+}
+
+struct Edge {
+    from_id: any
+    to_id: any
+    weight: float
+    label: str
+    directed: bool
+}
+
+struct Graph {
+    vertices: dict     -- id -> Vertex
+    edges: list[Edge]
+    directed: bool
+    _adj: dict         -- adjacency list: id -> list[(neighbor_id, weight)]
+}
+
+struct PathResult {
+    path: list
+    cost: float
+    found: bool
+}
+
+struct ComponentResult {
+    components: list[list]
+    count: int
+}
+
+-- ============================================================
+-- Construction
+-- ============================================================
+
+fn new_graph(directed: bool = false) -> Graph {
+    return Graph {
+        vertices: {},
+        edges: [],
+        directed: directed,
+        _adj: {}
+    }
+}
+
+fn new_digraph() -> Graph {
+    return new_graph(directed: true)
+}
+
+fn add_vertex(g: Graph, id: any, label: str = "", data: any = None) -> Graph {
+    let v = Vertex { id: id, label: label or str(id), data: data }
+    let new_vertices = {**g.vertices, id: v}
+    let new_adj = {**g._adj}
+    if id not in new_adj {
+        new_adj[id] = []
+    }
+    return Graph { vertices: new_vertices, edges: g.edges,
+                   directed: g.directed, _adj: new_adj }
+}
+
+fn add_edge(g: Graph, from_id: any, to_id: any,
+            weight: float = 1.0, label: str = "") -> Graph {
+    -- Auto-add vertices if not present
+    let g2 = g
+    if from_id not in g2.vertices { g2 = add_vertex(g2, from_id) }
+    if to_id not in g2.vertices   { g2 = add_vertex(g2, to_id) }
+
+    let e = Edge { from_id: from_id, to_id: to_id,
+                   weight: weight, label: label, directed: g2.directed }
+    let new_edges = g2.edges + [e]
+    let new_adj = {**g2._adj}
+    new_adj[from_id] = new_adj[from_id] + [(to_id, weight)]
+    if not g2.directed {
+        new_adj[to_id] = new_adj[to_id] + [(from_id, weight)]
+    }
+    return Graph { vertices: g2.vertices, edges: new_edges,
+                   directed: g2.directed, _adj: new_adj }
+}
+
+fn remove_vertex(g: Graph, id: any) -> Graph {
+    let new_vertices = {k: v for k, v in g.vertices.items() if k != id}
+    let new_edges = [e for e in g.edges if e.from_id != id and e.to_id != id]
+    let new_adj = {k: [(n, w) for n, w in ns if n != id]
+                   for k, ns in g._adj.items() if k != id}
+    return Graph { vertices: new_vertices, edges: new_edges,
+                   directed: g.directed, _adj: new_adj }
+}
+
+-- ============================================================
+-- Traversal
+-- ============================================================
+
+fn bfs(g: Graph, start: any) -> list {
+    if start not in g.vertices { return [] }
+    let visited = {start}
+    let queue = [start]
+    let order = []
+
+    while len(queue) > 0 {
+        let node = queue[0]
+        let queue = queue[1:]
+        order = order + [node]
+
+        for neighbor, _ in g._adj.get(node, []) {
+            if neighbor not in visited {
+                visited = visited | {neighbor}
+                queue = queue + [neighbor]
+            }
+        }
+    }
+
+    return order
+}
+
+fn dfs(g: Graph, start: any) -> list {
+    if start not in g.vertices { return [] }
+    let visited = set()
+    let order = []
+
+    fn _dfs_inner(node: any) -> None {
+        if node in visited { return }
+        visited.add(node)
+        order = order + [node]
+        for neighbor, _ in g._adj.get(node, []) {
+            _dfs_inner(neighbor)
+        }
+    }
+
+    _dfs_inner(start)
+    return order
+}
+
+fn dfs_iterative(g: Graph, start: any) -> list {
+    if start not in g.vertices { return [] }
+    let visited = set()
+    let stack = [start]
+    let order = []
+
+    while len(stack) > 0 {
+        let node = stack[-1]
+        let stack = stack[:-1]
+        if node not in visited {
+            visited.add(node)
+            order = order + [node]
+            let neighbors = [n for n, _ in g._adj.get(node, [])]
+            stack = stack + list(reversed(neighbors))
+        }
+    }
+
+    return order
+}
+
+-- ============================================================
+-- Shortest paths
+-- ============================================================
+
+-- Dijkstra's algorithm — single source shortest paths
+-- Returns dict: target_id -> (cost, path)
+fn dijkstra(g: Graph, source: any) -> dict {
+    @python("
+import heapq as _hq
+
+INF = float('inf')
+dist = {v: INF for v in g['vertices']}
+dist[source] = 0.0
+prev = {v: None for v in g['vertices']}
+heap = [(0.0, source)]
+
+while heap:
+    d, u = _hq.heappop(heap)
+    if d > dist[u]:
+        continue
+    for (v, w) in g['_adj'].get(u, []):
+        nd = d + w
+        if nd < dist[v]:
+            dist[v] = nd
+            prev[v] = u
+            _hq.heappush(heap, (nd, v))
+
+def _reconstruct(target):
+    path = []
+    cur = target
+    while cur is not None:
+        path.append(cur)
+        cur = prev[cur]
+    return list(reversed(path))
+
+_result = {
+    v: {'cost': dist[v], 'path': _reconstruct(v) if dist[v] < INF else []}
+    for v in g['vertices']
+}
+")
+    return @result
+}
+
+-- Shortest path between two specific vertices
+fn shortest_path(g: Graph, source: any, target: any) -> PathResult {
+    let all_paths = dijkstra(g, source)
+    let entry = all_paths.get(target, None)
+    if entry == None or entry["cost"] == @inf {
+        return PathResult { path: [], cost: @inf, found: false }
+    }
+    return PathResult { path: entry["path"], cost: entry["cost"], found: true }
+}
+
+-- Bellman-Ford — handles negative edge weights, detects negative cycles
+fn bellman_ford(g: Graph, source: any) -> dict {
+    @python("
+INF = float('inf')
+dist = {v: INF for v in g['vertices']}
+dist[source] = 0.0
+prev = {v: None for v in g['vertices']}
+n = len(g['vertices'])
+
+for _ in range(n - 1):
+    for e in g['edges']:
+        u, v, w = e['from_id'], e['to_id'], e['weight']
+        if dist[u] + w < dist[v]:
+            dist[v] = dist[u] + w
+            prev[v] = u
+
+# Check for negative cycles
+negative_cycle = False
+for e in g['edges']:
+    u, v, w = e['from_id'], e['to_id'], e['weight']
+    if dist[u] + w < dist[v]:
+        negative_cycle = True
+        break
+
+_result = {'dist': dist, 'prev': prev, 'negative_cycle': negative_cycle}
+")
+    return @result
+}
+
+-- ============================================================
+-- Connectivity
+-- ============================================================
+
+-- Find connected components (undirected)
+fn connected_components(g: Graph) -> ComponentResult {
+    let visited = set()
+    let components = []
+
+    for v in g.vertices.keys() {
+        if v not in visited {
+            let component = bfs(g, v)
+            for node in component { visited.add(node) }
+            components = components + [component]
+        }
+    }
+
+    return ComponentResult { components: components, count: len(components) }
+}
+
+-- Kosaraju's SCC for directed graphs
+fn strongly_connected_components(g: Graph) -> ComponentResult {
+    @python("
+adj = g['_adj']
+vertices = list(g['vertices'].keys())
+n_v = len(vertices)
+
+# Build reverse graph
+rev_adj = {v: [] for v in vertices}
+for e in g['edges']:
+    rev_adj[e['to_id']].append((e['from_id'], e['weight']))
+
+# First pass: DFS order
+visited = set()
+finish_order = []
+
+def dfs1(u):
+    stack = [(u, iter(adj.get(u, [])))]
+    visited.add(u)
+    while stack:
+        node, it = stack[-1]
+        try:
+            (nxt, _) = next(it)
+            if nxt not in visited:
+                visited.add(nxt)
+                stack.append((nxt, iter(adj.get(nxt, []))))
+        except StopIteration:
+            finish_order.append(node)
+            stack.pop()
+
+for v in vertices:
+    if v not in visited:
+        dfs1(v)
+
+# Second pass: reverse DFS
+visited2 = set()
+components = []
+
+def dfs2(u, comp):
+    stack = [u]
+    visited2.add(u)
+    comp.append(u)
+    while stack:
+        node = stack[-1]
+        nxt_list = [n for n, _ in rev_adj.get(node, []) if n not in visited2]
+        if nxt_list:
+            nxt = nxt_list[0]
+            visited2.add(nxt)
+            comp.append(nxt)
+            stack.append(nxt)
+        else:
+            stack.pop()
+
+for v in reversed(finish_order):
+    if v not in visited2:
+        comp = []
+        dfs2(v, comp)
+        components.append(comp)
+
+_result = {'components': components, 'count': len(components)}
+")
+    return ComponentResult { components: @result["components"],
+                             count: @result["count"] }
+}
+
+-- Check if a directed graph has a cycle
+fn has_cycle(g: Graph) -> bool {
+    @python("
+adj = g['_adj']
+vertices = list(g['vertices'].keys())
+WHITE, GRAY, BLACK = 0, 1, 2
+color = {v: WHITE for v in vertices}
+_result = False
+
+def dfs(u):
+    color[u] = GRAY
+    for (v, _) in adj.get(u, []):
+        if color[v] == GRAY:
+            return True
+        if color[v] == WHITE and dfs(v):
+            return True
+    color[u] = BLACK
+    return False
+
+for v in vertices:
+    if color[v] == WHITE:
+        if dfs(v):
+            _result = True
+            break
+")
+    return @result
+}
+
+-- ============================================================
+-- Topological sort (DAGs only)
+-- ============================================================
+
+fn topological_sort(g: Graph) -> list {
+    if not g.directed {
+        return []  -- undefined for undirected
+    }
+    if has_cycle(g) {
+        return []  -- undefined for cyclic graphs
+    }
+
+    @python("
+from collections import deque
+
+adj = g['_adj']
+vertices = list(g['vertices'].keys())
+
+# Kahn's algorithm
+in_degree = {v: 0 for v in vertices}
+for e in g['edges']:
+    in_degree[e['to_id']] += 1
+
+queue = deque([v for v in vertices if in_degree[v] == 0])
+order = []
+
+while queue:
+    u = queue.popleft()
+    order.append(u)
+    for (v, _) in adj.get(u, []):
+        in_degree[v] -= 1
+        if in_degree[v] == 0:
+            queue.append(v)
+
+_result = order
+")
+    return @result
+}
+
+-- ============================================================
+-- Minimum Spanning Tree
+-- ============================================================
+
+-- Kruskal's MST algorithm (undirected graphs)
+fn mst_kruskal(g: Graph) -> Graph {
+    @python("
+# Union-Find
+parent = {v: v for v in g['vertices']}
+rank = {v: 0 for v in g['vertices']}
+
+def find(x):
+    while parent[x] != x:
+        parent[x] = parent[parent[x]]
+        x = parent[x]
+    return x
+
+def union(x, y):
+    rx, ry = find(x), find(y)
+    if rx == ry:
+        return False
+    if rank[rx] < rank[ry]:
+        rx, ry = ry, rx
+    parent[ry] = rx
+    if rank[rx] == rank[ry]:
+        rank[rx] += 1
+    return True
+
+sorted_edges = sorted(g['edges'], key=lambda e: e['weight'])
+mst_edges = []
+
+for e in sorted_edges:
+    if union(e['from_id'], e['to_id']):
+        mst_edges.append(e)
+
+_result = mst_edges
+")
+    let mst = new_graph(directed: false)
+    for e in @result {
+        mst = add_edge(mst, e["from_id"], e["to_id"], e["weight"])
+    }
+    return mst
+}
+
+-- ============================================================
+-- Metrics
+-- ============================================================
+
+fn vertex_count(g: Graph) -> int { return len(g.vertices) }
+fn edge_count(g: Graph) -> int   { return len(g.edges) }
+
+fn degree(g: Graph, id: any) -> int {
+    return len(g._adj.get(id, []))
+}
+
+fn in_degree(g: Graph, id: any) -> int {
+    if not g.directed { return degree(g, id) }
+    return len([e for e in g.edges if e.to_id == id])
+}
+
+fn out_degree(g: Graph, id: any) -> int {
+    return len(g._adj.get(id, []))
+}
+
+fn is_connected(g: Graph) -> bool {
+    if vertex_count(g) == 0 { return true }
+    let start = list(g.vertices.keys())[0]
+    let visited = bfs(g, start)
+    return len(visited) == vertex_count(g)
+}
+
+fn diameter(g: Graph) -> float {
+    -- Compute diameter (longest shortest path) via all-pairs BFS
+    let max_dist = 0.0
+    for v in g.vertices.keys() {
+        let paths = dijkstra(g, v)
+        for entry in paths.values() {
+            let cost = entry["cost"]
+            if cost != @inf and cost > max_dist {
+                max_dist = cost
+            }
+        }
+    }
+    return max_dist
+}
+
+-- ============================================================
+-- Export / Display
+-- ============================================================
+
+-- Export to DOT format for Graphviz
+fn to_dot(g: Graph, name: str = "G") -> str {
+    let gtype = if g.directed { "digraph" } else { "graph" }
+    let arrow = if g.directed { " -> " } else { " -- " }
+    let lines = [gtype + " " + name + " {"]
+
+    for v in g.vertices.values() {
+        lines = lines + ["  " + str(v.id) + " [label=\"" + v.label + "\"];"]
+    }
+
+    for e in g.edges {
+        let wlabel = if e.weight != 1.0 { " [label=\"" + str(e.weight) + "\"]" } else { "" }
+        lines = lines + ["  " + str(e.from_id) + arrow + str(e.to_id) + wlabel + ";"]
+    }
+
+    lines = lines + ["}"]
+    return "\n".join(lines)
+}
+
+-- Build a graph from an adjacency list dict
+fn from_adj_list(adj: dict, directed: bool = false) -> Graph {
+    let g = new_graph(directed: directed)
+    for u, neighbors in adj.items() {
+        g = add_vertex(g, u)
+        for v in neighbors {
+            if @type(v) == "tuple" or @type(v) == "list" {
+                g = add_edge(g, u, v[0], weight: float(v[1]))
+            } else {
+                g = add_edge(g, u, v)
+            }
+        }
+    }
+    return g
+}

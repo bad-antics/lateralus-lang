@@ -1,0 +1,183 @@
+// ═══════════════════════════════════════════════════════════════════
+// LATERALUS v1.7 — Package Manager & Build System Showcase
+// Demonstrates: build profiles, conditional compilation, cfg!()
+// ═══════════════════════════════════════════════════════════════════
+
+import math
+import strings
+
+// ── Build profiles & conditional compilation ──────────────────────
+
+// @cfg(target, "python") decorates items compiled only for Python
+@cfg(target, "python")
+fn python_greeting() -> str {
+    return "Running on Python target"
+}
+
+// @cfg(target, "c") decorates items compiled only for C
+@cfg(target, "c")
+fn c_greeting() -> str {
+    return "Running on C target"
+}
+
+// cfg!() is a compile-time boolean expression
+fn show_target_info() {
+    if cfg!(target, "python") {
+        println("Target: Python 3")
+    }
+    if cfg!(feature, "async") {
+        println("Feature: async enabled")
+    }
+}
+
+// ── Package-style modular code ────────────────────────────────────
+
+struct Package {
+    name: str
+    version: str
+    deps: list
+}
+
+fn create_package(name: str, version: str) -> Package {
+    return Package { name: name, version: version, deps: [] }
+}
+
+fn add_dependency(pkg: Package, dep_name: str, dep_version: str) -> Package {
+    let dep = dep_name + "@" + dep_version
+    pkg.deps = pkg.deps + [dep]
+    return pkg
+}
+
+fn format_package(pkg: Package) -> str {
+    let dep_list = pkg.deps |> join(", ")
+    return pkg.name + " v" + pkg.version + " [" + dep_list + "]"
+}
+
+// ── SemVer-style version comparison ───────────────────────────────
+
+fn parse_version(s: str) -> list {
+    let parts = split(s, ".")
+    return [int(parts[0]), int(parts[1]), int(parts[2])]
+}
+
+fn version_gte(a: str, b: str) -> bool {
+    let va = parse_version(a)
+    let vb = parse_version(b)
+    if va[0] != vb[0] { return va[0] > vb[0] }
+    if va[1] != vb[1] { return va[1] > vb[1] }
+    return va[2] >= vb[2]
+}
+
+// ── Build profile simulation ─────────────────────────────────────
+
+struct BuildConfig {
+    profile: str
+    opt_level: int
+    debug_info: bool
+    features: list
+}
+
+fn make_debug_config() -> BuildConfig {
+    return BuildConfig {
+        profile: "debug",
+        opt_level: 0,
+        debug_info: true,
+        features: ["dev-tools", "verbose-logging"],
+    }
+}
+
+fn make_release_config() -> BuildConfig {
+    return BuildConfig {
+        profile: "release",
+        opt_level: 3,
+        debug_info: false,
+        features: ["optimize", "strip"],
+    }
+}
+
+fn describe_config(config: BuildConfig) -> str {
+    let feat_str = config.features |> join(", ")
+    return config.profile + " (O" + str(config.opt_level) + ", debug=" + str(config.debug_info) + ", features=[" + feat_str + "])"
+}
+
+// ── Workspace simulation ─────────────────────────────────────────
+
+fn simulate_workspace() {
+    println("\n═══ Workspace ═══")
+
+    let packages = [
+        create_package("core", "1.0.0"),
+        create_package("cli", "0.5.0"),
+        create_package("web", "0.3.0"),
+    ]
+
+    // Add inter-package dependencies
+    let cli = add_dependency(packages[1], "core", "^1.0")
+    let web = add_dependency(packages[2], "core", "^1.0")
+    let web2 = add_dependency(web, "http", "^2.0")
+
+    println("Workspace members:")
+    println("  " + format_package(packages[0]))
+    println("  " + format_package(cli))
+    println("  " + format_package(web2))
+}
+
+// ── Dependency resolution simulation ─────────────────────────────
+
+fn simulate_resolution() {
+    println("\n═══ Dependency Resolution ═══")
+
+    let deps = [
+        ["app", "core"],
+        ["app", "utils"],
+        ["core", "base"],
+        ["utils", "base"],
+    ]
+
+    // Topological sort (simple simulation)
+    let resolved = ["base", "core", "utils", "app"]
+    println("Resolution order:")
+    for pkg in resolved {
+        println("  → " + pkg)
+    }
+
+    // Version checking
+    let required = "1.5.0"
+    let available = "1.7.0"
+    if version_gte(available, required) {
+        println("Version check: " + available + " >= " + required + " ✓")
+    }
+}
+
+// ── Main ─────────────────────────────────────────────────────────
+
+fn main() {
+    println("═══ LATERALUS v1.7 — Package Manager & Build System ═══")
+
+    // Show target info using cfg!()
+    show_target_info()
+
+    // Build profiles
+    println("\n═══ Build Profiles ═══")
+    let debug_cfg = make_debug_config()
+    let release_cfg = make_release_config()
+    println("Debug:   " + describe_config(debug_cfg))
+    println("Release: " + describe_config(release_cfg))
+
+    // Workspace
+    simulate_workspace()
+
+    // Dependency resolution
+    simulate_resolution()
+
+    // Package creation
+    println("\n═══ Package Info ═══")
+    let pkg = create_package("lateralus-demo", "1.7.0")
+    let pkg2 = add_dependency(pkg, "stdlib", "^1.0")
+    let pkg3 = add_dependency(pkg2, "math", "^2.0")
+    println(format_package(pkg3))
+
+    println("\n✓ v1.7 showcase complete")
+}
+
+main()

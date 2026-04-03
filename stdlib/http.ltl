@@ -1,0 +1,170 @@
+// Lateralus Standard Library — http.ltl  (v1.5.0)
+// HTTP client for making web requests
+
+module stdlib.http
+
+// ── Core requests ────────────────────────────────────────────────────────────
+
+pub fn get(url: str) -> map {
+    // Returns {"status": int, "body": str, "headers": map}
+    return http_request("GET", url, "", {})
+}
+
+pub fn post(url: str, body: str) -> map {
+    return http_request("POST", url, body, {"Content-Type": "application/json"})
+}
+
+pub fn put(url: str, body: str) -> map {
+    return http_request("PUT", url, body, {"Content-Type": "application/json"})
+}
+
+pub fn delete(url: str) -> map {
+    return http_request("DELETE", url, "", {})
+}
+
+pub fn patch(url: str, body: str) -> map {
+    return http_request("PATCH", url, body, {"Content-Type": "application/json"})
+}
+
+pub fn head(url: str) -> map {
+    return http_request("HEAD", url, "", {})
+}
+
+// ── With headers ─────────────────────────────────────────────────────────────
+
+pub fn get_with_headers(url: str, headers: map) -> map {
+    return http_request("GET", url, "", headers)
+}
+
+pub fn post_with_headers(url: str, body: str, headers: map) -> map {
+    return http_request("POST", url, body, headers)
+}
+
+// ── JSON helpers ─────────────────────────────────────────────────────────────
+
+pub fn get_json(url: str) -> map {
+    let resp = get(url)
+    if resp["status"] >= 200 && resp["status"] < 300 {
+        return {"ok": true, "data": json_parse(resp["body"]),
+                "status": resp["status"]}
+    }
+    return {"ok": false, "data": null, "status": resp["status"],
+            "error": resp["body"]}
+}
+
+pub fn post_json(url: str, data: map) -> map {
+    let body = json_encode(data)
+    let resp = post(url, body)
+    if resp["status"] >= 200 && resp["status"] < 300 {
+        return {"ok": true, "data": json_parse(resp["body"]),
+                "status": resp["status"]}
+    }
+    return {"ok": false, "data": null, "status": resp["status"],
+            "error": resp["body"]}
+}
+
+// ── URL utilities ────────────────────────────────────────────────────────────
+
+pub fn encode_uri(s: str) -> str {
+    return url_encode(s)
+}
+
+pub fn decode_uri(s: str) -> str {
+    return url_decode(s)
+}
+
+pub fn build_url(base: str, params: map) -> str {
+    let mut parts = []
+    for key in keys(params) {
+        let encoded_key = url_encode(key)
+        let encoded_val = url_encode(to_str(params[key]))
+        parts = push(parts, encoded_key + "=" + encoded_val)
+    }
+    if len(parts) == 0 { return base }
+    return base + "?" + str_join(parts, "&")
+}
+
+pub fn parse_url(url: str) -> map {
+    // Simple URL parser
+    let mut result = {"scheme": "", "host": "", "port": 0,
+                      "path": "", "query": "", "fragment": ""}
+
+    let mut s = url
+
+    // Extract fragment
+    if str_contains(s, "#") {
+        let parts = str_split(s, "#")
+        s = parts[0]
+        result["fragment"] = parts[1]
+    }
+
+    // Extract query
+    if str_contains(s, "?") {
+        let parts = str_split(s, "?")
+        s = parts[0]
+        result["query"] = parts[1]
+    }
+
+    // Extract scheme
+    if str_contains(s, "://") {
+        let parts = str_split(s, "://")
+        result["scheme"] = parts[0]
+        s = parts[1]
+    }
+
+    // Extract path
+    let slash_idx = str_index_of(s, "/")
+    if slash_idx >= 0 {
+        result["path"] = slice(s, slash_idx, len(s))
+        s = slice(s, 0, slash_idx)
+    }
+
+    // Extract port
+    if str_contains(s, ":") {
+        let parts = str_split(s, ":")
+        result["host"] = parts[0]
+        result["port"] = to_int(parts[1])
+    } else {
+        result["host"] = s
+    }
+
+    return result
+}
+
+// ── Response helpers ─────────────────────────────────────────────────────────
+
+pub fn is_ok(resp: map) -> bool {
+    return resp["status"] >= 200 && resp["status"] < 300
+}
+
+pub fn is_redirect(resp: map) -> bool {
+    return resp["status"] >= 300 && resp["status"] < 400
+}
+
+pub fn is_client_error(resp: map) -> bool {
+    return resp["status"] >= 400 && resp["status"] < 500
+}
+
+pub fn is_server_error(resp: map) -> bool {
+    return resp["status"] >= 500 && resp["status"] < 600
+}
+
+pub fn status_text(code: int) -> str {
+    if code == 200 { return "OK" }
+    if code == 201 { return "Created" }
+    if code == 204 { return "No Content" }
+    if code == 301 { return "Moved Permanently" }
+    if code == 302 { return "Found" }
+    if code == 304 { return "Not Modified" }
+    if code == 400 { return "Bad Request" }
+    if code == 401 { return "Unauthorized" }
+    if code == 403 { return "Forbidden" }
+    if code == 404 { return "Not Found" }
+    if code == 405 { return "Method Not Allowed" }
+    if code == 409 { return "Conflict" }
+    if code == 429 { return "Too Many Requests" }
+    if code == 500 { return "Internal Server Error" }
+    if code == 502 { return "Bad Gateway" }
+    if code == 503 { return "Service Unavailable" }
+    return "Unknown"
+}

@@ -1,0 +1,327 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// LateralusOS — Inter-Process Communication
+// ═══════════════════════════════════════════════════════════════════════════
+// Copyright (c) 2025 bad-antics. All rights reserved.
+//
+// IPC mechanisms:
+//   • Message queues (async, bounded)
+//   • Shared memory regions
+//   • Pipes (unidirectional byte streams)
+//   • Signals (POSIX-like)
+//   • Channels (typed, CSP-style — native to Lateralus)
+// ═══════════════════════════════════════════════════════════════════════════
+
+import hal::serial
+import kernel::memory
+import kernel::scheduler
+import kernel::panic
+
+// ── Constants ───────────────────────────────────────────────────────────
+
+const MAX_CHANNELS      = 512
+const MAX_QUEUES        = 128
+const MAX_SHARED_REGIONS = 64
+const MAX_MSG_SIZE      = 4096
+const DEFAULT_QUEUE_CAP = 64
+
+// ── Message ─────────────────────────────────────────────────────────────
+
+struct Message {
+    sender_pid:  int,
+    msg_type:    int,
+    payload_len: int,
+    payload:     [byte; MAX_MSG_SIZE],
+    timestamp:   int,
+}
+
+// ── Message Queue ───────────────────────────────────────────────────────
+
+struct MessageQueue {
+    id:          int,
+    name:        str,
+    capacity:    int,
+    count:       int,
+    head:        int,
+    tail:        int,
+    messages:    [Message; DEFAULT_QUEUE_CAP],
+    waiters:     [int; 16],    // PIDs waiting to receive
+    waiter_count: int,
+    owner_pid:   int,
+    active:      bool,
+}
+
+let mut queues: [MessageQueue; MAX_QUEUES] = [MessageQueue{}; MAX_QUEUES]
+let mut next_queue_id = 1
+
+// ── Channel (CSP-style) ────────────────────────────────────────────────
+
+struct Channel {
+    id:          int,
+    name:        str,
+    capacity:    int,
+    count:       int,
+    buffer:      [int; 256],   // pointer buffer for messages
+    head:        int,
+    tail:        int,
+    sender_tid:  int,          // blocked sender (-1 if none)
+    receiver_tid: int,         // blocked receiver (-1 if none)
+    closed:      bool,
+    active:      bool,
+}
+
+let mut channels: [Channel; MAX_CHANNELS] = [Channel{}; MAX_CHANNELS]
+let mut next_channel_id = 1
+
+// ── Shared Memory ───────────────────────────────────────────────────────
+
+struct SharedRegion {
+    id:          int,
+    name:        str,
+    phys_addr:   int,
+    size:        int,
+    owner_pid:   int,
+    ref_count:   int,
+    active:      bool,
+}
+
+let mut shared_regions: [SharedRegion; MAX_SHARED_REGIONS] = [SharedRegion{}; MAX_SHARED_REGIONS]
+let mut next_region_id = 1
+
+// ── Signals ─────────────────────────────────────────────────────────────
+
+const SIG_KILL  = 9
+const SIG_TERM  = 15
+const SIG_STOP  = 19
+const SIG_CONT  = 18
+const SIG_USR1  = 10
+const SIG_USR2  = 12
+const SIG_SEGV  = 11
+
+// ── Init ────────────────────────────────────────────────────────────────
+
+pub fn init() {
+    serial::log("[ipc] Initializing IPC subsystem")
+    serial::log("[ipc] Max channels: {MAX_CHANNELS}, queues: {MAX_QUEUES}, shared regions: {MAX_SHARED_REGIONS}")
+    serial::log("[ipc] IPC ready")
+}
+
+// ── Channel API ─────────────────────────────────────────────────────────
+
+pub fn channel_create(name: str, capacity: int) -> Result<int, str> {
+    if next_channel_id >= MAX_CHANNELS {
+        return Result::Err("Channel table full")
+    }
+
+    let id = next_channel_id
+    next_channel_id = next_channel_id + 1
+
+    channels[id] = Channel {
+        id:           id,
+        name:         name,
+        capacity:     capacity,
+        count:        0,
+        buffer:       [0; 256],
+        head:         0,
+        tail:         0,
+        sender_tid:   -1,
+        receiver_tid: -1,
+        closed:       false,
+        active:       true,
+    }
+
+    serial::log("[ipc] Channel '{name}' created (id={id}, cap={capacity})")
+    return Result::Ok(id)
+}
+
+pub fn channel_send(ch_id: int, data: int) -> Result<bool, str> {
+    if ch_id >= MAX_CHANNELS || !channels[ch_id].active {
+        return Result::Err("Invalid channel")
+    }
+    if channels[ch_id].closed {
+        return Result::Err("Channel closed")
+    }
+
+    let ch = channels[ch_id]
+
+    if ch.count >= ch.capacity {
+        // Block sender until space is available
+        ch.sender_tid = scheduler::current_tid()
+        scheduler::block_current()
+        scheduler::schedule()
+        // Resumed — space should be available now
+    }
+
+    ch.buffer[ch.tail] = data
+    ch.tail = (ch.tail + 1) % ch.capacity
+    ch.count = ch.count + 1
+
+    // Wake blocked receiver if any
+    if ch.receiver_tid >= 0 {
+        scheduler::unblock(ch.receiver_tid)
+        ch.receiver_tid = -1
+    }
+
+    return Result::Ok(true)
+}
+
+pub fn channel_recv(ch_id: int) -> Result<int, str> {
+    if ch_id >= MAX_CHANNELS || !channels[ch_id].active {
+        return Result::Err("Invalid channel")
+    }
+
+    let ch = channels[ch_id]
+
+    if ch.count == 0 {
+        if ch.closed {
+            return Result::Err("Channel closed and empty")
+        }
+        // Block receiver until data arrives
+        ch.receiver_tid = scheduler::current_tid()
+        scheduler::block_current()
+        scheduler::schedule()
+        // Resumed — data should be available
+    }
+
+    let data = ch.buffer[ch.head]
+    ch.head = (ch.head + 1) % ch.capacity
+    ch.count = ch.count - 1
+
+    // Wake blocked sender if any
+    if ch.sender_tid >= 0 {
+        scheduler::unblock(ch.sender_tid)
+        ch.sender_tid = -1
+    }
+
+    return Result::Ok(data)
+}
+
+pub fn channel_close(ch_id: int) {
+    if ch_id < MAX_CHANNELS && channels[ch_id].active {
+        channels[ch_id].closed = true
+        // Wake any blocked threads
+        if channels[ch_id].sender_tid >= 0 {
+            scheduler::unblock(channels[ch_id].sender_tid)
+        }
+        if channels[ch_id].receiver_tid >= 0 {
+            scheduler::unblock(channels[ch_id].receiver_tid)
+        }
+        serial::log("[ipc] Channel {ch_id} closed")
+    }
+}
+
+// ── Message Queue API ───────────────────────────────────────────────────
+
+pub fn queue_create(name: str) -> Result<int, str> {
+    if next_queue_id >= MAX_QUEUES {
+        return Result::Err("Message queue table full")
+    }
+
+    let id = next_queue_id
+    next_queue_id = next_queue_id + 1
+
+    queues[id] = MessageQueue {
+        id:           id,
+        name:         name,
+        capacity:     DEFAULT_QUEUE_CAP,
+        count:        0,
+        head:         0,
+        tail:         0,
+        messages:     [Message{}; DEFAULT_QUEUE_CAP],
+        waiters:      [0; 16],
+        waiter_count: 0,
+        owner_pid:    scheduler::current_pid(),
+        active:       true,
+    }
+
+    serial::log("[ipc] Message queue '{name}' created (id={id})")
+    return Result::Ok(id)
+}
+
+pub fn queue_send(q_id: int, msg_type: int, payload: [byte]) -> Result<bool, str> {
+    if q_id >= MAX_QUEUES || !queues[q_id].active {
+        return Result::Err("Invalid message queue")
+    }
+
+    let q = queues[q_id]
+    if q.count >= q.capacity {
+        return Result::Err("Queue full")
+    }
+
+    q.messages[q.tail] = Message {
+        sender_pid:  scheduler::current_pid(),
+        msg_type:    msg_type,
+        payload_len: payload.len(),
+        payload:     [0; MAX_MSG_SIZE],   // copy payload
+        timestamp:   scheduler::get_ticks(),
+    }
+    // Copy payload bytes
+    let i = 0
+    while i < payload.len() && i < MAX_MSG_SIZE {
+        q.messages[q.tail].payload[i] = payload[i]
+        i = i + 1
+    }
+
+    q.tail = (q.tail + 1) % q.capacity
+    q.count = q.count + 1
+
+    // Wake first waiter
+    if q.waiter_count > 0 {
+        scheduler::unblock(q.waiters[0])
+        // Shift waiters
+        let j = 0
+        while j < q.waiter_count - 1 {
+            q.waiters[j] = q.waiters[j + 1]
+            j = j + 1
+        }
+        q.waiter_count = q.waiter_count - 1
+    }
+
+    return Result::Ok(true)
+}
+
+// ── Shared Memory API ───────────────────────────────────────────────────
+
+pub fn shm_create(name: str, size: int) -> Result<int, str> {
+    if next_region_id >= MAX_SHARED_REGIONS {
+        return Result::Err("Shared memory table full")
+    }
+
+    // Allocate physical pages
+    let pages = (size + 4095) / 4096
+    let phys = match memory::alloc_frame() {
+        Result::Ok(addr) => addr,
+        Result::Err(e) => return Result::Err("Cannot allocate shared memory: {e}"),
+    }
+
+    let id = next_region_id
+    next_region_id = next_region_id + 1
+
+    shared_regions[id] = SharedRegion {
+        id:        id,
+        name:      name,
+        phys_addr: phys,
+        size:      pages * 4096,
+        owner_pid: scheduler::current_pid(),
+        ref_count: 1,
+        active:    true,
+    }
+
+    serial::log("[ipc] Shared memory '{name}' created ({pages * 4} KB)")
+    return Result::Ok(id)
+}
+
+// ── Signal API ──────────────────────────────────────────────────────────
+
+pub fn send_signal(pid: int, sig: int) -> Result<bool, str> {
+    if sig == SIG_KILL {
+        scheduler::kill(pid, -9)
+        return Result::Ok(true)
+    }
+    if sig == SIG_TERM {
+        scheduler::kill(pid, 0)
+        return Result::Ok(true)
+    }
+    // Other signals: queue for delivery on next schedule
+    serial::log("[ipc] Signal {sig} sent to PID {pid}")
+    return Result::Ok(true)
+}

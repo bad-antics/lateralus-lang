@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scientific Computing Without Dependencies</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: Scientific Computing Without Dependencies
+author: bad-antics
+date: 2026-03-30
+abstract: LATERALUS embeds CODATA physical constants, ODE solvers, FFT, statistical analysis, matrix algebra, and complex number arithmetic directly into the language runtime. No NumPy. No SciPy. No imports. Just compute.
+---
+
+# Scientific Computing Without Dependencies
+
+## The Dependency Problem
+
+A typical Python scientific computing setup:
+
+```
+pip install numpy scipy matplotlib pandas sympy
+```
+
+That's 200+ MB of dependencies, C extensions that fail to compile on ARM, version conflicts with other packages, and a `requirements.txt` that grows until it breaks. For a simple ODE solver or FFT, you're importing the entire numerical computing ecosystem.
+
+LATERALUS takes a different approach: **embed the fundamentals into the language itself**.
+
+## CODATA Physical Constants
+
+Every CODATA 2018 constant is available without any import:
+
+```lateralus
+import "science"
+
+// Fundamental constants — just use them
+let E_rest = ELECTRON_MASS * SPEED_OF_LIGHT ** 2
+let lambda = PLANCK / (ELECTRON_MASS * velocity)  // de Broglie
+let kT = BOLTZMANN * temperature                   // thermal energy
+
+// Available constants include:
+// PLANCK              = 6.62607015e-34    J·s
+// BOLTZMANN           = 1.380649e-23      J/K
+// AVOGADRO            = 6.02214076e23     mol⁻¹
+// SPEED_OF_LIGHT      = 299792458         m/s
+// ELECTRON_MASS       = 9.1093837015e-31  kg
+// PROTON_MASS         = 1.67262192369e-27 kg
+// ELEMENTARY_CHARGE   = 1.602176634e-19   C
+// VACUUM_PERMITTIVITY = 8.8541878128e-12  F/m
+// GRAVITATIONAL       = 6.67430e-11       N·m²/kg²
+```
+
+No magic numbers scattered through your code. No risk of typos in fundamental constants. Just use `PLANCK` and it's the 2018 CODATA recommended value.
+
+## ODE Solvers
+
+Solve ordinary differential equations with the built-in Runge-Kutta 4th order method:
+
+```lateralus
+// Exponential decay: dy/dt = -0.5y, y(0) = 1.0
+let decay = solve_ode(
+  (t, y) => -0.5 * y,    // the ODE
+  1.0,                     // initial condition
+  0,                       // t_start
+  10,                      // t_end
+  1000                     // steps
+)
+
+// Radioactive decay with known half-life
+let half_life = 5730.0  // Carbon-14 in years
+let lambda = ln(2) / half_life
+let carbon_dating = solve_ode(
+  (t, N) => -lambda * N,
+  1000.0,   // initial atoms
+  0, 20000, 5000
+)
+
+// Simple harmonic oscillator: d²x/dt² = -ω²x
+// Rewrite as system: dx/dt = v, dv/dt = -ω²x
+let omega = 2.0 * PI
+let oscillator = solve_ode_system(
+  (t, state) => [state[1], -omega**2 * state[0]],
+  [1.0, 0.0],  // x=1, v=0 at t=0
+  0, 10, 2000
+)
+```
+
+## FFT — Fast Fourier Transform
+
+```lateralus
+// Generate a signal: 10 Hz + 25 Hz
+let signal = range(0, 1000)
+  |> map((i) => {
+    let t = i / 1000.0
+    return sin(2 * PI * 10 * t) + 0.5 * sin(2 * PI * 25 * t)
+  })
+
+// Compute FFT
+let spectrum = signal |> fft()
+
+// Power spectrum — magnitude squared
+let power = spectrum |> power_spectrum()
+
+// Find dominant frequencies
+let peaks = power
+  |> enumerate()
+  |> filter((pair) => pair.value > threshold)
+  |> sort_by((pair) => pair.value)
+  |> reverse()
+  |> take(5)
+```
+
+## Statistics
+
+Pipeline-driven statistical analysis:
+
+```lateralus
+import "stats"
+
+let data = [23.1, 25.4, 22.8, 24.9, 23.7, 26.1, 22.3, 25.0]
+
+// Descriptive statistics
+let mu = data |> mean()
+let sigma = data |> std_dev()
+let med = data |> median()
+let q1 = data |> percentile(25)
+let q3 = data |> percentile(75)
+let iqr = q3 - q1
+
+// Correlation
+let x_data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+let y_data = [2.1, 4.3, 5.8, 8.2, 9.9, 12.1, 14.0, 16.3, 17.8, 20.1]
+let r = correlation(x_data, y_data)
+
+// Linear regression
+let fit = linear_regression(x_data, y_data)
+println("y = {fit.slope}x + {fit.intercept}, R² = {fit.r_squared}")
+
+// Normal distribution
+let normal = normal_distribution(mu, sigma)
+let p_value = normal.cdf(25.0)
+```
+
+## Matrix Algebra
+
+```lateralus
+import "linalg"
+
+let A = matrix([
+  [1, 2, 3],
+  [4, 5, 6],
+  [7, 8, 10]
+])
+
+let det_A = A |> determinant()
+let inv_A = A |> inverse()
+let eigenvalues = A |> eigenvalues()
+
+// Solve Ax = b
+let b = vector([1, 2, 3])
+let x = solve_linear(A, b)
+
+// Matrix operations pipeline
+let result = A
+  |> transpose()
+  |> multiply(A)     // A^T * A
+  |> inverse()
+  |> determinant()
+```
+
+## Complex Numbers
+
+```lateralus
+import "math"
+
+let z1 = complex(3, 4)          // 3 + 4i
+let z2 = complex_polar(5, PI/4) // 5∠45°
+
+let product = z1 * z2
+let magnitude = z1 |> abs()     // 5.0
+let phase = z1 |> arg()         // 0.9273 rad
+
+// Euler's identity: e^(iπ) + 1 = 0
+let euler = exp(complex(0, PI)) + 1  // ≈ 0
+```
+
+## Why Not Just Use Python + NumPy?
+
+| | Python + NumPy | LATERALUS |
+|--|---------------|-----------|
+| Install size | 200+ MB | 0 MB (built in) |
+| C extensions | yes (fail on ARM) | pure Python transpile |
+| CODATA constants | `scipy.constants` | native identifiers |
+| Pipeline syntax | no | `\|>` operator |
+| Error handling | exceptions | `Result::Ok / Err` |
+| ODE solver | `scipy.integrate` | built-in `solve_ode` |
+| FFT | `numpy.fft` | built-in `fft()` |
+| Type checking | optional (mypy) | Hindley-Milner |
+
+LATERALUS isn't trying to replace NumPy for production-scale numerical computing. It's designed for the 90% of scientific code that's exploration, analysis, and scripting — where you want the tools built in and the syntax to get out of your way.
+
+## Pipeline-Driven Science
+
+The pipeline operator is the key insight. Scientific workflows are inherently sequential:
+
+1. Load data
+2. Clean / filter
+3. Transform
+4. Analyze
+5. Report
+
+```lateralus
+// The whole workflow in one pipeline
+let report = load_csv("measurements.csv")
+  |> filter((row) => row.quality == "A")
+  |> map((row) => calibrate(row, reference))
+  |> normalize()
+  |> correlation(model_predictions)
+```
+
+This reads like a lab notebook. Each step is explicit. The data flows forward. No temporary variables cluttering the namespace. No nested function calls reading inside-out.
+
+That's the LATERALUS way: **data flows. naturally.**
+
+---
+
+*Try the science demo:*
+
+```
+lateralus run examples/science_demo.ltl
+```
+
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>

@@ -1,0 +1,165 @@
+// ═══════════════════════════════════════════════════════════════════
+// Lateralus stdlib — arena
+// Arena (region-based) memory allocator for batch allocations
+// ═══════════════════════════════════════════════════════════════════
+
+// Arena represented as map:
+//   { "blocks": list, "current": int, "capacity": int, "total": int }
+
+// ── Construction ────────────────────────────────────────────────────
+
+/// Create a new arena with the given block capacity.
+pub fn new(capacity: int) -> map {
+    let arena = {}
+    arena["blocks"] = [[]]
+    arena["current"] = 0
+    arena["capacity"] = capacity
+    arena["total"] = 0
+    return arena
+}
+
+/// Create a default arena (block size 1024).
+pub fn default() -> map {
+    return new(1024)
+}
+
+// ── Allocation ──────────────────────────────────────────────────────
+
+/// Allocate space for one item in the arena.
+/// Returns [arena, slot_id] where slot_id identifies the allocation.
+pub fn alloc(arena: map, value) -> list {
+    let blocks = arena["blocks"]
+    let current = arena["current"]
+    let capacity = arena["capacity"]
+
+    let block = blocks[current]
+    if len(block) >= capacity {
+        // Need a new block
+        blocks = blocks + [[]]
+        current = current + 1
+        block = blocks[current]
+    }
+
+    let slot = len(block)
+    block = block + [value]
+    blocks[current] = block
+
+    arena["blocks"] = blocks
+    arena["current"] = current
+    arena["total"] = arena["total"] + 1
+
+    let id = current * capacity + slot
+    return [arena, id]
+}
+
+/// Allocate multiple items at once.
+/// Returns [arena, list_of_slot_ids].
+pub fn alloc_many(arena: map, values: list) -> list {
+    let ids = []
+    for value in values {
+        let result = alloc(arena, value)
+        arena = result[0]
+        ids = ids + [result[1]]
+    }
+    return [arena, ids]
+}
+
+// ── Access ──────────────────────────────────────────────────────────
+
+/// Get the value at a slot id.
+pub fn get(arena: map, id: int) {
+    let capacity = arena["capacity"]
+    let block_idx = id / capacity
+    let slot_idx = id % capacity
+    let blocks = arena["blocks"]
+    if block_idx >= len(blocks) {
+        return nil
+    }
+    let block = blocks[block_idx]
+    if slot_idx >= len(block) {
+        return nil
+    }
+    return block[slot_idx]
+}
+
+/// Set the value at a slot id.
+pub fn set(arena: map, id: int, value) -> map {
+    let capacity = arena["capacity"]
+    let block_idx = id / capacity
+    let slot_idx = id % capacity
+    let blocks = arena["blocks"]
+    let block = blocks[block_idx]
+    block[slot_idx] = value
+    blocks[block_idx] = block
+    arena["blocks"] = blocks
+    return arena
+}
+
+// ── Query ───────────────────────────────────────────────────────────
+
+/// Total number of allocations.
+pub fn total(arena: map) -> int {
+    return arena["total"]
+}
+
+/// Number of blocks in use.
+pub fn block_count(arena: map) -> int {
+    return arena["current"] + 1
+}
+
+/// Remaining capacity in the current block.
+pub fn remaining(arena: map) -> int {
+    let blocks = arena["blocks"]
+    let current = arena["current"]
+    let block = blocks[current]
+    return arena["capacity"] - len(block)
+}
+
+/// Total capacity (all blocks).
+pub fn total_capacity(arena: map) -> int {
+    return block_count(arena) * arena["capacity"]
+}
+
+/// Usage ratio (0.0 to 1.0).
+pub fn usage(arena: map) -> float {
+    let cap = total_capacity(arena)
+    if cap == 0 {
+        return 0.0
+    }
+    return float(arena["total"]) / float(cap)
+}
+
+// ── Lifecycle ───────────────────────────────────────────────────────
+
+/// Reset the arena, freeing all allocations at once.
+/// This is the key benefit of arenas — O(1) deallocation.
+pub fn reset(arena: map) -> map {
+    arena["blocks"] = [[]]
+    arena["current"] = 0
+    arena["total"] = 0
+    return arena
+}
+
+/// Collect all live values from the arena into a list.
+pub fn to_list(arena: map) -> list {
+    let result = []
+    let blocks = arena["blocks"]
+    for block in blocks {
+        for item in block {
+            result = result + [item]
+        }
+    }
+    return result
+}
+
+/// Create a snapshot of arena statistics.
+pub fn stats(arena: map) -> map {
+    let s = {}
+    s["total_allocations"] = total(arena)
+    s["block_count"] = block_count(arena)
+    s["capacity_per_block"] = arena["capacity"]
+    s["total_capacity"] = total_capacity(arena)
+    s["remaining_in_block"] = remaining(arena)
+    s["usage_ratio"] = usage(arena)
+    return s
+}

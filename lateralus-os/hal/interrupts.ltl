@@ -1,0 +1,217 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// LateralusOS — Interrupt Descriptor Table & IRQ Handling
+// ═══════════════════════════════════════════════════════════════════════════
+// Copyright (c) 2025 bad-antics. All rights reserved.
+// ═══════════════════════════════════════════════════════════════════════════
+
+import hal::serial
+import hal::cpu
+
+// ── Constants ───────────────────────────────────────────────────────────
+
+const IDT_ENTRIES       = 256
+const IRQ_BASE          = 32    // PIC remapped to 32-47
+
+// IDT gate types
+const GATE_INTERRUPT    = 0x8E  // 64-bit interrupt gate, DPL=0
+const GATE_TRAP         = 0x8F  // 64-bit trap gate, DPL=0
+const GATE_USER_INT     = 0xEE  // 64-bit interrupt gate, DPL=3
+
+// ── IDT Entry ───────────────────────────────────────────────────────────
+
+struct IDTEntry {
+    offset_low:   int,    // bits 0-15 of handler address
+    selector:     int,    // code segment selector
+    ist:          int,    // interrupt stack table offset
+    type_attr:    int,    // gate type + DPL + present
+    offset_mid:   int,    // bits 16-31
+    offset_high:  int,    // bits 32-63
+    reserved:     int,
+}
+
+struct IDTPointer {
+    limit:  int,    // size of IDT - 1
+    base:   int,    // linear address of IDT
+}
+
+// ── Handler table ───────────────────────────────────────────────────────
+
+let mut idt:      [IDTEntry; IDT_ENTRIES] = [IDTEntry{}; IDT_ENTRIES]
+let mut handlers: [fn(int); IDT_ENTRIES]  = [null; IDT_ENTRIES]
+
+// ── Init ────────────────────────────────────────────────────────────────
+
+pub fn init_idt() {
+    serial::log("[idt] Setting up Interrupt Descriptor Table")
+
+    // Remap PIC to IRQ 32-47
+    remap_pic()
+
+    // Set up CPU exception handlers (0-31)
+    set_gate(0,  isr_stub_0,  GATE_TRAP)       // Divide by zero
+    set_gate(1,  isr_stub_1,  GATE_TRAP)       // Debug
+    set_gate(2,  isr_stub_2,  GATE_INTERRUPT)  // NMI
+    set_gate(3,  isr_stub_3,  GATE_TRAP)       // Breakpoint
+    set_gate(4,  isr_stub_4,  GATE_TRAP)       // Overflow
+    set_gate(5,  isr_stub_5,  GATE_TRAP)       // Bound range exceeded
+    set_gate(6,  isr_stub_6,  GATE_TRAP)       // Invalid opcode
+    set_gate(7,  isr_stub_7,  GATE_TRAP)       // Device not available
+    set_gate(8,  isr_stub_8,  GATE_TRAP)       // Double fault
+    set_gate(13, isr_stub_13, GATE_TRAP)       // General protection fault
+    set_gate(14, isr_stub_14, GATE_TRAP)       // Page fault
+
+    // Set up IRQ handlers (32-47)
+    set_gate(32, irq_stub_0,  GATE_INTERRUPT)  // PIT timer
+    set_gate(33, irq_stub_1,  GATE_INTERRUPT)  // Keyboard
+    set_gate(36, irq_stub_4,  GATE_INTERRUPT)  // COM1 serial
+    set_gate(44, irq_stub_12, GATE_INTERRUPT)  // Mouse
+
+    // System call gate (INT 0x80)
+    set_gate(0x80, syscall_stub, GATE_USER_INT)
+
+    // Load IDT
+    let idtp = IDTPointer {
+        limit: IDT_ENTRIES * 16 - 1,
+        base:  idt as int,
+    }
+    load_idt(idtp)
+
+    serial::log("[idt] IDT loaded ({IDT_ENTRIES} entries)")
+}
+
+fn set_gate(num: int, handler: fn(), type_attr: int) {
+    let addr = handler as int
+
+    idt[num] = IDTEntry {
+        offset_low:  addr & 0xFFFF,
+        selector:    0x08,              // kernel code segment
+        ist:         0,
+        type_attr:   type_attr,
+        offset_mid:  (addr >> 16) & 0xFFFF,
+        offset_high: (addr >> 32) & 0xFFFFFFFF,
+        reserved:    0,
+    }
+}
+
+fn load_idt(ptr: IDTPointer) {
+    foreign "asm" (ptr: ptr) { "lidt [rdi]" }
+}
+
+// ── PIC Remapping ───────────────────────────────────────────────────────
+
+fn remap_pic() {
+    serial::log("[idt] Remapping PIC (IRQ 0→32)")
+
+    // Save masks
+    let mask1 = cpu::inb(0x21)
+    let mask2 = cpu::inb(0xA1)
+
+    // ICW1: begin initialization
+    cpu::outb(0x20, 0x11)
+    cpu::outb(0xA0, 0x11)
+
+    // ICW2: remap offset
+    cpu::outb(0x21, 0x20)    // Master PIC: IRQ 0-7 → INT 32-39
+    cpu::outb(0xA1, 0x28)    // Slave PIC:  IRQ 8-15 → INT 40-47
+
+    // ICW3: tell master about slave on IRQ2
+    cpu::outb(0x21, 0x04)
+    cpu::outb(0xA1, 0x02)
+
+    // ICW4: 8086 mode
+    cpu::outb(0x21, 0x01)
+    cpu::outb(0xA1, 0x01)
+
+    // Restore masks
+    cpu::outb(0x21, mask1)
+    cpu::outb(0xA1, mask2)
+}
+
+// ── Public API ──────────────────────────────────────────────────────────
+
+pub fn register_handler(num: int, handler: fn(int)) {
+    handlers[num] = handler
+    serial::log("[idt] Handler registered for interrupt {num}")
+}
+
+pub fn enable() {
+    cpu::sti()
+}
+
+pub fn disable() {
+    cpu::cli()
+}
+
+pub fn enable_irq(irq: int) {
+    if irq < 8 {
+        let mask = cpu::inb(0x21)
+        cpu::outb(0x21, mask & ~(1 << irq))
+    } else {
+        let mask = cpu::inb(0xA1)
+        cpu::outb(0xA1, mask & ~(1 << (irq - 8)))
+    }
+}
+
+pub fn disable_irq(irq: int) {
+    if irq < 8 {
+        let mask = cpu::inb(0x21)
+        cpu::outb(0x21, mask | (1 << irq))
+    } else {
+        let mask = cpu::inb(0xA1)
+        cpu::outb(0xA1, mask | (1 << (irq - 8)))
+    }
+}
+
+// Send End-of-Interrupt to PIC
+pub fn eoi(irq: int) {
+    if irq >= 8 {
+        cpu::outb(0xA0, 0x20)  // Slave PIC EOI
+    }
+    cpu::outb(0x20, 0x20)      // Master PIC EOI
+}
+
+// ── ISR/IRQ stubs (would be generated as asm thunks by C backend) ────────
+
+fn isr_common(num: int, error_code: int) {
+    if handlers[num] != null {
+        handlers[num](error_code)
+    } else {
+        serial::log("[idt] Unhandled interrupt {num}")
+    }
+}
+
+fn irq_common(irq: int) {
+    let num = irq + IRQ_BASE
+    if handlers[num] != null {
+        handlers[num](0)
+    }
+    eoi(irq)
+}
+
+// Stub declarations (actual implementations via inline asm in C backend)
+fn isr_stub_0()  { isr_common(0, 0) }
+fn isr_stub_1()  { isr_common(1, 0) }
+fn isr_stub_2()  { isr_common(2, 0) }
+fn isr_stub_3()  { isr_common(3, 0) }
+fn isr_stub_4()  { isr_common(4, 0) }
+fn isr_stub_5()  { isr_common(5, 0) }
+fn isr_stub_6()  { isr_common(6, 0) }
+fn isr_stub_7()  { isr_common(7, 0) }
+fn isr_stub_8()  { isr_common(8, 0) }
+fn isr_stub_13() { isr_common(13, 0) }
+fn isr_stub_14() { isr_common(14, 0) }
+
+fn irq_stub_0()  { irq_common(0) }
+fn irq_stub_1()  { irq_common(1) }
+fn irq_stub_4()  { irq_common(4) }
+fn irq_stub_12() { irq_common(12) }
+
+fn syscall_stub() { isr_common(0x80, 0) }
+
+// Port I/O helpers (delegate to cpu module but accessible locally)
+fn outb(port: int, val: int) {
+    cpu::outb(port, val)
+}
+fn inb(port: int) -> int {
+    return cpu::inb(port)
+}

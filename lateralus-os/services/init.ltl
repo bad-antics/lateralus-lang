@@ -1,0 +1,69 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// LateralusOS — Init System (PID 1)
+// ═══════════════════════════════════════════════════════════════════════════
+// Copyright (c) 2025 bad-antics. All rights reserved.
+//
+// The first user-space process. Initializes system services and spawns
+// the login shell.
+// ═══════════════════════════════════════════════════════════════════════════
+
+import hal::serial
+import drivers::vga
+import drivers::pci
+import drivers::disk
+import drivers::network
+import fs::vfs
+import kernel::scheduler
+import kernel::ipc
+import shell::ltlsh
+import services::mesh_agent
+import services::crypto_svc
+import services::monitor
+
+// ── Boot phases ─────────────────────────────────────────────────────────
+
+pub fn start() {
+    serial::log("[init] Init system starting (PID 1)")
+
+    // Phase 1: Enumerate hardware
+    serial::log("[init] Phase 1: Hardware enumeration")
+    pci::enumerate()
+    disk::init()
+    network::init()
+
+    // Phase 2: Mount file systems
+    serial::log("[init] Phase 2: File systems")
+    vfs::init()
+
+    // Phase 3: Start system services
+    serial::log("[init] Phase 3: System services")
+
+    // Crypto service (always start — needed for mesh security)
+    let crypto_pid = scheduler::spawn("crypto_svc", crypto_svc::start)
+    serial::log("[init] Crypto service started (PID={crypto_pid})")
+
+    // System monitor
+    let monitor_pid = scheduler::spawn("monitor", monitor::start)
+    serial::log("[init] System monitor started (PID={monitor_pid})")
+
+    // Mesh agent (if network is available)
+    if network::is_present() {
+        let mesh_pid = scheduler::spawn("mesh_agent", mesh_agent::start)
+        serial::log("[init] Mesh agent started (PID={mesh_pid})")
+    }
+
+    // Phase 4: Start shell
+    serial::log("[init] Phase 4: Starting shell")
+    vga::set_color(vga::Color::LightGreen, vga::Color::Black)
+    vga::println("[init] System ready")
+    vga::set_color(vga::Color::White, vga::Color::Black)
+    vga::println("")
+
+    let shell_pid = scheduler::spawn("ltlsh", ltlsh::start)
+    serial::log("[init] Shell started (PID={shell_pid})")
+
+    // Init stays alive to reap zombie processes
+    loop {
+        scheduler::wait_any()
+    }
+}

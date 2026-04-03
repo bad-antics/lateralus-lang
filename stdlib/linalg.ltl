@@ -1,0 +1,269 @@
+// Lateralus Standard Library — linalg.ltl  (v1.4.0)
+// Linear algebra: vectors, matrices, decompositions
+// These wrap the built-in preamble functions with ergonomic APIs.
+
+module stdlib.linalg
+
+import stdlib.math
+
+// ── Vectors ──────────────────────────────────────────────────────────────────
+
+pub fn vec_add(a, b) {
+    let mut result = []
+    let mut i = 0
+    while i < len(a) {
+        result = result + [a[i] + b[i]]
+        i += 1
+    }
+    return result
+}
+
+pub fn vec_sub(a, b) {
+    let mut result = []
+    let mut i = 0
+    while i < len(a) {
+        result = result + [a[i] - b[i]]
+        i += 1
+    }
+    return result
+}
+
+pub fn vec_scale(v, scalar) {
+    let mut result = []
+    let mut i = 0
+    while i < len(v) {
+        result = result + [v[i] * scalar]
+        i += 1
+    }
+    return result
+}
+
+pub fn dot_product(a, b) {
+    let mut s = 0.0
+    let mut i = 0
+    while i < len(a) {
+        s = s + a[i] * b[i]
+        i += 1
+    }
+    return s
+}
+
+pub fn cross_product(a, b) {
+    // 3D cross product
+    return [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0]
+    ]
+}
+
+pub fn magnitude(v) {
+    return math.sqrt(dot_product(v, v))
+}
+
+pub fn normalize(v) {
+    let mag = magnitude(v)
+    if mag < 1e-12 { throw ValueError("Cannot normalize zero vector") }
+    return vec_scale(v, 1.0 / mag)
+}
+
+pub fn angle_between(a, b) {
+    let d = dot_product(a, b)
+    let ma = magnitude(a)
+    let mb = magnitude(b)
+    if ma < 1e-12 || mb < 1e-12 { throw ValueError("Zero vector has no angle") }
+    let cos_theta = math.clamp(d / (ma * mb), -1.0, 1.0)
+    // acos via Taylor approximation
+    return math.acos(cos_theta)
+}
+
+pub fn projection(a, b) {
+    // Project a onto b
+    let d = dot_product(a, b)
+    let bb = dot_product(b, b)
+    if bb < 1e-12 { throw ValueError("Cannot project onto zero vector") }
+    return vec_scale(b, d / bb)
+}
+
+// ── Matrices (row-major nested lists) ────────────────────────────────────────
+
+pub fn mat_zeros(rows, cols) {
+    let mut m = []
+    let mut r = 0
+    while r < rows {
+        let mut row = []
+        let mut c = 0
+        while c < cols {
+            row = row + [0.0]
+            c += 1
+        }
+        m = m + [row]
+        r += 1
+    }
+    return m
+}
+
+pub fn mat_identity(n) {
+    let mut m = mat_zeros(n, n)
+    let mut i = 0
+    while i < n {
+        m[i][i] = 1.0
+        i += 1
+    }
+    return m
+}
+
+pub fn mat_add(a, b) {
+    let rows = len(a)
+    let cols = len(a[0])
+    let mut result = mat_zeros(rows, cols)
+    let mut r = 0
+    while r < rows {
+        let mut c = 0
+        while c < cols {
+            result[r][c] = a[r][c] + b[r][c]
+            c += 1
+        }
+        r += 1
+    }
+    return result
+}
+
+pub fn mat_mul(a, b) {
+    let ra = len(a)
+    let ca = len(a[0])
+    let cb = len(b[0])
+    let mut result = mat_zeros(ra, cb)
+    let mut i = 0
+    while i < ra {
+        let mut j = 0
+        while j < cb {
+            let mut s = 0.0
+            let mut k = 0
+            while k < ca {
+                s = s + a[i][k] * b[k][j]
+                k += 1
+            }
+            result[i][j] = s
+            j += 1
+        }
+        i += 1
+    }
+    return result
+}
+
+pub fn mat_transpose(m) {
+    let rows = len(m)
+    let cols = len(m[0])
+    let mut result = mat_zeros(cols, rows)
+    let mut r = 0
+    while r < rows {
+        let mut c = 0
+        while c < cols {
+            result[c][r] = m[r][c]
+            c += 1
+        }
+        r += 1
+    }
+    return result
+}
+
+pub fn mat_trace(m) {
+    let n = len(m)
+    let mut s = 0.0
+    let mut i = 0
+    while i < n {
+        s = s + m[i][i]
+        i += 1
+    }
+    return s
+}
+
+pub fn mat_det_2x2(m) {
+    return m[0][0] * m[1][1] - m[0][1] * m[1][0]
+}
+
+pub fn mat_det_3x3(m) {
+    return m[0][0] * (m[1][1]*m[2][2] - m[1][2]*m[2][1])
+         - m[0][1] * (m[1][0]*m[2][2] - m[1][2]*m[2][0])
+         + m[0][2] * (m[1][0]*m[2][1] - m[1][1]*m[2][0])
+}
+
+// ── Decompositions ───────────────────────────────────────────────────────────
+
+pub fn mat_lu(m) {
+    // LU decomposition (Doolittle's method, no pivoting)
+    let n = len(m)
+    let mut L = mat_identity(n)
+    let mut U = mat_zeros(n, n)
+
+    let mut j = 0
+    while j < n {
+        let mut i = 0
+        while i <= j {
+            let mut s = 0.0
+            let mut k = 0
+            while k < i {
+                s = s + L[i][k] * U[k][j]
+                k += 1
+            }
+            U[i][j] = m[i][j] - s
+            i += 1
+        }
+        i = j + 1
+        while i < n {
+            let mut s = 0.0
+            let mut k = 0
+            while k < j {
+                s = s + L[i][k] * U[k][j]
+                k += 1
+            }
+            if math.abs_val(U[j][j]) < 1e-12 {
+                throw ValueError("LU decomposition failed: singular matrix")
+            }
+            L[i][j] = (m[i][j] - s) / U[j][j]
+            i += 1
+        }
+        j += 1
+    }
+    return [L, U]
+}
+
+pub fn mat_solve_lu(A, b) {
+    // Solve Ax = b using LU decomposition
+    let lu = mat_lu(A)
+    let L = lu[0]
+    let U = lu[1]
+    let n = len(b)
+
+    // Forward substitution: Ly = b
+    let mut y = []
+    let mut i = 0
+    while i < n {
+        let mut s = 0.0
+        let mut j = 0
+        while j < i {
+            s = s + L[i][j] * y[j]
+            j += 1
+        }
+        y = y + [b[i] - s]
+        i += 1
+    }
+
+    // Back substitution: Ux = y
+    let mut x = []
+    let mut k = 0
+    while k < n { x = x + [0.0]; k += 1 }
+    i = n - 1
+    while i >= 0 {
+        let mut s = 0.0
+        let mut j = i + 1
+        while j < n {
+            s = s + U[i][j] * x[j]
+            j += 1
+        }
+        x[i] = (y[i] - s) / U[i][i]
+        i -= 1
+    }
+    return x
+}

@@ -1,0 +1,164 @@
+// ═══════════════════════════════════════════════════════════════════
+// Lateralus stdlib — pool
+// Object pool for reusable resource management
+// ═══════════════════════════════════════════════════════════════════
+
+// Pool represented as map:
+//   { "available": list, "in_use": list, "max_size": int,
+//     "factory": fn, "total_created": int }
+
+// ── Construction ────────────────────────────────────────────────────
+
+/// Create a new object pool.
+///   max_size: Maximum number of objects in the pool (0 = unlimited)
+pub fn new(max_size: int) -> map {
+    let pool = {}
+    pool["available"] = []
+    pool["in_use"] = []
+    pool["max_size"] = max_size
+    pool["total_created"] = 0
+    return pool
+}
+
+/// Create a pool pre-populated with items.
+pub fn from_list(items: list, max_size: int) -> map {
+    let pool = new(max_size)
+    pool["available"] = items
+    pool["total_created"] = len(items)
+    return pool
+}
+
+// ── Core operations ─────────────────────────────────────────────────
+
+/// Acquire an object from the pool.
+/// Returns [pool, object] if available, or [pool, nil] if empty.
+pub fn acquire(pool: map) -> list {
+    let available = pool["available"]
+    if len(available) == 0 {
+        return [pool, nil]
+    }
+    let obj = available[len(available) - 1]
+    pool["available"] = slice(available, 0, len(available) - 1)
+    let in_use = pool["in_use"]
+    pool["in_use"] = in_use + [obj]
+    return [pool, obj]
+}
+
+/// Release an object back to the pool.
+pub fn release(pool: map, obj) -> map {
+    // Remove from in_use
+    let new_in_use = []
+    let found = false
+    for item in pool["in_use"] {
+        if item == obj and not found {
+            found = true
+        } else {
+            new_in_use = new_in_use + [item]
+        }
+    }
+    pool["in_use"] = new_in_use
+
+    // Add back to available (if under max_size)
+    let max = pool["max_size"]
+    let available = pool["available"]
+    if max == 0 or len(available) < max {
+        pool["available"] = available + [obj]
+    }
+    return pool
+}
+
+/// Add a new object to the pool.
+pub fn add(pool: map, obj) -> map {
+    let max = pool["max_size"]
+    let available = pool["available"]
+    if max > 0 and len(available) + len(pool["in_use"]) >= max {
+        return pool
+    }
+    pool["available"] = available + [obj]
+    pool["total_created"] = pool["total_created"] + 1
+    return pool
+}
+
+// ── Query ───────────────────────────────────────────────────────────
+
+/// Number of available (idle) objects.
+pub fn available_count(pool: map) -> int {
+    return len(pool["available"])
+}
+
+/// Number of objects currently in use.
+pub fn in_use_count(pool: map) -> int {
+    return len(pool["in_use"])
+}
+
+/// Total objects in the pool (available + in use).
+pub fn total_count(pool: map) -> int {
+    return len(pool["available"]) + len(pool["in_use"])
+}
+
+/// Whether the pool is empty (no available objects).
+pub fn is_empty(pool: map) -> bool {
+    return len(pool["available"]) == 0
+}
+
+/// Whether the pool has reached its maximum size.
+pub fn is_full(pool: map) -> bool {
+    let max = pool["max_size"]
+    if max == 0 {
+        return false
+    }
+    return total_count(pool) >= max
+}
+
+/// Get pool statistics.
+pub fn stats(pool: map) -> map {
+    let s = {}
+    s["available"] = available_count(pool)
+    s["in_use"] = in_use_count(pool)
+    s["total"] = total_count(pool)
+    s["max_size"] = pool["max_size"]
+    s["total_created"] = pool["total_created"]
+    return s
+}
+
+// ── Bulk operations ─────────────────────────────────────────────────
+
+/// Acquire multiple objects.
+/// Returns [pool, list_of_objects] (some may be nil if pool exhausted).
+pub fn acquire_many(pool: map, count: int) -> list {
+    let objects = []
+    let i = 0
+    while i < count {
+        let result = acquire(pool)
+        pool = result[0]
+        objects = objects + [result[1]]
+        i = i + 1
+    }
+    return [pool, objects]
+}
+
+/// Release all objects back to the pool.
+pub fn release_all(pool: map) -> map {
+    let in_use = pool["in_use"]
+    let available = pool["available"]
+    pool["available"] = available + in_use
+    pool["in_use"] = []
+    return pool
+}
+
+/// Drain all objects from the pool (clear everything).
+pub fn drain(pool: map) -> list {
+    let all = pool["available"] + pool["in_use"]
+    pool["available"] = []
+    pool["in_use"] = []
+    return all
+}
+
+/// Shrink the pool to at most `n` available objects.
+pub fn shrink(pool: map, n: int) -> map {
+    let available = pool["available"]
+    if len(available) > n {
+        pool["available"] = slice(available, 0, n)
+    }
+    return pool
+}

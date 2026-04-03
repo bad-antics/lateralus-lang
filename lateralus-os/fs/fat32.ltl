@@ -1,0 +1,321 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// LateralusOS — FAT32 Compatibility Layer
+// ═══════════════════════════════════════════════════════════════════════════
+// Copyright (c) 2025 bad-antics. All rights reserved.
+//
+// Read/write support for FAT32 volumes — enables interoperability
+// with USB drives, SD cards, and existing media.
+// ═══════════════════════════════════════════════════════════════════════════
+
+import hal::serial
+import drivers::disk
+
+const FAT32_SIGNATURE  = 0xAA55
+const FAT32_ENTRY_SIZE = 4
+const DIR_ENTRY_SIZE   = 32
+const ATTR_READ_ONLY   = 0x01
+const ATTR_HIDDEN      = 0x02
+const ATTR_SYSTEM      = 0x04
+const ATTR_VOLUME_ID   = 0x08
+const ATTR_DIRECTORY   = 0x10
+const ATTR_ARCHIVE     = 0x20
+const ATTR_LONG_NAME   = 0x0F
+const CLUSTER_FREE     = 0x00000000
+const CLUSTER_EOC      = 0x0FFFFFF8  // end-of-chain marker
+
+// ── BIOS Parameter Block ────────────────────────────────────────────────
+
+struct BPB {
+    bytes_per_sector:    int,
+    sectors_per_cluster: int,
+    reserved_sectors:    int,
+    num_fats:            int,
+    root_entry_count:    int,   // 0 for FAT32
+    total_sectors_16:    int,
+    media_type:          int,
+    fat_size_16:         int,   // 0 for FAT32
+    sectors_per_track:   int,
+    num_heads:           int,
+    hidden_sectors:      int,
+    total_sectors_32:    int,
+    // FAT32 extended
+    fat_size_32:         int,
+    ext_flags:           int,
+    fs_version:          int,
+    root_cluster:        int,
+    fs_info_sector:      int,
+    backup_boot_sector:  int,
+    volume_label:        str,
+}
+
+struct Fat32Dir {
+    name:           str,     // 8.3 format or long name
+    attr:           int,
+    created_time:   int,
+    created_date:   int,
+    modified_time:  int,
+    modified_date:  int,
+    first_cluster:  int,
+    file_size:      int,
+}
+
+// ── State ───────────────────────────────────────────────────────────────
+
+let mut bpb = BPB {
+    bytes_per_sector: 512, sectors_per_cluster: 8,
+    reserved_sectors: 32, num_fats: 2,
+    root_entry_count: 0, total_sectors_16: 0,
+    media_type: 0xF8, fat_size_16: 0,
+    sectors_per_track: 63, num_heads: 255,
+    hidden_sectors: 0, total_sectors_32: 0,
+    fat_size_32: 0, ext_flags: 0, fs_version: 0,
+    root_cluster: 2, fs_info_sector: 1,
+    backup_boot_sector: 6, volume_label: "",
+}
+
+let mut fat_start_sector: int = 0
+let mut data_start_sector: int = 0
+let mut sectors_per_cluster: int = 0
+
+// ── Mount / Init ────────────────────────────────────────────────────────
+
+pub fn mount(device: int) -> Result<bool, str> {
+    serial::log("[fat32] Mounting FAT32 volume on device {device}")
+
+    // Read boot sector
+    let boot = disk::read_sectors(0, 1)
+    if boot.len() < 512 {
+        return Result::Err("Cannot read boot sector")
+    }
+
+    // Check signature
+    let sig = (boot[510] as int) | ((boot[511] as int) << 8)
+    if sig != FAT32_SIGNATURE {
+        return Result::Err("Invalid FAT32 signature: 0x{sig:04X}")
+    }
+
+    // Parse BPB
+    bpb.bytes_per_sector    = read16(boot, 11)
+    bpb.sectors_per_cluster = boot[13] as int
+    bpb.reserved_sectors    = read16(boot, 14)
+    bpb.num_fats            = boot[16] as int
+    bpb.total_sectors_32    = read32(boot, 32)
+    bpb.fat_size_32         = read32(boot, 36)
+    bpb.root_cluster        = read32(boot, 44)
+    bpb.fs_info_sector      = read16(boot, 48)
+
+    // Calculate layout
+    fat_start_sector = bpb.reserved_sectors
+    data_start_sector = bpb.reserved_sectors + (bpb.num_fats * bpb.fat_size_32)
+    sectors_per_cluster = bpb.sectors_per_cluster
+
+    // Read volume label from root directory
+    bpb.volume_label = read_volume_label()
+
+    serial::log("[fat32] Mounted '{bpb.volume_label}'")
+    serial::log("[fat32] Cluster size: {bpb.sectors_per_cluster * bpb.bytes_per_sector} bytes")
+    serial::log("[fat32] FAT at sector {fat_start_sector}, data at sector {data_start_sector}")
+
+    return Result::Ok(true)
+}
+
+// ── Cluster Operations ──────────────────────────────────────────────────
+
+fn cluster_to_sector(cluster: int) -> int {
+    return data_start_sector + (cluster - 2) * sectors_per_cluster
+}
+
+fn read_fat_entry(cluster: int) -> int {
+    let fat_offset = cluster * FAT32_ENTRY_SIZE
+    let fat_sector = fat_start_sector + (fat_offset / bpb.bytes_per_sector)
+    let offset_in_sector = fat_offset % bpb.bytes_per_sector
+
+    let raw = disk::read_sectors(fat_sector, 1)
+    return read32(raw, offset_in_sector) & 0x0FFFFFFF  // mask upper 4 bits
+}
+
+fn write_fat_entry(cluster: int, value: int) {
+    let fat_offset = cluster * FAT32_ENTRY_SIZE
+    let fat_sector = fat_start_sector + (fat_offset / bpb.bytes_per_sector)
+    let offset_in_sector = fat_offset % bpb.bytes_per_sector
+
+    let raw = disk::read_sectors(fat_sector, 1)
+    let existing = read32(raw, offset_in_sector)
+    let new_val = (existing & 0xF0000000) | (value & 0x0FFFFFFF)
+    write32(raw, offset_in_sector, new_val)
+    disk::write_sectors(fat_sector, raw)
+}
+
+fn get_cluster_chain(start: int) -> [int] {
+    let chain: [int] = []
+    let cluster = start
+
+    while cluster >= 2 && cluster < CLUSTER_EOC {
+        chain = chain + [cluster]
+        cluster = read_fat_entry(cluster)
+
+        // Safety: prevent infinite loops
+        if chain.len() > 1000000 { break }
+    }
+
+    return chain
+}
+
+fn alloc_cluster() -> Result<int, str> {
+    let cluster = 2
+    while cluster < bpb.total_sectors_32 / bpb.sectors_per_cluster {
+        if read_fat_entry(cluster) == CLUSTER_FREE {
+            write_fat_entry(cluster, CLUSTER_EOC)
+            return Result::Ok(cluster)
+        }
+        cluster = cluster + 1
+    }
+    return Result::Err("No free clusters")
+}
+
+// ── Directory Operations ────────────────────────────────────────────────
+
+pub fn list_dir(cluster: int) -> [Fat32Dir] {
+    let entries: [Fat32Dir] = []
+    let chain = get_cluster_chain(cluster)
+
+    let ci = 0
+    while ci < chain.len() {
+        let sector = cluster_to_sector(chain[ci])
+        let si = 0
+        while si < sectors_per_cluster {
+            let raw = disk::read_sectors(sector + si, 1)
+            let ei = 0
+            while ei < bpb.bytes_per_sector / DIR_ENTRY_SIZE {
+                let offset = ei * DIR_ENTRY_SIZE
+                let first_byte = raw[offset] as int
+
+                // End of directory
+                if first_byte == 0x00 { return entries }
+                // Deleted entry
+                if first_byte == 0xE5 { ei = ei + 1; continue }
+                // Long name entry
+                if (raw[offset + 11] as int) == ATTR_LONG_NAME { ei = ei + 1; continue }
+
+                let name = parse_83_name(raw, offset)
+                let attr = raw[offset + 11] as int
+                let cluster_hi = read16(raw, offset + 20)
+                let cluster_lo = read16(raw, offset + 26)
+                let first_cluster = (cluster_hi << 16) | cluster_lo
+
+                entries = entries + [Fat32Dir {
+                    name:           name,
+                    attr:           attr,
+                    created_time:   read16(raw, offset + 14),
+                    created_date:   read16(raw, offset + 16),
+                    modified_time:  read16(raw, offset + 22),
+                    modified_date:  read16(raw, offset + 24),
+                    first_cluster:  first_cluster,
+                    file_size:      read32(raw, offset + 28),
+                }]
+
+                ei = ei + 1
+            }
+            si = si + 1
+        }
+        ci = ci + 1
+    }
+
+    return entries
+}
+
+pub fn read_file(start_cluster: int, offset: int, length: int) -> Result<[byte], str> {
+    let chain = get_cluster_chain(start_cluster)
+    let cluster_size = sectors_per_cluster * bpb.bytes_per_sector
+
+    let start_ci = offset / cluster_size
+    let data: [byte] = []
+
+    let ci = start_ci
+    let remaining = length
+    let pos = offset
+
+    while ci < chain.len() && remaining > 0 {
+        let cluster_offset = pos % cluster_size
+        let sector = cluster_to_sector(chain[ci])
+        let to_read = if cluster_size - cluster_offset < remaining {
+            cluster_size - cluster_offset
+        } else {
+            remaining
+        }
+
+        // Read sectors of this cluster
+        let si = cluster_offset / bpb.bytes_per_sector
+        while si < sectors_per_cluster && remaining > 0 {
+            let raw = disk::read_sectors(sector + si, 1)
+            data = data + raw
+            si = si + 1
+        }
+
+        remaining = remaining - to_read
+        pos = pos + to_read
+        ci = ci + 1
+    }
+
+    return Result::Ok(data[0..length])
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────
+
+fn parse_83_name(raw: [byte], offset: int) -> str {
+    // Parse 8.3 filename: 8 bytes name + 3 bytes extension
+    let name = ""
+    let i = 0
+    while i < 8 {
+        let c = raw[offset + i]
+        if c != 0x20 {  // not space
+            name = name + (c as char)
+        }
+        i = i + 1
+    }
+
+    let ext = ""
+    i = 8
+    while i < 11 {
+        let c = raw[offset + i]
+        if c != 0x20 {
+            ext = ext + (c as char)
+        }
+        i = i + 1
+    }
+
+    if ext.len() > 0 {
+        return name + "." + ext
+    }
+    return name
+}
+
+fn read_volume_label() -> str {
+    let entries = list_dir(bpb.root_cluster)
+    let i = 0
+    while i < entries.len() {
+        if entries[i].attr & ATTR_VOLUME_ID != 0 {
+            return entries[i].name.trim()
+        }
+        i = i + 1
+    }
+    return "NO NAME"
+}
+
+fn read16(data: [byte], offset: int) -> int {
+    return (data[offset] as int) | ((data[offset + 1] as int) << 8)
+}
+
+fn read32(data: [byte], offset: int) -> int {
+    return (data[offset] as int) |
+           ((data[offset + 1] as int) << 8) |
+           ((data[offset + 2] as int) << 16) |
+           ((data[offset + 3] as int) << 24)
+}
+
+fn write32(data: [byte], offset: int, value: int) {
+    data[offset]     = (value & 0xFF) as byte
+    data[offset + 1] = ((value >> 8) & 0xFF) as byte
+    data[offset + 2] = ((value >> 16) & 0xFF) as byte
+    data[offset + 3] = ((value >> 24) & 0xFF) as byte
+}

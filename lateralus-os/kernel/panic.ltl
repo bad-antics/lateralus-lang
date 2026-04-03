@@ -1,0 +1,146 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// LateralusOS — Kernel Panic Handler
+// ═══════════════════════════════════════════════════════════════════════════
+// Copyright (c) 2025 bad-antics. All rights reserved.
+//
+// Handles unrecoverable kernel errors with maximum diagnostic information.
+// Outputs to both VGA and serial for debugging.
+// ═══════════════════════════════════════════════════════════════════════════
+
+import hal::serial
+import hal::cpu
+import drivers::vga
+
+// ── Panic state ─────────────────────────────────────────────────────────
+
+let mut panic_occurred = false
+let mut panic_depth    = 0       // detect recursive panics
+
+// ── Kernel panic ────────────────────────────────────────────────────────
+
+pub fn kernel_panic(message: str) {
+    // Disable interrupts immediately
+    cpu::cli()
+
+    panic_depth = panic_depth + 1
+
+    if panic_depth > 1 {
+        // Recursive panic — just halt
+        serial::puts("\n*** RECURSIVE KERNEL PANIC ***\n")
+        cpu::halt_forever()
+    }
+
+    panic_occurred = true
+
+    // ── Dump to serial ──────────────────────────────────────────────────
+
+    serial::puts("\n")
+    serial::puts("═══════════════════════════════════════════════════════════\n")
+    serial::puts("     *** LATERALUS OS KERNEL PANIC ***\n")
+    serial::puts("═══════════════════════════════════════════════════════════\n")
+    serial::puts("Message: ")
+    serial::puts(message)
+    serial::puts("\n\n")
+
+    // Dump registers
+    serial::puts("Register dump:\n")
+    let regs = cpu::read_all_registers()
+    serial::puts("  RAX={regs.rax:016X}  RBX={regs.rbx:016X}\n")
+    serial::puts("  RCX={regs.rcx:016X}  RDX={regs.rdx:016X}\n")
+    serial::puts("  RSI={regs.rsi:016X}  RDI={regs.rdi:016X}\n")
+    serial::puts("  RBP={regs.rbp:016X}  RSP={regs.rsp:016X}\n")
+    serial::puts("  R8 ={regs.r8:016X}   R9 ={regs.r9:016X}\n")
+    serial::puts("  R10={regs.r10:016X}  R11={regs.r11:016X}\n")
+    serial::puts("  R12={regs.r12:016X}  R13={regs.r13:016X}\n")
+    serial::puts("  R14={regs.r14:016X}  R15={regs.r15:016X}\n")
+    serial::puts("  RIP={regs.rip:016X}  RFLAGS={regs.rflags:016X}\n")
+    serial::puts("  CR0={cpu::read_cr0():016X}  CR2={cpu::read_cr2():016X}\n")
+    serial::puts("  CR3={cpu::read_cr3():016X}  CR4={cpu::read_cr4():016X}\n")
+    serial::puts("\n")
+
+    // Stack trace (walk RBP chain)
+    serial::puts("Stack trace:\n")
+    let frame = regs.rbp
+    let depth = 0
+    while frame != 0 && depth < 16 {
+        let ret_addr = cpu::read_mem64(frame + 8)
+        serial::puts("  [{depth}] 0x{ret_addr:016X}\n")
+        frame = cpu::read_mem64(frame)
+        depth = depth + 1
+    }
+
+    serial::puts("\n═══════════════════════════════════════════════════════════\n")
+    serial::puts("System halted. Attach debugger or reset.\n")
+
+    // ── Dump to VGA ─────────────────────────────────────────────────────
+
+    vga::set_color(vga::Color::White, vga::Color::Red)
+    vga::clear()
+    vga::println("  ╔═══════════════════════════════════════════════════════╗")
+    vga::println("  ║         LATERALUS OS KERNEL PANIC                    ║")
+    vga::println("  ╚═══════════════════════════════════════════════════════╝")
+    vga::println("")
+    vga::set_color(vga::Color::Yellow, vga::Color::Red)
+    vga::println("  {message}")
+    vga::println("")
+    vga::set_color(vga::Color::White, vga::Color::Red)
+    vga::println("  RIP: 0x{regs.rip:016X}")
+    vga::println("  RSP: 0x{regs.rsp:016X}")
+    vga::println("  CR2: 0x{cpu::read_cr2():016X}")
+    vga::println("")
+    vga::println("  System halted. Please restart.")
+
+    // Halt CPU forever
+    cpu::halt_forever()
+}
+
+// ── Fault Handlers ──────────────────────────────────────────────────────
+
+pub fn general_protection_fault(error_code: int) {
+    kernel_panic("General Protection Fault (error=0x{error_code:X})")
+}
+
+pub fn double_fault(error_code: int) {
+    // Double fault: cannot recover
+    cpu::cli()
+    serial::puts("\n*** DOUBLE FAULT *** (error=0x")
+    serial::puts("{error_code:X}")
+    serial::puts(")\n")
+
+    vga::set_color(vga::Color::White, vga::Color::Red)
+    vga::clear()
+    vga::println("  *** DOUBLE FAULT ***")
+    vga::println("  Cannot recover. System halted.")
+
+    cpu::halt_forever()
+}
+
+pub fn invalid_opcode() {
+    kernel_panic("Invalid Opcode (UD2)")
+}
+
+pub fn stack_segment_fault(error_code: int) {
+    kernel_panic("Stack Segment Fault (error=0x{error_code:X})")
+}
+
+pub fn divide_by_zero() {
+    kernel_panic("Division by Zero")
+}
+
+// ── Assertions ──────────────────────────────────────────────────────────
+
+pub fn assert(condition: bool, message: str) {
+    if !condition {
+        kernel_panic("Assertion failed: {message}")
+    }
+}
+
+pub fn assert_eq(a: int, b: int, context: str) {
+    if a != b {
+        kernel_panic("Assertion failed: {context} — expected {a}, got {b}")
+    }
+}
+
+pub fn unreachable(context: str) {
+    kernel_panic("Reached unreachable code: {context}")
+}

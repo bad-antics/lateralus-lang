@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pipelines Deep Dive — The Operator That Changes Everything</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+# Pipelines Deep Dive
+
+@meta {
+  title: "Pipelines Deep Dive — The Operator That Changes Everything"
+  date: "2024-11-15"
+  author: "bad-antics"
+  tags: ["pipelines", "operators", "functional", "internals"]
+  reading_time: "12 min"
+}
+
+@heading level=1 {
+  Pipelines Deep Dive
+}
+
+@subtitle {
+  The |> operator that changes the way you think about data
+}
+
+---
+
+@heading level=2 {
+  A Brief History of Function Composition
+}
+
+@paragraph {
+  Every programming language has a way to compose functions. In most languages,
+  it's nested calls:
+}
+
+@code lang=python {
+  # Python: inside-out, reads right-to-left
+  result = sum(map(square, filter(is_even, numbers)))
+}
+
+@paragraph {
+  In object-oriented languages, you chain methods:
+}
+
+@code lang=javascript {
+  // JavaScript: reads left-to-right, but only for methods
+  const result = numbers.filter(isEven).map(square).reduce((a,b) => a+b, 0)
+}
+
+@paragraph {
+  Both approaches work. But both force you to think in a different direction
+  than the data flows. And the OOP approach only works if the first value is
+  an object with the right methods.
+}
+
+@paragraph {
+  The pipeline operator solves this completely:
+}
+
+@code lang=lateralus {
+  // LATERALUS: reads in the order operations happen
+  let result = numbers
+    |> filter(is_even)
+    |> map(square)
+    |> reduce((a, b) => a + b, 0)
+}
+
+---
+
+@heading level=2 {
+  How |> Works Under the Hood
+}
+
+@paragraph {
+  The pipeline operator @code{|>} is a binary infix operator that desugars
+  during compilation. At the AST level, @code{x |> f(y)} becomes @code{f(x, y)}.
+}
+
+@paragraph {
+  More precisely: the value on the left is inserted as the *first argument*
+  of the function call on the right. If the right side is a bare identifier
+  (not a call), it's treated as @code{f(x)}.
+}
+
+@code lang=lateralus {
+  // These are identical:
+  "hello" |> upper()
+  upper("hello")
+
+  // These are also identical:
+  list |> filter(is_even)
+  filter(list, is_even)
+
+  // Multi-argument functions work naturally:
+  data |> group_by((x) => x.category)
+  group_by(data, (x) => x.category)
+}
+
+@paragraph {
+  The compiler transforms the AST before IR generation — pipelines have
+  zero runtime overhead compared to direct function calls.
+}
+
+---
+
+@heading level=2 {
+  The Optional Pipeline: |?
+}
+
+@paragraph {
+  Real programs deal with missing data. The @code{|?} operator is a
+  "null-propagating" pipeline: if the left side is @code{None}, the entire
+  pipeline short-circuits and returns @code{None} without calling the function.
+}
+
+@code lang=lateralus {
+  // Without |?, you'd write:
+  let result = if user != None {
+    let trimmed = trim(user.input)
+    if trimmed != None {
+      let parsed = parse_int(trimmed)
+      if parsed != None { validate_range(parsed, 0, 100) } else { None }
+    } else { None }
+  } else { None }
+
+  // With |?, it's one expression:
+  let result = user
+    |? .input
+    |? trim()
+    |? parse_int()
+    |? validate_range(0, 100)
+}
+
+@paragraph {
+  This is equivalent to Haskell's @code{Maybe} monad bind operation, or
+  Kotlin's safe-call operator @code{?.}, extended to arbitrary function calls.
+}
+
+---
+
+@heading level=2 {
+  Pipelines as First-Class Values
+}
+
+@paragraph {
+  In LATERALUS, pipeline *chains* can be stored and reused:
+}
+
+@code lang=lateralus {
+  // A pipeline stage is just a function
+  let normalize = (text: str) => text
+    |> trim()
+    |> lower()
+    |> replace("[^a-z0-9 ]", "")
+    |> split(" ")
+    |> filter((w) => len(w) > 2)
+
+  // Reuse it anywhere
+  let words_a = normalize(document_a)
+  let words_b = normalize(document_b)
+  let similarity = jaccard_similarity(words_a, words_b)
+}
+
+@paragraph {
+  This composability is what makes LATERALUS programs naturally modular.
+  Each pipeline stage is a pure function. Pure functions are easy to test,
+  easy to reason about, and easy to combine.
+}
+
+---
+
+@heading level=2 {
+  The Optimizer's Role
+}
+
+@paragraph {
+  The LATERALUS optimizer (at O2 and above) analyzes pipeline chains and
+  can apply *pipeline fusion*: combining multiple map/filter operations into
+  a single pass over the data.
+}
+
+@code lang=lateralus {
+  // At O2, this:
+  data
+    |> filter(pred_a)
+    |> map(transform_a)
+    |> filter(pred_b)
+    |> map(transform_b)
+
+  // Becomes roughly equivalent to:
+  data |> map_filter_chain([pred_a, transform_a, pred_b, transform_b])
+}
+
+@paragraph {
+  This matters for large datasets. Instead of four passes over potentially
+  millions of elements, you get one. The optimizer detects these fusion
+  opportunities automatically.
+}
+
+---
+
+@heading level=2 {
+  Pipeline-Oriented Design Patterns
+}
+
+@heading level=3 {
+  Pattern 1: The ETL Pipeline
+}
+
+@code lang=lateralus {
+  fn process_sensor_data(raw: list) {
+    raw
+      |> validate_readings()            // E: extract valid readings
+      |> normalize_units("SI")          // T: transform to SI units
+      |> apply_calibration(sensor_id)   // T: hardware calibration
+      |> remove_outliers(sigma=3.0)     // T: statistical cleaning
+      |> smooth(window=10)              // T: sliding window average
+      |> store_to_db("sensor_archive")  // L: load to storage
+  }
+}
+
+@heading level=3 {
+  Pattern 2: The Validation Chain
+}
+
+@code lang=lateralus {
+  fn validate_user_input(raw: str) -> Result {
+    raw
+      |? trim()
+      |? validate_not_empty("username cannot be empty")
+      |? validate_length(3, 32, "username must be 3-32 chars")
+      |? validate_regex("[a-z0-9_]+", "alphanumeric and underscore only")
+      |? check_not_taken(user_db)
+  }
+}
+
+@heading level=3 {
+  Pattern 3: The Analysis Pipeline
+}
+
+@code lang=lateralus {
+  fn analyze_genome(sequence: str) {
+    sequence
+      |> parse_fasta()
+      |> quality_filter(min_score=30)
+      |> align_to_reference(genome_ref)
+      |> call_variants(confidence=0.95)
+      |> annotate_variants(db=clinvar)
+      |> generate_report(format="html")
+  }
+}
+
+---
+
+@heading level=2 {
+  Parallel Pipelines (v1.4 Preview)
+}
+
+@paragraph {
+  Coming in v1.4: the @code{|>>} parallel pipeline operator splits the
+  collection across CPU cores automatically:
+}
+
+@code lang=lateralus {
+  // |>> uses parallel map internally
+  large_dataset
+    |>> expensive_transform()    // runs on all cores
+    |>> validate_result()        // parallel validation
+    |>  collect()                // merge back to single thread
+}
+
+---
+
+@heading level=2 {
+  Summary
+}
+
+@paragraph {
+  The pipeline operator is the most fundamental abstraction in LATERALUS.
+  It's not a feature. It's the philosophy of the language made concrete:
+  data flows through transformations naturally, readably, and efficiently.
+}
+
+@paragraph {
+  Every time you write @code{|>}, you're writing code that reads exactly
+  like the problem it solves. And that's what programming should always feel like.
+}
+
+@footer {
+  Filed under: pipelines, operators · November 2024
+}
+
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>

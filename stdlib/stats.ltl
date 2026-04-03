@@ -1,0 +1,214 @@
+// Lateralus Standard Library — stats.ltl  (v1.4.0)
+// Statistical analysis, probability distributions, hypothesis testing
+
+module stdlib.stats
+
+import stdlib.math
+
+// ── Descriptive Statistics ───────────────────────────────────────────────────
+
+pub fn mean(data) {
+    let n = len(data)
+    if n == 0 { throw ValueError("mean of empty dataset") }
+    let mut s = 0.0
+    let mut i = 0
+    while i < n { s = s + data[i]; i += 1 }
+    return s / (n as float)
+}
+
+pub fn median(data) {
+    let n = len(data)
+    if n == 0 { throw ValueError("median of empty dataset") }
+    let sorted = sort(data)
+    if n % 2 == 1 {
+        return sorted[n / 2]
+    }
+    return (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
+}
+
+pub fn mode(data) {
+    let n = len(data)
+    if n == 0 { throw ValueError("mode of empty dataset") }
+    let mut best_val = data[0]
+    let mut best_count = 0
+    let mut i = 0
+    while i < n {
+        let mut count = 0
+        let mut j = 0
+        while j < n {
+            if data[j] == data[i] { count += 1 }
+            j += 1
+        }
+        if count > best_count {
+            best_count = count
+            best_val = data[i]
+        }
+        i += 1
+    }
+    return best_val
+}
+
+pub fn variance(data) {
+    let n = len(data)
+    if n < 2 { throw ValueError("variance requires at least 2 values") }
+    let m = mean(data)
+    let mut ss = 0.0
+    let mut i = 0
+    while i < n {
+        let d = data[i] - m
+        ss = ss + d * d
+        i += 1
+    }
+    return ss / ((n - 1) as float)
+}
+
+pub fn stddev(data) {
+    return math.sqrt(variance(data))
+}
+
+pub fn range_val(data) {
+    let n = len(data)
+    if n == 0 { throw ValueError("range of empty dataset") }
+    let mut lo = data[0]
+    let mut hi = data[0]
+    let mut i = 1
+    while i < n {
+        if data[i] < lo { lo = data[i] }
+        if data[i] > hi { hi = data[i] }
+        i += 1
+    }
+    return hi - lo
+}
+
+pub fn percentile(data, p) {
+    let sorted = sort(data)
+    let n = len(sorted)
+    if n == 0 { throw ValueError("percentile of empty dataset") }
+    let idx = (p / 100.0) * ((n - 1) as float)
+    let lo = math.floor(idx)
+    let hi = math.ceil(idx)
+    if lo == hi { return sorted[lo] }
+    let frac = idx - (lo as float)
+    return sorted[lo] * (1.0 - frac) + sorted[hi] * frac
+}
+
+pub fn quartiles(data) {
+    return [percentile(data, 25), percentile(data, 50), percentile(data, 75)]
+}
+
+pub fn iqr(data) {
+    let q = quartiles(data)
+    return q[2] - q[0]
+}
+
+// ── Correlation & Regression ─────────────────────────────────────────────────
+
+pub fn covariance(x, y) {
+    let n = len(x)
+    if n != len(y) { throw ValueError("x and y must have same length") }
+    if n < 2 { throw ValueError("covariance requires at least 2 values") }
+    let mx = mean(x)
+    let my = mean(y)
+    let mut s = 0.0
+    let mut i = 0
+    while i < n {
+        s = s + (x[i] - mx) * (y[i] - my)
+        i += 1
+    }
+    return s / ((n - 1) as float)
+}
+
+pub fn correlation(x, y) {
+    let sx = stddev(x)
+    let sy = stddev(y)
+    if sx < 1e-12 || sy < 1e-12 { return 0.0 }
+    return covariance(x, y) / (sx * sy)
+}
+
+pub fn linear_regression(x, y) {
+    // Returns [slope, intercept]
+    let n = len(x)
+    let mx = mean(x)
+    let my = mean(y)
+    let mut num = 0.0
+    let mut den = 0.0
+    let mut i = 0
+    while i < n {
+        let dx = x[i] - mx
+        num = num + dx * (y[i] - my)
+        den = den + dx * dx
+        i += 1
+    }
+    let slope = num / den
+    let intercept = my - slope * mx
+    return [slope, intercept]
+}
+
+// ── Normalization ────────────────────────────────────────────────────────────
+
+pub fn zscore(data) {
+    let m = mean(data)
+    let s = stddev(data)
+    if s < 1e-12 { throw ValueError("zscore: zero stddev") }
+    let mut result = []
+    let mut i = 0
+    while i < len(data) {
+        result = result + [(data[i] - m) / s]
+        i += 1
+    }
+    return result
+}
+
+pub fn min_max_normalize(data) {
+    let lo = min_of(data)
+    let hi = max_of(data)
+    let r = hi - lo
+    if r < 1e-12 { throw ValueError("min_max_normalize: constant data") }
+    let mut result = []
+    let mut i = 0
+    while i < len(data) {
+        result = result + [(data[i] - lo) / r]
+        i += 1
+    }
+    return result
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+fn sort(data) {
+    // Simple insertion sort (stdlib doesn't need to be fast)
+    let mut arr = data
+    let n = len(arr)
+    let mut i = 1
+    while i < n {
+        let key = arr[i]
+        let mut j = i - 1
+        while j >= 0 && arr[j] > key {
+            arr[j + 1] = arr[j]
+            j -= 1
+        }
+        arr[j + 1] = key
+        i += 1
+    }
+    return arr
+}
+
+fn min_of(data) {
+    let mut m = data[0]
+    let mut i = 1
+    while i < len(data) {
+        if data[i] < m { m = data[i] }
+        i += 1
+    }
+    return m
+}
+
+fn max_of(data) {
+    let mut m = data[0]
+    let mut i = 1
+    while i < len(data) {
+        if data[i] > m { m = data[i] }
+        i += 1
+    }
+    return m
+}

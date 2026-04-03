@@ -1,0 +1,212 @@
+// ═══════════════════════════════════════════════════════════════════
+// Lateralus stdlib — bitset
+// Fixed-size bitset for efficient set operations on integers
+// ═══════════════════════════════════════════════════════════════════
+
+// ── Bitset construction ─────────────────────────────────────────────
+
+/// Create a new bitset that can hold values 0..(capacity-1).
+/// Internally stored as a list of ints (each int = one "word").
+pub fn new(capacity: int) -> list {
+    let num_words = (capacity + 31) / 32
+    let words = []
+    for i in range(0, num_words) {
+        words = words + [0]
+    }
+    // Store [capacity, word0, word1, ...]
+    return [capacity] + words
+}
+
+/// Create a bitset from a list of bit positions to set.
+pub fn from_list(capacity: int, positions: list) -> list {
+    let bs = new(capacity)
+    for pos in positions {
+        bs = set(bs, pos)
+    }
+    return bs
+}
+
+// ── Core operations ─────────────────────────────────────────────────
+
+/// Set bit at position `pos`.
+pub fn set(bs: list, pos: int) -> list {
+    let cap = bs[0]
+    if (pos < 0) or (pos >= cap) {
+        return bs
+    }
+    let word_idx = pos / 32 + 1
+    let bit_idx = pos % 32
+    let mask = power(2, bit_idx)
+    let current = bs[word_idx]
+    // Set bit using OR equivalent: if bit not already set, add it
+    if (current / mask) % 2 == 0 {
+        bs[word_idx] = current + mask
+    }
+    return bs
+}
+
+/// Clear bit at position `pos`.
+pub fn clear(bs: list, pos: int) -> list {
+    let cap = bs[0]
+    if (pos < 0) or (pos >= cap) {
+        return bs
+    }
+    let word_idx = pos / 32 + 1
+    let bit_idx = pos % 32
+    let mask = power(2, bit_idx)
+    let current = bs[word_idx]
+    // Clear bit: if bit is set, subtract the mask
+    if (current / mask) % 2 == 1 {
+        bs[word_idx] = current - mask
+    }
+    return bs
+}
+
+/// Test whether bit at `pos` is set.
+pub fn test(bs: list, pos: int) -> bool {
+    let cap = bs[0]
+    if (pos < 0) or (pos >= cap) {
+        return false
+    }
+    let word_idx = pos / 32 + 1
+    let bit_idx = pos % 32
+    let mask = power(2, bit_idx)
+    return (bs[word_idx] / mask) % 2 == 1
+}
+
+/// Toggle bit at position `pos`.
+pub fn toggle(bs: list, pos: int) -> list {
+    if test(bs, pos) {
+        return clear(bs, pos)
+    }
+    return set(bs, pos)
+}
+
+// ── Inspection ──────────────────────────────────────────────────────
+
+/// Return the capacity of the bitset.
+pub fn capacity(bs: list) -> int {
+    return bs[0]
+}
+
+/// Count the number of set bits (popcount).
+pub fn count(bs: list) -> int {
+    let total = 0
+    for i in range(0, bs[0]) {
+        if test(bs, i) {
+            total = total + 1
+        }
+    }
+    return total
+}
+
+/// Check if no bits are set.
+pub fn is_empty(bs: list) -> bool {
+    return count(bs) == 0
+}
+
+/// Return a list of all set bit positions.
+pub fn to_list(bs: list) -> list {
+    let result = []
+    for i in range(0, bs[0]) {
+        if test(bs, i) {
+            result = result + [i]
+        }
+    }
+    return result
+}
+
+// ── Set operations ──────────────────────────────────────────────────
+
+/// Bitwise OR of two bitsets (union).
+pub fn union(a: list, b: list) -> list {
+    let cap = max(a[0], b[0])
+    let result = new(cap)
+    let positions_a = to_list(a)
+    let positions_b = to_list(b)
+    for p in positions_a {
+        result = set(result, p)
+    }
+    for p in positions_b {
+        result = set(result, p)
+    }
+    return result
+}
+
+/// Bitwise AND of two bitsets (intersection).
+pub fn intersection(a: list, b: list) -> list {
+    let cap = min(a[0], b[0])
+    let result = new(cap)
+    for i in range(0, cap) {
+        if test(a, i) and test(b, i) {
+            result = set(result, i)
+        }
+    }
+    return result
+}
+
+/// Bitwise difference: a - b (bits in a but not b).
+pub fn difference(a: list, b: list) -> list {
+    let cap = a[0]
+    let result = new(cap)
+    for i in range(0, cap) {
+        if test(a, i) and (not test(b, i)) {
+            result = set(result, i)
+        }
+    }
+    return result
+}
+
+/// Bitwise XOR of two bitsets (symmetric difference).
+pub fn symmetric_difference(a: list, b: list) -> list {
+    let cap = max(a[0], b[0])
+    let result = new(cap)
+    for i in range(0, cap) {
+        let in_a = test(a, i)
+        let in_b = test(b, i)
+        if (in_a and (not in_b)) or ((not in_a) and in_b) {
+            result = set(result, i)
+        }
+    }
+    return result
+}
+
+/// Check if `a` is a subset of `b`.
+pub fn is_subset(a: list, b: list) -> bool {
+    let positions = to_list(a)
+    for p in positions {
+        if not test(b, p) {
+            return false
+        }
+    }
+    return true
+}
+
+// ── Utilities ───────────────────────────────────────────────────────
+
+/// Integer power helper (2^n for bit manipulation).
+fn power(base: int, exp: int) -> int {
+    let result = 1
+    for i in range(0, exp) {
+        result = result * base
+    }
+    return result
+}
+
+/// Convert bitset to a binary string representation.
+pub fn to_binary_string(bs: list) -> str {
+    let result = ""
+    for i in range(0, bs[0]) {
+        if test(bs, i) {
+            result = "1" + result
+        } else {
+            result = "0" + result
+        }
+    }
+    return result
+}
+
+/// Convert bitset to a readable format.
+pub fn to_string(bs: list) -> str {
+    return "Bitset(" + str(to_list(bs)) + ")"
+}

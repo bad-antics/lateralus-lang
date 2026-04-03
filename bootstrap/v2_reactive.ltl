@@ -1,0 +1,898 @@
+// ═══════════════════════════════════════════════════════════════════════
+// v2_reactive.ltl  —  LATERALUS Reactive Programming Extension
+// Self-hosted port of lateralus_lang/reactive.py
+//
+// Provides reactive state primitives and observable streams:
+//   - Signal      : reactive state cell (read/write, auto-dependency tracking)
+//   - Computed    : derived value, auto-updates when dependencies change
+//   - Effect      : side-effect that re-runs on dependency change
+//   - Observable  : lazy composable stream of values with operators
+//   - Subject     : hot observable (multicasts to all subscribers)
+//   - BehaviorSubject : replays latest value on subscribe
+//   - ReplaySubject   : replays buffer of recent values
+//   - Store       : centralized state with actions + selectors
+//   - Operators   : map, filter, scan, take, skip, distinct, buffer, zip
+//
+// v2.3.0
+// ═══════════════════════════════════════════════════════════════════════
+
+import math
+import strings
+
+// ─── Tracking Context ──────────────────────────────────────────────────
+//
+// Global tracking stack for auto-dependency detection (like MobX).
+// When a Computed/Effect reads a Signal, it registers as a dependency.
+
+let _tracking_stack = []
+
+fn _tracking_push(comp: map) {
+    _tracking_stack = _tracking_stack + [comp]
+}
+
+fn _tracking_pop() {
+    if len(_tracking_stack) > 0 {
+        _tracking_stack = slice(_tracking_stack, 0, len(_tracking_stack) - 1)
+    }
+}
+
+fn _tracking_current() -> map {
+    if len(_tracking_stack) > 0 {
+        return _tracking_stack[len(_tracking_stack) - 1]
+    }
+    return none
+}
+
+// ─── Effect Scheduler ──────────────────────────────────────────────────
+
+let _pending_effects  = []
+let _batching         = false
+
+fn _schedule_effect(comp: map) {
+    _pending_effects = _pending_effects + [comp]
+    if not _batching {
+        _flush_effects()
+    }
+}
+
+fn _begin_batch() {
+    _batching = true
+}
+
+fn _end_batch() {
+    _batching = false
+    _flush_effects()
+}
+
+fn _flush_effects() {
+    while len(_pending_effects) > 0 {
+        let eff = _pending_effects[0]
+        _pending_effects = slice(_pending_effects, 1, len(_pending_effects))
+        if eff["_reactive_kind"] == "effect" and eff["active"] {
+            _effect_run(eff)
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// SIGNAL — reactive state cell
+// ═══════════════════════════════════════════════════════════════════════
+
+let _signal_id_counter = 0
+
+fn signal_new(initial: any) -> map {
+    _signal_id_counter = _signal_id_counter + 1
+    let s = {}
+    s["_reactive_kind"] = "signal"
+    s["_id"]            = _signal_id_counter
+    s["value"]          = initial
+    s["name"]           = "signal_" + str(_signal_id_counter)
+    s["observers"]      = []
+    s["subscribers"]    = []
+    return s
+}
+
+fn signal_named(initial: any, name: str) -> map {
+    let s = signal_new(initial)
+    s["name"] = name
+    return s
+}
+
+fn signal_get(s: map) -> any {
+    // Track dependency
+    let comp = _tracking_current()
+    if comp != none {
+        _add_observer(s, comp)
+    }
+    return s["value"]
+}
+
+fn signal_set(s: map, value: any) {
+    if s["value"] == value {
+        return
+    }
+    s["value"] = value
+    // Notify observers
+    let obs = s["observers"]
+    let i = 0
+    while i < len(obs) {
+        _invalidate(obs[i])
+        i = i + 1
+    }
+    // Notify subscribers
+    let subs = s["subscribers"]
+    let j = 0
+    while j < len(subs) {
+        let cb = subs[j]
+        cb(value)
+        j = j + 1
+    }
+}
+
+fn signal_update(s: map, fn_transform: fn) {
+    signal_set(s, fn_transform(signal_get(s)))
+}
+
+fn signal_subscribe(s: map, callback: fn) {
+    s["subscribers"] = s["subscribers"] + [callback]
+}
+
+fn _add_observer(s: map, comp: map) {
+    // Avoid duplicates by checking _id
+    let comp_id = comp["_id"]
+    for existing in s["observers"] {
+        if existing["_id"] == comp_id {
+            return
+        }
+    }
+    s["observers"] = s["observers"] + [comp]
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// COMPUTED — derived reactive value
+// ═══════════════════════════════════════════════════════════════════════
+
+let _computed_id_counter = 0
+
+fn computed_new(compute_fn: fn) -> map {
+    _computed_id_counter = _computed_id_counter + 1
+    let c = {}
+    c["_reactive_kind"] = "computed"
+    c["_id"]            = _computed_id_counter
+    c["fn"]             = compute_fn
+    c["name"]           = "computed_" + str(_computed_id_counter)
+    c["value"]          = none
+    c["valid"]          = false
+    c["observers"]      = []
+    return c
+}
+
+fn computed_named(compute_fn: fn, name: str) -> map {
+    let c = computed_new(compute_fn)
+    c["name"] = name
+    return c
+}
+
+fn _invalidate(comp: map) {
+    let kind = comp["_reactive_kind"]
+    if kind == "computed" {
+        if comp["valid"] {
+            comp["valid"] = false
+            // Cascade to observers of this computed
+            let obs = comp["observers"]
+            let i = 0
+            while i < len(obs) {
+                _invalidate(obs[i])
+                i = i + 1
+            }
+        }
+    }
+    if kind == "effect" {
+        _schedule_effect(comp)
+    }
+}
+
+fn computed_get(c: map) -> any {
+    if c["valid"] {
+        let comp = _tracking_current()
+        if comp != none {
+            _add_computed_observer(c, comp)
+        }
+        return c["value"]
+    }
+
+    // Recompute
+    _tracking_push(c)
+    let new_val = c["fn"]()
+    _tracking_pop()
+
+    c["value"] = new_val
+    c["valid"] = true
+
+    let comp = _tracking_current()
+    if comp != none {
+        _add_computed_observer(c, comp)
+    }
+    return new_val
+}
+
+fn _add_computed_observer(c: map, comp: map) {
+    let comp_id = comp["_id"]
+    for existing in c["observers"] {
+        if existing["_id"] == comp_id {
+            return
+        }
+    }
+    c["observers"] = c["observers"] + [comp]
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// EFFECT — reactive side-effect
+// ═══════════════════════════════════════════════════════════════════════
+
+let _effect_id_counter = 0
+
+fn effect_new(fn_effect: fn) -> map {
+    _effect_id_counter = _effect_id_counter + 1
+    let e = {}
+    e["_reactive_kind"] = "effect"
+    e["_id"]            = _effect_id_counter
+    e["fn"]             = fn_effect
+    e["active"]         = true
+    // Run immediately
+    _effect_run(e)
+    return e
+}
+
+fn _effect_run(e: map) {
+    if not e["active"] {
+        return
+    }
+    _tracking_push(e)
+    e["fn"]()
+    _tracking_pop()
+}
+
+fn effect_dispose(e: map) {
+    e["active"] = false
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// OBSERVABLE — lazy composable stream
+// ═══════════════════════════════════════════════════════════════════════
+
+// Observer is a map with on_next, on_error, on_complete callbacks
+
+fn observer_new(on_next: fn, on_error: fn, on_complete: fn) -> map {
+    let o = {}
+    o["on_next"]     = on_next
+    o["on_error"]    = on_error
+    o["on_complete"] = on_complete
+    o["completed"]   = false
+    return o
+}
+
+fn noop(x: any) {
+    // no-op
+}
+
+fn noop0() {
+    // no-op
+}
+
+// An Observable is a map with a subscribe_fn
+fn observable_create(subscribe_fn: fn) -> map {
+    let o = {}
+    o["_reactive_kind"] = "observable"
+    o["subscribe_fn"]   = subscribe_fn
+    return o
+}
+
+fn observable_subscribe(obs: map, on_next: fn) -> map {
+    let observer = observer_new(on_next, fn(e) { }, fn() { })
+    obs["subscribe_fn"](observer)
+    return observer
+}
+
+fn observable_subscribe_full(obs: map, on_next: fn, on_error: fn, on_complete: fn) -> map {
+    let observer = observer_new(on_next, on_error, on_complete)
+    obs["subscribe_fn"](observer)
+    return observer
+}
+
+fn observable_to_list(obs: map) -> list {
+    let results = []
+    observable_subscribe(obs, fn(val) {
+        results = results + [val]
+    })
+    return results
+}
+
+// ─── Static constructors ──────────────────────────────────────────────
+
+fn observable_of(values: list) -> map {
+    return observable_create(fn(observer) {
+        for v in values {
+            observer["on_next"](v)
+        }
+        observer["on_complete"]()
+    })
+}
+
+fn observable_from_list(lst: list) -> map {
+    return observable_of(lst)
+}
+
+fn observable_empty() -> map {
+    return observable_create(fn(observer) {
+        observer["on_complete"]()
+    })
+}
+
+fn observable_range(start: int, stop: int) -> map {
+    return observable_create(fn(observer) {
+        let i = start
+        while i <= stop {
+            observer["on_next"](i)
+            i = i + 1
+        }
+        observer["on_complete"]()
+    })
+}
+
+// ─── Operators ─────────────────────────────────────────────────────────
+
+fn obs_map(source: map, transform: fn) -> map {
+    return observable_create(fn(observer) {
+        observable_subscribe_full(source,
+            fn(val) { observer["on_next"](transform(val)) },
+            fn(err) { observer["on_error"](err) },
+            fn()    { observer["on_complete"]() }
+        )
+    })
+}
+
+fn obs_filter(source: map, predicate: fn) -> map {
+    return observable_create(fn(observer) {
+        observable_subscribe_full(source,
+            fn(val) {
+                if predicate(val) {
+                    observer["on_next"](val)
+                }
+            },
+            fn(err) { observer["on_error"](err) },
+            fn()    { observer["on_complete"]() }
+        )
+    })
+}
+
+fn obs_scan(source: map, reducer: fn, seed: any) -> map {
+    return observable_create(fn(observer) {
+        let acc = seed
+        observable_subscribe_full(source,
+            fn(val) {
+                acc = reducer(acc, val)
+                observer["on_next"](acc)
+            },
+            fn(err) { observer["on_error"](err) },
+            fn()    { observer["on_complete"]() }
+        )
+    })
+}
+
+fn obs_take(source: map, n: int) -> map {
+    return observable_create(fn(observer) {
+        let count = 0
+        observable_subscribe_full(source,
+            fn(val) {
+                if count < n {
+                    count = count + 1
+                    observer["on_next"](val)
+                    if count >= n {
+                        observer["on_complete"]()
+                    }
+                }
+            },
+            fn(err) { observer["on_error"](err) },
+            fn()    { observer["on_complete"]() }
+        )
+    })
+}
+
+fn obs_skip(source: map, n: int) -> map {
+    return observable_create(fn(observer) {
+        let count = 0
+        observable_subscribe_full(source,
+            fn(val) {
+                if count < n {
+                    count = count + 1
+                } else {
+                    observer["on_next"](val)
+                }
+            },
+            fn(err) { observer["on_error"](err) },
+            fn()    { observer["on_complete"]() }
+        )
+    })
+}
+
+fn obs_distinct(source: map) -> map {
+    return observable_create(fn(observer) {
+        let prev = "__SENTINEL__"
+        observable_subscribe_full(source,
+            fn(val) {
+                if val != prev {
+                    prev = val
+                    observer["on_next"](val)
+                }
+            },
+            fn(err) { observer["on_error"](err) },
+            fn()    { observer["on_complete"]() }
+        )
+    })
+}
+
+fn obs_buffer(source: map, size: int) -> map {
+    return observable_create(fn(observer) {
+        let buf = []
+        observable_subscribe_full(source,
+            fn(val) {
+                buf = buf + [val]
+                if len(buf) >= size {
+                    observer["on_next"](buf)
+                    buf = []
+                }
+            },
+            fn(err) { observer["on_error"](err) },
+            fn() {
+                if len(buf) > 0 {
+                    observer["on_next"](buf)
+                }
+                observer["on_complete"]()
+            }
+        )
+    })
+}
+
+fn obs_tap(source: map, side_effect: fn) -> map {
+    return obs_map(source, fn(val) {
+        side_effect(val)
+        return val
+    })
+}
+
+fn obs_reduce(source: map, reducer: fn, seed: any) -> any {
+    let acc = seed
+    observable_subscribe(source, fn(val) {
+        acc = reducer(acc, val)
+    })
+    return acc
+}
+
+fn obs_count(source: map) -> int {
+    return obs_reduce(source, fn(a, _v) { return a + 1 }, 0)
+}
+
+fn obs_sum(source: map) -> any {
+    return obs_reduce(source, fn(a, v) { return a + v }, 0)
+}
+
+fn obs_zip(left: map, right: map) -> map {
+    return observable_create(fn(observer) {
+        let left_buf  = []
+        let right_buf = []
+        let left_done  = false
+        let right_done = false
+
+        fn emit_pairs() {
+            while len(left_buf) > 0 and len(right_buf) > 0 {
+                let l = left_buf[0]
+                let r = right_buf[0]
+                left_buf  = slice(left_buf, 1, len(left_buf))
+                right_buf = slice(right_buf, 1, len(right_buf))
+                observer["on_next"]([l, r])
+            }
+        }
+
+        observable_subscribe_full(left,
+            fn(v) {
+                left_buf = left_buf + [v]
+                emit_pairs()
+            },
+            fn(err) { observer["on_error"](err) },
+            fn() {
+                left_done = true
+                if right_done {
+                    observer["on_complete"]()
+                }
+            }
+        )
+        observable_subscribe_full(right,
+            fn(v) {
+                right_buf = right_buf + [v]
+                emit_pairs()
+            },
+            fn(err) { observer["on_error"](err) },
+            fn() {
+                right_done = true
+                if left_done {
+                    observer["on_complete"]()
+                }
+            }
+        )
+    })
+}
+
+fn obs_merge(sources: list) -> map {
+    return observable_create(fn(observer) {
+        for s in sources {
+            observable_subscribe_full(s,
+                fn(v) { observer["on_next"](v) },
+                fn(e) { observer["on_error"](e) },
+                fn()  { }
+            )
+        }
+        observer["on_complete"]()
+    })
+}
+
+fn obs_concat(sources: list) -> map {
+    return observable_create(fn(observer) {
+        for s in sources {
+            observable_subscribe_full(s,
+                fn(v) { observer["on_next"](v) },
+                fn(e) { observer["on_error"](e) },
+                fn()  { }
+            )
+        }
+        observer["on_complete"]()
+    })
+}
+
+fn obs_from_signal(sig: map) -> map {
+    return observable_create(fn(observer) {
+        observer["on_next"](signal_get(sig))
+        signal_subscribe(sig, fn(v) {
+            observer["on_next"](v)
+        })
+    })
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// SUBJECT — hot observable / event emitter
+// ═══════════════════════════════════════════════════════════════════════
+
+fn subject_new() -> map {
+    let s = {}
+    s["_reactive_kind"] = "subject"
+    s["observers"]      = []
+    s["completed"]      = false
+    s["error"]          = none
+    return s
+}
+
+fn subject_subscribe(subj: map, on_next: fn) {
+    let obs = observer_new(on_next, fn(e) { }, fn() { })
+    if subj["completed"] {
+        obs["on_complete"]()
+        return
+    }
+    subj["observers"] = subj["observers"] + [obs]
+}
+
+fn subject_emit(subj: map, value: any) {
+    let observers = subj["observers"]
+    let i = 0
+    while i < len(observers) {
+        observers[i]["on_next"](value)
+        i = i + 1
+    }
+}
+
+fn subject_complete(subj: map) {
+    subj["completed"] = true
+    for obs in subj["observers"] {
+        obs["on_complete"]()
+    }
+    subj["observers"] = []
+}
+
+fn subject_as_observable(subj: map) -> map {
+    return observable_create(fn(observer) {
+        subj["observers"] = subj["observers"] + [observer]
+    })
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// BEHAVIOR SUBJECT — replays latest value
+// ═══════════════════════════════════════════════════════════════════════
+
+fn behavior_subject_new(initial: any) -> map {
+    let s = subject_new()
+    s["_reactive_kind"] = "behavior_subject"
+    s["latest"] = initial
+    return s
+}
+
+fn behavior_subject_subscribe(subj: map, on_next: fn) {
+    subject_subscribe(subj, on_next)
+    // Replay latest immediately
+    on_next(subj["latest"])
+}
+
+fn behavior_subject_emit(subj: map, value: any) {
+    subj["latest"] = value
+    subject_emit(subj, value)
+}
+
+fn behavior_subject_get(subj: map) -> any {
+    return subj["latest"]
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// REPLAY SUBJECT — replays buffer of recent values
+// ═══════════════════════════════════════════════════════════════════════
+
+fn replay_subject_new(buffer_size: int) -> map {
+    let s = subject_new()
+    s["_reactive_kind"] = "replay_subject"
+    s["buffer"]      = []
+    s["buffer_size"] = buffer_size
+    return s
+}
+
+fn replay_subject_subscribe(subj: map, on_next: fn) {
+    subject_subscribe(subj, on_next)
+    // Replay buffer
+    for v in subj["buffer"] {
+        on_next(v)
+    }
+}
+
+fn replay_subject_emit(subj: map, value: any) {
+    let buf = subj["buffer"] + [value]
+    if len(buf) > subj["buffer_size"] {
+        buf = slice(buf, len(buf) - subj["buffer_size"], len(buf))
+    }
+    subj["buffer"] = buf
+    subject_emit(subj, value)
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// STORE — centralized reactive state (Redux + MobX style)
+// ═══════════════════════════════════════════════════════════════════════
+
+fn store_new(initial_state: map) -> map {
+    let st = {}
+    st["_reactive_kind"] = "store"
+    st["state"]          = signal_named(initial_state, "store")
+    st["actions"]        = {}
+    st["history"]        = []
+    st["subscribers"]    = []
+    return st
+}
+
+fn store_get_state(st: map) -> map {
+    return signal_get(st["state"])
+}
+
+fn store_register_action(st: map, name: str, handler: fn) {
+    st["actions"][name] = handler
+}
+
+fn store_dispatch(st: map, action_name: str, payload: map) {
+    if not has_key(st["actions"], action_name) {
+        println("Error: Unknown action '" + action_name + "'")
+        return
+    }
+    let handler = st["actions"][action_name]
+    let old_state = store_get_state(st)
+    let new_state = handler(old_state, payload)
+    st["history"] = st["history"] + [[action_name, payload]]
+    signal_set(st["state"], new_state)
+    for cb in st["subscribers"] {
+        cb(new_state)
+    }
+}
+
+fn store_subscribe(st: map, callback: fn) {
+    st["subscribers"] = st["subscribers"] + [callback]
+}
+
+fn store_action_log(st: map) -> list {
+    return st["history"]
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// BATCH UTILITY
+// ═══════════════════════════════════════════════════════════════════════
+
+fn batch_begin() {
+    _begin_batch()
+}
+
+fn batch_end() {
+    _end_batch()
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// SELF-TEST
+// ═══════════════════════════════════════════════════════════════════════
+
+fn _self_test() {
+    let pass_count = 0
+    let fail_count = 0
+
+    fn check(label: str, ok: bool) {
+        if ok {
+            pass_count = pass_count + 1
+        } else {
+            println("[FAIL] " + label)
+            fail_count = fail_count + 1
+        }
+    }
+
+    // ── Signal ─────────────────────────────────────────────────────
+    let s = signal_new(10)
+    check("signal initial",   signal_get(s) == 10)
+    signal_set(s, 42)
+    check("signal set",       signal_get(s) == 42)
+    signal_update(s, fn(v) { return v + 8 })
+    check("signal update",    signal_get(s) == 50)
+
+    // Signal subscribe
+    let log = []
+    signal_subscribe(s, fn(v) { log = log + [v] })
+    signal_set(s, 100)
+    check("signal subscribe", len(log) == 1 and log[0] == 100)
+
+    // ── Computed ───────────────────────────────────────────────────
+    let a = signal_new(3)
+    let b = signal_new(4)
+    let hyp = computed_new(fn() {
+        let av = signal_get(a)
+        let bv = signal_get(b)
+        return sqrt(av * av + bv * bv)
+    })
+    let h = computed_get(hyp)
+    check("computed 3-4-5", h == 5.0)
+
+    signal_set(a, 6)
+    let h2 = computed_get(hyp)
+    // sqrt(36+16) = sqrt(52) ≈ 7.211
+    check("computed recompute", h2 > 7.2 and h2 < 7.22)
+
+    // ── Observable ─────────────────────────────────────────────────
+    let nums = observable_of([1, 2, 3, 4, 5])
+    let result = observable_to_list(nums)
+    check("observable of",    len(result) == 5)
+    check("observable vals",  result[0] == 1 and result[4] == 5)
+
+    // map operator
+    let doubled = obs_map(observable_of([1, 2, 3]), fn(x) { return x * 2 })
+    let d_list = observable_to_list(doubled)
+    check("obs_map",          d_list[0] == 2 and d_list[1] == 4 and d_list[2] == 6)
+
+    // filter operator
+    let evens = obs_filter(observable_of([1, 2, 3, 4, 5, 6]), fn(x) { return x % 2 == 0 })
+    let e_list = observable_to_list(evens)
+    check("obs_filter",       len(e_list) == 3)
+    check("obs_filter vals",  e_list[0] == 2 and e_list[1] == 4 and e_list[2] == 6)
+
+    // scan operator
+    let sums = obs_scan(observable_of([1, 2, 3, 4]), fn(acc, v) { return acc + v }, 0)
+    let s_list = observable_to_list(sums)
+    check("obs_scan",         s_list[0] == 1 and s_list[1] == 3 and s_list[2] == 6 and s_list[3] == 10)
+
+    // take operator
+    let first3 = obs_take(observable_of([10, 20, 30, 40, 50]), 3)
+    let t_list = observable_to_list(first3)
+    check("obs_take",         len(t_list) == 3 and t_list[2] == 30)
+
+    // skip operator
+    let skipped = obs_skip(observable_of([10, 20, 30, 40, 50]), 2)
+    let sk_list = observable_to_list(skipped)
+    check("obs_skip",         len(sk_list) == 3 and sk_list[0] == 30)
+
+    // distinct
+    let dist = obs_distinct(observable_of([1, 1, 2, 2, 3, 1]))
+    let di_list = observable_to_list(dist)
+    check("obs_distinct",     len(di_list) == 4)  // 1, 2, 3, 1
+
+    // buffer
+    let buffered = obs_buffer(observable_of([1, 2, 3, 4, 5]), 2)
+    let b_list = observable_to_list(buffered)
+    check("obs_buffer",       len(b_list) == 3)  // [1,2], [3,4], [5]
+    check("obs_buffer first", len(b_list[0]) == 2 and b_list[0][0] == 1)
+
+    // reduce
+    let total = obs_reduce(observable_of([1, 2, 3, 4]), fn(a, v) { return a + v }, 0)
+    check("obs_reduce",       total == 10)
+
+    // count
+    let cnt = obs_count(observable_of([10, 20, 30]))
+    check("obs_count",        cnt == 3)
+
+    // sum
+    let sm = obs_sum(observable_of([1, 2, 3, 4, 5]))
+    check("obs_sum",          sm == 15)
+
+    // range
+    let rng = observable_range(1, 5)
+    let r_list = observable_to_list(rng)
+    check("obs_range",        len(r_list) == 5 and r_list[0] == 1 and r_list[4] == 5)
+
+    // zip
+    let zipped = obs_zip(observable_of([1, 2, 3]), observable_of(["a", "b", "c"]))
+    let z_list = observable_to_list(zipped)
+    check("obs_zip",          len(z_list) == 3)
+    check("obs_zip pairs",    z_list[0][0] == 1 and z_list[0][1] == "a")
+
+    // chained operators: filter then map
+    let chain = obs_map(
+        obs_filter(observable_of([1, 2, 3, 4, 5, 6]),
+                   fn(x) { return x % 2 == 0 }),
+        fn(x) { return x * 10 }
+    )
+    let ch_list = observable_to_list(chain)
+    check("chained ops",      ch_list[0] == 20 and ch_list[1] == 40 and ch_list[2] == 60)
+
+    // ── Subject ────────────────────────────────────────────────────
+    let subj = subject_new()
+    let subj_log = []
+    subject_subscribe(subj, fn(v) { subj_log = subj_log + [v] })
+    subject_emit(subj, "hello")
+    subject_emit(subj, "world")
+    check("subject emit",     len(subj_log) == 2)
+    check("subject vals",     subj_log[0] == "hello" and subj_log[1] == "world")
+
+    // ── BehaviorSubject ────────────────────────────────────────────
+    let bs = behavior_subject_new(99)
+    let bs_log = []
+    behavior_subject_subscribe(bs, fn(v) { bs_log = bs_log + [v] })
+    check("bsub replay",      len(bs_log) == 1 and bs_log[0] == 99)
+    behavior_subject_emit(bs, 200)
+    check("bsub emit",        len(bs_log) == 2 and bs_log[1] == 200)
+    check("bsub get",         behavior_subject_get(bs) == 200)
+
+    // ── ReplaySubject ──────────────────────────────────────────────
+    let rs = replay_subject_new(3)
+    replay_subject_emit(rs, 1)
+    replay_subject_emit(rs, 2)
+    replay_subject_emit(rs, 3)
+    replay_subject_emit(rs, 4)  // buffer is [2, 3, 4]
+    let rs_log = []
+    replay_subject_subscribe(rs, fn(v) { rs_log = rs_log + [v] })
+    check("replay buffer",    len(rs_log) == 3)
+    check("replay vals",      rs_log[0] == 2 and rs_log[1] == 3 and rs_log[2] == 4)
+
+    // ── Store ──────────────────────────────────────────────────────
+    let init_state = {}
+    init_state["count"] = 0
+    let store = store_new(init_state)
+    store_register_action(store, "increment", fn(state, payload) {
+        let new_state = {}
+        new_state["count"] = state["count"] + payload["amount"]
+        return new_state
+    })
+
+    let pay = {}
+    pay["amount"] = 5
+    store_dispatch(store, "increment", pay)
+    check("store dispatch",   store_get_state(store)["count"] == 5)
+
+    let pay2 = {}
+    pay2["amount"] = 3
+    store_dispatch(store, "increment", pay2)
+    check("store dispatch 2", store_get_state(store)["count"] == 8)
+    check("store log",        len(store_action_log(store)) == 2)
+
+    // ── Summary ────────────────────────────────────────────────────
+    println("")
+    println("v2_reactive self-test: " + str(pass_count) + " passed, " + str(fail_count) + " failed")
+    if fail_count == 0 {
+        println("All tests passed!")
+    }
+}
+
+_self_test()

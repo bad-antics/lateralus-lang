@@ -1,0 +1,669 @@
+// ═══════════════════════════════════════════════════════════════════════
+// v2_debugger.ltl  —  LATERALUS Interactive Debugger
+// Self-hosted port of lateralus_lang/debugger.py
+//
+// Provides an interactive debugging system for LATERALUS programs:
+//   - Breakpoints (line-based, conditional)
+//   - Step over / step into / step out
+//   - Variable inspection and evaluation
+//   - Call stack viewing
+//   - Watch expressions
+//   - Source context display
+//   - Debug hook integration
+//
+// v2.3.0
+// ═══════════════════════════════════════════════════════════════════════
+
+import strings
+
+// ─── Debug Actions ─────────────────────────────────────────────────────
+
+const DA_CONTINUE  = 0
+const DA_STEP_OVER = 1
+const DA_STEP_INTO = 2
+const DA_STEP_OUT  = 3
+const DA_PAUSE     = 4
+
+fn action_name(a: int) -> str {
+    return match a {
+        0 => "continue",
+        1 => "step_over",
+        2 => "step_into",
+        3 => "step_out",
+        4 => "pause",
+        _ => "unknown",
+    }
+}
+
+// ─── Breakpoint ────────────────────────────────────────────────────────
+
+struct Breakpoint {
+    file: str
+    line: int
+    condition: str
+    hit_count: int
+    enabled: bool
+}
+
+fn breakpoint_new(file: str, line: int) -> Breakpoint {
+    return Breakpoint {
+        file: file,
+        line: line,
+        condition: "",
+        hit_count: 0,
+        enabled: true,
+    }
+}
+
+fn breakpoint_cond(file: str, line: int, condition: str) -> Breakpoint {
+    return Breakpoint {
+        file: file,
+        line: line,
+        condition: condition,
+        hit_count: 0,
+        enabled: true,
+    }
+}
+
+fn breakpoint_id(bp: Breakpoint) -> str {
+    return bp.file + ":" + str(bp.line)
+}
+
+fn breakpoint_should_break(bp: Breakpoint, locals_dict: map) -> bool {
+    if not bp.enabled {
+        return false
+    }
+    bp.hit_count = bp.hit_count + 1
+    // Conditional breakpoints: if condition is set, evaluate it
+    // In the self-hosted version we accept a variable name check
+    if len(bp.condition) > 0 {
+        if has_key(locals_dict, bp.condition) {
+            let val = locals_dict[bp.condition]
+            if val == true {
+                return true
+            }
+            if val == false {
+                return false
+            }
+            // Non-bool: break if truthy (non-zero, non-empty)
+            return true
+        }
+        // Condition variable not found — break anyway
+        return true
+    }
+    return true
+}
+
+// ─── Stack Frame ───────────────────────────────────────────────────────
+
+struct StackFrame {
+    func_name: str
+    file: str
+    line: int
+    locals: map
+    args: map
+}
+
+fn frame_new(func_name: str, file: str, line: int) -> StackFrame {
+    return StackFrame {
+        func_name: func_name,
+        file: file,
+        line: line,
+        locals: {},
+        args: {},
+    }
+}
+
+fn frame_with_args(func_name: str, file: str, line: int, args: map) -> StackFrame {
+    return StackFrame {
+        func_name: func_name,
+        file: file,
+        line: line,
+        locals: {},
+        args: args,
+    }
+}
+
+fn frame_str(f: StackFrame) -> str {
+    return "  " + f.func_name + " at " + f.file + ":" + str(f.line)
+}
+
+// ─── Watch Expression ──────────────────────────────────────────────────
+
+struct WatchExpr {
+    expression: str
+    watch_id: int
+    last_value: any
+    error: str
+}
+
+let _watch_id_counter = 0
+
+fn watch_new(expr: str) -> WatchExpr {
+    _watch_id_counter = _watch_id_counter + 1
+    return WatchExpr {
+        expression: expr,
+        watch_id: _watch_id_counter,
+        last_value: none,
+        error: "",
+    }
+}
+
+fn watch_evaluate(w: WatchExpr, locals_dict: map) -> any {
+    // Simple evaluation: look up the expression as a variable name
+    if has_key(locals_dict, w.expression) {
+        w.last_value = locals_dict[w.expression]
+        w.error = ""
+        return w.last_value
+    }
+    w.error = "variable '" + w.expression + "' not found"
+    w.last_value = none
+    return none
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// DEBUGGER
+// ═══════════════════════════════════════════════════════════════════════
+
+struct Debugger {
+    breakpoints: list
+    watches: list
+    call_stack: list
+    current_action: int
+    running: bool
+    paused: bool
+    step_depth: int
+    source_lines: list
+    source_cache: map
+    on_break_cb: any
+}
+
+fn debugger_new() -> Debugger {
+    return Debugger {
+        breakpoints: [],
+        watches: [],
+        call_stack: [],
+        current_action: DA_CONTINUE,
+        running: false,
+        paused: false,
+        step_depth: 0,
+        source_lines: [],
+        source_cache: {},
+        on_break_cb: none,
+    }
+}
+
+// ─── Breakpoint Management ─────────────────────────────────────────────
+
+fn dbg_add_breakpoint(d: Debugger, file: str, line: int) -> Breakpoint {
+    let bp = breakpoint_new(file, line)
+    d.breakpoints = d.breakpoints + [bp]
+    return bp
+}
+
+fn dbg_add_cond_breakpoint(d: Debugger, file: str, line: int, condition: str) -> Breakpoint {
+    let bp = breakpoint_cond(file, line, condition)
+    d.breakpoints = d.breakpoints + [bp]
+    return bp
+}
+
+fn dbg_remove_breakpoint(d: Debugger, file: str, line: int) -> bool {
+    let new_list = []
+    let removed = false
+    for bp in d.breakpoints {
+        if bp.file == file and bp.line == line {
+            removed = true
+        } else {
+            new_list = new_list + [bp]
+        }
+    }
+    d.breakpoints = new_list
+    return removed
+}
+
+fn dbg_toggle_breakpoint(d: Debugger, file: str, line: int) {
+    for bp in d.breakpoints {
+        if bp.file == file and bp.line == line {
+            bp.enabled = not bp.enabled
+            return
+        }
+    }
+}
+
+fn dbg_clear_breakpoints(d: Debugger) {
+    d.breakpoints = []
+}
+
+fn dbg_list_breakpoints(d: Debugger) -> list {
+    return d.breakpoints
+}
+
+// ─── Watch Management ──────────────────────────────────────────────────
+
+fn dbg_add_watch(d: Debugger, expression: str) -> WatchExpr {
+    let w = watch_new(expression)
+    d.watches = d.watches + [w]
+    return w
+}
+
+fn dbg_remove_watch(d: Debugger, index: int) -> bool {
+    if index >= 0 and index < len(d.watches) {
+        let new_list = []
+        let i = 0
+        while i < len(d.watches) {
+            if i != index {
+                new_list = new_list + [d.watches[i]]
+            }
+            i = i + 1
+        }
+        d.watches = new_list
+        return true
+    }
+    return false
+}
+
+// ─── Execution Control ────────────────────────────────────────────────
+
+fn dbg_continue(d: Debugger) {
+    d.current_action = DA_CONTINUE
+    d.paused = false
+}
+
+fn dbg_step_over(d: Debugger) {
+    d.current_action = DA_STEP_OVER
+    d.step_depth = len(d.call_stack)
+    d.paused = false
+}
+
+fn dbg_step_into(d: Debugger) {
+    d.current_action = DA_STEP_INTO
+    d.paused = false
+}
+
+fn dbg_step_out(d: Debugger) {
+    d.current_action = DA_STEP_OUT
+    d.step_depth = len(d.call_stack) - 1
+    d.paused = false
+}
+
+fn dbg_pause(d: Debugger) {
+    d.current_action = DA_PAUSE
+    d.paused = true
+}
+
+// ─── Stack Management ─────────────────────────────────────────────────
+
+fn dbg_push_frame(d: Debugger, func_name: str, file: str, line: int, args: map) {
+    let f = frame_with_args(func_name, file, line, args)
+    d.call_stack = d.call_stack + [f]
+}
+
+fn dbg_pop_frame(d: Debugger) -> StackFrame {
+    if len(d.call_stack) == 0 {
+        return none
+    }
+    let top = d.call_stack[len(d.call_stack) - 1]
+    d.call_stack = slice(d.call_stack, 0, len(d.call_stack) - 1)
+    return top
+}
+
+fn dbg_current_frame(d: Debugger) -> StackFrame {
+    if len(d.call_stack) == 0 {
+        return none
+    }
+    return d.call_stack[len(d.call_stack) - 1]
+}
+
+// ─── Debug Hook ────────────────────────────────────────────────────────
+
+fn dbg_on_line(d: Debugger, file: str, line: int, locals_dict: map) -> int {
+    // Update current frame
+    if len(d.call_stack) > 0 {
+        let idx = len(d.call_stack) - 1
+        d.call_stack[idx].line = line
+        d.call_stack[idx].locals = locals_dict
+    }
+
+    let should_break = false
+
+    // Check breakpoints
+    for bp in d.breakpoints {
+        if bp.file == file and bp.line == line {
+            if breakpoint_should_break(bp, locals_dict) {
+                should_break = true
+            }
+        }
+    }
+
+    // Check stepping
+    if d.current_action == DA_STEP_INTO {
+        should_break = true
+    }
+    if d.current_action == DA_STEP_OVER and len(d.call_stack) <= d.step_depth {
+        should_break = true
+    }
+    if d.current_action == DA_STEP_OUT and len(d.call_stack) <= d.step_depth {
+        should_break = true
+    }
+    if d.current_action == DA_PAUSE {
+        should_break = true
+    }
+
+    if should_break {
+        d.paused = true
+        // Update watches
+        for w in d.watches {
+            watch_evaluate(w, locals_dict)
+        }
+        // Notify callback
+        if d.on_break_cb != none {
+            d.on_break_cb(d, file, line)
+        }
+    }
+
+    return d.current_action
+}
+
+// ─── Source Viewing ────────────────────────────────────────────────────
+
+fn dbg_set_source(d: Debugger, lines: list) {
+    d.source_lines = lines
+}
+
+fn dbg_get_source_context(d: Debugger, line: int, ctx: int) -> list {
+    let start = line - ctx - 1
+    if start < 0 {
+        start = 0
+    }
+    let end_idx = line + ctx
+    if end_idx > len(d.source_lines) {
+        end_idx = len(d.source_lines)
+    }
+    let result = []
+    let i = start
+    while i < end_idx {
+        let is_current = (i + 1) == line
+        result = result + [[i + 1, d.source_lines[i], is_current]]
+        i = i + 1
+    }
+    return result
+}
+
+// ─── State Inspection ──────────────────────────────────────────────────
+
+fn dbg_get_variables(d: Debugger) -> map {
+    let frame = dbg_current_frame(d)
+    if frame == none {
+        return {}
+    }
+    let vars = {}
+    for k in keys(frame.args) {
+        vars[k] = frame.args[k]
+    }
+    for k in keys(frame.locals) {
+        vars[k] = frame.locals[k]
+    }
+    return vars
+}
+
+fn dbg_evaluate(d: Debugger, expression: str) -> list {
+    // Returns [value, error_string]
+    let vars = dbg_get_variables(d)
+    if has_key(vars, expression) {
+        return [vars[expression], ""]
+    }
+    return [none, "variable '" + expression + "' not found"]
+}
+
+fn dbg_call_stack_str(d: Debugger) -> str {
+    if len(d.call_stack) == 0 {
+        return "  (empty stack)"
+    }
+    let lines = []
+    let i = len(d.call_stack) - 1
+    let first = true
+    while i >= 0 {
+        let f = d.call_stack[i]
+        let marker = "  "
+        if first {
+            marker = "\x1b[33m→ \x1b[0m"
+            first = false
+        }
+        lines = lines + [marker + frame_str(f)]
+        i = i - 1
+    }
+    return join(lines, "\n")
+}
+
+// ─── Breakpoint info ───────────────────────────────────────────────────
+
+fn dbg_breakpoints_str(d: Debugger) -> str {
+    if len(d.breakpoints) == 0 {
+        return "  (no breakpoints)"
+    }
+    let lines = []
+    let i = 0
+    while i < len(d.breakpoints) {
+        let bp = d.breakpoints[i]
+        let status = "ON "
+        if not bp.enabled {
+            status = "OFF"
+        }
+        let line_str = "[" + status + "] " + breakpoint_id(bp) + " (hits: " + str(bp.hit_count) + ")"
+        if len(bp.condition) > 0 {
+            line_str = line_str + " when " + bp.condition
+        }
+        lines = lines + ["  " + line_str]
+        i = i + 1
+    }
+    return join(lines, "\n")
+}
+
+// ─── Watches info ──────────────────────────────────────────────────────
+
+fn dbg_watches_str(d: Debugger) -> str {
+    if len(d.watches) == 0 {
+        return "  (no watches)"
+    }
+    let lines = []
+    for w in d.watches {
+        let val_str = str(w.last_value)
+        if len(w.error) > 0 {
+            val_str = "<error: " + w.error + ">"
+        }
+        lines = lines + ["  #" + str(w.watch_id) + " " + w.expression + " = " + val_str]
+    }
+    return join(lines, "\n")
+}
+
+// ─── Format source context with markers ────────────────────────────────
+
+fn dbg_format_context(context: list) -> str {
+    let lines = []
+    for entry in context {
+        let lineno = entry[0]
+        let text   = entry[1]
+        let is_cur = entry[2]
+        let marker = " "
+        if is_cur {
+            marker = "\x1b[31m→\x1b[0m"
+        }
+        let num = str(lineno)
+        while len(num) < 4 {
+            num = " " + num
+        }
+        lines = lines + ["  " + marker + " " + num + " | " + text]
+    }
+    return join(lines, "\n")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// SELF-TEST
+// ═══════════════════════════════════════════════════════════════════════
+
+fn _self_test() {
+    let pass_count = 0
+    let fail_count = 0
+
+    fn check(label: str, ok: bool) {
+        if ok {
+            pass_count = pass_count + 1
+        } else {
+            println("[FAIL] " + label)
+            fail_count = fail_count + 1
+        }
+    }
+
+    // ── Breakpoint ─────────────────────────────────────────────────
+    let bp = breakpoint_new("test.ltl", 10)
+    check("bp file",      bp.file == "test.ltl")
+    check("bp line",      bp.line == 10)
+    check("bp enabled",   bp.enabled)
+    check("bp id",        breakpoint_id(bp) == "test.ltl:10")
+    check("bp should brk", breakpoint_should_break(bp, {}))
+    check("bp hit count",  bp.hit_count == 1)
+
+    let bp2 = breakpoint_cond("test.ltl", 20, "debug_flag")
+    check("bp cond set",   len(bp2.condition) > 0)
+
+    // Conditional: flag true → break
+    let lv1 = {}
+    lv1["debug_flag"] = true
+    check("bp cond true",  breakpoint_should_break(bp2, lv1))
+
+    // Conditional: flag false → no break
+    let lv2 = {}
+    lv2["debug_flag"] = false
+    check("bp cond false", not breakpoint_should_break(bp2, lv2))
+
+    // Disabled → no break
+    bp.enabled = false
+    check("bp disabled",   not breakpoint_should_break(bp, {}))
+
+    // ── Stack Frame ────────────────────────────────────────────────
+    let f = frame_new("main", "app.ltl", 1)
+    check("frame func",   f.func_name == "main")
+    check("frame file",   f.file == "app.ltl")
+    check("frame line",   f.line == 1)
+    check("frame str",    len(frame_str(f)) > 0)
+
+    // ── Watch Expression ───────────────────────────────────────────
+    let w = watch_new("x")
+    check("watch expr",   w.expression == "x")
+    let wv = {}
+    wv["x"] = 42
+    watch_evaluate(w, wv)
+    check("watch eval",   w.last_value == 42)
+    check("watch no err", len(w.error) == 0)
+
+    let w2 = watch_new("missing")
+    watch_evaluate(w2, {})
+    check("watch err",    len(w2.error) > 0)
+
+    // ── Debugger ───────────────────────────────────────────────────
+    let d = debugger_new()
+    check("dbg init",     len(d.breakpoints) == 0)
+    check("dbg action",   d.current_action == DA_CONTINUE)
+
+    // Add breakpoints
+    dbg_add_breakpoint(d, "main.ltl", 5)
+    dbg_add_breakpoint(d, "main.ltl", 15)
+    check("dbg 2 bps",    len(d.breakpoints) == 2)
+
+    // Remove breakpoint
+    let removed = dbg_remove_breakpoint(d, "main.ltl", 5)
+    check("dbg remove ok", removed)
+    check("dbg 1 bp",     len(d.breakpoints) == 1)
+
+    let removed2 = dbg_remove_breakpoint(d, "main.ltl", 999)
+    check("dbg remove miss", not removed2)
+
+    // Toggle
+    dbg_toggle_breakpoint(d, "main.ltl", 15)
+    check("dbg toggle",   not d.breakpoints[0].enabled)
+    dbg_toggle_breakpoint(d, "main.ltl", 15)
+    check("dbg untoggle",  d.breakpoints[0].enabled)
+
+    // Clear
+    dbg_clear_breakpoints(d)
+    check("dbg clear",    len(d.breakpoints) == 0)
+
+    // Watches
+    dbg_add_watch(d, "counter")
+    dbg_add_watch(d, "total")
+    check("dbg 2 watches", len(d.watches) == 2)
+    dbg_remove_watch(d, 0)
+    check("dbg rm watch",  len(d.watches) == 1)
+
+    // Stack management
+    let args1 = {}
+    args1["n"] = 5
+    dbg_push_frame(d, "factorial", "math.ltl", 10, args1)
+    dbg_push_frame(d, "main", "app.ltl", 3, {})
+    check("dbg stack 2",   len(d.call_stack) == 2)
+
+    let top = dbg_current_frame(d)
+    check("dbg top func",  top.func_name == "main")
+
+    let popped = dbg_pop_frame(d)
+    check("dbg pop",       popped.func_name == "main")
+    check("dbg stack 1",   len(d.call_stack) == 1)
+
+    // Variables
+    let vars = dbg_get_variables(d)
+    check("dbg vars",      has_key(vars, "n"))
+    check("dbg var val",   vars["n"] == 5)
+
+    // Evaluate
+    let ev = dbg_evaluate(d, "n")
+    check("dbg eval ok",   ev[0] == 5 and len(ev[1]) == 0)
+    let ev2 = dbg_evaluate(d, "missing")
+    check("dbg eval miss", len(ev2[1]) > 0)
+
+    // Source context
+    dbg_set_source(d, ["line 1", "line 2", "line 3", "line 4", "line 5"])
+    let ctx = dbg_get_source_context(d, 3, 1)
+    check("dbg context",   len(ctx) == 3)
+    check("dbg ctx cur",   ctx[1][2] == true)  // middle line is current
+    check("dbg ctx text",  ctx[1][1] == "line 3")
+
+    // Execution control
+    dbg_step_over(d)
+    check("dbg step_over", d.current_action == DA_STEP_OVER)
+    dbg_step_into(d)
+    check("dbg step_into", d.current_action == DA_STEP_INTO)
+    dbg_step_out(d)
+    check("dbg step_out",  d.current_action == DA_STEP_OUT)
+    dbg_pause(d)
+    check("dbg pause",     d.paused)
+    dbg_continue(d)
+    check("dbg continue",  d.current_action == DA_CONTINUE and not d.paused)
+
+    // Debug hook
+    dbg_add_breakpoint(d, "test.ltl", 3)
+    let hook_locals = {}
+    hook_locals["x"] = 10
+    let action = dbg_on_line(d, "test.ltl", 3, hook_locals)
+    check("dbg hook brk",  d.paused)
+
+    // Call stack string
+    let cs_str = dbg_call_stack_str(d)
+    check("dbg stack str",  len(cs_str) > 0)
+
+    // Breakpoints string
+    let bp_str = dbg_breakpoints_str(d)
+    check("dbg bp str",     len(bp_str) > 0)
+
+    // Format context
+    let fc = dbg_format_context(ctx)
+    check("dbg fmt ctx",    len(fc) > 0)
+
+    // ── Summary ────────────────────────────────────────────────────
+    println("")
+    println("v2_debugger self-test: " + str(pass_count) + " passed, " + str(fail_count) + " failed")
+    if fail_count == 0 {
+        println("All tests passed!")
+    }
+}
+
+_self_test()

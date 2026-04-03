@@ -1,0 +1,135 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// LateralusOS — Kernel Main Entry Point
+// ═══════════════════════════════════════════════════════════════════════════
+// Copyright (c) 2025 bad-antics. All rights reserved.
+//
+// This is the first Lateralus code that runs after the C bootstrap.
+// It initializes all kernel subsystems in order and enters the scheduler.
+// ═══════════════════════════════════════════════════════════════════════════
+
+import hal::interrupts
+import hal::timer
+import hal::serial
+import hal::cpu
+import kernel::memory
+import kernel::scheduler
+import kernel::ipc
+import kernel::syscall
+import kernel::panic
+import drivers::vga
+import drivers::keyboard
+import services::init
+
+// ── Kernel version ──────────────────────────────────────────────────────
+
+const KERNEL_VERSION = "0.1.0"
+const KERNEL_NAME    = "LateralusOS"
+const KERNEL_AUTHOR  = "bad-antics"
+
+// ── Kernel state ────────────────────────────────────────────────────────
+
+struct KernelState {
+    booted:       bool,
+    uptime_ticks: int,
+    num_procs:    int,
+    heap_used:    int,
+    heap_total:   int,
+    edition:      str,
+}
+
+let mut kernel_state = KernelState {
+    booted:       false,
+    uptime_ticks: 0,
+    num_procs:    0,
+    heap_used:    0,
+    heap_total:   0,
+    edition:      "workstation",
+}
+
+// ── Kernel main ─────────────────────────────────────────────────────────
+
+pub fn kernel_main() {
+    serial::log("[kernel] LateralusOS v{KERNEL_VERSION} starting...")
+    serial::log("[kernel] Created by {KERNEL_AUTHOR}")
+
+    // Phase 1: CPU initialization
+    serial::log("[kernel] Phase 1: CPU init")
+    cpu::detect_features()
+    cpu::enable_sse()
+    cpu::enable_avx()
+
+    // Phase 2: Interrupt Descriptor Table
+    serial::log("[kernel] Phase 2: IDT setup")
+    interrupts::init_idt()
+    interrupts::register_handler(14, memory::page_fault_handler)
+    interrupts::register_handler(13, panic::general_protection_fault)
+    interrupts::register_handler(8,  panic::double_fault)
+
+    // Phase 3: Memory management
+    serial::log("[kernel] Phase 3: Memory manager")
+    memory::init_physical_allocator()
+    memory::init_virtual_memory()
+    memory::init_heap(1024 * 1024 * 16)  // 16 MB initial heap
+    kernel_state.heap_total = 1024 * 1024 * 16
+
+    // Phase 4: Timer
+    serial::log("[kernel] Phase 4: Timer init")
+    timer::init_pit(1000)  // 1000 Hz tick rate
+    timer::register_callback(fn() {
+        kernel_state.uptime_ticks = kernel_state.uptime_ticks + 1
+    })
+
+    // Phase 5: Keyboard driver
+    serial::log("[kernel] Phase 5: Keyboard driver")
+    keyboard::init()
+
+    // Phase 6: VGA display
+    serial::log("[kernel] Phase 6: VGA display")
+    vga::set_color(vga::Color::LightCyan, vga::Color::Black)
+    vga::println("[kernel] All hardware initialized")
+
+    // Phase 7: System call table
+    serial::log("[kernel] Phase 7: Syscall table")
+    syscall::init_table()
+
+    // Phase 8: Inter-process communication
+    serial::log("[kernel] Phase 8: IPC channels")
+    ipc::init()
+
+    // Phase 9: Process scheduler
+    serial::log("[kernel] Phase 9: Scheduler")
+    scheduler::init()
+
+    // Phase 10: Start init process (PID 1)
+    serial::log("[kernel] Phase 10: Starting init")
+    let init_pid = scheduler::spawn("init", init::start)
+    kernel_state.num_procs = 1
+    kernel_state.booted = true
+
+    vga::set_color(vga::Color::LightGreen, vga::Color::Black)
+    vga::println("[kernel] LateralusOS booted successfully")
+    vga::println("[kernel] Entering scheduler loop...")
+    vga::set_color(vga::Color::White, vga::Color::Black)
+
+    serial::log("[kernel] Boot complete — entering scheduler")
+
+    // Enter the scheduler loop (never returns)
+    scheduler::run()
+
+    // If scheduler returns, something went very wrong
+    panic::kernel_panic("Scheduler returned unexpectedly")
+}
+
+// ── Kernel status query ─────────────────────────────────────────────────
+
+pub fn get_uptime() -> int {
+    return kernel_state.uptime_ticks
+}
+
+pub fn get_version() -> str {
+    return KERNEL_VERSION
+}
+
+pub fn get_proc_count() -> int {
+    return kernel_state.num_procs
+}

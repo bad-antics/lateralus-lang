@@ -1,0 +1,137 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// LateralusOS — PCI Bus Driver
+// ═══════════════════════════════════════════════════════════════════════════
+// Copyright (c) 2025 bad-antics. All rights reserved.
+//
+// Enumerates PCI bus devices and provides a registry for driver binding.
+// ═══════════════════════════════════════════════════════════════════════════
+
+import hal::cpu
+import hal::serial
+
+const PCI_CONFIG_ADDR = 0xCF8
+const PCI_CONFIG_DATA = 0xCFC
+const MAX_PCI_DEVICES = 64
+
+struct PciDevice {
+    bus:       int,
+    device:    int,
+    function:  int,
+    vendor_id: int,
+    device_id: int,
+    class_:    int,
+    subclass:  int,
+    prog_if:   int,
+    header_type: int,
+    irq_line:  int,
+    bar:       [int; 6],    // Base Address Registers
+}
+
+let mut devices: [PciDevice; MAX_PCI_DEVICES] = [PciDevice{}; MAX_PCI_DEVICES]
+let mut device_count: int = 0
+
+// ── PCI Config Space Access ─────────────────────────────────────────────
+
+fn pci_read32(bus: int, dev: int, func: int, offset: int) -> int {
+    let addr = 0x80000000 | (bus << 16) | (dev << 11) | (func << 8) | (offset & 0xFC)
+    cpu::outb(PCI_CONFIG_ADDR, addr)       // Note: should be outl (32-bit)
+    return cpu::inb(PCI_CONFIG_DATA)       // Note: should be inl (32-bit)
+}
+
+fn pci_read16(bus: int, dev: int, func: int, offset: int) -> int {
+    let val = pci_read32(bus, dev, func, offset)
+    return (val >> ((offset & 2) * 8)) & 0xFFFF
+}
+
+fn pci_read8(bus: int, dev: int, func: int, offset: int) -> int {
+    let val = pci_read32(bus, dev, func, offset)
+    return (val >> ((offset & 3) * 8)) & 0xFF
+}
+
+// ── Bus Enumeration ─────────────────────────────────────────────────────
+
+pub fn enumerate() {
+    serial::log("[pci] Enumerating PCI bus")
+    device_count = 0
+
+    let bus = 0
+    while bus < 256 {
+        let dev = 0
+        while dev < 32 {
+            let func = 0
+            while func < 8 {
+                let vendor = pci_read16(bus, dev, func, 0x00)
+                if vendor != 0xFFFF && vendor != 0x0000 {
+                    let device_id = pci_read16(bus, dev, func, 0x02)
+                    let class_    = pci_read8(bus, dev, func, 0x0B)
+                    let subclass  = pci_read8(bus, dev, func, 0x0A)
+                    let prog_if   = pci_read8(bus, dev, func, 0x09)
+                    let header    = pci_read8(bus, dev, func, 0x0E)
+                    let irq       = pci_read8(bus, dev, func, 0x3C)
+
+                    if device_count < MAX_PCI_DEVICES {
+                        devices[device_count] = PciDevice {
+                            bus:         bus,
+                            device:      dev,
+                            function:    func,
+                            vendor_id:   vendor,
+                            device_id:   device_id,
+                            class_:      class_,
+                            subclass:    subclass,
+                            prog_if:     prog_if,
+                            header_type: header & 0x7F,
+                            irq_line:    irq,
+                            bar:         [0; 6],
+                        }
+
+                        // Read BARs
+                        let b = 0
+                        while b < 6 {
+                            devices[device_count].bar[b] = pci_read32(bus, dev, func, 0x10 + b * 4)
+                            b = b + 1
+                        }
+
+                        serial::log("[pci] {bus}:{dev}.{func} vendor=0x{vendor:04X} device=0x{device_id:04X} class={class_:02X}:{subclass:02X}")
+                        device_count = device_count + 1
+                    }
+
+                    // If not multi-function, skip remaining functions
+                    if func == 0 && (header & 0x80) == 0 { break }
+                }
+                func = func + 1
+            }
+            dev = dev + 1
+        }
+        bus = bus + 1
+    }
+
+    serial::log("[pci] Found {device_count} PCI device(s)")
+}
+
+// ── Device Lookup ───────────────────────────────────────────────────────
+
+pub fn find_by_class(class_: int, subclass: int) -> Option<PciDevice> {
+    let i = 0
+    while i < device_count {
+        if devices[i].class_ == class_ && devices[i].subclass == subclass {
+            return Option::Some(devices[i])
+        }
+        i = i + 1
+    }
+    return Option::None
+}
+
+pub fn find_by_vendor(vendor: int, device_id: int) -> Option<PciDevice> {
+    let i = 0
+    while i < device_count {
+        if devices[i].vendor_id == vendor && devices[i].device_id == device_id {
+            return Option::Some(devices[i])
+        }
+        i = i + 1
+    }
+    return Option::None
+}
+
+pub fn get_device_count() -> int {
+    return device_count
+}

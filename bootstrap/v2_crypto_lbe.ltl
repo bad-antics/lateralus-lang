@@ -1,0 +1,1056 @@
+// ═══════════════════════════════════════════════════════════════════════
+// v2_crypto_lbe.ltl  —  LATERALUS Cryptography & Encoding Engine
+// Self-hosted port of lateralus_lang/crypto_engine.py (LBE section)
+//
+// Provides:
+//   - LATERALUS Binary Encoding (LBE) serialization format
+//   - Byte-array helpers (list[int] as byte buffers)
+//   - Big-endian integer packing / unpacking
+//   - XOR cipher (symmetric)
+//   - Hex encoding / decoding
+//   - Base64 encoding / decoding
+//   - Simple hash (DJB2 / FNV-1a style — not cryptographic)
+//
+// NOTE: Lateralus has no raw `bytes` type, so we represent byte arrays
+//       as list[int] where each element is 0..255.
+//
+// v2.3.0
+// ═══════════════════════════════════════════════════════════════════════
+
+import math
+
+// ─── LBE Magic & Version ────────────────────────────────────────────────
+
+// Magic bytes: 'L' 'T' 'L' 'B' => [76, 84, 76, 66]
+const LBE_MAGIC_0 = 76
+const LBE_MAGIC_1 = 84
+const LBE_MAGIC_2 = 76
+const LBE_MAGIC_3 = 66
+const LBE_VERSION  = 1
+
+// ─── Type Tags ──────────────────────────────────────────────────────────
+
+const TAG_NULL      = 0
+const TAG_BOOL      = 1
+const TAG_INT       = 2
+const TAG_FLOAT     = 3
+const TAG_STRING    = 4
+const TAG_BYTES     = 5
+const TAG_LIST      = 6
+const TAG_MAP       = 7
+const TAG_BIGINT    = 8
+const TAG_TIMESTAMP = 9
+
+// ─── Byte-Array Helpers ─────────────────────────────────────────────────
+
+fn byte_list(n: int) -> list {
+    // Create a list of n zeroes
+    let result = []
+    let i = 0
+    while i < n {
+        result = result + [0]
+        i = i + 1
+    }
+    return result
+}
+
+fn byte_append(buf: list, b: int) -> list {
+    return buf + [b % 256]
+}
+
+fn bytes_append(buf: list, src: list) -> list {
+    let result = buf
+    let i = 0
+    while i < len(src) {
+        result = result + [src[i]]
+        i = i + 1
+    }
+    return result
+}
+
+fn bytes_eq(a: list, b: list) -> bool {
+    if len(a) != len(b) {
+        return false
+    }
+    let i = 0
+    while i < len(a) {
+        if a[i] != b[i] {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+fn bytes_slice(buf: list, start: int, end_idx: int) -> list {
+    let result = []
+    let i = start
+    while i < end_idx {
+        if i < len(buf) {
+            result = result + [buf[i]]
+        }
+        i = i + 1
+    }
+    return result
+}
+
+// ─── Big-Endian Packing ─────────────────────────────────────────────────
+
+fn pack_u16(val: int) -> list {
+    // Pack unsigned 16-bit big-endian
+    let hi = (val / 256) % 256
+    let lo = val % 256
+    return [hi, lo]
+}
+
+fn pack_u32(val: int) -> list {
+    // Pack unsigned 32-bit big-endian
+    let b3 = (val / 16777216) % 256
+    let b2 = (val / 65536) % 256
+    let b1 = (val / 256) % 256
+    let b0 = val % 256
+    return [b3, b2, b1, b0]
+}
+
+fn pack_i64(val: int) -> list {
+    // Pack signed 64-bit big-endian (two's complement)
+    let v = val
+    if v < 0 {
+        // two's complement for negative
+        v = v + 18446744073709551616
+    }
+    let result = byte_list(8)
+    let i = 7
+    while i >= 0 {
+        result[i] = v % 256
+        v = v / 256
+        i = i - 1
+    }
+    return result
+}
+
+fn pack_f64(val: float) -> list {
+    // Pack IEEE 754 double big-endian
+    // Simplified: encode as string representation stored in 8 bytes
+    // For a real implementation we'd need bit-level float decomposition
+    // Here we use a practical approach: store float as int bits
+    let sign_bit = 0
+    let fv = val
+    if fv < 0.0 {
+        sign_bit = 1
+        fv = 0.0 - fv
+    }
+
+    if fv == 0.0 {
+        let result = byte_list(8)
+        if sign_bit == 1 {
+            result[0] = 128
+        }
+        return result
+    }
+
+    // Compute exponent and mantissa
+    let exp_val = 0
+    let m = fv
+
+    // Normalize: 1.0 <= m < 2.0
+    while m >= 2.0 {
+        m = m / 2.0
+        exp_val = exp_val + 1
+    }
+    while m < 1.0 {
+        m = m * 2.0
+        exp_val = exp_val - 1
+    }
+
+    let biased_exp = exp_val + 1023
+    // m is now 1.xxx, mantissa is the fractional part
+    let mantissa_frac = m - 1.0
+
+    // Convert mantissa fraction to 52-bit integer
+    let mantissa_bits = 0
+    let bit_val = 1
+    let j = 0
+    while j < 52 {
+        bit_val = bit_val * 2
+        j = j + 1
+    }
+    // mantissa_bits = floor(mantissa_frac * 2^52)
+    mantissa_bits = floor(mantissa_frac * to_float(bit_val))
+
+    // Assemble: sign(1) | exponent(11) | mantissa(52)
+    // Byte 0: sign(1) | exp[10:4](7)
+    let result = byte_list(8)
+    result[0] = (sign_bit * 128) + ((biased_exp / 16) % 128)
+    // Byte 1: exp[3:0](4) | mantissa[51:48](4)
+    let mant_top = mantissa_bits
+    let k = 0
+    while k < 48 {
+        mant_top = mant_top / 2
+        k = k + 1
+    }
+    result[1] = ((biased_exp % 16) * 16) + (mant_top % 16)
+
+    // Bytes 2-7: remaining mantissa bits (48 bits = 6 bytes)
+    let remaining = mantissa_bits % 281474976710656
+    let bi = 7
+    while bi >= 2 {
+        result[bi] = remaining % 256
+        remaining = remaining / 256
+        bi = bi - 1
+    }
+
+    return result
+}
+
+// ─── Big-Endian Unpacking ───────────────────────────────────────────────
+
+fn unpack_u16(buf: list, pos: int) -> int {
+    return buf[pos] * 256 + buf[pos + 1]
+}
+
+fn unpack_u32(buf: list, pos: int) -> int {
+    return buf[pos] * 16777216 + buf[pos + 1] * 65536 + buf[pos + 2] * 256 + buf[pos + 3]
+}
+
+fn unpack_i64(buf: list, pos: int) -> int {
+    let val = 0
+    let i = 0
+    while i < 8 {
+        val = val * 256 + buf[pos + i]
+        i = i + 1
+    }
+    // Handle sign (two's complement)
+    if val >= 9223372036854775808 {
+        val = val - 18446744073709551616
+    }
+    return val
+}
+
+fn unpack_u64(buf: list, pos: int) -> int {
+    let val = 0
+    let i = 0
+    while i < 8 {
+        val = val * 256 + buf[pos + i]
+        i = i + 1
+    }
+    return val
+}
+
+fn unpack_f64(buf: list, pos: int) -> float {
+    // Decode IEEE 754 double from 8 big-endian bytes
+    let b0 = buf[pos]
+    let b1 = buf[pos + 1]
+
+    let sign_bit = b0 / 128
+    let biased_exp = ((b0 % 128) * 16) + (b1 / 16)
+
+    // Extract 52-bit mantissa
+    let mant_top = b1 % 16
+    let mantissa = mant_top
+    let i = 2
+    while i < 8 {
+        mantissa = mantissa * 256 + buf[pos + i]
+        i = i + 1
+    }
+
+    if biased_exp == 0 {
+        if mantissa == 0 {
+            if sign_bit == 1 {
+                return -0.0
+            }
+            return 0.0
+        }
+        // Denormalized — very small numbers, approximate as 0
+        return 0.0
+    }
+
+    if biased_exp == 2047 {
+        // Infinity or NaN
+        return 0.0
+    }
+
+    let exp_val = biased_exp - 1023
+    // Reconstruct: (1 + mantissa/2^52) * 2^exp
+    let two_52 = 1
+    let j = 0
+    while j < 52 {
+        two_52 = two_52 * 2
+        j = j + 1
+    }
+    let significand = 1.0 + to_float(mantissa) / to_float(two_52)
+
+    let result = significand
+    if exp_val > 0 {
+        let ek = 0
+        while ek < exp_val {
+            result = result * 2.0
+            ek = ek + 1
+        }
+    }
+    if exp_val < 0 {
+        let ek = 0
+        while ek < (0 - exp_val) {
+            result = result / 2.0
+            ek = ek + 1
+        }
+    }
+
+    if sign_bit == 1 {
+        result = 0.0 - result
+    }
+    return result
+}
+
+// ─── String <-> Byte Conversion ─────────────────────────────────────────
+
+fn str_to_bytes(s: str) -> list {
+    // Convert string to list of char codes (ASCII/UTF-8 code points)
+    let result = []
+    let i = 0
+    while i < len(s) {
+        result = result + [char_code(s, i)]
+        i = i + 1
+    }
+    return result
+}
+
+fn bytes_to_str(buf: list) -> str {
+    let result = ""
+    let i = 0
+    while i < len(buf) {
+        result = result + from_char_code(buf[i])
+        i = i + 1
+    }
+    return result
+}
+
+fn char_code(s: str, idx: int) -> int {
+    // Get ASCII code of character at index
+    let ch = str_at(s, idx)
+    // Map common ASCII characters
+    let codes = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~\t\n\r"
+    let vals = [48,49,50,51,52,53,54,55,56,57,
+                65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,
+                97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,
+                32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,58,59,60,61,62,63,64,91,92,93,94,95,96,123,124,125,126,9,10,13]
+    let ci = 0
+    while ci < len(codes) {
+        if str_at(codes, ci) == ch {
+            return vals[ci]
+        }
+        ci = ci + 1
+    }
+    return 63
+}
+
+fn from_char_code(code: int) -> str {
+    let codes = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
+    let vals = [48,49,50,51,52,53,54,55,56,57,
+                65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,
+                97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,
+                32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,58,59,60,61,62,63,64,91,92,93,94,95,96,123,124,125,126]
+    let ci = 0
+    while ci < len(vals) {
+        if vals[ci] == code {
+            return str_at(codes, ci)
+        }
+        ci = ci + 1
+    }
+    return "?"
+}
+
+fn str_at(s: str, idx: int) -> str {
+    if idx < 0 {
+        return ""
+    }
+    if idx >= len(s) {
+        return ""
+    }
+    let result = ""
+    let i = 0
+    while i < len(s) {
+        if i == idx {
+            // Extract single character via string iteration
+            let ch = s[i]
+            return str(ch)
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// ─── LBE Encoder ────────────────────────────────────────────────────────
+
+fn lbe_encode_header(compressed: bool) -> list {
+    let flags = 0
+    if compressed {
+        flags = 1
+    }
+    let header = [LBE_MAGIC_0, LBE_MAGIC_1, LBE_MAGIC_2, LBE_MAGIC_3]
+    header = bytes_append(header, pack_u16(LBE_VERSION))
+    header = bytes_append(header, pack_u16(flags))
+    return header
+}
+
+fn lbe_check_magic(data: list) -> bool {
+    if len(data) < 8 {
+        return false
+    }
+    return data[0] == LBE_MAGIC_0 && data[1] == LBE_MAGIC_1 && data[2] == LBE_MAGIC_2 && data[3] == LBE_MAGIC_3
+}
+
+fn lbe_encode_value(val: any) -> list {
+    // Encode a single value to LBE byte list
+
+    // Null check
+    if val == none {
+        return [TAG_NULL]
+    }
+
+    // Bool check — check before int since bool could be int-like
+    if val == true {
+        return [TAG_BOOL, 1]
+    }
+    if val == false {
+        return [TAG_BOOL, 0]
+    }
+
+    // Try to detect value kind using string representation heuristics
+    let s = str(val)
+
+    // Check if it looks like a float (has decimal point)
+    let has_dot = false
+    let si = 0
+    while si < len(s) {
+        if str_at(s, si) == "." {
+            has_dot = true
+        }
+        si = si + 1
+    }
+
+    // Check if it looks like a string (not a number, not a list, not a map)
+    let is_num = true
+    let ni = 0
+    let s_len = len(s)
+    if s_len == 0 {
+        is_num = false
+    }
+    let start_idx = 0
+    if s_len > 0 {
+        if str_at(s, 0) == "-" {
+            start_idx = 1
+            if s_len == 1 {
+                is_num = false
+            }
+        }
+    }
+    ni = start_idx
+    while ni < s_len {
+        let ch = str_at(s, ni)
+        if ch != "0" && ch != "1" && ch != "2" && ch != "3" && ch != "4" && ch != "5" && ch != "6" && ch != "7" && ch != "8" && ch != "9" && ch != "." && ch != "e" && ch != "E" && ch != "+" && ch != "-" {
+            is_num = false
+        }
+        ni = ni + 1
+    }
+
+    // If it has a dot and is numeric, encode as float
+    if has_dot && is_num {
+        let result = [TAG_FLOAT]
+        result = bytes_append(result, pack_f64(to_float(val)))
+        return result
+    }
+
+    // If it is numeric (no dot), encode as int
+    if is_num && s_len > 0 {
+        let result = [TAG_INT]
+        result = bytes_append(result, pack_i64(to_int(val)))
+        return result
+    }
+
+    // Check if list
+    let is_list_val = false
+    if s_len > 0 {
+        if str_at(s, 0) == "[" {
+            is_list_val = true
+        }
+    }
+
+    if is_list_val {
+        // Encode as list
+        let items = val
+        let count = len(items)
+        let result = [TAG_LIST]
+        result = bytes_append(result, pack_u32(count))
+        let li = 0
+        while li < count {
+            result = bytes_append(result, lbe_encode_value(items[li]))
+            li = li + 1
+        }
+        return result
+    }
+
+    // Check if map (use char_code to avoid literal brace confusion)
+    let is_map_val = false
+    if s_len > 0 {
+        if char_code(s, 0) == 123 {
+            is_map_val = true
+        }
+    }
+
+    if is_map_val {
+        // Encode as map
+        let ks = keys(val)
+        let count = len(ks)
+        let result = [TAG_MAP]
+        result = bytes_append(result, pack_u32(count))
+        let mi = 0
+        while mi < count {
+            let k = ks[mi]
+            result = bytes_append(result, lbe_encode_value(k))
+            result = bytes_append(result, lbe_encode_value(val[k]))
+            mi = mi + 1
+        }
+        return result
+    }
+
+    // Default: encode as string
+    let encoded = str_to_bytes(s)
+    let result = [TAG_STRING]
+    result = bytes_append(result, pack_u32(len(encoded)))
+    result = bytes_append(result, encoded)
+    return result
+}
+
+fn lbe_encode(val: any) -> list {
+    // Full LBE encode: header + body
+    let header = lbe_encode_header(false)
+    let body = lbe_encode_value(val)
+    return bytes_append(header, body)
+}
+
+// ─── LBE Decoder ────────────────────────────────────────────────────────
+
+struct DecodeResult {
+    val: any
+    pos: int
+}
+
+fn lbe_decode_value(data: list, pos: int) -> DecodeResult {
+    let tag = data[pos]
+    let p = pos + 1
+
+    if tag == TAG_NULL {
+        return DecodeResult { val: none, pos: p }
+    }
+
+    if tag == TAG_BOOL {
+        let bval = data[p] != 0
+        return DecodeResult { val: bval, pos: p + 1 }
+    }
+
+    if tag == TAG_INT {
+        let ival = unpack_i64(data, p)
+        return DecodeResult { val: ival, pos: p + 8 }
+    }
+
+    if tag == TAG_FLOAT {
+        let fval = unpack_f64(data, p)
+        return DecodeResult { val: fval, pos: p + 8 }
+    }
+
+    if tag == TAG_STRING {
+        let slen = unpack_u32(data, p)
+        p = p + 4
+        let sbytes = bytes_slice(data, p, p + slen)
+        let sval = bytes_to_str(sbytes)
+        return DecodeResult { val: sval, pos: p + slen }
+    }
+
+    if tag == TAG_BYTES {
+        let blen = unpack_u32(data, p)
+        p = p + 4
+        let bval = bytes_slice(data, p, p + blen)
+        return DecodeResult { val: bval, pos: p + blen }
+    }
+
+    if tag == TAG_LIST {
+        let count = unpack_u32(data, p)
+        p = p + 4
+        let items = []
+        let li = 0
+        while li < count {
+            let item_result = lbe_decode_value(data, p)
+            items = items + [item_result.val]
+            p = item_result.pos
+            li = li + 1
+        }
+        return DecodeResult { val: items, pos: p }
+    }
+
+    if tag == TAG_MAP {
+        let count = unpack_u32(data, p)
+        p = p + 4
+        let result = {}
+        let mi = 0
+        while mi < count {
+            let key_result = lbe_decode_value(data, p)
+            p = key_result.pos
+            let val_result = lbe_decode_value(data, p)
+            p = val_result.pos
+            result[key_result.val] = val_result.val
+            mi = mi + 1
+        }
+        return DecodeResult { val: result, pos: p }
+    }
+
+    if tag == TAG_BIGINT {
+        let blen = unpack_u32(data, p)
+        p = p + 4
+        let sign_byte = data[p]
+        p = p + 1
+        let mag = 0
+        let bi = 0
+        while bi < blen {
+            mag = mag * 256 + data[p + bi]
+            bi = bi + 1
+        }
+        if sign_byte != 0 {
+            mag = 0 - mag
+        }
+        return DecodeResult { val: mag, pos: p + blen }
+    }
+
+    if tag == TAG_TIMESTAMP {
+        let ns = unpack_u64(data, p)
+        let seconds = to_float(ns) / 1000000000.0
+        return DecodeResult { val: seconds, pos: p + 8 }
+    }
+
+    // Unknown tag — return null
+    return DecodeResult { val: none, pos: p }
+}
+
+fn lbe_decode(data: list) -> any {
+    // Full LBE decode: check header, decode body
+    if !lbe_check_magic(data) {
+        println("LBE Error: invalid magic bytes")
+        return none
+    }
+    let version = unpack_u16(data, 4)
+    let flags = unpack_u16(data, 6)
+
+    if version > LBE_VERSION {
+        println("LBE Error: unsupported version " + str(version))
+        return none
+    }
+
+    // flags & 1 = compressed (not supported in pure Lateralus yet)
+    let dr = lbe_decode_value(data, 8)
+    return dr.val
+}
+
+// ─── XOR Cipher ─────────────────────────────────────────────────────────
+
+fn xor_encrypt(data: list, key_bytes: list) -> list {
+    let key_len = len(key_bytes)
+    if key_len == 0 {
+        return data
+    }
+    let result = []
+    let i = 0
+    while i < len(data) {
+        let xored = xor_byte(data[i], key_bytes[i % key_len])
+        result = result + [xored]
+        i = i + 1
+    }
+    return result
+}
+
+fn xor_byte(a: int, b: int) -> int {
+    // XOR two bytes using bit manipulation
+    // XOR truth table: 0^0=0, 0^1=1, 1^0=1, 1^1=0
+    let result = 0
+    let bit_pos = 1
+    let va = a % 256
+    let vb = b % 256
+    let bi = 0
+    while bi < 8 {
+        let a_bit = (va / bit_pos) % 2
+        let b_bit = (vb / bit_pos) % 2
+        if a_bit != b_bit {
+            result = result + bit_pos
+        }
+        bit_pos = bit_pos * 2
+        bi = bi + 1
+    }
+    return result
+}
+
+fn xor_decrypt(data: list, key_bytes: list) -> list {
+    // XOR is its own inverse
+    return xor_encrypt(data, key_bytes)
+}
+
+// ─── Hex Encoding ───────────────────────────────────────────────────────
+
+const HEX_CHARS = "0123456789abcdef"
+
+fn to_hex(data: list) -> str {
+    let result = ""
+    let i = 0
+    while i < len(data) {
+        let b = data[i] % 256
+        let hi = b / 16
+        let lo = b % 16
+        result = result + str_at(HEX_CHARS, hi) + str_at(HEX_CHARS, lo)
+        i = i + 1
+    }
+    return result
+}
+
+fn hex_digit_val(ch: str) -> int {
+    if ch == "0" { return 0 }
+    if ch == "1" { return 1 }
+    if ch == "2" { return 2 }
+    if ch == "3" { return 3 }
+    if ch == "4" { return 4 }
+    if ch == "5" { return 5 }
+    if ch == "6" { return 6 }
+    if ch == "7" { return 7 }
+    if ch == "8" { return 8 }
+    if ch == "9" { return 9 }
+    if ch == "a" { return 10 }
+    if ch == "b" { return 11 }
+    if ch == "c" { return 12 }
+    if ch == "d" { return 13 }
+    if ch == "e" { return 14 }
+    if ch == "f" { return 15 }
+    if ch == "A" { return 10 }
+    if ch == "B" { return 11 }
+    if ch == "C" { return 12 }
+    if ch == "D" { return 13 }
+    if ch == "E" { return 14 }
+    if ch == "F" { return 15 }
+    return 0
+}
+
+fn from_hex(hex_str: str) -> list {
+    let result = []
+    let i = 0
+    let slen = len(hex_str)
+    while i + 1 < slen {
+        let hi = hex_digit_val(str_at(hex_str, i))
+        let lo = hex_digit_val(str_at(hex_str, i + 1))
+        result = result + [hi * 16 + lo]
+        i = i + 2
+    }
+    return result
+}
+
+// ─── Base64 Encoding ────────────────────────────────────────────────────
+
+const B64_TABLE = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+fn to_base64(data: list) -> str {
+    let result = ""
+    let i = 0
+    let dlen = len(data)
+
+    while i < dlen {
+        let b0 = data[i]
+        let b1 = 0
+        let b2 = 0
+        let pad = 0
+
+        if i + 1 < dlen {
+            b1 = data[i + 1]
+        } else {
+            pad = pad + 1
+        }
+
+        if i + 2 < dlen {
+            b2 = data[i + 2]
+        } else {
+            pad = pad + 1
+        }
+
+        // 3 bytes -> 4 base64 chars
+        let n = b0 * 65536 + b1 * 256 + b2
+
+        let c0 = (n / 262144) % 64
+        let c1 = (n / 4096) % 64
+        let c2 = (n / 64) % 64
+        let c3 = n % 64
+
+        result = result + str_at(B64_TABLE, c0) + str_at(B64_TABLE, c1)
+
+        if pad <= 1 {
+            result = result + str_at(B64_TABLE, c2)
+        } else {
+            result = result + "="
+        }
+
+        if pad == 0 {
+            result = result + str_at(B64_TABLE, c3)
+        } else {
+            result = result + "="
+        }
+
+        i = i + 3
+    }
+
+    return result
+}
+
+fn b64_char_val(ch: str) -> int {
+    // Find index of char in B64_TABLE
+    let ci = 0
+    while ci < 64 {
+        if str_at(B64_TABLE, ci) == ch {
+            return ci
+        }
+        ci = ci + 1
+    }
+    return 0
+}
+
+fn from_base64(encoded: str) -> list {
+    let result = []
+    let i = 0
+    let slen = len(encoded)
+
+    while i + 3 < slen {
+        let c0 = b64_char_val(str_at(encoded, i))
+        let c1 = b64_char_val(str_at(encoded, i + 1))
+        let ch2 = str_at(encoded, i + 2)
+        let ch3 = str_at(encoded, i + 3)
+
+        let c2 = 0
+        let c3 = 0
+        let pad = 0
+
+        if ch2 == "=" {
+            pad = 2
+        } else {
+            c2 = b64_char_val(ch2)
+            if ch3 == "=" {
+                pad = 1
+            } else {
+                c3 = b64_char_val(ch3)
+            }
+        }
+
+        let n = c0 * 262144 + c1 * 4096 + c2 * 64 + c3
+
+        result = result + [(n / 65536) % 256]
+        if pad < 2 {
+            result = result + [(n / 256) % 256]
+        }
+        if pad < 1 {
+            result = result + [n % 256]
+        }
+
+        i = i + 4
+    }
+
+    return result
+}
+
+// ─── Simple Hash Functions (non-cryptographic) ─────────────────────────
+
+fn djb2_hash(data: list) -> int {
+    // DJB2 hash algorithm
+    let hash_val = 5381
+    let i = 0
+    while i < len(data) {
+        hash_val = ((hash_val * 33) + data[i]) % 4294967296
+        i = i + 1
+    }
+    return hash_val
+}
+
+fn fnv1a_hash(data: list) -> int {
+    // FNV-1a hash (32-bit)
+    let hash_val = 2166136261
+    let i = 0
+    while i < len(data) {
+        hash_val = xor_byte(hash_val % 256, data[i]) + (hash_val / 256) * 256
+        hash_val = (hash_val * 16777619) % 4294967296
+        i = i + 1
+    }
+    return hash_val
+}
+
+fn hash_string(s: str) -> int {
+    return djb2_hash(str_to_bytes(s))
+}
+
+// ─── HMAC (simplified, non-cryptographic) ───────────────────────────────
+
+fn simple_hmac(key_bytes: list, msg_bytes: list) -> int {
+    // Simplified HMAC using DJB2: H(key || msg)
+    // NOT cryptographically secure — for demonstration
+    let combined = bytes_append(key_bytes, msg_bytes)
+    return djb2_hash(combined)
+}
+
+fn simple_hmac_verify(key_bytes: list, msg_bytes: list, expected: int) -> bool {
+    return simple_hmac(key_bytes, msg_bytes) == expected
+}
+
+// ─── Secure Token Generation (pseudo-random, not truly secure) ──────────
+
+fn pseudo_random_bytes(n: int, seed: int) -> list {
+    // Linear congruential generator for pseudo-random bytes
+    // NOT cryptographically secure
+    let state = seed
+    let result = []
+    let i = 0
+    while i < n {
+        state = (state * 1103515245 + 12345) % 2147483648
+        result = result + [(state / 65536) % 256]
+        i = i + 1
+    }
+    return result
+}
+
+fn generate_token(nbytes: int, seed: int) -> str {
+    let raw = pseudo_random_bytes(nbytes, seed)
+    return to_hex(raw)
+}
+
+// ─── Self-Test ──────────────────────────────────────────────────────────
+
+fn assert_eq(label: str, actual: any, expected: any) {
+    if str(actual) == str(expected) {
+        println("  PASS: " + label)
+    } else {
+        println("  FAIL: " + label)
+        println("    expected: " + str(expected))
+        println("    actual:   " + str(actual))
+    }
+}
+
+fn main() {
+    println("=== LBE Crypto Engine Self-Test ===")
+    println("")
+
+    // ── Pack/Unpack Tests ────────────────────────────────────────────
+    println("-- Pack/Unpack --")
+    let p16 = pack_u16(258)
+    assert_eq("pack_u16(258)", p16, [1, 2])
+    assert_eq("unpack_u16", unpack_u16(p16, 0), 258)
+
+    let p32 = pack_u32(16909060)
+    assert_eq("pack_u32(16909060)", p32, [1, 2, 3, 4])
+    assert_eq("unpack_u32", unpack_u32(p32, 0), 16909060)
+
+    let p64 = pack_i64(42)
+    assert_eq("unpack_i64(42)", unpack_i64(p64, 0), 42)
+
+    let pn = pack_i64(-1)
+    assert_eq("unpack_i64(-1)", unpack_i64(pn, 0), -1)
+
+    // ── Hex Tests ────────────────────────────────────────────────────
+    println("")
+    println("-- Hex Encoding --")
+    assert_eq("to_hex([0,255])", to_hex([0, 255]), "00ff")
+    assert_eq("to_hex([171])", to_hex([171]), "ab")
+    let hex_rt = from_hex(to_hex([72, 101, 108, 108, 111]))
+    assert_eq("hex roundtrip", hex_rt, [72, 101, 108, 108, 111])
+
+    // ── Base64 Tests ─────────────────────────────────────────────────
+    println("")
+    println("-- Base64 Encoding --")
+    let hello_bytes = str_to_bytes("Hello")
+    let b64 = to_base64(hello_bytes)
+    assert_eq("base64 encode Hello", b64, "SGVsbG8=")
+    let decoded = from_base64(b64)
+    assert_eq("base64 roundtrip", bytes_to_str(decoded), "Hello")
+
+    let abc_b64 = to_base64(str_to_bytes("ABC"))
+    assert_eq("base64 ABC", abc_b64, "QUJD")
+
+    // ── XOR Tests ────────────────────────────────────────────────────
+    println("")
+    println("-- XOR Cipher --")
+    let plain = [72, 101, 108, 108, 111]
+    let xkey = [42, 17]
+    let encrypted = xor_encrypt(plain, xkey)
+    let decrypted = xor_decrypt(encrypted, xkey)
+    assert_eq("xor roundtrip", decrypted, plain)
+    assert_eq("xor_byte(0xFF,0x0F)", xor_byte(255, 15), 240)
+    assert_eq("xor_byte(0xAA,0x55)", xor_byte(170, 85), 255)
+
+    // ── Hash Tests ───────────────────────────────────────────────────
+    println("")
+    println("-- Hash Functions --")
+    let h1 = hash_string("hello")
+    let h2 = hash_string("hello")
+    let h3 = hash_string("world")
+    assert_eq("hash deterministic", h1, h2)
+    assert_eq("hash differs", h1 != h3, true)
+
+    let fnv1 = fnv1a_hash(str_to_bytes("hello"))
+    assert_eq("fnv1a nonzero", fnv1 > 0, true)
+
+    // ── HMAC Tests ───────────────────────────────────────────────────
+    println("")
+    println("-- Simple HMAC --")
+    let hk = str_to_bytes("key")
+    let hm = str_to_bytes("message")
+    let hmac_val = simple_hmac(hk, hm)
+    assert_eq("hmac verify", simple_hmac_verify(hk, hm, hmac_val), true)
+    assert_eq("hmac reject", simple_hmac_verify(hk, hm, 12345), false)
+
+    // ── LBE Encode/Decode Tests ──────────────────────────────────────
+    println("")
+    println("-- LBE Encode/Decode --")
+
+    // Test null
+    let enc_null = lbe_encode(none)
+    let dec_null = lbe_decode(enc_null)
+    assert_eq("LBE null", dec_null, none)
+
+    // Test bool
+    let enc_true = lbe_encode(true)
+    let dec_true = lbe_decode(enc_true)
+    assert_eq("LBE true", dec_true, true)
+
+    // Test integer
+    let enc_42 = lbe_encode(42)
+    let dec_42 = lbe_decode(enc_42)
+    assert_eq("LBE int 42", dec_42, 42)
+
+    // Test negative integer
+    let enc_neg = lbe_encode(-100)
+    let dec_neg = lbe_decode(enc_neg)
+    assert_eq("LBE int -100", dec_neg, -100)
+
+    // Test string
+    let enc_str = lbe_encode("hello")
+    let dec_str = lbe_decode(enc_str)
+    assert_eq("LBE string", dec_str, "hello")
+
+    // Test list
+    let test_list = [1, 2, 3]
+    let enc_list = lbe_encode(test_list)
+    let dec_list = lbe_decode(enc_list)
+    assert_eq("LBE list len", len(dec_list), 3)
+
+    // ── Token Generation ─────────────────────────────────────────────
+    println("")
+    println("-- Token Generation --")
+    let token1 = generate_token(16, 42)
+    let token2 = generate_token(16, 42)
+    let token3 = generate_token(16, 99)
+    assert_eq("token deterministic", token1, token2)
+    assert_eq("token differs seed", token1 != token3, true)
+    assert_eq("token length", len(token1), 32)
+
+    println("")
+    println("=== All LBE Crypto Tests Complete ===")
+}
+
+main()

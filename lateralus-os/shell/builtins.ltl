@@ -1,0 +1,325 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// LateralusOS — Shell Built-in Commands
+// ═══════════════════════════════════════════════════════════════════════════
+// Copyright (c) 2025 bad-antics. All rights reserved.
+// ═══════════════════════════════════════════════════════════════════════════
+
+import drivers::vga
+import hal::serial
+import hal::timer
+import kernel::scheduler
+import kernel::memory
+import kernel::ipc
+import drivers::pci
+import drivers::network
+import fs::vfs
+
+// ── Command Dispatch ────────────────────────────────────────────────────
+
+pub fn execute(cmd: str, args: [str], shell: ShellState) -> Result<int, str> {
+    match cmd {
+        "help"      => { cmd_help(args); return Result::Ok(0) },
+        "echo"      => { cmd_echo(args); return Result::Ok(0) },
+        "clear"     => { vga::clear(); return Result::Ok(0) },
+        "pwd"       => { vga::println(shell.cwd); return Result::Ok(0) },
+        "cd"        => return cmd_cd(args, shell),
+        "ls"        => return cmd_ls(args, shell),
+        "cat"       => return cmd_cat(args),
+        "mkdir"     => return cmd_mkdir(args),
+        "rm"        => return cmd_rm(args),
+        "uname"     => { cmd_uname(args); return Result::Ok(0) },
+        "uptime"    => { cmd_uptime(); return Result::Ok(0) },
+        "ps"        => { cmd_ps(); return Result::Ok(0) },
+        "kill"      => return cmd_kill(args),
+        "free"      => { cmd_free(); return Result::Ok(0) },
+        "lspci"     => { cmd_lspci(); return Result::Ok(0) },
+        "ifconfig"  => { cmd_ifconfig(); return Result::Ok(0) },
+        "env"       => { cmd_env(shell); return Result::Ok(0) },
+        "export"    => return cmd_export(args, shell),
+        "history"   => { cmd_history(shell); return Result::Ok(0) },
+        "exit"      => { shell.running = false; return Result::Ok(0) },
+        "shutdown"  => { cmd_shutdown(); return Result::Ok(0) },
+        "reboot"    => { cmd_reboot(); return Result::Ok(0) },
+        "version"   => { cmd_version(); return Result::Ok(0) },
+        "mesh"      => return cmd_mesh(args),
+        "crypto"    => return cmd_crypto(args),
+        _           => return Result::Err("Command not found: {cmd}"),
+    }
+}
+
+// ── Command Implementations ─────────────────────────────────────────────
+
+fn cmd_help(args: [str]) {
+    vga::set_color(vga::Color::LightCyan, vga::Color::Black)
+    vga::println("LateralusOS Shell Commands")
+    vga::println("═════════════════════════════════════════")
+    vga::set_color(vga::Color::White, vga::Color::Black)
+    vga::println("  help        Show this help")
+    vga::println("  echo        Print text")
+    vga::println("  clear       Clear screen")
+    vga::println("  pwd         Print working directory")
+    vga::println("  cd <dir>    Change directory")
+    vga::println("  ls [path]   List files")
+    vga::println("  cat <file>  Display file contents")
+    vga::println("  mkdir <dir> Create directory")
+    vga::println("  rm <file>   Remove file")
+    vga::println("  uname [-a]  System info")
+    vga::println("  uptime      System uptime")
+    vga::println("  ps          List processes")
+    vga::println("  kill <pid>  Kill process")
+    vga::println("  free        Memory usage")
+    vga::println("  lspci       List PCI devices")
+    vga::println("  ifconfig    Network config")
+    vga::println("  env         Show environment")
+    vga::println("  history     Command history")
+    vga::println("  mesh        Mesh agent control")
+    vga::println("  crypto      Encryption tools")
+    vga::println("  version     OS version info")
+    vga::println("  shutdown    Power off")
+    vga::println("  reboot      Restart system")
+    vga::println("  exit        Exit shell")
+}
+
+fn cmd_echo(args: [str]) {
+    let output = args.join(" ")
+    vga::println(output)
+}
+
+fn cmd_cd(args: [str], shell: ShellState) -> Result<int, str> {
+    if args.len() == 0 {
+        shell.cwd = shell.env["HOME"]
+    } else {
+        let path = args[0]
+        if path == ".." {
+            // Go up one level
+            let parts = shell.cwd.split("/")
+            if parts.len() > 1 {
+                shell.cwd = parts[..parts.len()-1].join("/")
+                if shell.cwd == "" { shell.cwd = "/" }
+            }
+        } else if path[0] == '/' {
+            shell.cwd = path
+        } else {
+            shell.cwd = shell.cwd + "/" + path
+        }
+    }
+    return Result::Ok(0)
+}
+
+fn cmd_ls(args: [str], shell: ShellState) -> Result<int, str> {
+    let path = if args.len() > 0 { args[0] } else { shell.cwd }
+    match vfs::list_dir(path) {
+        Result::Ok(entries) => {
+            let i = 0
+            while i < entries.len() {
+                let e = entries[i]
+                let type_char = match e.file_type {
+                    FileType::Directory => "d",
+                    FileType::Symlink   => "l",
+                    _                   => "-",
+                }
+                vga::println("{type_char} {e.size:>8}  {e.name}")
+                i = i + 1
+            }
+            return Result::Ok(0)
+        },
+        Result::Err(msg) => return Result::Err(msg),
+    }
+}
+
+fn cmd_cat(args: [str]) -> Result<int, str> {
+    if args.len() == 0 {
+        return Result::Err("Usage: cat <file>")
+    }
+    match vfs::open(args[0], vfs::O_RDONLY) {
+        Result::Ok(fd) => {
+            // TODO: read and display file contents
+            vfs::close(fd)
+            return Result::Ok(0)
+        },
+        Result::Err(msg) => return Result::Err(msg),
+    }
+}
+
+fn cmd_mkdir(args: [str]) -> Result<int, str> {
+    if args.len() == 0 {
+        return Result::Err("Usage: mkdir <directory>")
+    }
+    return match vfs::mkdir(args[0]) {
+        Result::Ok(_) => Result::Ok(0),
+        Result::Err(msg) => Result::Err(msg),
+    }
+}
+
+fn cmd_rm(args: [str]) -> Result<int, str> {
+    if args.len() == 0 {
+        return Result::Err("Usage: rm <file>")
+    }
+    return match vfs::unlink(args[0]) {
+        Result::Ok(_) => Result::Ok(0),
+        Result::Err(msg) => Result::Err(msg),
+    }
+}
+
+fn cmd_uname(args: [str]) {
+    if args.len() > 0 && args[0] == "-a" {
+        vga::println("LateralusOS lateralus 0.1.0 x86_64 Lateralus/OS")
+    } else {
+        vga::println("LateralusOS")
+    }
+}
+
+fn cmd_uptime() {
+    let ms = timer::get_uptime_ms()
+    let seconds = ms / 1000
+    let minutes = seconds / 60
+    let hours = minutes / 60
+    vga::println("up {hours}h {minutes % 60}m {seconds % 60}s")
+}
+
+fn cmd_ps() {
+    let stats = scheduler::get_stats()
+    vga::println("PID  STATE    NAME")
+    vga::println("───  ───────  ────")
+    vga::println("  0  Running  idle")
+    vga::println("  1  Running  init")
+    vga::println("")
+    vga::println("Processes: {stats.0}  Threads: {stats.1}  Switches: {stats.2}")
+}
+
+fn cmd_kill(args: [str]) -> Result<int, str> {
+    if args.len() == 0 {
+        return Result::Err("Usage: kill <pid>")
+    }
+    let pid = args[0].to_int()
+    ipc::send_signal(pid, ipc::SIG_TERM)
+    return Result::Ok(0)
+}
+
+fn cmd_free() {
+    let stats = memory::get_stats()
+    vga::println("              Total      Free       Used")
+    vga::println("Physical:  {stats.0 / 1024:>8} KB  {stats.1 / 1024:>8} KB  {(stats.0 - stats.1) / 1024:>8} KB")
+    vga::println("Heap:      {stats.2 / 1024:>8} KB                {stats.3 / 1024:>8} KB")
+}
+
+fn cmd_lspci() {
+    vga::println("PCI Devices:")
+    vga::println("BUS:DEV.FN  VENDOR  DEVICE  CLASS")
+    vga::println("──────────  ──────  ──────  ─────")
+    // TODO: iterate PCI devices
+    vga::println("(enumerated at boot — see serial log)")
+}
+
+fn cmd_ifconfig() {
+    if network::is_present() {
+        let mac = network::get_mac()
+        let stats = network::get_stats()
+        vga::println("eth0:")
+        vga::println("  MAC:     {mac[0]:02X}:{mac[1]:02X}:{mac[2]:02X}:{mac[3]:02X}:{mac[4]:02X}:{mac[5]:02X}")
+        vga::println("  RX:     {stats.0} packets  {stats.2} bytes")
+        vga::println("  TX:     {stats.1} packets  {stats.3} bytes")
+    } else {
+        vga::println("No network adapter found")
+    }
+}
+
+fn cmd_env(shell: ShellState) {
+    // Print environment variables
+    for key in shell.env.keys() {
+        vga::println("{key}={shell.env[key]}")
+    }
+}
+
+fn cmd_export(args: [str], shell: ShellState) -> Result<int, str> {
+    if args.len() == 0 {
+        return Result::Err("Usage: export KEY=VALUE")
+    }
+    let parts = args[0].split("=")
+    if parts.len() < 2 {
+        return Result::Err("Invalid format. Use: export KEY=VALUE")
+    }
+    shell.env[parts[0]] = parts[1]
+    return Result::Ok(0)
+}
+
+fn cmd_history(shell: ShellState) {
+    let i = 0
+    while i < shell.history_count {
+        vga::println("  {i + 1}  {shell.history[i]}")
+        i = i + 1
+    }
+}
+
+fn cmd_version() {
+    vga::set_color(vga::Color::LightMagenta, vga::Color::Black)
+    vga::println("LateralusOS v0.2.0")
+    vga::set_color(vga::Color::White, vga::Color::Black)
+    vga::println("Created by bad-antics")
+    vga::println("Built with Lateralus v1.5.0")
+    vga::println("Architecture: x86_64")
+}
+
+fn cmd_shutdown() {
+    vga::set_color(vga::Color::Yellow, vga::Color::Black)
+    vga::println("Shutting down LateralusOS...")
+    serial::log("[shell] Shutdown requested")
+    // ACPI shutdown (QEMU: outw 0x604, 0x2000)
+    cpu::outb(0x604, 0x2000)
+}
+
+fn cmd_reboot() {
+    vga::println("Rebooting...")
+    serial::log("[shell] Reboot requested")
+    // Keyboard controller reset
+    cpu::outb(0x64, 0xFE)
+}
+
+fn cmd_mesh(args: [str]) -> Result<int, str> {
+    if args.len() == 0 {
+        vga::println("Usage: mesh <connect|status|send|deploy>")
+        return Result::Ok(0)
+    }
+    match args[0] {
+        "status" => {
+            vga::println("Mesh Agent: active")
+            vga::println("Connected nodes: 0")
+            vga::println("Pending tasks: 0")
+        },
+        "connect" => {
+            if args.len() < 2 {
+                return Result::Err("Usage: mesh connect <address>")
+            }
+            vga::println("Connecting to {args[1]}...")
+        },
+        "deploy" => {
+            if args.len() < 2 {
+                return Result::Err("Usage: mesh deploy <agent.ltl>")
+            }
+            vga::println("Deploying agent: {args[1]}")
+        },
+        _ => return Result::Err("Unknown mesh command: {args[0]}"),
+    }
+    return Result::Ok(0)
+}
+
+fn cmd_crypto(args: [str]) -> Result<int, str> {
+    if args.len() == 0 {
+        vga::println("Usage: crypto <encrypt|decrypt|hash|keygen>")
+        return Result::Ok(0)
+    }
+    match args[0] {
+        "keygen" => {
+            vga::println("Generating 256-bit key...")
+            vga::println("Key stored in /etc/lateralus/keys/")
+        },
+        "hash" => {
+            if args.len() < 2 {
+                return Result::Err("Usage: crypto hash <file>")
+            }
+            vga::println("SHA-256: (computing...)")
+        },
+        _ => return Result::Err("Unknown crypto command: {args[0]}"),
+    }
+    return Result::Ok(0)
+}

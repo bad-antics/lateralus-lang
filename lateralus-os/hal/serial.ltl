@@ -1,0 +1,53 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// LateralusOS — Serial Port Driver (COM1)
+// ═══════════════════════════════════════════════════════════════════════════
+// Copyright (c) 2025 bad-antics. All rights reserved.
+// ═══════════════════════════════════════════════════════════════════════════
+
+import hal::cpu
+
+const COM1       = 0x3F8
+const COM2       = 0x2F8
+const BAUD_38400 = 3
+const BAUD_115200 = 1
+
+let mut initialized = false
+
+pub fn init(baud_divisor: int) {
+    cpu::outb(COM1 + 1, 0x00)  // Disable interrupts
+    cpu::outb(COM1 + 3, 0x80)  // Enable DLAB
+    cpu::outb(COM1 + 0, baud_divisor & 0xFF)
+    cpu::outb(COM1 + 1, (baud_divisor >> 8) & 0xFF)
+    cpu::outb(COM1 + 3, 0x03)  // 8N1
+    cpu::outb(COM1 + 2, 0xC7)  // Enable FIFO
+    cpu::outb(COM1 + 4, 0x0B)  // RTS/DSR set
+    initialized = true
+}
+
+pub fn putc(c: byte) {
+    while (cpu::inb(COM1 + 5) & 0x20) == 0 {}
+    cpu::outb(COM1, c as int)
+}
+
+pub fn puts(s: str) {
+    let i = 0
+    while i < s.len() {
+        putc(s[i] as byte)
+        i = i + 1
+    }
+}
+
+pub fn log(msg: str) {
+    puts("[LateralusOS] ")
+    puts(msg)
+    putc(0x0A)  // newline
+}
+
+pub fn getc() -> byte {
+    while (cpu::inb(COM1 + 5) & 0x01) == 0 {}
+    return cpu::inb(COM1) as byte
+}
+
+pub fn has_data() -> bool {
+    return (cpu::inb(COM1 + 5) & 0x01) != 0
+}

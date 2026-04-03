@@ -1,0 +1,271 @@
+// ═══════════════════════════════════════════════════════════════════════
+// LATERALUS — Statistical Analysis Pipeline
+// Real-world data analysis demonstrating pipeline composition
+// ═══════════════════════════════════════════════════════════════════════
+
+import math
+import collections
+import functional
+
+// ─── Data generation (simulated dataset) ──────────────────────────────
+
+fn generate_dataset(n: int) -> list {
+    let data = []
+    for i in range(n) {
+        // Simulate: y = 2.5x + 10 + noise
+        let x = i * 0.1
+        let noise = (random() - 0.5) * 5.0
+        let y = 2.5 * x + 10.0 + noise
+
+        let row = {}
+        row["id"] = i
+        row["x"] = round(x, 2)
+        row["y"] = round(y, 2)
+        let cat = match i % 3 {
+            0 => "A",
+            1 => "B",
+            _ => "C",
+        }
+        row["category"] = cat
+        data = data + [row]
+    }
+    return data
+}
+
+// ─── Statistical functions ────────────────────────────────────────────
+
+fn extract_field(data: list, field: str) -> list {
+    return data |> map(fn(row) { row[field] })
+}
+
+fn compute_mean(values: list) -> float {
+    let total = values |> reduce(fn(a, b) { a + b }, 0.0)
+    return total / len(values)
+}
+
+fn compute_variance(values: list) -> float {
+    let mu = compute_mean(values)
+    let sq_diffs = values |> map(fn(x) { (x - mu) ** 2 })
+    let s = sq_diffs |> reduce(fn(a, b) { a + b }, 0.0)
+    return s / len(values)
+}
+
+fn compute_std_dev(values: list) -> float {
+    return sqrt(compute_variance(values))
+}
+
+fn compute_median(values: list) -> float {
+    let sorted = sort(values)
+    let n = len(sorted)
+    if n % 2 == 0 {
+        return (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
+    }
+    return sorted[n / 2]
+}
+
+fn compute_percentile(values: list, p: float) -> float {
+    let sorted = sort(values)
+    let idx = (p / 100.0) * (len(sorted) - 1)
+    let lower = int(idx)
+    let upper = min(lower + 1, len(sorted) - 1)
+    let frac = idx - lower
+    return sorted[lower] * (1.0 - frac) + sorted[upper] * frac
+}
+
+fn compute_correlation(xs: list, ys: list) -> float {
+    let n = len(xs)
+    let mu_x = compute_mean(xs)
+    let mu_y = compute_mean(ys)
+
+    let cov = 0.0
+    let var_x = 0.0
+    let var_y = 0.0
+
+    for i in range(n) {
+        let dx = xs[i] - mu_x
+        let dy = ys[i] - mu_y
+        cov = cov + dx * dy
+        var_x = var_x + dx ** 2
+        var_y = var_y + dy ** 2
+    }
+
+    let denom = sqrt(var_x * var_y)
+    if denom == 0.0 { return 0.0 }
+    return cov / denom
+}
+
+fn linear_regression(xs: list, ys: list) -> map {
+    let n = len(xs)
+    let mu_x = compute_mean(xs)
+    let mu_y = compute_mean(ys)
+
+    let num = 0.0
+    let den = 0.0
+    for i in range(n) {
+        num = num + (xs[i] - mu_x) * (ys[i] - mu_y)
+        den = den + (xs[i] - mu_x) ** 2
+    }
+
+    let slope = num / den
+    let intercept = mu_y - slope * mu_x
+
+    // R-squared
+    let ss_res = 0.0
+    let ss_tot = 0.0
+    for i in range(n) {
+        let predicted = slope * xs[i] + intercept
+        ss_res = ss_res + (ys[i] - predicted) ** 2
+        ss_tot = ss_tot + (ys[i] - mu_y) ** 2
+    }
+    let r_squared = 1.0 - ss_res / ss_tot
+
+    let result = {}
+    result["slope"] = round(slope, 4)
+    result["intercept"] = round(intercept, 4)
+    result["r_squared"] = round(r_squared, 4)
+    return result
+}
+
+// ─── Group-by analysis ────────────────────────────────────────────────
+
+fn group_by_field(data: list, field: str) -> map {
+    let groups = {}
+    for row in data {
+        let key = row[field]
+        if not contains(keys(groups), key) {
+            groups[key] = []
+        }
+        groups[key] = groups[key] + [row]
+    }
+    return groups
+}
+
+fn summarize_group(group: list, field: str) -> map {
+    let values = extract_field(group, field)
+    let result = {}
+    result["count"] = len(values)
+    result["mean"] = round(compute_mean(values), 2)
+    result["std_dev"] = round(compute_std_dev(values), 2)
+    result["median"] = round(compute_median(values), 2)
+    result["min"] = min(values)
+    result["max"] = max(values)
+    return result
+}
+
+// ─── Outlier detection ────────────────────────────────────────────────
+
+fn detect_outliers_iqr(values: list) -> map {
+    let q1 = compute_percentile(values, 25.0)
+    let q3 = compute_percentile(values, 75.0)
+    let iqr = q3 - q1
+    let lower = q1 - 1.5 * iqr
+    let upper = q3 + 1.5 * iqr
+
+    let outliers = values |> filter(fn(x) { x < lower or x > upper })
+
+    let result = {}
+    result["q1"] = round(q1, 2)
+    result["q3"] = round(q3, 2)
+    result["iqr"] = round(iqr, 2)
+    result["lower_fence"] = round(lower, 2)
+    result["upper_fence"] = round(upper, 2)
+    result["outlier_count"] = len(outliers)
+    result["outliers"] = outliers
+    return result
+}
+
+// ─── Moving average ───────────────────────────────────────────────────
+
+fn moving_average(values: list, window: int) -> list {
+    let result = []
+    for i in range(len(values) - window + 1) {
+        let window_vals = slice(values, i, i + window)
+        result = result + [round(compute_mean(window_vals), 2)]
+    }
+    return result
+}
+
+// ─── Main analysis pipeline ──────────────────────────────────────────
+
+fn main() {
+    println("LATERALUS Statistical Analysis Pipeline")
+    println("=======================================")
+    println("")
+
+    // Generate dataset
+    let data = generate_dataset(100)
+    println("Dataset: " + str(len(data)) + " observations")
+    println("")
+
+    // Extract features
+    let xs = extract_field(data, "x")
+    let ys = extract_field(data, "y")
+
+    // Descriptive statistics
+    println("Descriptive Statistics:")
+    println("  X: mean=" + str(round(compute_mean(xs), 2)) +
+            ", std=" + str(round(compute_std_dev(xs), 2)) +
+            ", median=" + str(round(compute_median(xs), 2)))
+    println("  Y: mean=" + str(round(compute_mean(ys), 2)) +
+            ", std=" + str(round(compute_std_dev(ys), 2)) +
+            ", median=" + str(round(compute_median(ys), 2)))
+    println("")
+
+    // Correlation
+    let r = compute_correlation(xs, ys)
+    println("Correlation (X, Y): " + str(round(r, 4)))
+    println("")
+
+    // Linear regression
+    let reg = linear_regression(xs, ys)
+    println("Linear Regression: Y = " + str(reg["slope"]) + " * X + " +
+            str(reg["intercept"]))
+    println("  R-squared: " + str(reg["r_squared"]))
+    println("  (True model: Y = 2.5 * X + 10 + noise)")
+    println("")
+
+    // Group-by analysis
+    println("Group Analysis (by category):")
+    let groups = group_by_field(data, "category")
+    for category in keys(groups) {
+        let summary = summarize_group(groups[category], "y")
+        println("  Category " + category + ":")
+        println("    Count: " + str(summary["count"]))
+        println("    Mean:  " + str(summary["mean"]))
+        println("    Std:   " + str(summary["std_dev"]))
+    }
+    println("")
+
+    // Outlier detection
+    println("Outlier Detection (Y values, IQR method):")
+    let outlier_info = detect_outliers_iqr(ys)
+    println("  IQR: " + str(outlier_info["iqr"]))
+    println("  Fences: [" + str(outlier_info["lower_fence"]) + ", " +
+            str(outlier_info["upper_fence"]) + "]")
+    println("  Outliers found: " + str(outlier_info["outlier_count"]))
+    println("")
+
+    // Moving average (smoothing)
+    let smoothed = moving_average(ys, 5)
+    println("Moving Average (window=5):")
+    println("  First 10 values: " + str(slice(smoothed, 0, min(10, len(smoothed)))))
+    println("")
+
+    // Pipeline composition example
+    let mean_y = compute_mean(ys)
+    let high_y = data
+        |> filter(fn(row) { row["y"] > mean_y })
+        |> filter(fn(row) { row["category"] == "A" })
+        |> map(fn(row) { row["x"] })
+        |> sort()
+
+    println("Category A observations with above-average Y:")
+    println("  Count: " + str(len(high_y)))
+    if len(high_y) > 0 {
+        println("  X range: [" + str(high_y[0]) + ", " +
+                str(high_y[len(high_y) - 1]) + "]")
+    }
+
+    println("")
+    println("Analysis complete!")
+}

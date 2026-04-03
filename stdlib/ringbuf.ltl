@@ -1,0 +1,158 @@
+// ═══════════════════════════════════════════════════════════════════
+// Lateralus stdlib — ringbuf
+// Fixed-size ring buffer (circular buffer) with wrap-around semantics
+// ═══════════════════════════════════════════════════════════════════
+
+// ── Construction ────────────────────────────────────────────────────
+
+/// Create a new ring buffer with given capacity.
+/// Returns [capacity, head, tail, count, items_list].
+pub fn new(capacity: int) -> list {
+    let items = []
+    for i in range(0, capacity) {
+        items = items + [nil]
+    }
+    return [capacity, 0, 0, 0, items]
+}
+
+/// Create a ring buffer from a list (capacity = length of list).
+pub fn from_list(items: list) -> list {
+    let cap = len(items)
+    let buf = new(cap)
+    for item in items {
+        buf = push(buf, item)
+    }
+    return buf
+}
+
+// ── Accessors ───────────────────────────────────────────────────────
+
+/// Get the capacity of the ring buffer.
+pub fn capacity(buf: list) -> int {
+    return buf[0]
+}
+
+/// Get the number of elements currently stored.
+pub fn count(buf: list) -> int {
+    return buf[3]
+}
+
+/// Check if the buffer is empty.
+pub fn is_empty(buf: list) -> bool {
+    return buf[3] == 0
+}
+
+/// Check if the buffer is full.
+pub fn is_full(buf: list) -> bool {
+    return buf[3] == buf[0]
+}
+
+// ── Core operations ─────────────────────────────────────────────────
+
+/// Push an element to the back.  If full, overwrites the oldest element.
+pub fn push(buf: list, item) -> list {
+    let cap = buf[0]
+    let head = buf[1]
+    let tail = buf[2]
+    let cnt = buf[3]
+    let items = buf[4]
+
+    // Write at tail position
+    let new_items = []
+    for i in range(0, cap) {
+        if i == tail {
+            new_items = new_items + [item]
+        } else {
+            new_items = new_items + [items[i]]
+        }
+    }
+    let new_tail = (tail + 1) % cap
+    let new_head = head
+    let new_cnt = cnt + 1
+    if new_cnt > cap {
+        new_cnt = cap
+        new_head = (head + 1) % cap
+    }
+    return [cap, new_head, new_tail, new_cnt, new_items]
+}
+
+/// Pop the oldest element (from head).  Returns [value, new_buf].
+pub fn pop(buf: list) -> list {
+    let cap = buf[0]
+    let head = buf[1]
+    let tail = buf[2]
+    let cnt = buf[3]
+    let items = buf[4]
+
+    if cnt == 0 {
+        return [nil, buf]
+    }
+    let val = items[head]
+    let new_head = (head + 1) % cap
+    return [val, [cap, new_head, tail, cnt - 1, items]]
+}
+
+/// Peek at the oldest element without removing.
+pub fn peek_front(buf: list) {
+    if buf[3] == 0 {
+        return nil
+    }
+    return buf[4][buf[1]]
+}
+
+/// Peek at the newest element without removing.
+pub fn peek_back(buf: list) {
+    if buf[3] == 0 {
+        return nil
+    }
+    let cap = buf[0]
+    let tail = buf[2]
+    let idx = (tail - 1 + cap) % cap
+    return buf[4][idx]
+}
+
+// ── Utilities ───────────────────────────────────────────────────────
+
+/// Convert ring buffer contents to a list (oldest first).
+pub fn to_list(buf: list) -> list {
+    let cap = buf[0]
+    let head = buf[1]
+    let cnt = buf[3]
+    let items = buf[4]
+    let result = []
+    for i in range(0, cnt) {
+        let idx = (head + i) % cap
+        result = result + [items[idx]]
+    }
+    return result
+}
+
+/// Clear all elements (reset to empty, keep capacity).
+pub fn clear(buf: list) -> list {
+    return new(buf[0])
+}
+
+/// Get element at logical index (0 = oldest).
+pub fn at(buf: list, index: int) {
+    let cap = buf[0]
+    let head = buf[1]
+    let cnt = buf[3]
+    if index < 0 || index >= cnt {
+        return nil
+    }
+    let real_idx = (head + index) % cap
+    return buf[4][real_idx]
+}
+
+/// Apply a function to every element, returning a new ring buffer.
+pub fn map_buf(buf: list, f: fn) -> list {
+    let items = to_list(buf)
+    let mapped = items |> map(f)
+    return from_list(mapped)
+}
+
+/// Drain all elements into a list, leaving the buffer empty.
+pub fn drain(buf: list) -> list {
+    let items = to_list(buf)
+    return items
+}

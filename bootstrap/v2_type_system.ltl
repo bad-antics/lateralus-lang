@@ -1,0 +1,1552 @@
+// ═══════════════════════════════════════════════════════════════════════
+// v2_type_system.ltl  —  LATERALUS Type System
+// Self-hosted port of lateralus_lang/type_system.py
+//
+// Provides the foundation for static type analysis, type inference,
+// and runtime type checking.  Inspired by Julia's type dispatch and
+// Rust's algebraic data types.
+//
+//   - Core type representations via tagged structs
+//   - Type inference engine (HM-style with unification)
+//   - Type compatibility / assignability checking
+//   - Type variables, generics, and constraint solving
+//   - Union types, Optional types, Gradual types
+//   - Type narrowing for flow-sensitive branches
+//   - Type environment with scoped bindings
+//   - Type annotation parser
+//
+// v2.3.0
+// ═══════════════════════════════════════════════════════════════════════
+
+import math
+import strings
+
+// ─── Type Kind Constants ───────────────────────────────────────────────
+
+const TK_PRIMITIVE  = 0
+const TK_FUNCTION   = 1
+const TK_STRUCT     = 2
+const TK_INTERFACE  = 3
+const TK_LIST       = 4
+const TK_MAP        = 5
+const TK_TUPLE      = 6
+const TK_UNION      = 7
+const TK_OPTIONAL   = 8
+const TK_GENERIC    = 9
+const TK_TYPEVAR    = 10
+const TK_NEVER      = 11
+const TK_ANY        = 12
+const TK_VOID       = 13
+const TK_GRADUAL    = 14
+const TK_PTR        = 15
+
+fn kind_name(k: int) -> str {
+    return match k {
+        0  => "primitive",
+        1  => "function",
+        2  => "struct",
+        3  => "interface",
+        4  => "list",
+        5  => "map",
+        6  => "tuple",
+        7  => "union",
+        8  => "optional",
+        9  => "generic",
+        10 => "typevar",
+        11 => "never",
+        12 => "any",
+        13 => "void",
+        14 => "gradual",
+        15 => "ptr",
+        _  => "unknown",
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// TYPE REPRESENTATION
+//
+// All types are maps with a "kind" key (one of the TK_* constants)
+// and a "name" key (the display string).  Compound types carry extra
+// keys (e.g. "element_type", "param_types", "return_type", etc.).
+// ═══════════════════════════════════════════════════════════════════════
+
+// ─── Constructor helpers ───────────────────────────────────────────────
+
+fn make_type(kind: int, name: str) -> map {
+    let t = {}
+    t["kind"] = kind
+    t["name"] = name
+    return t
+}
+
+fn type_kind(t: map) -> int {
+    return t["kind"]
+}
+
+fn type_name(t: map) -> str {
+    return t["name"]
+}
+
+// ─── Primitive type ────────────────────────────────────────────────────
+
+fn prim(name: str) -> map {
+    return make_type(TK_PRIMITIVE, name)
+}
+
+fn is_numeric(t: map) -> bool {
+    let n = type_name(t)
+    return n == "int" or n == "float" or n == "number" or n == "complex"
+}
+
+// ─── Built-in type constants ───────────────────────────────────────────
+
+const T_INT    = prim("int")
+const T_FLOAT  = prim("float")
+const T_STR    = prim("str")
+const T_BOOL   = prim("bool")
+const T_NONE   = prim("none")
+const T_ANY    = make_type(TK_ANY, "any")
+const T_NEVER  = make_type(TK_NEVER, "never")
+const T_VOID   = make_type(TK_VOID, "void")
+
+// Fixed-width integer types for OS / low-level work
+const T_U8     = prim("u8")
+const T_U16    = prim("u16")
+const T_U32    = prim("u32")
+const T_U64    = prim("u64")
+const T_I8     = prim("i8")
+const T_I16    = prim("i16")
+const T_I32    = prim("i32")
+const T_I64    = prim("i64")
+const T_USIZE  = prim("usize")
+const T_ISIZE  = prim("isize")
+const T_BYTE   = prim("byte")
+
+// ─── Function type ─────────────────────────────────────────────────────
+
+fn fn_type(param_types: list, return_type: map) -> map {
+    let parts = []
+    for pt in param_types {
+        parts = parts + [type_name(pt)]
+    }
+    let sig = join(parts, ", ")
+    let name = "(" + sig + ") -> " + type_name(return_type)
+    let t = make_type(TK_FUNCTION, name)
+    t["param_types"]  = param_types
+    t["return_type"]  = return_type
+    t["param_names"]  = []
+    return t
+}
+
+fn fn_type_named(param_types: list, return_type: map, param_names: list) -> map {
+    let t = fn_type(param_types, return_type)
+    t["param_names"] = param_names
+    return t
+}
+
+fn fn_arity(t: map) -> int {
+    return len(t["param_types"])
+}
+
+// ─── List type ─────────────────────────────────────────────────────────
+
+fn list_type(element_type: map) -> map {
+    let t = make_type(TK_LIST, "list[" + type_name(element_type) + "]")
+    t["element_type"] = element_type
+    return t
+}
+
+// ─── Map type ──────────────────────────────────────────────────────────
+
+fn map_type(key_type: map, value_type: map) -> map {
+    let name = "map[" + type_name(key_type) + ", " + type_name(value_type) + "]"
+    let t = make_type(TK_MAP, name)
+    t["key_type"]   = key_type
+    t["value_type"] = value_type
+    return t
+}
+
+// ─── Tuple type ────────────────────────────────────────────────────────
+
+fn tuple_type(element_types: list) -> map {
+    let parts = []
+    for et in element_types {
+        parts = parts + [type_name(et)]
+    }
+    let name = "(" + join(parts, ", ") + ")"
+    let t = make_type(TK_TUPLE, name)
+    t["element_types"] = element_types
+    return t
+}
+
+// ─── Union type ────────────────────────────────────────────────────────
+
+fn union_type(types: list) -> map {
+    // Flatten nested unions
+    let flat = []
+    for ty in types {
+        if type_kind(ty) == TK_UNION {
+            for inner in ty["member_types"] {
+                flat = flat + [inner]
+            }
+        } else {
+            flat = flat + [ty]
+        }
+    }
+    // Deduplicate by name
+    let seen = {}
+    let deduped = []
+    for ty in flat {
+        let n = type_name(ty)
+        if not has_key(seen, n) {
+            seen[n] = true
+            deduped = deduped + [ty]
+        }
+    }
+    let names = []
+    for ty in deduped {
+        names = names + [type_name(ty)]
+    }
+    let sorted_names = sorted(names)
+    let name = join(sorted_names, " | ")
+    let t = make_type(TK_UNION, name)
+    t["member_types"] = deduped
+    return t
+}
+
+fn union_contains(u: map, t: map) -> bool {
+    let target = type_name(t)
+    for member in u["member_types"] {
+        if type_name(member) == target {
+            return true
+        }
+    }
+    return false
+}
+
+// ─── Optional type ────────────────────────────────────────────────────
+
+fn optional_type(inner: map) -> map {
+    let t = make_type(TK_OPTIONAL, type_name(inner) + "?")
+    t["inner_type"] = inner
+    return t
+}
+
+// ─── TypeVar ───────────────────────────────────────────────────────────
+
+fn typevar(name: str) -> map {
+    let t = make_type(TK_TYPEVAR, name)
+    t["constraint"] = none
+    return t
+}
+
+fn typevar_constrained(name: str, constraint: map) -> map {
+    let t = make_type(TK_TYPEVAR, name)
+    t["constraint"] = constraint
+    return t
+}
+
+// ─── Struct type ───────────────────────────────────────────────────────
+
+fn struct_type(name: str, fields: list) -> map {
+    // fields is a list of [name, type] pairs
+    let t = make_type(TK_STRUCT, name)
+    t["fields"]  = fields
+    t["methods"] = []
+    return t
+}
+
+fn struct_type_with_methods(name: str, fields: list, methods: list) -> map {
+    let t = struct_type(name, fields)
+    t["methods"] = methods
+    return t
+}
+
+fn struct_field_type(s: map, field_name: str) -> map {
+    for f in s["fields"] {
+        if f[0] == field_name {
+            return f[1]
+        }
+    }
+    return none
+}
+
+fn struct_method_type(s: map, method_name: str) -> map {
+    for m in s["methods"] {
+        if m[0] == method_name {
+            return m[1]
+        }
+    }
+    return none
+}
+
+// ─── Interface type ────────────────────────────────────────────────────
+
+fn interface_type(name: str, methods: list) -> map {
+    let t = make_type(TK_INTERFACE, name)
+    t["methods_required"] = methods
+    return t
+}
+
+fn interface_satisfied_by(iface: map, st: map) -> bool {
+    for req in iface["methods_required"] {
+        let mname = req[0]
+        let actual = struct_method_type(st, mname)
+        if actual == none {
+            return false
+        }
+    }
+    return true
+}
+
+// ─── Gradual type (v1.5) ──────────────────────────────────────────────
+
+fn gradual_type(inner: map) -> map {
+    let label = "~any"
+    if type_kind(inner) != TK_ANY {
+        label = "~" + type_name(inner)
+    }
+    let t = make_type(TK_GRADUAL, label)
+    t["inner"] = inner
+    return t
+}
+
+fn gradual_is_consistent(g: map, other: map) -> bool {
+    let inner = g["inner"]
+    if type_kind(other) == TK_ANY or type_kind(inner) == TK_ANY {
+        return true
+    }
+    if type_kind(other) == TK_GRADUAL {
+        return is_assignable(inner, other["inner"]) or is_assignable(other["inner"], inner)
+    }
+    return is_assignable(inner, other) or is_assignable(other, inner)
+}
+
+// ─── Pointer type (v1.6) ──────────────────────────────────────────────
+
+fn ptr_type(pointee: map) -> map {
+    let t = make_type(TK_PTR, "Ptr<" + type_name(pointee) + ">")
+    t["pointee"] = pointee
+    return t
+}
+
+// ─── Compound constants ───────────────────────────────────────────────
+
+const T_NUMBER  = union_type([T_INT, T_FLOAT])
+const T_DYNAMIC = gradual_type(T_ANY)
+
+// ═══════════════════════════════════════════════════════════════════════
+// TYPE ASSIGNABILITY
+// ═══════════════════════════════════════════════════════════════════════
+
+fn types_equal(a: map, b: map) -> bool {
+    return type_name(a) == type_name(b)
+}
+
+fn is_assignable(target: map, source: map) -> bool {
+    // Same type
+    if types_equal(target, source) {
+        return true
+    }
+    // Any accepts everything
+    if type_kind(target) == TK_ANY {
+        return true
+    }
+    // Never is assignable to anything (bottom type)
+    if type_kind(source) == TK_NEVER {
+        return true
+    }
+
+    let tk = type_kind(target)
+    let sk = type_kind(source)
+
+    // Primitive promotions
+    if tk == TK_PRIMITIVE and sk == TK_PRIMITIVE {
+        // int -> float promotion
+        if type_name(target) == "float" and type_name(source) == "int" {
+            return true
+        }
+        // Anything -> str (implicit conversion)
+        if type_name(target) == "str" {
+            return true
+        }
+        return false
+    }
+
+    // Function type: contravariant params, covariant return
+    if tk == TK_FUNCTION and sk == TK_FUNCTION {
+        if fn_arity(target) != fn_arity(source) {
+            return false
+        }
+        let tparams = target["param_types"]
+        let sparams = source["param_types"]
+        let i = 0
+        while i < len(tparams) {
+            // Contravariant: source params must accept target params
+            if not is_assignable(sparams[i], tparams[i]) {
+                return false
+            }
+            i = i + 1
+        }
+        return is_assignable(target["return_type"], source["return_type"])
+    }
+
+    // List<A> assignable from List<B> if A assignable from B
+    if tk == TK_LIST and sk == TK_LIST {
+        return is_assignable(target["element_type"], source["element_type"])
+    }
+
+    // Map<K1,V1> from Map<K2,V2>
+    if tk == TK_MAP and sk == TK_MAP {
+        return is_assignable(target["key_type"], source["key_type"]) and
+               is_assignable(target["value_type"], source["value_type"])
+    }
+
+    // Tuple: same arity, pairwise assignable
+    if tk == TK_TUPLE and sk == TK_TUPLE {
+        let te = target["element_types"]
+        let se = source["element_types"]
+        if len(te) != len(se) {
+            return false
+        }
+        let j = 0
+        while j < len(te) {
+            if not is_assignable(te[j], se[j]) {
+                return false
+            }
+            j = j + 1
+        }
+        return true
+    }
+
+    // Union target: source must be assignable to at least one member
+    if tk == TK_UNION {
+        if sk == TK_UNION {
+            // Every member of source must be assignable to target
+            for m in source["member_types"] {
+                if not union_contains(target, m) {
+                    return false
+                }
+            }
+            return true
+        }
+        return union_contains(target, source)
+    }
+
+    // Optional target: accepts none or inner type
+    if tk == TK_OPTIONAL {
+        if type_name(source) == "none" {
+            return true
+        }
+        return is_assignable(target["inner_type"], source)
+    }
+
+    // TypeVar: unconstrained accepts everything
+    if tk == TK_TYPEVAR {
+        let c = target["constraint"]
+        if c == none {
+            return true
+        }
+        return is_assignable(c, source)
+    }
+
+    // Struct: structural typing — source must have all target fields
+    if tk == TK_STRUCT and sk == TK_STRUCT {
+        for f in target["fields"] {
+            let fname = f[0]
+            let ftype = f[1]
+            let other_type = struct_field_type(source, fname)
+            if other_type == none {
+                return false
+            }
+            if not is_assignable(ftype, other_type) {
+                return false
+            }
+        }
+        return true
+    }
+
+    // Gradual type: always accepts (mismatch deferred to runtime)
+    if tk == TK_GRADUAL or sk == TK_GRADUAL {
+        return true
+    }
+
+    // Ptr<T>: accepts Ptr<T> or Ptr<u8>
+    if tk == TK_PTR and sk == TK_PTR {
+        if type_name(source["pointee"]) == "u8" {
+            return true
+        }
+        return is_assignable(target["pointee"], source["pointee"])
+    }
+
+    return false
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// TYPE ENVIRONMENT
+// ═══════════════════════════════════════════════════════════════════════
+
+struct TypeEnv {
+    bindings: map
+    type_defs: map
+    parent: any
+}
+
+fn env_new() -> TypeEnv {
+    return TypeEnv { bindings: {}, type_defs: {}, parent: none }
+}
+
+fn env_child(parent: TypeEnv) -> TypeEnv {
+    return TypeEnv { bindings: {}, type_defs: {}, parent: parent }
+}
+
+fn env_define(env: TypeEnv, name: str, typ: map) {
+    env.bindings[name] = typ
+}
+
+fn env_lookup(env: TypeEnv, name: str) -> map {
+    if has_key(env.bindings, name) {
+        return env.bindings[name]
+    }
+    if env.parent != none {
+        return env_lookup(env.parent, name)
+    }
+    return none
+}
+
+fn env_define_type(env: TypeEnv, name: str, typ: map) {
+    env.type_defs[name] = typ
+}
+
+fn env_lookup_type(env: TypeEnv, name: str) -> map {
+    if has_key(env.type_defs, name) {
+        return env.type_defs[name]
+    }
+    if env.parent != none {
+        return env_lookup_type(env.parent, name)
+    }
+    return none
+}
+
+fn env_all_bindings(env: TypeEnv) -> map {
+    let result = {}
+    if env.parent != none {
+        let parent_bindings = env_all_bindings(env.parent)
+        for k in keys(parent_bindings) {
+            result[k] = parent_bindings[k]
+        }
+    }
+    for k in keys(env.bindings) {
+        result[k] = env.bindings[k]
+    }
+    return result
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// TYPE NARROWING
+// ═══════════════════════════════════════════════════════════════════════
+
+fn narrow_optional(typ: map) -> map {
+    if type_kind(typ) == TK_OPTIONAL {
+        return typ["inner_type"]
+    }
+    return typ
+}
+
+fn is_nilable(typ: map) -> bool {
+    if type_kind(typ) == TK_OPTIONAL {
+        return true
+    }
+    if type_kind(typ) == TK_UNION {
+        for m in typ["member_types"] {
+            if type_name(m) == "none" {
+                return true
+            }
+        }
+    }
+    return type_name(typ) == "none"
+}
+
+// narrow_from_condition returns [true_env, false_env]
+fn narrow_from_condition(env: TypeEnv, cond: map) -> list {
+    let true_env  = env_child(env)
+    let false_env = env_child(env)
+    _narrow_analyze(cond, env, true_env, false_env)
+    return [true_env, false_env]
+}
+
+fn _narrow_analyze(cond: map, env: TypeEnv, true_env: TypeEnv, false_env: TypeEnv) {
+    let ctype = cond["node_type"]
+
+    // x != nil  →  true branch: narrowed
+    if ctype == "BinaryOp" and cond["op"] == "!=" {
+        _narrow_nil_check(cond, env, true_env, false_env, false)
+        return
+    }
+
+    // x == nil  →  false branch: narrowed
+    if ctype == "BinaryOp" and cond["op"] == "==" {
+        _narrow_nil_check(cond, env, true_env, false_env, true)
+        _narrow_typeof(cond, env, true_env, false_env)
+        return
+    }
+
+    // !expr → swap branches
+    if ctype == "UnaryOp" and (cond["op"] == "!" or cond["op"] == "not") {
+        _narrow_analyze(cond["operand"], env, false_env, true_env)
+        return
+    }
+
+    // expr && expr → both narrow true branch
+    if ctype == "BinaryOp" and (cond["op"] == "&&" or cond["op"] == "and") {
+        _narrow_analyze(cond["left"], env, true_env, false_env)
+        _narrow_analyze(cond["right"], env, true_env, false_env)
+        return
+    }
+
+    // expr || expr → both narrow false branch
+    if ctype == "BinaryOp" and (cond["op"] == "||" or cond["op"] == "or") {
+        _narrow_analyze(cond["left"], env, true_env, false_env)
+        _narrow_analyze(cond["right"], env, true_env, false_env)
+        return
+    }
+}
+
+fn _narrow_nil_check(cond: map, env: TypeEnv, true_env: TypeEnv, false_env: TypeEnv, negated: bool) {
+    let left  = cond["left"]
+    let right = cond["right"]
+    let var_name = ""
+
+    // Determine which side is nil
+    if has_key(right, "value") and right["value"] == none {
+        if has_key(left, "name") {
+            var_name = left["name"]
+        }
+    }
+    if var_name == "" and has_key(left, "value") and left["value"] == none {
+        if has_key(right, "name") {
+            var_name = right["name"]
+        }
+    }
+
+    if len(var_name) == 0 {
+        return
+    }
+
+    let current = env_lookup(env, var_name)
+    if current == none {
+        return
+    }
+
+    let non_nil = current
+    if type_kind(current) == TK_OPTIONAL {
+        non_nil = current["inner_type"]
+    }
+
+    if negated {
+        // x == nil → false branch narrows
+        env_define(false_env, var_name, non_nil)
+    } else {
+        // x != nil → true branch narrows
+        env_define(true_env, var_name, non_nil)
+        env_define(false_env, var_name, T_NONE)
+    }
+}
+
+fn _narrow_typeof(cond: map, env: TypeEnv, true_env: TypeEnv, false_env: TypeEnv) {
+    let left  = cond["left"]
+    let right = cond["right"]
+
+    // Check for type_of(var) == "typename"
+    if has_key(left, "node_type") and left["node_type"] == "CallExpr" {
+        if has_key(left, "callee") and left["callee"] == "type_of" {
+            if has_key(left, "args") and len(left["args"]) == 1 {
+                let arg = left["args"][0]
+                if has_key(arg, "name") and has_key(right, "value") {
+                    let var_name  = arg["name"]
+                    let type_name_str = right["value"]
+                    let narrowed  = _narrow_type_map(type_name_str)
+                    if narrowed != none {
+                        env_define(true_env, var_name, narrowed)
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn _narrow_type_map(name: str) -> map {
+    if name == "int"   { return T_INT }
+    if name == "float" { return T_FLOAT }
+    if name == "str"   { return T_STR }
+    if name == "bool"  { return T_BOOL }
+    if name == "list"  { return list_type(T_ANY) }
+    if name == "map"   { return map_type(T_STR, T_ANY) }
+    return none
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// TYPE INFERENCE ENGINE
+// ═══════════════════════════════════════════════════════════════════════
+
+struct Inferencer {
+    constraints: list
+    substitutions: map
+    counter: int
+}
+
+fn inferencer_new() -> Inferencer {
+    return Inferencer { constraints: [], substitutions: {}, counter: 0 }
+}
+
+fn fresh_typevar_from(inf: Inferencer, prefix: str) -> map {
+    inf.counter = inf.counter + 1
+    return typevar(prefix + str(inf.counter))
+}
+
+fn constrain(inf: Inferencer, expected: map, actual: map, context: str) {
+    inf.constraints = inf.constraints + [[expected, actual, context]]
+}
+
+// ─── Literal inference ─────────────────────────────────────────────────
+
+fn infer_literal(inf: Inferencer, value: any) -> map {
+    if value == true or value == false {
+        return T_BOOL
+    }
+    if value == none {
+        return T_NONE
+    }
+    let vt = get_type(value)
+    if vt == "int" {
+        return T_INT
+    }
+    if vt == "float" {
+        return T_FLOAT
+    }
+    if vt == "str" {
+        return T_STR
+    }
+    // Default
+    return T_ANY
+}
+
+// ─── Binary operation inference ────────────────────────────────────────
+
+fn infer_binary(op: str, left: map, right: map) -> map {
+    // Comparison → bool
+    if op == "==" or op == "!=" or op == "<" or op == ">" or op == "<=" or op == ">=" {
+        return T_BOOL
+    }
+    // Boolean ops → bool
+    if op == "and" or op == "or" {
+        return T_BOOL
+    }
+    // String concatenation
+    if op == "+" and (types_equal(left, T_STR) or types_equal(right, T_STR)) {
+        return T_STR
+    }
+    // Numeric ops
+    if is_numeric(left) and is_numeric(right) {
+        if types_equal(left, T_FLOAT) or types_equal(right, T_FLOAT) {
+            return T_FLOAT
+        }
+        if op == "/" {
+            return T_FLOAT
+        }
+        return T_INT
+    }
+    return T_ANY
+}
+
+// ─── Unary operation inference ─────────────────────────────────────────
+
+fn infer_unary(op: str, operand: map) -> map {
+    if op == "not" or op == "!" {
+        return T_BOOL
+    }
+    if op == "-" and is_numeric(operand) {
+        return operand
+    }
+    return T_ANY
+}
+
+// ─── Resolve / substitute ──────────────────────────────────────────────
+
+fn resolve(inf: Inferencer, typ: map) -> map {
+    if type_kind(typ) == TK_TYPEVAR {
+        let n = type_name(typ)
+        if has_key(inf.substitutions, n) {
+            return resolve(inf, inf.substitutions[n])
+        }
+    }
+    return typ
+}
+
+fn substitute(inf: Inferencer, typ: map) -> map {
+    let tk = type_kind(typ)
+
+    if tk == TK_TYPEVAR {
+        let n = type_name(typ)
+        if has_key(inf.substitutions, n) {
+            return substitute(inf, inf.substitutions[n])
+        }
+        return typ
+    }
+
+    if tk == TK_LIST {
+        return list_type(substitute(inf, typ["element_type"]))
+    }
+
+    if tk == TK_MAP {
+        return map_type(substitute(inf, typ["key_type"]),
+                        substitute(inf, typ["value_type"]))
+    }
+
+    if tk == TK_TUPLE {
+        let elems = []
+        for e in typ["element_types"] {
+            elems = elems + [substitute(inf, e)]
+        }
+        return tuple_type(elems)
+    }
+
+    if tk == TK_FUNCTION {
+        let params = []
+        for p in typ["param_types"] {
+            params = params + [substitute(inf, p)]
+        }
+        return fn_type_named(params, substitute(inf, typ["return_type"]), typ["param_names"])
+    }
+
+    if tk == TK_UNION {
+        let members = []
+        for m in typ["member_types"] {
+            members = members + [substitute(inf, m)]
+        }
+        return union_type(members)
+    }
+
+    if tk == TK_OPTIONAL {
+        return optional_type(substitute(inf, typ["inner_type"]))
+    }
+
+    return typ
+}
+
+// ─── Occurs check ──────────────────────────────────────────────────────
+
+fn occurs_check(inf: Inferencer, var_type: map, typ: map) -> bool {
+    let t = resolve(inf, typ)
+    let tk = type_kind(t)
+    let vname = type_name(var_type)
+
+    if tk == TK_TYPEVAR {
+        return type_name(t) == vname
+    }
+    if tk == TK_LIST {
+        return occurs_check(inf, var_type, t["element_type"])
+    }
+    if tk == TK_MAP {
+        return occurs_check(inf, var_type, t["key_type"]) or
+               occurs_check(inf, var_type, t["value_type"])
+    }
+    if tk == TK_TUPLE {
+        for e in t["element_types"] {
+            if occurs_check(inf, var_type, e) {
+                return true
+            }
+        }
+        return false
+    }
+    if tk == TK_FUNCTION {
+        for p in t["param_types"] {
+            if occurs_check(inf, var_type, p) {
+                return true
+            }
+        }
+        return occurs_check(inf, var_type, t["return_type"])
+    }
+    if tk == TK_UNION {
+        for m in t["member_types"] {
+            if occurs_check(inf, var_type, m) {
+                return true
+            }
+        }
+        return false
+    }
+    if tk == TK_OPTIONAL {
+        return occurs_check(inf, var_type, t["inner_type"])
+    }
+    return false
+}
+
+// ─── Robinson unification ──────────────────────────────────────────────
+
+fn unify(inf: Inferencer, t1: map, t2: map, context: str) -> str {
+    let a = resolve(inf, t1)
+    let b = resolve(inf, t2)
+
+    // Trivially equal
+    if types_equal(a, b) {
+        return ""
+    }
+
+    // ANY escape hatch
+    if type_kind(a) == TK_ANY or type_kind(b) == TK_ANY {
+        return ""
+    }
+
+    // Bind type variable (left)
+    if type_kind(a) == TK_TYPEVAR {
+        if occurs_check(inf, a, b) {
+            return "Infinite type: " + type_name(a) + " occurs in " + type_name(b)
+        }
+        inf.substitutions[type_name(a)] = b
+        return ""
+    }
+
+    // Bind type variable (right)
+    if type_kind(b) == TK_TYPEVAR {
+        if occurs_check(inf, b, a) {
+            return "Infinite type: " + type_name(b) + " occurs in " + type_name(a)
+        }
+        inf.substitutions[type_name(b)] = a
+        return ""
+    }
+
+    let ak = type_kind(a)
+    let bk = type_kind(b)
+
+    // List<A> ~ List<B>
+    if ak == TK_LIST and bk == TK_LIST {
+        return unify(inf, a["element_type"], b["element_type"], context)
+    }
+
+    // Map<K1,V1> ~ Map<K2,V2>
+    if ak == TK_MAP and bk == TK_MAP {
+        let kerr = unify(inf, a["key_type"], b["key_type"], context)
+        if len(kerr) > 0 {
+            return kerr
+        }
+        return unify(inf, a["value_type"], b["value_type"], context)
+    }
+
+    // Tuple ~ Tuple
+    if ak == TK_TUPLE and bk == TK_TUPLE {
+        let ae = a["element_types"]
+        let be = b["element_types"]
+        if len(ae) != len(be) {
+            return "Tuple arity mismatch: " + type_name(a) + " vs " + type_name(b)
+        }
+        let idx = 0
+        while idx < len(ae) {
+            let err = unify(inf, ae[idx], be[idx], context)
+            if len(err) > 0 {
+                return err
+            }
+            idx = idx + 1
+        }
+        return ""
+    }
+
+    // Function ~ Function
+    if ak == TK_FUNCTION and bk == TK_FUNCTION {
+        if fn_arity(a) != fn_arity(b) {
+            let ctx_part = ""
+            if len(context) > 0 {
+                ctx_part = " in " + context
+            }
+            return "Function arity mismatch" + ctx_part + ": " + type_name(a) + " vs " + type_name(b)
+        }
+        let ap = a["param_types"]
+        let bp = b["param_types"]
+        let pi = 0
+        while pi < len(ap) {
+            let perr = unify(inf, ap[pi], bp[pi], context)
+            if len(perr) > 0 {
+                return perr
+            }
+            pi = pi + 1
+        }
+        return unify(inf, a["return_type"], b["return_type"], context)
+    }
+
+    // Optional ~ Optional
+    if ak == TK_OPTIONAL and bk == TK_OPTIONAL {
+        return unify(inf, a["inner_type"], b["inner_type"], context)
+    }
+
+    // Nullable coercion: Optional<T> ~ T
+    if ak == TK_OPTIONAL {
+        return unify(inf, a["inner_type"], b, context)
+    }
+    if bk == TK_OPTIONAL {
+        return unify(inf, a, b["inner_type"], context)
+    }
+
+    // Union widening
+    if bk == TK_UNION and union_contains(b, a) {
+        return ""
+    }
+    if ak == TK_UNION and union_contains(a, b) {
+        return ""
+    }
+
+    let ctx_suffix = ""
+    if len(context) > 0 {
+        ctx_suffix = " in " + context
+    }
+    return "Type mismatch" + ctx_suffix + ": expected " + type_name(a) + ", got " + type_name(b)
+}
+
+// ─── Constraint solving ────────────────────────────────────────────────
+
+fn solve(inf: Inferencer) -> list {
+    let errors = []
+    for c in inf.constraints {
+        let expected = c[0]
+        let actual   = c[1]
+        let context  = c[2]
+        let err = unify(inf, expected, actual, context)
+        if len(err) > 0 {
+            errors = errors + [err]
+        }
+    }
+    inf.constraints = []
+    return errors
+}
+
+// ─── Pattern inference ─────────────────────────────────────────────────
+
+fn infer_pattern(inf: Inferencer, pattern: map, subject: map) -> map {
+    let bindings = {}
+    let ptype = pattern["pattern_type"]
+
+    if ptype == "wildcard" {
+        return bindings
+    }
+
+    if ptype == "literal" {
+        let lit_type = infer_literal(inf, pattern["value"])
+        constrain(inf, subject, lit_type, "literal pattern")
+        return bindings
+    }
+
+    if ptype == "binding" {
+        bindings[pattern["name"]] = resolve(inf, subject)
+        return bindings
+    }
+
+    if ptype == "type_match" {
+        if has_key(pattern, "fields") {
+            let i = 0
+            for sub_pat in pattern["fields"] {
+                let ftv = fresh_typevar_from(inf, "F" + str(i))
+                let sub_bindings = infer_pattern(inf, sub_pat, ftv)
+                for k in keys(sub_bindings) {
+                    bindings[k] = sub_bindings[k]
+                }
+                i = i + 1
+            }
+        }
+        return bindings
+    }
+
+    if ptype == "enum_variant" {
+        if has_key(pattern, "fields") {
+            let i = 0
+            for sub_pat in pattern["fields"] {
+                let vtv = fresh_typevar_from(inf, "V" + str(i))
+                let sub_bindings = infer_pattern(inf, sub_pat, vtv)
+                for k in keys(sub_bindings) {
+                    bindings[k] = sub_bindings[k]
+                }
+                i = i + 1
+            }
+        }
+        return bindings
+    }
+
+    if ptype == "tuple_match" {
+        let elems = pattern["elements"]
+        let elem_types = []
+        let i = 0
+        while i < len(elems) {
+            elem_types = elem_types + [fresh_typevar_from(inf, "T" + str(i))]
+            i = i + 1
+        }
+        constrain(inf, subject, tuple_type(elem_types), "tuple pattern")
+        let j = 0
+        while j < len(elems) {
+            let sub_bindings = infer_pattern(inf, elems[j], elem_types[j])
+            for k in keys(sub_bindings) {
+                bindings[k] = sub_bindings[k]
+            }
+            j = j + 1
+        }
+        return bindings
+    }
+
+    if ptype == "list_match" {
+        let elem_tv = fresh_typevar_from(inf, "E")
+        constrain(inf, subject, list_type(elem_tv), "list pattern")
+        for sub_pat in pattern["head"] {
+            let sub_bindings = infer_pattern(inf, sub_pat, elem_tv)
+            for k in keys(sub_bindings) {
+                bindings[k] = sub_bindings[k]
+            }
+        }
+        if has_key(pattern, "rest") and pattern["rest"] != "" {
+            bindings[pattern["rest"]] = list_type(resolve(inf, elem_tv))
+        }
+        return bindings
+    }
+
+    if ptype == "or_match" {
+        let left_bindings  = infer_pattern(inf, pattern["left"], subject)
+        let right_bindings = infer_pattern(inf, pattern["right"], subject)
+        // Only names in BOTH branches are in scope
+        for k in keys(left_bindings) {
+            if has_key(right_bindings, k) {
+                bindings[k] = left_bindings[k]
+            }
+        }
+        return bindings
+    }
+
+    return bindings
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// TYPE CHECKER
+// ═══════════════════════════════════════════════════════════════════════
+
+struct TypeError_ {
+    message: str
+    expected: any
+    actual: any
+    location: str
+}
+
+fn type_error(msg: str) -> TypeError_ {
+    return TypeError_ { message: msg, expected: none, actual: none, location: "" }
+}
+
+fn type_error_full(msg: str, expected: map, actual: map, loc: str) -> TypeError_ {
+    return TypeError_ { message: msg, expected: expected, actual: actual, location: loc }
+}
+
+struct TypeChecker {
+    env: TypeEnv
+    inferencer: Inferencer
+    errors: list
+}
+
+fn checker_new() -> TypeChecker {
+    let env = env_new()
+    let inf = inferencer_new()
+    let tc = TypeChecker { env: env, inferencer: inf, errors: [] }
+    _register_builtins(tc)
+    return tc
+}
+
+fn _register_builtins(tc: TypeChecker) {
+    let e = tc.env
+    // I/O
+    env_define(e, "print",   fn_type([T_ANY], T_VOID))
+    env_define(e, "println", fn_type([T_ANY], T_VOID))
+    // Conversion
+    env_define(e, "len",   fn_type([T_ANY], T_INT))
+    env_define(e, "str",   fn_type([T_ANY], T_STR))
+    env_define(e, "int",   fn_type([T_ANY], T_INT))
+    env_define(e, "float", fn_type([T_ANY], T_FLOAT))
+    env_define(e, "bool",  fn_type([T_ANY], T_BOOL))
+    env_define(e, "type_of", fn_type([T_ANY], T_STR))
+    // Collections
+    env_define(e, "range",    fn_type([T_INT, T_INT], list_type(T_INT)))
+    env_define(e, "abs",      fn_type([T_NUMBER], T_NUMBER))
+    env_define(e, "min",      fn_type([T_NUMBER, T_NUMBER], T_NUMBER))
+    env_define(e, "max",      fn_type([T_NUMBER, T_NUMBER], T_NUMBER))
+    env_define(e, "sum",      fn_type([list_type(T_NUMBER)], T_NUMBER))
+    env_define(e, "sorted",   fn_type([list_type(T_ANY)], list_type(T_ANY)))
+    env_define(e, "reversed", fn_type([list_type(T_ANY)], list_type(T_ANY)))
+    // Higher-order
+    let any_fn  = fn_type([T_ANY], T_ANY)
+    let pred_fn = fn_type([T_ANY], T_BOOL)
+    let red_fn  = fn_type([T_ANY, T_ANY], T_ANY)
+    env_define(e, "map",    fn_type([any_fn, list_type(T_ANY)], list_type(T_ANY)))
+    env_define(e, "filter", fn_type([pred_fn, list_type(T_ANY)], list_type(T_ANY)))
+    env_define(e, "reduce", fn_type([red_fn, list_type(T_ANY), T_ANY], T_ANY))
+    // Math engine
+    env_define(e, "mean",    fn_type([list_type(T_FLOAT)], T_FLOAT))
+    env_define(e, "median",  fn_type([list_type(T_FLOAT)], T_FLOAT))
+    env_define(e, "std_dev", fn_type([list_type(T_FLOAT)], T_FLOAT))
+    env_define(e, "sqrt",    fn_type([T_FLOAT], T_FLOAT))
+    env_define(e, "sin",     fn_type([T_FLOAT], T_FLOAT))
+    env_define(e, "cos",     fn_type([T_FLOAT], T_FLOAT))
+    // Crypto
+    env_define(e, "sha256",     fn_type([T_STR], T_STR))
+    env_define(e, "sha512",     fn_type([T_STR], T_STR))
+    env_define(e, "hmac_sign",  fn_type([T_STR, T_STR], T_STR))
+    env_define(e, "hmac_verify", fn_type([T_STR, T_STR, T_STR], T_BOOL))
+    env_define(e, "to_base64",  fn_type([T_STR], T_STR))
+    env_define(e, "from_base64", fn_type([T_STR], T_STR))
+    env_define(e, "random_token", fn_type([T_INT], T_STR))
+    // OS / low-level
+    env_define(e, "addr_of",  fn_type([T_ANY], ptr_type(T_U8)))
+    env_define(e, "deref",    fn_type([ptr_type(T_U8)], T_ANY))
+    env_define(e, "sizeof",   fn_type([T_ANY], T_USIZE))
+    env_define(e, "alignof",  fn_type([T_ANY], T_USIZE))
+    env_define(e, "offsetof", fn_type([T_ANY, T_STR], T_USIZE))
+}
+
+fn check_assignment(tc: TypeChecker, var_name: str, declared: map, value_type: map) -> TypeError_ {
+    if declared == none {
+        // Infer from value
+        env_define(tc.env, var_name, value_type)
+        return none
+    }
+
+    // Gradual types defer to runtime
+    if type_kind(declared) == TK_GRADUAL or type_kind(value_type) == TK_GRADUAL {
+        env_define(tc.env, var_name, declared)
+        return none
+    }
+
+    if not is_assignable(declared, value_type) {
+        let msg = "Cannot assign " + type_name(value_type) + " to variable '" + var_name + "' of type " + type_name(declared)
+        let err = type_error_full(msg, declared, value_type, "")
+        tc.errors = tc.errors + [err]
+        return err
+    }
+
+    env_define(tc.env, var_name, declared)
+    return none
+}
+
+fn check_call(tc: TypeChecker, fn_name: str, arg_types: list) -> list {
+    // Returns [result_type, error_or_none]
+    let fn_type_val = env_lookup(tc.env, fn_name)
+
+    if fn_type_val == none {
+        let err = type_error("Unknown function '" + fn_name + "'")
+        tc.errors = tc.errors + [err]
+        return [T_ANY, err]
+    }
+
+    if type_kind(fn_type_val) != TK_FUNCTION {
+        let err = type_error("'" + fn_name + "' is not callable (type: " + type_name(fn_type_val) + ")")
+        tc.errors = tc.errors + [err]
+        return [T_ANY, err]
+    }
+
+    let expected_arity = fn_arity(fn_type_val)
+    if len(arg_types) != expected_arity {
+        let err = type_error("'" + fn_name + "' expects " + str(expected_arity) + " arguments, got " + str(len(arg_types)))
+        tc.errors = tc.errors + [err]
+        return [fn_type_val["return_type"], err]
+    }
+
+    // Check each argument
+    let params = fn_type_val["param_types"]
+    let pnames = fn_type_val["param_names"]
+    let i = 0
+    while i < len(params) {
+        if not is_assignable(params[i], arg_types[i]) {
+            let pname = "arg" + str(i)
+            if i < len(pnames) {
+                pname = pnames[i]
+            }
+            let msg = "Argument '" + pname + "' of '" + fn_name + "': expected " + type_name(params[i]) + ", got " + type_name(arg_types[i])
+            let err = type_error_full(msg, params[i], arg_types[i], "")
+            tc.errors = tc.errors + [err]
+        }
+        i = i + 1
+    }
+
+    return [fn_type_val["return_type"], none]
+}
+
+fn checker_has_errors(tc: TypeChecker) -> bool {
+    return len(tc.errors) > 0
+}
+
+fn checker_format_errors(tc: TypeChecker) -> str {
+    let lines = []
+    for err in tc.errors {
+        let msg = "TypeError: " + err.message
+        if len(err.location) > 0 {
+            msg = err.location + ": " + msg
+        }
+        lines = lines + [msg]
+    }
+    return join(lines, "\n")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// TYPE ANNOTATION PARSER
+// ═══════════════════════════════════════════════════════════════════════
+
+fn parse_type_annotation(annotation: str) -> map {
+    let s = trim(annotation)
+
+    // Primitives
+    if s == "int"    { return T_INT }
+    if s == "float"  { return T_FLOAT }
+    if s == "str"    { return T_STR }
+    if s == "string" { return T_STR }
+    if s == "bool"   { return T_BOOL }
+    if s == "none"   { return T_NONE }
+    if s == "any"    { return T_ANY }
+    if s == "void"   { return T_VOID }
+    if s == "never"  { return T_NEVER }
+
+    // Fixed-width types
+    if s == "u8"    { return T_U8 }
+    if s == "u16"   { return T_U16 }
+    if s == "u32"   { return T_U32 }
+    if s == "u64"   { return T_U64 }
+    if s == "i8"    { return T_I8 }
+    if s == "i16"   { return T_I16 }
+    if s == "i32"   { return T_I32 }
+    if s == "i64"   { return T_I64 }
+    if s == "usize" { return T_USIZE }
+    if s == "isize" { return T_ISIZE }
+    if s == "byte"  { return T_BYTE }
+
+    // Gradual: ~T
+    if starts_with(s, "~") {
+        let inner = parse_type_annotation(slice(s, 1, len(s)))
+        return gradual_type(inner)
+    }
+
+    // Optional: T?
+    if ends_with(s, "?") {
+        let inner = parse_type_annotation(slice(s, 0, len(s) - 1))
+        return optional_type(inner)
+    }
+
+    // List: list[T]
+    if starts_with(s, "list[") and ends_with(s, "]") {
+        let inner = parse_type_annotation(slice(s, 5, len(s) - 1))
+        return list_type(inner)
+    }
+
+    // Map: map[K, V]
+    if starts_with(s, "map[") and ends_with(s, "]") {
+        let inner = slice(s, 4, len(s) - 1)
+        let comma = index_of(inner, ",")
+        if comma >= 0 {
+            let k = parse_type_annotation(slice(inner, 0, comma))
+            let v = parse_type_annotation(slice(inner, comma + 1, len(inner)))
+            return map_type(k, v)
+        }
+    }
+
+    // Union: T1 | T2
+    if contains(s, "|") {
+        let parts = split(s, "|")
+        let types = []
+        for p in parts {
+            types = types + [parse_type_annotation(p)]
+        }
+        return union_type(types)
+    }
+
+    // Unknown → named type reference (struct)
+    return make_type(TK_STRUCT, s)
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// FIXED-WIDTH TYPE LOOKUP
+// ═══════════════════════════════════════════════════════════════════════
+
+fn lookup_fixed_width(name: str) -> map {
+    if name == "u8"    { return T_U8 }
+    if name == "u16"   { return T_U16 }
+    if name == "u32"   { return T_U32 }
+    if name == "u64"   { return T_U64 }
+    if name == "i8"    { return T_I8 }
+    if name == "i16"   { return T_I16 }
+    if name == "i32"   { return T_I32 }
+    if name == "i64"   { return T_I64 }
+    if name == "usize" { return T_USIZE }
+    if name == "isize" { return T_ISIZE }
+    if name == "byte"  { return T_BYTE }
+    return none
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// SELF-TEST
+// ═══════════════════════════════════════════════════════════════════════
+
+fn _self_test() {
+    let pass_count = 0
+    let fail_count = 0
+
+    fn check(label: str, ok: bool) {
+        if ok {
+            pass_count = pass_count + 1
+        } else {
+            println("[FAIL] " + label)
+            fail_count = fail_count + 1
+        }
+    }
+
+    // ── Primitive types ────────────────────────────────────────────
+    check("int kind",    type_kind(T_INT) == TK_PRIMITIVE)
+    check("int name",    type_name(T_INT) == "int")
+    check("float name",  type_name(T_FLOAT) == "float")
+    check("is_numeric int",   is_numeric(T_INT))
+    check("is_numeric float", is_numeric(T_FLOAT))
+    check("is_numeric str",   not is_numeric(T_STR))
+
+    // ── Assignability ──────────────────────────────────────────────
+    check("int=int",     is_assignable(T_INT, T_INT))
+    check("float=int",   is_assignable(T_FLOAT, T_INT))
+    check("any=str",     is_assignable(T_ANY, T_STR))
+    check("str=any",     not is_assignable(T_STR, T_ANY))
+    check("int=str NO",  not is_assignable(T_INT, T_STR))
+
+    // ── List type ──────────────────────────────────────────────────
+    let li = list_type(T_INT)
+    check("list kind",       type_kind(li) == TK_LIST)
+    check("list name",       type_name(li) == "list[int]")
+    check("list=list same",  is_assignable(li, list_type(T_INT)))
+    check("list=list diff",  not is_assignable(li, list_type(T_STR)))
+
+    // ── Map type ───────────────────────────────────────────────────
+    let ms = map_type(T_STR, T_INT)
+    check("map kind", type_kind(ms) == TK_MAP)
+    check("map name", type_name(ms) == "map[str, int]")
+
+    // ── Tuple type ─────────────────────────────────────────────────
+    let tup = tuple_type([T_INT, T_STR])
+    check("tuple kind", type_kind(tup) == TK_TUPLE)
+    check("tuple name", type_name(tup) == "(int, str)")
+
+    // ── Function type ──────────────────────────────────────────────
+    let ft = fn_type([T_INT, T_STR], T_BOOL)
+    check("fn kind",  type_kind(ft) == TK_FUNCTION)
+    check("fn arity", fn_arity(ft) == 2)
+
+    // ── Optional type ──────────────────────────────────────────────
+    let opt = optional_type(T_INT)
+    check("opt kind",     type_kind(opt) == TK_OPTIONAL)
+    check("opt name",     type_name(opt) == "int?")
+    check("opt=none",     is_assignable(opt, T_NONE))
+    check("opt=int",      is_assignable(opt, T_INT))
+    check("opt=str NO",   not is_assignable(opt, T_STR))
+
+    // ── Union type ─────────────────────────────────────────────────
+    let u = union_type([T_INT, T_STR])
+    check("union kind",     type_kind(u) == TK_UNION)
+    check("union contains", union_contains(u, T_INT))
+    check("union !float",   not union_contains(u, T_FLOAT))
+
+    // ── TypeVar ────────────────────────────────────────────────────
+    let tv = typevar("T")
+    check("typevar kind", type_kind(tv) == TK_TYPEVAR)
+    check("typevar name", type_name(tv) == "T")
+    check("typevar assignable", is_assignable(tv, T_INT))
+
+    // ── Struct type ────────────────────────────────────────────────
+    let pt = struct_type("Point", [["x", T_FLOAT], ["y", T_FLOAT]])
+    check("struct kind",  type_kind(pt) == TK_STRUCT)
+    check("struct name",  type_name(pt) == "Point")
+    check("struct field", types_equal(struct_field_type(pt, "x"), T_FLOAT))
+
+    // ── Gradual type ───────────────────────────────────────────────
+    let g = gradual_type(T_INT)
+    check("gradual kind", type_kind(g) == TK_GRADUAL)
+    check("gradual name", type_name(g) == "~int")
+    check("gradual assignable", is_assignable(g, T_STR))
+
+    // ── Ptr type ───────────────────────────────────────────────────
+    let p = ptr_type(T_U8)
+    check("ptr kind", type_kind(p) == TK_PTR)
+    check("ptr name", type_name(p) == "Ptr<u8>")
+
+    // ── Type environment ───────────────────────────────────────────
+    let env = env_new()
+    env_define(env, "x", T_INT)
+    check("env lookup",      types_equal(env_lookup(env, "x"), T_INT))
+    check("env lookup miss",  env_lookup(env, "y") == none)
+    let child = env_child(env)
+    env_define(child, "y", T_STR)
+    check("child lookup y",  types_equal(env_lookup(child, "y"), T_STR))
+    check("child lookup x",  types_equal(env_lookup(child, "x"), T_INT))
+
+    // ── Narrowing ──────────────────────────────────────────────────
+    let o = optional_type(T_INT)
+    check("narrow optional", types_equal(narrow_optional(o), T_INT))
+    check("narrow non-opt",  types_equal(narrow_optional(T_INT), T_INT))
+    check("nilable opt",     is_nilable(o))
+    check("nilable int",     not is_nilable(T_INT))
+
+    // ── Inferencer ─────────────────────────────────────────────────
+    let inf = inferencer_new()
+    check("infer int",   types_equal(infer_literal(inf, 42), T_INT))
+    check("infer float", types_equal(infer_literal(inf, 3.14), T_FLOAT))
+    check("infer str",   types_equal(infer_literal(inf, "hi"), T_STR))
+    check("infer bool",  types_equal(infer_literal(inf, true), T_BOOL))
+    check("infer none",  types_equal(infer_literal(inf, none), T_NONE))
+
+    // ── Binary inference ───────────────────────────────────────────
+    check("infer ==",    types_equal(infer_binary("==", T_INT, T_INT), T_BOOL))
+    check("infer +int",  types_equal(infer_binary("+", T_INT, T_INT), T_INT))
+    check("infer +flt",  types_equal(infer_binary("+", T_INT, T_FLOAT), T_FLOAT))
+    check("infer /",     types_equal(infer_binary("/", T_INT, T_INT), T_FLOAT))
+    check("infer +str",  types_equal(infer_binary("+", T_STR, T_INT), T_STR))
+
+    // ── Unification ────────────────────────────────────────────────
+    let inf2 = inferencer_new()
+    let tv1 = fresh_typevar_from(inf2, "T")
+    let err1 = unify(inf2, tv1, T_INT, "test")
+    check("unify TV=int", len(err1) == 0)
+    check("unify resolve", types_equal(resolve(inf2, tv1), T_INT))
+
+    let inf3 = inferencer_new()
+    let err2 = unify(inf3, T_INT, T_STR, "test")
+    check("unify int!=str", len(err2) > 0)
+
+    let inf4 = inferencer_new()
+    let err3 = unify(inf4, list_type(T_INT), list_type(T_INT), "test")
+    check("unify list=list", len(err3) == 0)
+
+    // ── Constraint solving ─────────────────────────────────────────
+    let inf5 = inferencer_new()
+    let tv2 = fresh_typevar_from(inf5, "X")
+    constrain(inf5, tv2, T_FLOAT, "test")
+    let errs = solve(inf5)
+    check("solve no errors", len(errs) == 0)
+    check("solve resolved",  types_equal(resolve(inf5, tv2), T_FLOAT))
+
+    // ── Type annotation parsing ────────────────────────────────────
+    check("parse int",     types_equal(parse_type_annotation("int"), T_INT))
+    check("parse str",     types_equal(parse_type_annotation("str"), T_STR))
+    check("parse list[int]", type_kind(parse_type_annotation("list[int]")) == TK_LIST)
+    check("parse int?",    type_kind(parse_type_annotation("int?")) == TK_OPTIONAL)
+    check("parse u32",     types_equal(parse_type_annotation("u32"), T_U32))
+
+    // ── Type checker ───────────────────────────────────────────────
+    let tc = checker_new()
+    let aerr = check_assignment(tc, "x", T_INT, T_INT)
+    check("tc assign ok", aerr == none)
+    let aerr2 = check_assignment(tc, "y", T_INT, T_STR)
+    check("tc assign fail", aerr2 != none)
+    let result = check_call(tc, "len", [T_STR])
+    check("tc call len", types_equal(result[0], T_INT))
+    let result2 = check_call(tc, "unknown_fn", [T_INT])
+    check("tc call unknown", result2[1] != none)
+
+    // ── Summary ────────────────────────────────────────────────────
+    println("")
+    println("v2_type_system self-test: " + str(pass_count) + " passed, " + str(fail_count) + " failed")
+    if fail_count == 0 {
+        println("All tests passed!")
+    }
+}
+
+_self_test()

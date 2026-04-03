@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LATERALUS: Pipeline-Native Computation for Scientific Discovery</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "LATERALUS: Pipeline-Native Computation for Scientific Discovery"
+author: bad-antics
+date: 2026-03-30
+abstract: We present LATERALUS, a programming language designed for scientific computation that treats data pipelines as first-class syntax, embeds measurement and introspection into the grammar, and provides a polyglot execution bridge to Python, Julia, and R. We describe the language design, compiler architecture, mathematical computation engine, and evaluate its expressiveness against existing scientific programming languages.
+---
+
+# LATERALUS: Pipeline-Native Computation for Scientific Discovery
+
+## 1. Introduction
+
+The landscape of scientific programming is dominated by a few languages — Python for its ecosystem, Julia for its speed, R for its statistics, MATLAB for its matrix operations. Each excels in its domain but forces compromises in others. Researchers routinely maintain codebases spanning three or more languages, connected by fragile serialization layers and subprocess calls.
+
+We present LATERALUS, a language designed to address this fragmentation through three key innovations:
+
+1. **Pipeline-native syntax** — The `|>` and `|?` operators make data transformation chains a grammatical primitive, not a library pattern.
+
+2. **Embedded measurement** — The `measure` and `probe` constructs allow performance analysis and data introspection without external tooling.
+
+3. **Polyglot bridge** — The `foreign` block system provides zero-overhead interoperability with Python, Julia, R, and JavaScript runtimes.
+
+## 2. Language Design
+
+### 2.1 Core Syntax
+
+LATERALUS uses a C-family syntax with significant extensions for scientific workflows:
+
+```lateralus
+fn analyze(data: list) -> map {
+    let stats = data
+        |> filter(fn(x) { return x > 0.0 })
+        |> map(fn(x) { return x * x })
+        |> reduce(fn(a, b) { return a + b }, 0.0)
+
+    return {
+        "sum_squares": stats,
+        "count": length(data),
+        "mean": mean(data),
+    }
+}
+```
+
+### 2.2 The Pipeline Operator
+
+The pipeline operator `|>` transforms `x |> f()` into `f(x)`, enabling left-to-right data flow that mirrors the conceptual flow of scientific analysis. The optional variant `|?` short-circuits on `nil`, providing safe chaining without explicit null checks.
+
+### 2.3 Error Handling Philosophy
+
+LATERALUS treats errors as structured data, not exceptional control flow:
+
+- **Error codes** (E1001–E7004) categorize every possible failure
+- **Source context** shows surrounding lines with underline highlighting
+- **Suggestions** provide "did you mean?" and fix recommendations
+- **Error chains** track causal relationships between failures
+
+### 2.4 Decorators as Language Features
+
+Rather than treating testing, memoization, and type checking as framework concerns, LATERALUS embeds them in the grammar:
+
+- `@memo` — Automatic memoization with LRU cache
+- `@test` — Inline test declaration and discovery
+- `@typed` — Runtime type enforcement via inspection
+
+## 3. Compiler Architecture
+
+The LATERALUS compiler is a multi-stage pipeline:
+
+$$ \text{Source} \xrightarrow{\text{Lexer}} \text{Tokens} \xrightarrow{\text{Parser}} \text{AST} \xrightarrow{\text{Analyzer}} \text{IR} \xrightarrow{\text{Codegen}} \text{Target} $$
+
+### 3.1 Lexer
+
+The lexer handles 65+ token types including string interpolation with embedded expressions, the `|>` and `|?` pipeline operators, and keyword operators (`and`, `or`, `not`).
+
+### 3.2 Parser
+
+A recursive-descent parser produces an AST with 45 node types. The parser supports operator precedence, pipeline chaining, pattern matching, and try-as-expression constructs.
+
+### 3.3 Semantic Analysis
+
+A three-address IR is generated with symbol resolution, basic type checking, and scope analysis. The IR supports optimization passes before final code generation.
+
+### 3.4 Code Generation
+
+Two backends are supported:
+
+1. **Python transpiler** — Generates Python 3.10+ code with a runtime preamble containing 30+ built-in functions, exception type aliases, and pipeline-compatible wrappers.
+
+2. **Bytecode compiler** — Generates compact bytecode for the LATERALUS VM with 90+ opcodes.
+
+## 4. Mathematical Computation Engine
+
+LATERALUS includes a purpose-built mathematical engine with:
+
+### 4.1 Arbitrary Precision
+
+Python's native arbitrary-precision integers are combined with `Decimal` for controlled-precision floating-point operations, avoiding the IEEE 754 pitfalls that plague scientific computation.
+
+### 4.2 Linear Algebra
+
+A pure-Python `Matrix` class supports addition, subtraction, multiplication, transposition, determinant (LU decomposition), inverse (Gauss-Jordan), and trace operations.
+
+### 4.3 Interval Arithmetic
+
+The `Interval` type provides guaranteed enclosure arithmetic, where every operation returns an interval that is mathematically guaranteed to contain the true result:
+
+$$ [a, b] + [c, d] = [a+c, b+d] $$
+$$ [a, b] \times [c, d] = [\min(ac, ad, bc, bd), \max(ac, ad, bc, bd)] $$
+
+### 4.4 Automatic Differentiation
+
+Forward-mode automatic differentiation via dual numbers:
+
+$$ (a + b\varepsilon) \times (c + d\varepsilon) = ac + (ad + bc)\varepsilon $$
+
+This allows exact derivative computation without numerical approximation errors:
+
+```lateralus
+let slope = derivative(fn(x) { return sin(x) * exp(x) }, 1.0)
+```
+
+## 5. Compiled Binary Format
+
+The `.ltlc` format is a proprietary binary container with:
+
+- 4-byte magic (`\x89LTL`)
+- Metadata section (JSON)
+- SHA-256 source hash for integrity
+- Constant pool with typed entries
+- Symbol table with line mappings
+- Compressed instruction stream (zlib)
+- Optional debug information
+- Optional HMAC digital signature
+
+## 6. Related Work
+
+LATERALUS draws inspiration from:
+
+- **Julia** — Multiple dispatch, mathematical elegance, scientific focus
+- **Elixir** — Pipeline operators, functional programming, fault tolerance
+- **Rust** — Struct/impl system, pattern matching, error handling
+- **Python** — Readability, dynamic typing, ecosystem interop
+- **Haskell** — Higher-order functions, type system design
+
+Unlike these languages, LATERALUS is designed from the ground up to be **polyglot** — treating interoperability as a language feature rather than a foreign function interface.
+
+## 7. Evaluation
+
+### 7.1 Test Suite
+
+The LATERALUS test suite contains 167 tests covering:
+- Lexer tokenization (all token types)
+- Parser output (all AST node types)
+- IR generation (symbol resolution, scope analysis)
+- Transpiler output (Python code generation)
+- End-to-end execution (pipeline evaluation, error handling)
+
+All 167 tests pass with zero regressions across v1.0–v1.3.
+
+### 7.2 Expressiveness
+
+A comparison of implementing Fibonacci in several languages:
+
+| Language | Lines | External deps | Memoization | Testing |
+|----------|-------|---------------|-------------|---------|
+| Python | 8 | functools | Manual decorator | pytest required |
+| Julia | 6 | None | Manual | Test stdlib |
+| LATERALUS | 6 | None | `@memo` built-in | `@test` built-in |
+
+### 7.3 Standard Library
+
+13 modules covering mathematics, statistics, linear algebra, optimization, functional programming, cryptography, science, strings, collections, time, random, I/O, and core utilities.
+
+## 8. Conclusion
+
+LATERALUS demonstrates that a programming language can be simultaneously:
+- **Expressive** — Pipeline-native syntax reads like structured thought
+- **Precise** — Arbitrary precision, interval arithmetic, automatic differentiation
+- **Safe** — Rich error messages with fix suggestions and error chains
+- **Interoperable** — Polyglot bridge to Python/Julia/R/JS
+- **Self-contained** — Markup language, binary format, crypto engine
+
+Future work focuses on JIT compilation, type inference, async/await concurrency, and ultimately self-hosting the compiler in LATERALUS itself.
+
+## References
+
+1. Bezanson, J., Edelman, A., Karpinski, S., & Shah, V. B. (2017). Julia: A fresh approach to numerical computing. SIAM Review, 59(1), 65-98.
+2. Lattner, C., & Adve, V. (2004). LLVM: A compilation framework for lifelong program analysis & transformation. CGO 2004.
+3. Pierce, B. C. (2002). Types and Programming Languages. MIT Press.
+4. Wadler, P. (1992). The essence of functional programming. POPL 1992.
+
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>

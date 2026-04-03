@@ -1,0 +1,77 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// LateralusOS — System Health Monitor
+// ═══════════════════════════════════════════════════════════════════════════
+// Copyright (c) 2025 bad-antics. All rights reserved.
+// ═══════════════════════════════════════════════════════════════════════════
+
+import hal::serial
+import hal::timer
+import kernel::memory
+import kernel::scheduler
+import kernel::ipc
+import drivers::network
+
+const MONITOR_INTERVAL = 10000   // 10 seconds
+
+struct SystemStats {
+    uptime_ms:     int,
+    cpu_idle_pct:  int,
+    mem_total_kb:  int,
+    mem_free_kb:   int,
+    mem_used_pct:  int,
+    proc_count:    int,
+    thread_count:  int,
+    ctx_switches:  int,
+    net_rx_pkts:   int,
+    net_tx_pkts:   int,
+    heap_used_kb:  int,
+}
+
+let mut last_stats = SystemStats {
+    uptime_ms:    0, cpu_idle_pct: 100, mem_total_kb: 0,
+    mem_free_kb:  0, mem_used_pct: 0,   proc_count:  0,
+    thread_count: 0, ctx_switches: 0,   net_rx_pkts: 0,
+    net_tx_pkts:  0, heap_used_kb: 0,
+}
+
+pub fn start() {
+    serial::log("[monitor] System monitor starting")
+
+    loop {
+        collect_stats()
+
+        // Log summary to serial
+        serial::log("[monitor] up={last_stats.uptime_ms / 1000}s cpu_idle={last_stats.cpu_idle_pct}% mem={last_stats.mem_used_pct}% procs={last_stats.proc_count}")
+
+        // Check for critical conditions
+        if last_stats.mem_used_pct > 90 {
+            serial::log("[monitor] WARNING: Memory usage at {last_stats.mem_used_pct}%!")
+        }
+
+        scheduler::sleep_current(MONITOR_INTERVAL)
+    }
+}
+
+fn collect_stats() {
+    let mem = memory::get_stats()
+    let sched = scheduler::get_stats()
+
+    last_stats.uptime_ms    = timer::get_uptime_ms()
+    last_stats.mem_total_kb = mem.0 / 1024
+    last_stats.mem_free_kb  = mem.1 / 1024
+    last_stats.mem_used_pct = if mem.0 > 0 { ((mem.0 - mem.1) * 100) / mem.0 } else { 0 }
+    last_stats.heap_used_kb = mem.3 / 1024
+    last_stats.proc_count   = sched.0
+    last_stats.thread_count = sched.1
+    last_stats.ctx_switches = sched.2
+
+    if network::is_present() {
+        let net = network::get_stats()
+        last_stats.net_rx_pkts = net.0
+        last_stats.net_tx_pkts = net.1
+    }
+}
+
+pub fn get_stats() -> SystemStats {
+    return last_stats
+}

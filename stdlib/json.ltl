@@ -1,0 +1,262 @@
+-- stdlib/json.ltl
+-- LATERALUS JSON Standard Library
+-- Pure LATERALUS implementation of JSON encode/decode
+-- Delegates to Python's json module for heavy lifting
+
+module JSON
+
+import "core"
+import "strings"
+import "collections"
+
+-- ============================================================
+-- Types
+-- ============================================================
+
+type JsonValue = int | float | str | bool | None | list[JsonValue] | dict[str, JsonValue]
+
+struct JsonError {
+    message: str
+    position: int
+}
+
+-- ============================================================
+-- Parsing
+-- ============================================================
+
+-- Parse a JSON string into a LATERALUS value
+fn parse(text: str) -> any {
+    @python("
+import json as _json
+try:
+    _result = _json.loads(text)
+except _json.JSONDecodeError as e:
+    raise RuntimeError(f'JSON parse error at {e.pos}: {e.msg}')
+")
+    return @result
+}
+
+-- Parse JSON, returning None on error instead of raising
+fn try_parse(text: str) -> any {
+    @python("
+import json as _json
+try:
+    _result = _json.loads(text)
+except:
+    _result = None
+")
+    return @result
+}
+
+-- ============================================================
+-- Serialization
+-- ============================================================
+
+-- Convert a LATERALUS value to a compact JSON string
+fn stringify(value: any) -> str {
+    @python("
+import json as _json
+_result = _json.dumps(value, separators=(',', ':'), default=str)
+")
+    return @result
+}
+
+-- Convert to pretty-printed JSON
+fn pretty(value: any, indent: int = 2) -> str {
+    @python("
+import json as _json
+_result = _json.dumps(value, indent=indent, default=str)
+")
+    return @result
+}
+
+-- ============================================================
+-- Path access
+-- ============================================================
+
+-- Access a nested value by dot-notation path
+-- Example: get_path(obj, "user.address.city") -> "NYC"
+fn get_path(obj: any, path: str) -> any {
+    let parts = strings.split(path, ".")
+    let current = obj
+
+    for part in parts {
+        if current == None {
+            return None
+        }
+        if @type(current) == "dict" {
+            current = current[part] if part in current else None
+        } else {
+            return None
+        }
+    }
+
+    return current
+}
+
+-- Set a value at a nested path, returning a new dict
+fn set_path(obj: any, path: str, value: any) -> any {
+    let parts = strings.split(path, ".")
+    if len(parts) == 1 {
+        return {**obj, parts[0]: value}
+    }
+    let head = parts[0]
+    let rest = strings.join(parts[1:], ".")
+    let nested = obj[head] if head in obj else {}
+    return {**obj, head: set_path(nested, rest, value)}
+}
+
+-- Delete a key at a nested path
+fn delete_path(obj: any, path: str) -> any {
+    let parts = strings.split(path, ".")
+    if len(parts) == 1 {
+        return {k: v for k, v in obj.items() if k != parts[0]}
+    }
+    let head = parts[0]
+    let rest = strings.join(parts[1:], ".")
+    return {**obj, head: delete_path(obj[head], rest)}
+}
+
+-- ============================================================
+-- Transformation
+-- ============================================================
+
+-- Flatten a nested JSON object to a flat dict with dot-notation keys
+fn flatten(obj: any, prefix: str = "") -> dict {
+    let result = {}
+    for key, value in obj.items() {
+        let full_key = if prefix == "" { key } else { prefix + "." + key }
+        if @type(value) == "dict" {
+            let nested = flatten(value, full_key)
+            result = {**result, **nested}
+        } else {
+            result[full_key] = value
+        }
+    }
+    return result
+}
+
+-- Unflatten a flat dot-notation dict back to nested structure
+fn unflatten(flat: dict) -> dict {
+    let result = {}
+    for key, value in flat.items() {
+        result = set_path(result, key, value)
+    }
+    return result
+}
+
+-- Deep merge two JSON objects (second wins on conflict)
+fn merge(base: any, overlay: any) -> any {
+    if @type(base) != "dict" or @type(overlay) != "dict" {
+        return overlay
+    }
+    let result = {**base}
+    for key, value in overlay.items() {
+        if key in result and @type(result[key]) == "dict" and @type(value) == "dict" {
+            result[key] = merge(result[key], value)
+        } else {
+            result[key] = value
+        }
+    }
+    return result
+}
+
+-- ============================================================
+-- Schema / Validation
+-- ============================================================
+
+-- Validate a JSON value against a simple schema dict
+-- Schema: {"field": "type", "field2": {"nested": "type"}, "list_field": ["type"]}
+fn validate_schema(value: any, schema: any) -> list[str] {
+    let errors = []
+
+    if @type(schema) == "dict" and @type(value) == "dict" {
+        for key, expected_type in schema.items() {
+            if key not in value {
+                errors = errors + ["Missing required key: " + key]
+                continue
+            }
+            let sub_errors = validate_schema(value[key], expected_type)
+            errors = errors + sub_errors
+    } else if @type(schema) == "str" {
+        let actual = @type(value).__name__
+        if schema == "any" {
+            -- any type is always valid
+        } else if schema == "number" {
+            if actual not in ["int", "float"] {
+                errors = errors + ["Expected number, got " + actual]
+            }
+        } else if actual != schema {
+            errors = errors + ["Expected " + schema + ", got " + actual]
+        }
+    }
+
+    return errors
+}
+
+-- ============================================================
+-- Utility
+-- ============================================================
+
+-- Count keys at all levels of a nested JSON object
+fn count_keys(obj: any) -> int {
+    if @type(obj) != "dict" {
+        return 0
+    }
+    let total = len(obj)
+    for value in obj.values() {
+        total = total + count_keys(value)
+    }
+    return total
+}
+
+-- Extract all values at a given key from nested structures
+fn pluck_deep(obj: any, key: str) -> list {
+    let results = []
+    if @type(obj) == "dict" {
+        if key in obj {
+            results = results + [obj[key]]
+        }
+        for value in obj.values() {
+            results = results + pluck_deep(value, key)
+        }
+    } else if @type(obj) == "list" {
+        for item in obj {
+            results = results + pluck_deep(item, key)
+        }
+    }
+    return results
+}
+
+-- ============================================================
+-- Pipeline helpers
+-- ============================================================
+
+-- Parse then apply a pipeline function
+fn parse_and(text: str, transform: fn) -> any {
+    return text |> parse |> transform
+}
+
+-- Load a JSON file
+fn load_file(path: str) -> any {
+    @python("
+import json as _json, pathlib as _pl
+_p = _pl.Path(path)
+if not _p.exists():
+    raise FileNotFoundError(f'JSON file not found: {path}')
+with open(_p, 'r', encoding='utf-8') as _f:
+    _result = _json.load(_f)
+")
+    return @result
+}
+
+-- Save a value to a JSON file
+fn save_file(path: str, value: any, indent: int = 2) -> None {
+    @python("
+import json as _json, pathlib as _pl
+_p = _pl.Path(path)
+_p.parent.mkdir(parents=True, exist_ok=True)
+with open(_p, 'w', encoding='utf-8') as _f:
+    _json.dump(value, _f, indent=indent, default=str)
+")
+}

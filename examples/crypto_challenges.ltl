@@ -1,0 +1,181 @@
+// ═══════════════════════════════════════════════════════════════════
+// LATERALUS v1.5 — Crypto Challenges
+// CTF-style exercises using built-in cryptographic primitives
+// ═══════════════════════════════════════════════════════════════════
+
+import crypto
+import strings
+
+// ── Challenge 1: XOR Cipher ───────────────────────────────────────
+
+fn challenge_xor() {
+    println("═══ Challenge 1: XOR Cipher ═══")
+
+    let key = "SPIRAL"
+    let plaintext = "LATERALUS is the key to everything"
+
+    // Encrypt
+    let encrypted = xor_cipher(plaintext, key)
+    println("Encrypted: " + to_hex(encrypted))
+
+    // Decrypt (XOR is its own inverse)
+    let decrypted = xor_cipher(encrypted, key)
+    println("Decrypted: " + decrypted)
+
+    // Verify round-trip
+    assert_eq(plaintext, decrypted)
+    println("✓ Round-trip verified\n")
+}
+
+// ── Challenge 2: Hash Verification ────────────────────────────────
+
+fn challenge_hash_verify() {
+    println("═══ Challenge 2: Hash Chain ═══")
+
+    // Build a hash chain: each link = sha256(previous)
+    let seed = "LATERALUS v1.5"
+    let chain = [sha256(seed)]
+
+    for i in range(1, 5) {
+        let next = sha256(chain[i - 1])
+        chain = chain + [next]
+    }
+
+    println("Seed:     " + seed)
+    println("Chain[0]: " + chain[0])
+    println("Chain[4]: " + chain[4])
+
+    // Verify the chain
+    for i in range(1, len(chain)) {
+        let expected = sha256(chain[i - 1])
+        assert_eq(chain[i], expected)
+    }
+    println("✓ Hash chain verified (" + str(len(chain)) + " links)\n")
+}
+
+// ── Challenge 3: HMAC Token Authentication ────────────────────────
+
+fn challenge_hmac() {
+    println("═══ Challenge 3: HMAC Tokens ═══")
+
+    let secret = "my-secret-key-2026"
+
+    // Create authenticated messages
+    let messages = [
+        "user=alice&role=admin",
+        "user=bob&role=viewer",
+        "user=eve&role=guest",
+    ]
+
+    // Sign each message
+    let signed = []
+    for msg in messages {
+        let entry = {}
+        entry["message"] = msg
+        entry["signature"] = hmac_sha256(secret, msg)
+        signed = signed + [entry]
+    }
+
+    // Verify signatures
+    for item in signed {
+        let valid = hmac_verify(secret, item["message"], item["signature"])
+        let status = "✗ invalid"
+        if valid { status = "✓ valid" }
+        println(status + ": " + item["message"])
+    }
+
+    // Tamper detection
+    let tampered = signed[0]
+    tampered["message"] = "user=eve&role=admin"  // tampering!
+    let still_valid = hmac_verify(secret, tampered["message"], tampered["signature"])
+    println("\nTampered message valid? " + str(still_valid))
+    println("✓ Tamper detection works\n")
+}
+
+// ── Challenge 4: Multi-Hash Comparison ────────────────────────────
+
+fn challenge_multi_hash() {
+    println("═══ Challenge 4: Algorithm Comparison ═══")
+
+    let data = "The quick brown fox jumps over the lazy dog"
+
+    let results = {}
+    results["SHA-256"]  = sha256(data)
+    results["SHA-512"]  = sha512(data)
+    results["BLAKE2b"]  = blake2b(data, digest_size=32)
+    results["MD5"]      = md5_hash(data)
+
+    for algo in sorted(keys(results)) {
+        let hash = results[algo]
+        let short = slice_str(hash, 0, 16) + "..."
+        println(algo + ": " + short + " (" + str(len(hash)) + " chars)")
+    }
+
+    // Verify determinism
+    assert_eq(sha256(data), sha256(data))
+    println("✓ All hashes deterministic\n")
+}
+
+// ── Challenge 5: Binary Format with Integrity ─────────────────────
+
+fn challenge_lbe() {
+    println("═══ Challenge 5: LBE Binary Format ═══")
+
+    // Create a structured payload
+    let payload = {}
+    payload["operation"] = "scan"
+    payload["target"] = "192.168.1.0/24"
+    payload["ports"] = [22, 80, 443, 8080, 8443]
+    payload["timestamp"] = 1711843200
+    payload["agent"] = "lateralus-v1.5"
+
+    // Encode to LBE binary format
+    let encoded = lbe_encode(payload)
+    println("Payload size: " + str(len(str(payload))) + " chars")
+    println("Encoded size: " + str(len(encoded)) + " bytes")
+
+    // Decode and verify
+    let decoded = lbe_decode(encoded)
+    assert_eq(decoded["operation"], "scan")
+    assert_eq(decoded["target"], "192.168.1.0/24")
+    println("✓ LBE round-trip verified\n")
+}
+
+// ── Challenge 6: Password Hashing ─────────────────────────────────
+
+fn challenge_password() {
+    println("═══ Challenge 6: Password Security ═══")
+
+    let passwords = ["correct-horse-battery-staple", "password123", "s3cur3!P@ss"]
+
+    for pwd in passwords {
+        let hashed = hash_password(pwd)
+        let valid = verify_password(pwd, hashed)
+        let wrong = verify_password("wrong-password", hashed)
+
+        println("Password: " + pwd)
+        println("  Hash:    " + slice_str(hashed, 0, 32) + "...")
+        println("  Verify:  " + str(valid) + " (should be true)")
+        println("  Wrong:   " + str(wrong) + " (should be false)")
+    }
+    println("✓ Password hashing secure\n")
+}
+
+// ── Main ──────────────────────────────────────────────────────────
+
+fn main() {
+    println("╔═══════════════════════════════════════╗")
+    println("║  LATERALUS v1.5 — Crypto Challenges   ║")
+    println("╚═══════════════════════════════════════╝\n")
+
+    challenge_xor()
+    challenge_hash_verify()
+    challenge_hmac()
+    challenge_multi_hash()
+    challenge_lbe()
+    challenge_password()
+
+    println("All challenges completed! 🔐")
+}
+
+main()

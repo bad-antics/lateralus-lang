@@ -1,0 +1,310 @@
+// ═══════════════════════════════════════════════════════════════════════
+// LATERALUS Source Map Generator — Self-Hosted (.ltl)
+// ═══════════════════════════════════════════════════════════════════════
+// Creates source maps that map compiled/transpiled output back to
+// original .ltl source lines.  Essential for debugging and error reporting.
+//
+// This is the Lateralus-native port of lateralus_lang/source_map.py
+// ═══════════════════════════════════════════════════════════════════════
+
+module source_map
+
+import io
+import strings
+import collections
+
+// ── SourceMapping — single gen→src position mapping ────────────────────
+
+struct SourceMapping {
+    gen_line:    int,
+    gen_col:     int,
+    src_line:    int,
+    src_col:     int,
+    source_file: str,
+    name:        str?,   // Optional identifier name
+}
+
+fn new_mapping(gen_line: int, gen_col: int,
+               src_line: int, src_col: int,
+               source_file: str, name: str?) -> SourceMapping {
+    return SourceMapping {
+        gen_line:    gen_line,
+        gen_col:     gen_col,
+        src_line:    src_line,
+        src_col:     src_col,
+        source_file: source_file,
+        name:        name,
+    }
+}
+
+// ── SourceMap — collection of mappings (v3 format) ─────────────────────
+
+struct SourceMap {
+    version:     int,
+    file:        str,
+    source_root: str,
+    sources:     list,
+    names:       list,
+    mappings:    list,
+}
+
+fn new_source_map() -> SourceMap {
+    return SourceMap {
+        version:     3,
+        file:        "",
+        source_root: "",
+        sources:     [],
+        names:       [],
+        mappings:    [],
+    }
+}
+
+fn source_map_with_file(file: str) -> SourceMap {
+    let mut sm = new_source_map()
+    sm.file = file
+    return sm
+}
+
+// ── Mutation methods ───────────────────────────────────────────────────
+
+fn add_mapping(sm: SourceMap, gen_line: int, gen_col: int,
+               src_line: int, src_col: int,
+               source_file: str, name: str?) -> SourceMap {
+    // Register source file if new
+    let mut sources = sm.sources
+    if not contains(sources, source_file) {
+        sources = sources + [source_file]
+    }
+
+    // Register name if new and present
+    let mut names = sm.names
+    match name {
+        Some(n) => {
+            if not contains(names, n) {
+                names = names + [n]
+            }
+        },
+        None => {},
+    }
+
+    let m = new_mapping(gen_line, gen_col, src_line, src_col,
+                        source_file, name)
+
+    return SourceMap {
+        version:     sm.version,
+        file:        sm.file,
+        source_root: sm.source_root,
+        sources:     sources,
+        names:       names,
+        mappings:    sm.mappings + [m],
+    }
+}
+
+// ── Lookup methods ─────────────────────────────────────────────────────
+
+fn find_source(sm: SourceMap, gen_line: int, gen_col: int) -> SourceMapping? {
+    let mut best: SourceMapping? = None
+    for m in sm.mappings {
+        if m.gen_line == gen_line {
+            if gen_col == 0 or m.gen_col <= gen_col {
+                match best {
+                    Some(b) => {
+                        if m.gen_col > b.gen_col {
+                            best = Some(m)
+                        }
+                    },
+                    None => {
+                        best = Some(m)
+                    },
+                }
+            }
+        }
+    }
+    return best
+}
+
+fn find_generated(sm: SourceMap, src_file: str, src_line: int) -> list {
+    let mut results: list = []
+    for m in sm.mappings {
+        if m.source_file == src_file and m.src_line == src_line {
+            results = results + [m]
+        }
+    }
+    return results
+}
+
+// ── JSON serialization ────────────────────────────────────────────────
+
+fn mapping_to_json(m: SourceMapping) -> str {
+    let mut parts: list = []
+    parts = parts + ["    {"]
+    parts = parts + ["      \"generatedLine\": " + str(m.gen_line) + ","]
+    parts = parts + ["      \"generatedColumn\": " + str(m.gen_col) + ","]
+    parts = parts + ["      \"originalLine\": " + str(m.src_line) + ","]
+    parts = parts + ["      \"originalColumn\": " + str(m.src_col) + ","]
+    parts = parts + ["      \"source\": \"" + m.source_file + "\""]
+    match m.name {
+        Some(n) => {
+            // Replace the last line to add comma, then add name
+            parts = parts + ["      ,\"name\": \"" + n + "\""]
+        },
+        None => {},
+    }
+    parts = parts + ["    }"]
+    return join(parts, "\n")
+}
+
+fn to_json(sm: SourceMap) -> str {
+    let mut lines: list = []
+    lines = lines + ["{"]
+    lines = lines + ["  \"version\": " + str(sm.version) + ","]
+    lines = lines + ["  \"file\": \"" + sm.file + "\","]
+    lines = lines + ["  \"sourceRoot\": \"" + sm.source_root + "\","]
+
+    // Sources array
+    let src_parts = sm.sources
+        |> map(fn(s) { "\"" + s + "\"" })
+        |> join(", ")
+    lines = lines + ["  \"sources\": [" + src_parts + "],"]
+
+    // Names array
+    let name_parts = sm.names
+        |> map(fn(n) { "\"" + n + "\"" })
+        |> join(", ")
+    lines = lines + ["  \"names\": [" + name_parts + "],"]
+
+    // Mappings array
+    lines = lines + ["  \"mappings\": ["]
+    for i in range(0, len(sm.mappings)) {
+        let entry = mapping_to_json(sm.mappings[i])
+        if i < len(sm.mappings) - 1 {
+            lines = lines + [entry + ","]
+        } else {
+            lines = lines + [entry]
+        }
+    }
+    lines = lines + ["  ]"]
+    lines = lines + ["}"]
+
+    return join(lines, "\n")
+}
+
+// ── SourceMapBuilder — ergonomic builder for compilation ───────────────
+
+struct SourceMapBuilder {
+    source_map:     SourceMap,
+    default_source: str,
+    gen_line:       int,
+    gen_col:        int,
+}
+
+fn new_builder(output_file: str, source_file: str) -> SourceMapBuilder {
+    return SourceMapBuilder {
+        source_map:     source_map_with_file(output_file),
+        default_source: source_file,
+        gen_line:       1,
+        gen_col:        0,
+    }
+}
+
+fn set_position(builder: SourceMapBuilder, gen_line: int, gen_col: int) -> SourceMapBuilder {
+    return SourceMapBuilder {
+        source_map:     builder.source_map,
+        default_source: builder.default_source,
+        gen_line:       gen_line,
+        gen_col:        gen_col,
+    }
+}
+
+fn map_line(builder: SourceMapBuilder, src_line: int, src_col: int,
+            name: str?, source_file: str?) -> SourceMapBuilder {
+    let sf = match source_file {
+        Some(f) => f,
+        None    => builder.default_source,
+    }
+    let sm = add_mapping(builder.source_map,
+                         builder.gen_line, builder.gen_col,
+                         src_line, src_col, sf, name)
+    return SourceMapBuilder {
+        source_map:     sm,
+        default_source: builder.default_source,
+        gen_line:       builder.gen_line,
+        gen_col:        builder.gen_col,
+    }
+}
+
+fn advance_line(builder: SourceMapBuilder) -> SourceMapBuilder {
+    return SourceMapBuilder {
+        source_map:     builder.source_map,
+        default_source: builder.default_source,
+        gen_line:       builder.gen_line + 1,
+        gen_col:        0,
+    }
+}
+
+fn build(builder: SourceMapBuilder) -> SourceMap {
+    return builder.source_map
+}
+
+// ── Error enhancement ─────────────────────────────────────────────────
+
+fn enhance_error(error_line: int, sm: SourceMap,
+                 source_content: map) -> str {
+    let mapping = find_source(sm, error_line, 0)
+
+    match mapping {
+        None => {
+            return "Error at generated line " + str(error_line) + " (no source map entry)"
+        },
+        Some(m) => {
+            let mut lines: list = []
+            lines = lines + ["Error in " + m.source_file + ", line " + str(m.src_line) + ":"]
+
+            // Show source context if available
+            if has_key(source_content, m.source_file) {
+                let src_lines: list = source_content[m.source_file]
+                let start = max(0, m.src_line - 3)
+                let end = min(len(src_lines), m.src_line + 2)
+
+                for i in range(start, end) {
+                    let mut marker = "    "
+                    if i == m.src_line - 1 {
+                        marker = " >> "
+                    }
+                    let line_num = str(i + 1)
+                    // Pad line number to 4 chars
+                    let padded = pad_left(line_num, 4, " ")
+                    lines = lines + [marker + padded + " | " + src_lines[i]]
+                }
+            }
+
+            match m.name {
+                Some(n) => {
+                    lines = lines + ["  in function: " + n]
+                },
+                None => {},
+            }
+
+            return join(lines, "\n")
+        },
+    }
+}
+
+// ── Helper: check if list contains element ────────────────────────────
+
+fn contains(items: list, target: str) -> bool {
+    for item in items {
+        if item == target {
+            return true
+        }
+    }
+    return false
+}
+
+fn pad_left(s: str, width: int, fill: str) -> str {
+    let mut result = s
+    while len(result) < width {
+        result = fill + result
+    }
+    return result
+}

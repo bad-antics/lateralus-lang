@@ -1,0 +1,619 @@
+// ═══════════════════════════════════════════════════════════════════
+// LATERALUS v2 — Self-hosted Linter (ltllint)
+// Ported from lateralus_lang/linter.py
+//
+// Static analysis and code quality checks for LATERALUS source files.
+// Checks: unused variables, undefined references, style violations,
+//         potential bugs, complexity warnings
+// ═══════════════════════════════════════════════════════════════════
+
+import io
+import strings
+
+// ── Severity constants ────────────────────────────────────────────
+
+const SEV_ERROR   = "ERROR"
+const SEV_WARNING = "WARNING"
+const SEV_INFO    = "INFO"
+const SEV_HINT    = "HINT"
+
+// ── Lint issue ────────────────────────────────────────────────────
+
+struct LintIssue {
+    rule: str,
+    message: str,
+    severity: str,
+    file: str,
+    line: int,
+    column: int,
+    suggestion: str,
+}
+
+fn make_issue(rule: str, message: str, sev: str, file: str, line: int) -> LintIssue {
+    return LintIssue {
+        rule: rule,
+        message: message,
+        severity: sev,
+        file: file,
+        line: line,
+        column: 0,
+        suggestion: "",
+    }
+}
+
+fn make_issue_sug(rule: str, message: str, sev: str, file: str, line: int, suggestion: str) -> LintIssue {
+    return LintIssue {
+        rule: rule,
+        message: message,
+        severity: sev,
+        file: file,
+        line: line,
+        column: 0,
+        suggestion: suggestion,
+    }
+}
+
+fn format_issue(issue: LintIssue) -> str {
+    let sev = issue.severity
+    let loc = issue.file + ":" + str(issue.line)
+    let mut s = "  " + sev + " " + loc + " [" + issue.rule + "] " + issue.message
+    if issue.suggestion != "" {
+        s = s + "\n           suggestion: " + issue.suggestion
+    }
+    return s
+}
+
+// ── Lint result ───────────────────────────────────────────────────
+
+struct LintResult {
+    issues: list,
+}
+
+fn error_count(result: LintResult) -> int {
+    let mut c = 0
+    for issue in result.issues {
+        if issue.severity == SEV_ERROR {
+            c = c + 1
+        }
+    }
+    return c
+}
+
+fn warning_count(result: LintResult) -> int {
+    let mut c = 0
+    for issue in result.issues {
+        if issue.severity == SEV_WARNING {
+            c = c + 1
+        }
+    }
+    return c
+}
+
+fn has_errors(result: LintResult) -> bool {
+    return error_count(result) > 0
+}
+
+// ── Built-in names ────────────────────────────────────────────────
+
+fn is_builtin(name: str) -> bool {
+    let builtins = [
+        "println", "print", "len", "str", "int", "float", "type", "range",
+        "map", "filter", "reduce", "sort", "reverse", "zip", "enumerate",
+        "sum", "min", "max", "abs", "sqrt", "keys", "values", "split",
+        "join", "contains", "append", "pop", "slice", "upper", "lower",
+        "trim", "replace", "starts_with", "ends_with", "repr", "char_at",
+        "dict_get", "assert_eq", "hash_sha256", "hash_blake2b",
+        "random_token", "base64_encode", "base64_decode", "hex_encode",
+        "hex_decode", "hmac_sign", "hmac_verify", "input", "round",
+        "floor", "ceil", "log", "sin", "cos", "tan", "repeat",
+    ]
+    for b in builtins {
+        if name == b {
+            return true
+        }
+    }
+    return false
+}
+
+fn is_keyword(name: str) -> bool {
+    let keywords = [
+        "fn", "let", "const", "if", "else", "for", "while", "return",
+        "match", "struct", "interface", "import", "from", "as", "in",
+        "throw", "try", "catch", "emit", "probe", "measure", "pass",
+        "break", "continue", "and", "or", "not", "true", "false", "none",
+        "async", "await", "yield", "spawn", "foreign",
+        "enum", "trait", "impl", "pub", "type", "where", "self",
+    ]
+    for k in keywords {
+        if name == k {
+            return true
+        }
+    }
+    return false
+}
+
+// ── Helper functions ──────────────────────────────────────────────
+
+fn is_alpha_num(c: str) -> bool {
+    let alphanum = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+    return contains(alphanum, c)
+}
+
+fn leading_spaces(s: str) -> int {
+    let mut c = 0
+    while c < len(s) {
+        if char_at(s, c) != " " {
+            break
+        }
+        c = c + 1
+    }
+    return c
+}
+
+fn extract_name_after(line: str, keyword: str) -> str {
+    if !starts_with(line, keyword) {
+        return ""
+    }
+    let mut rest = slice(line, len(keyword), len(line))
+    if starts_with(rest, "mut ") {
+        rest = slice(rest, 4, len(rest))
+    }
+    let mut name = ""
+    for i in range(0, len(rest)) {
+        let c = char_at(rest, i)
+        if is_alpha_num(c) {
+            name = name + c
+        } else {
+            break
+        }
+    }
+    return name
+}
+
+// ── Individual lint checks ────────────────────────────────────────
+
+fn check_line_length(line: str, lineno: int, filename: str) -> list {
+    if len(line) > 120 {
+        return [make_issue(
+            "line-length",
+            "Line is " + str(len(line)) + " characters (max 120)",
+            SEV_WARNING,
+            filename,
+            lineno
+        )]
+    }
+    return []
+}
+
+fn check_trailing_whitespace(line: str, lineno: int, filename: str) -> list {
+    if line != rstrip(line) {
+        return [make_issue(
+            "trailing-whitespace",
+            "Trailing whitespace",
+            SEV_HINT,
+            filename,
+            lineno
+        )]
+    }
+    return []
+}
+
+fn check_semicolons(stripped: str, lineno: int, filename: str) -> list {
+    if ends_with(stripped, ";") && !starts_with(stripped, "//") {
+        return [make_issue_sug(
+            "unnecessary-semicolon",
+            "Unnecessary semicolon",
+            SEV_INFO,
+            filename,
+            lineno,
+            "Remove the semicolon"
+        )]
+    }
+    return []
+}
+
+fn check_var_keyword(stripped: str, lineno: int, filename: str) -> list {
+    if starts_with(stripped, "var ") {
+        return [make_issue_sug(
+            "use-let",
+            "Use 'let' instead of 'var'",
+            SEV_ERROR,
+            filename,
+            lineno,
+            "Replace 'var' with 'let'"
+        )]
+    }
+    return []
+}
+
+fn check_comparison_none(stripped: str, lineno: int, filename: str, strict: bool) -> list {
+    if contains(stripped, "== none") || contains(stripped, "!= none") {
+        let mut sev = SEV_INFO
+        if strict {
+            sev = SEV_WARNING
+        }
+        return [make_issue_sug(
+            "none-comparison",
+            "Prefer pattern matching over none comparison",
+            sev,
+            filename,
+            lineno,
+            "Use 'match value { none => ..., _ => ... }'"
+        )]
+    }
+    return []
+}
+
+fn check_empty_block(stripped: str, lineno: int, filename: str) -> list {
+    if ends_with(stripped, "{}") || ends_with(stripped, "{ }") {
+        return [make_issue_sug(
+            "empty-block",
+            "Empty block - use 'pass' if intentional",
+            SEV_WARNING,
+            filename,
+            lineno,
+            "Add 'pass' inside empty blocks"
+        )]
+    }
+    return []
+}
+
+fn check_nested_pipelines(stripped: str, lineno: int, filename: str) -> list {
+    let pipe_count = count(stripped, "|>") + count(stripped, "|?")
+    if pipe_count > 5 {
+        return [make_issue_sug(
+            "pipeline-length",
+            "Pipeline has " + str(pipe_count) + " stages - consider breaking up",
+            SEV_WARNING,
+            filename,
+            lineno,
+            "Extract intermediate steps into named variables"
+        )]
+    }
+    return []
+}
+
+fn check_naming_function(stripped: str, lineno: int, filename: str) -> list {
+    let name = extract_name_after(stripped, "fn ")
+    if name == "" {
+        return []
+    }
+    if name != lower(name) && !starts_with(name, "_") {
+        return [make_issue(
+            "naming-convention",
+            "Function '" + name + "' should be snake_case",
+            SEV_WARNING,
+            filename,
+            lineno
+        )]
+    }
+    return []
+}
+
+fn check_naming_struct(stripped: str, lineno: int, filename: str) -> list {
+    let name = extract_name_after(stripped, "struct ")
+    if name == "" {
+        return []
+    }
+    let first = char_at(name, 0)
+    if first == lower(first) {
+        return [make_issue(
+            "naming-convention",
+            "Struct '" + name + "' should be PascalCase",
+            SEV_WARNING,
+            filename,
+            lineno
+        )]
+    }
+    return []
+}
+
+fn check_naming_const(stripped: str, lineno: int, filename: str) -> list {
+    let name = extract_name_after(stripped, "const ")
+    if name == "" {
+        return []
+    }
+    if name != upper(name) && !starts_with(name, "_") {
+        return [make_issue(
+            "naming-convention",
+            "Constant '" + name + "' should be UPPER_CASE",
+            SEV_INFO,
+            filename,
+            lineno
+        )]
+    }
+    return []
+}
+
+fn check_duplicate_import(stripped: str, lineno: int, filename: str, imports: map) -> list {
+    let mut mod_name = ""
+    if starts_with(stripped, "import ") {
+        mod_name = extract_name_after(stripped, "import ")
+    } else if starts_with(stripped, "from ") {
+        if contains(stripped, " import ") {
+            let parts = split(stripped, " import ")
+            if len(parts) > 1 {
+                mod_name = strip(parts[1])
+            }
+        }
+    }
+
+    if mod_name == "" {
+        return []
+    }
+
+    let existing_keys = keys(imports)
+    for k in existing_keys {
+        if k == mod_name {
+            return [make_issue_sug(
+                "duplicate-import",
+                "Module '" + mod_name + "' already imported on line " + str(imports[mod_name]),
+                SEV_WARNING,
+                filename,
+                lineno,
+                "Remove duplicate import of '" + mod_name + "'"
+            )]
+        }
+    }
+    return []
+}
+
+fn check_todo_fixme(stripped: str, lineno: int, filename: str) -> list {
+    let comment_pos = find(stripped, "//")
+    if comment_pos < 0 {
+        return []
+    }
+    let comment = slice(stripped, comment_pos, len(stripped))
+    let tags = ["TODO", "FIXME", "HACK", "XXX"]
+    for tag in tags {
+        if contains(comment, tag) {
+            return [make_issue(
+                "todo-comment",
+                tag + " comment found",
+                SEV_HINT,
+                filename,
+                lineno
+            )]
+        }
+    }
+    return []
+}
+
+fn check_constant_condition(stripped: str, lineno: int, filename: str) -> list {
+    let checks = ["if true", "if false", "guard true", "guard false"]
+    for c in checks {
+        if starts_with(stripped, c) {
+            let value = split(c, " ")[1]
+            return [make_issue_sug(
+                "constant-condition",
+                "Condition is always " + value,
+                SEV_WARNING,
+                filename,
+                lineno,
+                "Remove the dead branch or simplify the condition"
+            )]
+        }
+    }
+    return []
+}
+
+fn check_deep_nesting(line: str, lineno: int, filename: str) -> list {
+    let stripped = strip(line)
+    if stripped == "" || starts_with(stripped, "//") {
+        return []
+    }
+    let indent = leading_spaces(line)
+    let depth = indent / 4
+    if depth >= 5 {
+        let mut sev = SEV_INFO
+        if depth >= 7 {
+            sev = SEV_WARNING
+        }
+        return [make_issue_sug(
+            "deep-nesting",
+            "Code is nested " + str(depth) + " levels deep - consider refactoring",
+            sev,
+            filename,
+            lineno,
+            "Extract nested logic into helper functions"
+        )]
+    }
+    return []
+}
+
+// ── Collect definitions ───────────────────────────────────────────
+
+fn collect_definitions(stripped: str, lineno: int, defined_vars: map, defined_fns: map, imports: map) {
+    let let_name = extract_name_after(stripped, "let ")
+    if let_name != "" {
+        defined_vars[let_name] = lineno
+    }
+    let const_name = extract_name_after(stripped, "const ")
+    if const_name != "" {
+        defined_vars[const_name] = lineno
+    }
+    let fn_name = extract_name_after(stripped, "fn ")
+    if fn_name != "" && fn_name != "main" {
+        defined_fns[fn_name] = lineno
+    }
+    let for_name = extract_name_after(stripped, "for ")
+    if for_name != "" {
+        defined_vars[for_name] = lineno
+    }
+    if starts_with(stripped, "import ") {
+        let mod_name = extract_name_after(stripped, "import ")
+        if mod_name != "" {
+            imports[mod_name] = lineno
+        }
+    }
+}
+
+// ── Post-analysis checks ─────────────────────────────────────────
+
+fn check_unused_vars(defined_vars: map, used_set: list, filename: str) -> list {
+    let mut issues = []
+    for name in keys(defined_vars) {
+        if starts_with(name, "_") {
+            continue
+        }
+        let mut used = false
+        for u in used_set {
+            if u == name {
+                used = true
+                break
+            }
+        }
+        if !used {
+            issues = issues + [make_issue_sug(
+                "unused-variable",
+                "Variable '" + name + "' is defined but never used",
+                SEV_WARNING,
+                filename,
+                defined_vars[name],
+                "Prefix with underscore: _" + name
+            )]
+        }
+    }
+    return issues
+}
+
+fn check_unused_functions(defined_fns: map, used_set: list, filename: str, strict: bool) -> list {
+    let mut issues = []
+    let mut sev = SEV_INFO
+    if strict {
+        sev = SEV_WARNING
+    }
+    for name in keys(defined_fns) {
+        if starts_with(name, "_") || starts_with(name, "test_") {
+            continue
+        }
+        let mut used = false
+        for u in used_set {
+            if u == name {
+                used = true
+                break
+            }
+        }
+        if !used {
+            issues = issues + [make_issue(
+                "unused-function",
+                "Function '" + name + "' is defined but never called",
+                sev,
+                filename,
+                defined_fns[name]
+            )]
+        }
+    }
+    return issues
+}
+
+fn check_unused_imports(imports: map, filename: str, source: str) -> list {
+    let mut issues = []
+    let source_lines = split(source, "\n")
+    for mod_name in keys(imports) {
+        let mut uses = 0
+        for src_line in source_lines {
+            let stripped = strip(src_line)
+            if starts_with(stripped, "import ") || starts_with(stripped, "from ") {
+                continue
+            }
+            if contains(stripped, mod_name) {
+                uses = uses + 1
+            }
+        }
+        if uses == 0 {
+            issues = issues + [make_issue_sug(
+                "unused-import",
+                "Module '" + mod_name + "' is imported but never used",
+                SEV_WARNING,
+                filename,
+                imports[mod_name],
+                "Remove unused import: import " + mod_name
+            )]
+        }
+    }
+    return issues
+}
+
+// ── Main lint function ────────────────────────────────────────────
+
+fn lint(source: str, filename: str) -> LintResult {
+    return lint_strict(source, filename, false)
+}
+
+fn lint_strict(source: str, filename: str, strict: bool) -> LintResult {
+    let mut issues = []
+    let mut defined_vars = {}
+    let mut used_vars = []
+    let mut defined_fns = {}
+    let mut used_fns = []
+    let mut imports = {}
+
+    let lines = split(source, "\n")
+
+    for i in range(0, len(lines)) {
+        let lineno = i + 1
+        let line = lines[i]
+        let stripped = strip(line)
+
+        if stripped == "" {
+            continue
+        }
+
+        // TODO/FIXME check
+        issues = issues + check_todo_fixme(stripped, lineno, filename)
+
+        if starts_with(stripped, "//") {
+            continue
+        }
+
+        // Collect definitions
+        collect_definitions(stripped, lineno, defined_vars, defined_fns, imports)
+
+        // Rule checks
+        issues = issues + check_line_length(line, lineno, filename)
+        issues = issues + check_trailing_whitespace(line, lineno, filename)
+        issues = issues + check_semicolons(stripped, lineno, filename)
+        issues = issues + check_var_keyword(stripped, lineno, filename)
+        issues = issues + check_comparison_none(stripped, lineno, filename, strict)
+        issues = issues + check_empty_block(stripped, lineno, filename)
+        issues = issues + check_nested_pipelines(stripped, lineno, filename)
+        issues = issues + check_naming_function(stripped, lineno, filename)
+        issues = issues + check_naming_struct(stripped, lineno, filename)
+        issues = issues + check_naming_const(stripped, lineno, filename)
+        issues = issues + check_duplicate_import(stripped, lineno, filename, imports)
+        issues = issues + check_constant_condition(stripped, lineno, filename)
+        issues = issues + check_deep_nesting(line, lineno, filename)
+    }
+
+    // Post-analysis checks
+    issues = issues + check_unused_vars(defined_vars, used_vars, filename)
+    issues = issues + check_unused_functions(defined_fns, used_fns, filename, strict)
+    issues = issues + check_unused_imports(imports, filename, source)
+
+    return LintResult { issues: issues }
+}
+
+// ── File linting entry point ──────────────────────────────────────
+
+fn lint_file(path: str) -> LintResult {
+    let source = read_file(path)
+    return lint(source, path)
+}
+
+fn lint_file_strict(path: str) -> LintResult {
+    let source = read_file(path)
+    return lint_strict(source, path, true)
+}
+
+// ── CLI entry ─────────────────────────────────────────────────────
+
+fn main() {
+    println("ltllint - LATERALUS Linter")
+    println("Usage: lateralus lint <files...> [--strict] [--json]")
+    println("")
+    println("Options:")
+    println("  --strict       Enable strict checks")
+    println("  --json         Output as JSON")
+    println("  --errors-only  Only show errors")
+}

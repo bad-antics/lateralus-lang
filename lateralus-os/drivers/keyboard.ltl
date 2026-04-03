@@ -1,0 +1,160 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// LateralusOS — PS/2 Keyboard Driver
+// ═══════════════════════════════════════════════════════════════════════════
+// Copyright (c) 2025 bad-antics. All rights reserved.
+// ═══════════════════════════════════════════════════════════════════════════
+
+import hal::cpu
+import hal::serial
+import hal::interrupts
+
+const KB_DATA_PORT   = 0x60
+const KB_STATUS_PORT = 0x64
+const KB_BUFFER_SIZE = 256
+
+// Scancode → ASCII lookup (US QWERTY, lowercase)
+let scancode_map: [byte; 128] = [
+    0, 27, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', 8,
+    9, 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', 10,
+    0, 'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', 39, '`',
+    0, 92, 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', 0, '*',
+    0, ' ',     // rest zero
+]
+
+// Shifted versions
+let scancode_shift: [byte; 128] = [
+    0, 27, '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', 8,
+    9, 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '{', '}', 10,
+    0, 'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ':', '"', '~',
+    0, '|', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', '<', '>', '?', 0, '*',
+    0, ' ',
+]
+
+// Key state
+let mut shift_held: bool = false
+let mut ctrl_held:  bool = false
+let mut alt_held:   bool = false
+let mut caps_lock:  bool = false
+
+// Circular key buffer
+struct KeyBuffer {
+    data:  [byte; KB_BUFFER_SIZE],
+    head:  int,
+    tail:  int,
+    count: int,
+}
+
+let mut key_buffer = KeyBuffer {
+    data:  [0; KB_BUFFER_SIZE],
+    head:  0,
+    tail:  0,
+    count: 0,
+}
+
+// ── Init ────────────────────────────────────────────────────────────────
+
+pub fn init() {
+    serial::log("[kbd] Initializing PS/2 keyboard")
+
+    // Flush keyboard buffer
+    while (cpu::inb(KB_STATUS_PORT) & 0x01) != 0 {
+        cpu::inb(KB_DATA_PORT)
+    }
+
+    // Register IRQ1 handler
+    interrupts::register_handler(33, keyboard_irq)
+    interrupts::enable_irq(1)
+
+    serial::log("[kbd] Keyboard ready")
+}
+
+// ── IRQ Handler ─────────────────────────────────────────────────────────
+
+fn keyboard_irq(error_code: int) {
+    let scancode = cpu::inb(KB_DATA_PORT) as byte
+
+    // Key release (bit 7 set)
+    if (scancode & 0x80) != 0 {
+        let released = scancode & 0x7F
+        match released {
+            0x2A => shift_held = false,  // Left Shift
+            0x36 => shift_held = false,  // Right Shift
+            0x1D => ctrl_held  = false,  // Ctrl
+            0x38 => alt_held   = false,  // Alt
+            _ => {},
+        }
+        return
+    }
+
+    // Key press
+    match scancode {
+        0x2A => { shift_held = true; return },
+        0x36 => { shift_held = true; return },
+        0x1D => { ctrl_held  = true; return },
+        0x38 => { alt_held   = true; return },
+        0x3A => { caps_lock  = !caps_lock; return },  // Caps Lock toggle
+        _ => {},
+    }
+
+    // Convert scancode to ASCII
+    let ascii = if shift_held || caps_lock {
+        scancode_shift[scancode as int]
+    } else {
+        scancode_map[scancode as int]
+    }
+
+    if ascii != 0 {
+        // Ctrl+C → signal
+        if ctrl_held && ascii == 'c' {
+            // Send SIGINT to foreground process
+            serial::log("[kbd] Ctrl+C pressed")
+            return
+        }
+
+        // Buffer the keypress
+        if key_buffer.count < KB_BUFFER_SIZE {
+            key_buffer.data[key_buffer.tail] = ascii
+            key_buffer.tail = (key_buffer.tail + 1) % KB_BUFFER_SIZE
+            key_buffer.count = key_buffer.count + 1
+        }
+    }
+}
+
+// ── Public API ──────────────────────────────────────────────────────────
+
+pub fn read_key() -> byte {
+    // Blocking read — wait for a keypress
+    while key_buffer.count == 0 {
+        cpu::halt()   // Sleep until next interrupt
+    }
+
+    let key = key_buffer.data[key_buffer.head]
+    key_buffer.head = (key_buffer.head + 1) % KB_BUFFER_SIZE
+    key_buffer.count = key_buffer.count - 1
+    return key
+}
+
+pub fn has_key() -> bool {
+    return key_buffer.count > 0
+}
+
+pub fn read_line() -> str {
+    let buf = ""
+    loop {
+        let c = read_key()
+        if c == 10 || c == 13 {  // Enter
+            return buf
+        }
+        if c == 8 {  // Backspace
+            if buf.len() > 0 {
+                buf = buf.substring(0, buf.len() - 1)
+            }
+        } else {
+            buf = buf + chr(c as int)
+        }
+    }
+}
+
+pub fn is_shift_held() -> bool { return shift_held }
+pub fn is_ctrl_held() -> bool  { return ctrl_held }
+pub fn is_alt_held() -> bool   { return alt_held }

@@ -1,0 +1,165 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// LateralusOS — Shell (ltlsh)
+// ═══════════════════════════════════════════════════════════════════════════
+// Copyright (c) 2025 bad-antics. All rights reserved.
+//
+// Interactive command interpreter for LateralusOS.
+// Supports built-in commands, pipeline operators, and job control.
+// ═══════════════════════════════════════════════════════════════════════════
+
+import hal::serial
+import drivers::vga
+import drivers::keyboard
+import kernel::scheduler
+import kernel::ipc
+import shell::builtins
+import fs::vfs
+
+const MAX_HISTORY    = 64
+const MAX_CMD_LEN    = 1024
+const MAX_ARGS       = 32
+
+struct ShellState {
+    cwd:          str,
+    user:         str,
+    hostname:     str,
+    history:      [str; MAX_HISTORY],
+    history_count: int,
+    history_pos:  int,
+    running:      bool,
+    exit_code:    int,
+    env:          Map<str, str>,
+}
+
+let mut shell = ShellState {
+    cwd:           "/",
+    user:          "root",
+    hostname:      "lateralus",
+    history:       [""; MAX_HISTORY],
+    history_count: 0,
+    history_pos:   0,
+    running:       false,
+    exit_code:     0,
+    env:           {
+        "PATH": "/bin:/usr/bin",
+        "HOME": "/root",
+        "SHELL": "/bin/ltlsh",
+        "TERM": "lateralus-vga",
+        "EDITOR": "ltled",
+        "LANG": "en_US.UTF-8",
+    },
+}
+
+// ── Shell Entry Point ───────────────────────────────────────────────────
+
+pub fn start() {
+    shell.running = true
+
+    vga::set_color(vga::Color::LightCyan, vga::Color::Black)
+    vga::println("LateralusOS Shell v0.2.0")
+    vga::println("Type 'help' for available commands")
+    vga::println("")
+    vga::set_color(vga::Color::White, vga::Color::Black)
+
+    // Main REPL loop
+    while shell.running {
+        print_prompt()
+        let input = keyboard::read_line()
+
+        if input.len() == 0 { continue }
+
+        // Add to history
+        if shell.history_count < MAX_HISTORY {
+            shell.history[shell.history_count] = input
+            shell.history_count = shell.history_count + 1
+        }
+
+        // Parse and execute
+        execute_line(input)
+    }
+}
+
+fn print_prompt() {
+    vga::set_color(vga::Color::LightGreen, vga::Color::Black)
+    vga::print(shell.user)
+    vga::set_color(vga::Color::White, vga::Color::Black)
+    vga::print("@")
+    vga::set_color(vga::Color::LightCyan, vga::Color::Black)
+    vga::print(shell.hostname)
+    vga::set_color(vga::Color::White, vga::Color::Black)
+    vga::print(":")
+    vga::set_color(vga::Color::LightBlue, vga::Color::Black)
+    vga::print(shell.cwd)
+    vga::set_color(vga::Color::White, vga::Color::Black)
+    vga::print("$ ")
+}
+
+// ── Command Parsing ─────────────────────────────────────────────────────
+
+fn execute_line(line: str) {
+    let trimmed = line.trim()
+    if trimmed.len() == 0 { return }
+    if trimmed[0] == '#' { return }  // comment
+
+    // Check for pipeline
+    if trimmed.contains("|>") {
+        execute_pipeline(trimmed)
+        return
+    }
+
+    // Split into command and args
+    let parts = trimmed.split(" ")
+    if parts.len() == 0 { return }
+
+    let cmd = parts[0]
+    let args = parts[1..]
+
+    // Try built-in commands first
+    let result = builtins::execute(cmd, args, shell)
+    match result {
+        Result::Ok(code) => {
+            shell.exit_code = code
+        },
+        Result::Err(msg) => {
+            vga::set_color(vga::Color::LightRed, vga::Color::Black)
+            vga::println("ltlsh: {msg}")
+            vga::set_color(vga::Color::White, vga::Color::Black)
+            shell.exit_code = 1
+        },
+    }
+}
+
+fn execute_pipeline(line: str) {
+    // Lateralus-native pipeline: cmd1 |> cmd2 |> cmd3
+    let stages = line.split("|>")
+    let prev_output = ""
+
+    let i = 0
+    while i < stages.len() {
+        let stage = stages[i].trim()
+        if stage.len() == 0 {
+            i = i + 1
+            continue
+        }
+
+        let parts = stage.split(" ")
+        let cmd = parts[0]
+        let args = parts[1..]
+
+        // Pass previous output as stdin to next stage
+        // (simplified — real implementation uses pipes)
+        match builtins::execute(cmd, args, shell) {
+            Result::Ok(code) => {
+                shell.exit_code = code
+            },
+            Result::Err(msg) => {
+                vga::set_color(vga::Color::LightRed, vga::Color::Black)
+                vga::println("Pipeline error: {msg}")
+                vga::set_color(vga::Color::White, vga::Color::Black)
+                return
+            },
+        }
+
+        i = i + 1
+    }
+}

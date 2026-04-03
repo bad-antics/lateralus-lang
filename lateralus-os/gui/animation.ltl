@@ -1,0 +1,131 @@
+// ═══════════════════════════════════════════════════════════════════════
+// LateralusOS — Window Animation Engine (Lateralus Implementation)
+// ═══════════════════════════════════════════════════════════════════════
+// Smooth open/close/minimize animations for GUI windows.
+// Uses 8-frame interpolation for fluid transitions.
+//
+// Copyright (c) 2025 bad-antics. All rights reserved.
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Animation states
+enum AnimState {
+    None,           // no animation in progress
+    Opening,        // window scaling in from center (8 frames)
+    Closing,        // window shrinking to center (7 frames)
+    Minimizing,     // window sliding down to taskbar (7 frames)
+}
+
+/// Animation parameters
+const ANIM_OPEN_FRAMES   = 8
+const ANIM_CLOSE_FRAMES  = 7
+const ANIM_MIN_FRAMES    = 7
+const ANIM_OPEN_STEP     = 12    // scale increment per frame (0..100)
+const ANIM_CLOSE_STEP    = 14    // scale decrement per frame
+const ANIM_MIN_STEP      = 15    // slide increment per frame
+
+/// Window animation state
+struct WindowAnim {
+    state:  AnimState,
+    frame:  Int,         // current frame (0-based)
+}
+
+/// Create a default (no animation) state
+fn anim_none() -> WindowAnim {
+    WindowAnim { state: AnimState::None, frame: 0 }
+}
+
+/// Start an opening animation
+fn anim_start_open() -> WindowAnim {
+    WindowAnim { state: AnimState::Opening, frame: 0 }
+}
+
+/// Start a closing animation
+fn anim_start_close() -> WindowAnim {
+    WindowAnim { state: AnimState::Closing, frame: 0 }
+}
+
+/// Start a minimize animation
+fn anim_start_minimize() -> WindowAnim {
+    WindowAnim { state: AnimState::Minimizing, frame: 0 }
+}
+
+/// Compute interpolated window rect during animation
+/// Returns (x, y, w, h, done) where done=true means animation finished
+fn anim_interpolate(
+    anim: &mut WindowAnim,
+    orig_x: Int, orig_y: Int,
+    orig_w: Int, orig_h: Int,
+    screen_h: Int, taskbar_h: Int
+) -> (Int, Int, Int, Int, Bool) {
+    match anim.state {
+        AnimState::None => {
+            (orig_x, orig_y, orig_w, orig_h, true)
+        },
+
+        AnimState::Opening => {
+            anim.frame += 1
+            let scale = min(anim.frame * ANIM_OPEN_STEP, 100)
+
+            let cx = orig_x + orig_w / 2
+            let cy = orig_y + orig_h / 2
+            let w = max(orig_w * scale / 100, 20)
+            let h = max(orig_h * scale / 100, 20)
+            let x = cx - w / 2
+            let y = cy - h / 2
+
+            let done = anim.frame >= ANIM_OPEN_FRAMES
+            if done { anim.state = AnimState::None }
+
+            if done {
+                (orig_x, orig_y, orig_w, orig_h, true)
+            } else {
+                (x, y, w, h, false)
+            }
+        },
+
+        AnimState::Closing => {
+            anim.frame += 1
+            let scale = max(100 - anim.frame * ANIM_CLOSE_STEP, 5)
+
+            let cx = orig_x + orig_w / 2
+            let cy = orig_y + orig_h / 2
+            let w = orig_w * scale / 100
+            let h = orig_h * scale / 100
+            let x = cx - w / 2
+            let y = cy - h / 2
+
+            let done = anim.frame >= ANIM_CLOSE_FRAMES
+            (x, y, w, h, done)
+        },
+
+        AnimState::Minimizing => {
+            anim.frame += 1
+            let progress = min(anim.frame * ANIM_MIN_STEP, 100)
+
+            let target_y = screen_h - taskbar_h
+            let y = orig_y + (target_y - orig_y) * progress / 100
+            let w = orig_w * (100 - progress / 2) / 100
+            let h = max(orig_h * (100 - progress) / 100, 10)
+
+            let done = anim.frame >= ANIM_MIN_FRAMES
+            (orig_x, y, w, h, done)
+        },
+    }
+}
+
+/// Linear interpolation helper
+fn lerp(a: Int, b: Int, t: Int) -> Int {
+    // t is 0..100
+    a + (b - a) * t / 100
+}
+
+/// Easing function: ease-out quad
+/// t is 0..100, returns 0..100
+fn ease_out_quad(t: Int) -> Int {
+    100 - (100 - t) * (100 - t) / 100
+}
+
+/// Easing function: ease-in quad
+fn ease_in_quad(t: Int) -> Int {
+    t * t / 100
+}

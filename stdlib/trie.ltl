@@ -1,0 +1,170 @@
+// ═══════════════════════════════════════════════════════════════════
+// Lateralus stdlib — trie
+// Prefix trie for efficient string-key lookup and prefix matching
+// ═══════════════════════════════════════════════════════════════════
+
+// A trie node is represented as a map:
+//   { "children": map[char -> node], "is_end": bool, "value": any }
+
+// ── Construction ────────────────────────────────────────────────────
+
+/// Create a new empty trie.
+pub fn new() -> map {
+    let node = {}
+    node["children"] = {}
+    node["is_end"] = false
+    node["value"] = nil
+    return node
+}
+
+/// Build a trie from a list of [key, value] pairs.
+pub fn from_pairs(pairs: list) -> map {
+    let t = new()
+    for pair in pairs {
+        t = insert(t, pair[0], pair[1])
+    }
+    return t
+}
+
+/// Build a trie from a list of strings (values = true).
+pub fn from_words(words: list) -> map {
+    let t = new()
+    for word in words {
+        t = insert(t, word, true)
+    }
+    return t
+}
+
+// ── Core operations ─────────────────────────────────────────────────
+
+/// Insert a key-value pair into the trie.
+pub fn insert(t: map, key: str, value) -> map {
+    let node = t
+    let i = 0
+    while i < len(key) {
+        let ch = substr(key, i, 1)
+        let children = node["children"]
+        if not contains(keys(children), ch) {
+            let child = new()
+            children[ch] = child
+        }
+        node["children"] = children
+        node = children[ch]
+        i = i + 1
+    }
+    node["is_end"] = true
+    node["value"] = value
+    return t
+}
+
+/// Look up a key.  Returns the value if found, nil otherwise.
+pub fn get(t: map, key: str) {
+    let node = _find_node(t, key)
+    if node == nil {
+        return nil
+    }
+    if node["is_end"] {
+        return node["value"]
+    }
+    return nil
+}
+
+/// Check if the trie contains a key.
+pub fn has(t: map, key: str) -> bool {
+    let node = _find_node(t, key)
+    if node == nil {
+        return false
+    }
+    return node["is_end"]
+}
+
+/// Check if any key in the trie starts with `prefix`.
+pub fn has_prefix(t: map, prefix: str) -> bool {
+    let node = _find_node(t, prefix)
+    return node != nil
+}
+
+// ── Prefix operations ───────────────────────────────────────────────
+
+/// Find all keys that start with `prefix`.
+pub fn keys_with_prefix(t: map, prefix: str) -> list {
+    let node = _find_node(t, prefix)
+    if node == nil {
+        return []
+    }
+    return _collect_keys(node, prefix)
+}
+
+/// Count keys that start with `prefix`.
+pub fn count_prefix(t: map, prefix: str) -> int {
+    return len(keys_with_prefix(t, prefix))
+}
+
+/// Find the longest prefix of `word` that exists in the trie.
+pub fn longest_prefix(t: map, word: str) -> str {
+    let node = t
+    let best = ""
+    let current = ""
+    let i = 0
+    while i < len(word) {
+        let ch = substr(word, i, 1)
+        let children = node["children"]
+        if not contains(keys(children), ch) {
+            return best
+        }
+        node = children[ch]
+        current = current + ch
+        if node["is_end"] {
+            best = current
+        }
+        i = i + 1
+    }
+    return best
+}
+
+// ── Query ───────────────────────────────────────────────────────────
+
+/// Get all keys stored in the trie.
+pub fn all_keys(t: map) -> list {
+    return _collect_keys(t, "")
+}
+
+/// Count all keys stored in the trie.
+pub fn size(t: map) -> int {
+    return len(all_keys(t))
+}
+
+/// Check if the trie is empty.
+pub fn is_empty(t: map) -> bool {
+    return size(t) == 0
+}
+
+// ── Internal helpers ────────────────────────────────────────────────
+
+fn _find_node(t: map, key: str) -> map {
+    let node = t
+    let i = 0
+    while i < len(key) {
+        let ch = substr(key, i, 1)
+        let children = node["children"]
+        if not contains(keys(children), ch) {
+            return nil
+        }
+        node = children[ch]
+        i = i + 1
+    }
+    return node
+}
+
+fn _collect_keys(node: map, prefix: str) -> list {
+    let result = []
+    if node["is_end"] {
+        result = result + [prefix]
+    }
+    let children = node["children"]
+    for ch in sorted(keys(children)) {
+        let sub = _collect_keys(children[ch], prefix + ch)
+        result = result + sub
+    }
+    return result
+}

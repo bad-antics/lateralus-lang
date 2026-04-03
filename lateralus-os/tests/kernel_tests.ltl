@@ -1,0 +1,227 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// LateralusOS — Kernel Unit Tests
+// ═══════════════════════════════════════════════════════════════════════════
+// Copyright (c) 2025 bad-antics. All rights reserved.
+//
+// These tests run inside the kernel itself during a test boot.
+// Results are printed to serial output for the test harness to capture.
+// ═══════════════════════════════════════════════════════════════════════════
+
+import hal::serial
+import kernel::memory
+import kernel::scheduler
+import kernel::ipc
+import kernel::panic
+import services::crypto_svc
+
+let mut tests_run:    int = 0
+let mut tests_passed: int = 0
+let mut tests_failed: int = 0
+
+fn assert_test(name: str, condition: bool) {
+    tests_run = tests_run + 1
+    if condition {
+        tests_passed = tests_passed + 1
+        serial::log("[TEST PASS] {name}")
+    } else {
+        tests_failed = tests_failed + 1
+        serial::log("[TEST FAIL] {name}")
+    }
+}
+
+fn assert_eq_int(name: str, actual: int, expected: int) {
+    tests_run = tests_run + 1
+    if actual == expected {
+        tests_passed = tests_passed + 1
+        serial::log("[TEST PASS] {name}")
+    } else {
+        tests_failed = tests_failed + 1
+        serial::log("[TEST FAIL] {name}: expected {expected}, got {actual}")
+    }
+}
+
+// ── Memory Tests ────────────────────────────────────────────────────────
+
+fn test_physical_allocator() {
+    serial::log("[TEST SUITE] Physical Allocator")
+
+    // Allocate a frame
+    let frame1 = memory::alloc_frame()
+    assert_test("alloc_frame returns non-zero", frame1 != 0)
+
+    // Allocate another frame (should be different)
+    let frame2 = memory::alloc_frame()
+    assert_test("second frame is different", frame2 != frame1)
+
+    // Free and re-allocate (should reuse)
+    memory::free_frame(frame1)
+    let frame3 = memory::alloc_frame()
+    assert_eq_int("freed frame is reused", frame3, frame1)
+
+    memory::free_frame(frame2)
+    memory::free_frame(frame3)
+}
+
+fn test_heap_allocator() {
+    serial::log("[TEST SUITE] Heap Allocator")
+
+    // Basic allocation
+    let ptr1 = memory::kmalloc(64)
+    assert_test("kmalloc(64) returns non-null", ptr1 != 0)
+
+    // Larger allocation
+    let ptr2 = memory::kmalloc(4096)
+    assert_test("kmalloc(4096) returns non-null", ptr2 != 0)
+    assert_test("different allocations don't overlap", ptr2 != ptr1)
+
+    // Free and re-allocate
+    memory::kfree(ptr1)
+    let ptr3 = memory::kmalloc(64)
+    assert_test("freed memory is reusable", ptr3 != 0)
+
+    memory::kfree(ptr2)
+    memory::kfree(ptr3)
+}
+
+// ── IPC Tests ───────────────────────────────────────────────────────────
+
+fn test_ipc_channels() {
+    serial::log("[TEST SUITE] IPC Channels")
+
+    // Create channel
+    let ch = ipc::channel_create("test_ch", 8)
+    match ch {
+        Result::Ok(id) => {
+            assert_test("channel_create succeeds", true)
+
+            // Send and receive
+            ipc::channel_send(id, 42)
+            match ipc::channel_recv(id) {
+                Result::Ok(val) => assert_eq_int("channel recv gets sent value", val, 42),
+                Result::Err(_) => assert_test("channel recv succeeds", false),
+            }
+
+            ipc::channel_close(id)
+        },
+        Result::Err(e) => assert_test("channel_create succeeds", false),
+    }
+}
+
+fn test_ipc_message_queue() {
+    serial::log("[TEST SUITE] IPC Message Queue")
+
+    let q = ipc::queue_create("test_q", 16)
+    match q {
+        Result::Ok(id) => {
+            assert_test("queue_create succeeds", true)
+
+            // Send multiple messages
+            ipc::queue_send(id, 1, [10, 20, 30])
+            ipc::queue_send(id, 2, [40, 50, 60])
+
+            // FIFO order
+            match ipc::queue_recv(id) {
+                Result::Ok(msg) => assert_eq_int("queue FIFO: first msg type", msg.msg_type, 1),
+                Result::Err(_) => assert_test("queue recv 1 succeeds", false),
+            }
+            match ipc::queue_recv(id) {
+                Result::Ok(msg) => assert_eq_int("queue FIFO: second msg type", msg.msg_type, 2),
+                Result::Err(_) => assert_test("queue recv 2 succeeds", false),
+            }
+        },
+        Result::Err(_) => assert_test("queue_create succeeds", false),
+    }
+}
+
+// ── Scheduler Tests ─────────────────────────────────────────────────────
+
+fn test_scheduler_spawn() {
+    serial::log("[TEST SUITE] Scheduler")
+
+    let stats = scheduler::get_stats()
+    let initial_procs = stats.0
+
+    // Spawn a simple process
+    let pid = scheduler::spawn("test_proc", fn() {
+        // Do nothing — just verify we can spawn
+    })
+    assert_test("spawn returns valid PID", pid > 0)
+
+    let new_stats = scheduler::get_stats()
+    assert_test("process count increased", new_stats.0 > initial_procs)
+}
+
+// ── Crypto Tests ────────────────────────────────────────────────────────
+
+fn test_crypto_key_generation() {
+    serial::log("[TEST SUITE] Crypto Key Generation")
+
+    let key1 = crypto_svc::generate_key(32)
+    assert_test("key generation produces 32 bytes", key1.len() == 32)
+
+    let key2 = crypto_svc::generate_key(32)
+    assert_test("two keys are different", key1 != key2)
+}
+
+fn test_crypto_encrypt_decrypt() {
+    serial::log("[TEST SUITE] Crypto Encrypt/Decrypt")
+
+    let key = crypto_svc::generate_key(32)
+    let plaintext = [72, 101, 108, 108, 111]  // "Hello"
+
+    let ciphertext = crypto_svc::encrypt(plaintext, key)
+    assert_test("ciphertext is longer than plaintext", ciphertext.len() > plaintext.len())
+    assert_test("ciphertext differs from plaintext", ciphertext != plaintext)
+
+    match crypto_svc::decrypt(ciphertext, key) {
+        Result::Ok(decrypted) => {
+            assert_test("decrypted matches plaintext", decrypted == plaintext)
+        },
+        Result::Err(e) => assert_test("decryption succeeds", false),
+    }
+}
+
+fn test_crypto_tamper_detection() {
+    serial::log("[TEST SUITE] Crypto Tamper Detection")
+
+    let key = crypto_svc::generate_key(32)
+    let plaintext = [1, 2, 3, 4, 5]
+
+    let ciphertext = crypto_svc::encrypt(plaintext, key)
+
+    // Tamper with ciphertext
+    let tampered = ciphertext
+    tampered[20] = tampered[20] ^ 0xFF
+
+    match crypto_svc::decrypt(tampered, key) {
+        Result::Ok(_) => assert_test("tampered data is rejected", false),
+        Result::Err(_) => assert_test("tampered data is rejected", true),
+    }
+}
+
+// ── Run All Tests ───────────────────────────────────────────────────────
+
+pub fn run_all() {
+    serial::log("═══════════════════════════════════════════════════")
+    serial::log("  LateralusOS Kernel Test Suite")
+    serial::log("═══════════════════════════════════════════════════")
+
+    test_physical_allocator()
+    test_heap_allocator()
+    test_ipc_channels()
+    test_ipc_message_queue()
+    test_scheduler_spawn()
+    test_crypto_key_generation()
+    test_crypto_encrypt_decrypt()
+    test_crypto_tamper_detection()
+
+    serial::log("═══════════════════════════════════════════════════")
+    serial::log("  Results: {tests_passed}/{tests_run} passed, {tests_failed} failed")
+    serial::log("═══════════════════════════════════════════════════")
+
+    if tests_failed > 0 {
+        serial::log("[TEST SUITE] FAILED")
+    } else {
+        serial::log("[TEST SUITE] ALL PASSED")
+    }
+}

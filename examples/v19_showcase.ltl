@@ -1,0 +1,238 @@
+// ═══════════════════════════════════════════════════════════════════
+// LATERALUS v1.9 — FFI & Ecosystem Showcase
+// Demonstrates: JS/WASM targets, FFI bridge, Jupyter kernel,
+//               multi-target compilation, and full v1.9 feature set
+// ═══════════════════════════════════════════════════════════════════
+
+import math
+import strings
+
+// ── 1. Multi-Target Constants ─────────────────────────────────────
+
+const VERSION = "1.9.0"
+const MAX_ITEMS = 256
+
+// ── 2. Core data types (work across all targets) ──────────────────
+
+struct Vector2D {
+    x: float
+    y: float
+}
+
+struct Matrix2x2 {
+    a: float
+    b: float
+    c: float
+    d: float
+}
+
+enum Shape {
+    Circle(radius: float),
+    Rect(width: float, height: float),
+    Triangle(base: float, height: float),
+}
+
+// ── 3. Functions demonstrating multi-target output ────────────────
+
+fn vec_add(a: Vector2D, b: Vector2D) -> Vector2D {
+    return Vector2D { x: a.x + b.x, y: a.y + b.y }
+}
+
+fn vec_dot(a: Vector2D, b: Vector2D) -> float {
+    return a.x * b.x + a.y * b.y
+}
+
+fn vec_length(v: Vector2D) -> float {
+    return sqrt(v.x * v.x + v.y * v.y)
+}
+
+fn mat_det(m: Matrix2x2) -> float {
+    return m.a * m.d - m.b * m.c
+}
+
+fn mat_mul_vec(m: Matrix2x2, v: Vector2D) -> Vector2D {
+    return Vector2D {
+        x: m.a * v.x + m.b * v.y,
+        y: m.c * v.x + m.d * v.y,
+    }
+}
+
+// ── 4. Shape area — pattern matching across targets ───────────────
+
+fn shape_area(s: Shape) -> float {
+    return match s {
+        Circle(r) => 3.14159 * r * r,
+        Rect(w, h) => w * h,
+        Triangle(b, h) => 0.5 * b * h,
+    }
+}
+
+// ── 5. Pipeline processing ────────────────────────────────────────
+
+fn generate_points(n: int) -> list {
+    let points = []
+    for i in range(0, n) {
+        let angle = i * 6.28318 / n
+        push(points, Vector2D {
+            x: cos(angle) * 10.0,
+            y: sin(angle) * 10.0,
+        })
+    }
+    return points
+}
+
+fn analyze_points(points: list) -> map {
+    let result = {}
+    let distances = points
+        |> map(fn(p) { vec_length(p) })
+
+    result["count"] = len(points)
+    result["avg_distance"] = mean(distances)
+    result["max_distance"] = max(distances)
+    result["min_distance"] = min(distances)
+    return result
+}
+
+// ── 6. Const fn (compile-time evaluation) ─────────────────────────
+
+const fn fibonacci(n: int) -> int {
+    if n <= 1 { return n }
+    return fibonacci(n - 1) + fibonacci(n - 2)
+}
+
+const fn factorial(n: int) -> int {
+    if n <= 1 { return 1 }
+    return n * factorial(n - 1)
+}
+
+// ── 7. FFI-ready structures ───────────────────────────────────────
+
+struct FFIBuffer {
+    data: list
+    size: int
+    capacity: int
+}
+
+fn buffer_new(cap: int) -> FFIBuffer {
+    return FFIBuffer { data: [], size: 0, capacity: cap }
+}
+
+fn buffer_push(buf: FFIBuffer, value: int) -> bool {
+    if buf.size >= buf.capacity {
+        return false
+    }
+    push(buf.data, value)
+    buf.size = buf.size + 1
+    return true
+}
+
+// ── 8. Numeric processing pipeline ───────────────────────────────
+
+fn process_signal(samples: list) -> map {
+    let n = len(samples)
+
+    // Moving average
+    let smoothed = []
+    for i in range(1, n - 1) {
+        let avg = (samples[i - 1] + samples[i] + samples[i + 1]) / 3.0
+        push(smoothed, avg)
+    }
+
+    // Peak detection
+    let peaks = []
+    for i in range(1, len(smoothed) - 1) {
+        if smoothed[i] > smoothed[i - 1] and smoothed[i] > smoothed[i + 1] {
+            push(peaks, i)
+        }
+    }
+
+    let result = {}
+    result["sample_count"] = n
+    result["smoothed_count"] = len(smoothed)
+    result["peak_count"] = len(peaks)
+    result["mean_value"] = mean(samples)
+    return result
+}
+
+// ── 9. String processing (works in JS/WASM/Python/C) ─────────────
+
+fn tokenize(input: str) -> list {
+    return split(input, " ")
+}
+
+fn word_count(text: str) -> int {
+    let words = tokenize(text)
+    return len(words)
+}
+
+fn reverse_words(text: str) -> str {
+    let words = tokenize(text)
+    let reversed = reverse(words)
+    return join(reversed, " ")
+}
+
+// ── 10. Result type usage ─────────────────────────────────────────
+
+fn safe_divide(a: float, b: float) -> Result {
+    if b == 0.0 {
+        return Err("division by zero")
+    }
+    return Ok(a / b)
+}
+
+fn safe_sqrt(x: float) -> Result {
+    if x < 0.0 {
+        return Err("negative input")
+    }
+    return Ok(sqrt(x))
+}
+
+// ── Main ──────────────────────────────────────────────────────────
+
+fn main() {
+    println("═══ LATERALUS v" + VERSION + " — FFI & Ecosystem ═══")
+
+    // Vector math
+    let v1 = Vector2D { x: 3.0, y: 4.0 }
+    let v2 = Vector2D { x: 1.0, y: 2.0 }
+    let v3 = vec_add(v1, v2)
+    println("v1 + v2 = (" + str(v3.x) + ", " + str(v3.y) + ")")
+    println("dot(v1, v2) = " + str(vec_dot(v1, v2)))
+    println("|v1| = " + str(vec_length(v1)))
+
+    // Matrix math
+    let rot = Matrix2x2 { a: 0.0, b: -1.0, c: 1.0, d: 0.0 }
+    let rotated = mat_mul_vec(rot, v1)
+    println("rot90(v1) = (" + str(rotated.x) + ", " + str(rotated.y) + ")")
+    println("det(rot) = " + str(mat_det(rot)))
+
+    // Const fn results
+    println("fib(10) = " + str(fibonacci(10)))
+    println("fact(6) = " + str(factorial(6)))
+
+    // Pipeline
+    let points = generate_points(8)
+    let stats = analyze_points(points)
+    println("Points: " + str(stats["count"]))
+    println("Avg dist: " + str(stats["avg_distance"]))
+
+    // Signal processing
+    let signal = [1.0, 3.0, 7.0, 4.0, 2.0, 8.0, 5.0, 1.0]
+    let analysis = process_signal(signal)
+    println("Peaks found: " + str(analysis["peak_count"]))
+
+    // String ops
+    let text = "the quick brown fox"
+    println("Words: " + str(word_count(text)))
+    println("Reversed: " + reverse_words(text))
+
+    // Result types
+    let r1 = safe_divide(10.0, 3.0)
+    let r2 = safe_divide(10.0, 0.0)
+    println("10/3 = " + str(r1))
+    println("10/0 = " + str(r2))
+
+    println("═══ Done ═══")
+}
+
+main()

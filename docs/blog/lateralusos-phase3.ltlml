@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LATERALUS Document</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+@title{LateralusOS Phase 3: The Interactive Desktop}
+@author{bad-antics}
+@date{2026-03-31}
+@tags{lateralus, os, gui, terminal, filesystem, speaker, animation}
+
+@section{Overview}
+
+Phase 3 of LateralusOS transforms the graphical desktop from a static window manager
+into a fully interactive environment. The kernel has grown from 136 KB to 375 KB,
+gaining four major new subsystems and numerous GUI enhancements — all while maintaining
+a clean zero-warning build.
+
+@section{What's New}
+
+@subsection{Functional GUI Terminal}
+
+The centerpiece of Phase 3 is a real, working terminal emulator rendered inside
+the framebuffer GUI. Each terminal gets its own window, its own scrollback buffer
+(200 lines, 80 columns), and its own working directory.
+
+@code[ltl]{
+// 17 built-in commands:
+// File ops:    ls, cat, touch, mkdir, rm, cd, pwd
+// Output:      echo (supports echo text > file redirect)
+// System:      uname, uptime, free, tasks
+// Terminal:    help, clear, history, neofetch
+}
+
+Up to 4 terminals can run simultaneously. Each has cursor blinking (500 ms),
+command history with Up/Down arrows (16 entries), and full VFS path resolution
+(absolute paths with @code{..} support).
+
+@subsection{RAM Filesystem (ramfs)}
+
+A proper inode-based in-memory filesystem. 64 max nodes, 16 children per directory,
+2 KB max file content. The filesystem comes pre-populated:
+
+@code{
+/
+├── home/
+│   ├── readme.txt
+│   ├── hello.ltl
+│   └── spiral.txt
+├── etc/
+│   ├── hostname    → "lateralus"
+│   └── motd        → "Welcome to LateralusOS v0.1.0"
+└── tmp/
+}
+
+Full API: @code{ramfs_create}, @code{ramfs_mkdir}, @code{ramfs_write},
+@code{ramfs_read}, @code{ramfs_find}, @code{ramfs_list}, @code{ramfs_remove},
+@code{ramfs_resolve_path}.
+
+The VFS is integrated into both the text-mode shell and the GUI terminal.
+
+@subsection{PC Speaker Driver}
+
+PIT Channel 2 tone generation with a non-blocking melody queue (8 notes max).
+Programs ports 0x42, 0x43, and 0x61 directly.
+
+Pre-built sound effects:
+@list{
+  @item{@bold{Boot chime}: C5→E5→G5→C6 ascending arpeggio at startup}
+  @item{@bold{Window open}: A5→D6 two-note chime when creating a window}
+  @item{@bold{Key click}: 1200 Hz, 3 ms ultra-short feedback}
+  @item{@bold{Error beep}: A3 warning tone}
+  @item{@bold{Notification}: E6 ding}
+}
+
+@subsection{Cooperative Task Scheduler}
+
+A lightweight callback-based scheduler running alongside the main loop.
+16 task slots, round-robin execution with configurable intervals.
+
+@code[ltl]{
+// Register a periodic task
+task_create("cursor_blink", blink_fn, NULL, 500)  // every 500ms
+
+// Register a one-shot delayed task
+task_create_oneshot("chime", chime_fn, NULL, 2000, tick)  // after 2s
+}
+
+Viewable via the terminal @code{tasks} command.
+
+@subsection{Animated Wallpaper}
+
+The static gradient wallpaper is replaced with a fully animated one:
+
+@list{
+  @item{@bold{Color-cycling gradient}: Background colors shift via integer sine/cosine tables (64 entries)}
+  @item{@bold{12 twinkling stars}: Pseudo-random positions with brightness that fades in and out}
+  @item{@bold{5 Fibonacci spiral rings}: Rotating dots in Catppuccin accent colors (blue, green, yellow, pink, lavender)}
+  @item{@bold{Pulsing logo}: "LateralusOS" text with oscillating glow color}
+}
+
+All animation uses integer math only (no floating point in freestanding mode).
+Phase-based: @code{wallpaper_phase} increments every @code{gui_tick}.
+
+@subsection{Window Animations}
+
+Smooth transitions for window lifecycle events:
+
+@list{
+  @item{@bold{Open}: 8-frame scale-from-center animation}
+  @item{@bold{Close}: 7-frame shrink-to-center animation}
+  @item{@bold{Minimize}: 7-frame slide-to-taskbar animation}
+}
+
+New @code{Window} fields: @code{anim_state} (none/opening/closing/minimizing)
+and @code{anim_frame} (0-based frame counter).
+
+@subsection{Alt+Tab Window Switcher}
+
+An overlay panel listing all visible windows with a highlighted selection.
+@code{Alt+Tab} cycles forward, @code{Shift+Alt+Tab} cycles backward.
+Releasing the Alt key focuses the selected window (restores if minimized).
+
+@subsection{Keyboard Enhancements}
+
+@list{
+  @item{@bold{Ctrl key tracking}: Scancodes 0x1D/0x9D, generates ASCII control codes}
+  @item{@bold{Alt key tracking}: Scancodes 0x38/0xB8, enables Alt+Tab}
+  @item{@bold{Ctrl+T}: Open new terminal}
+  @item{@bold{Ctrl+A}: Toggle start menu}
+  @item{@bold{Ctrl+M}: Open system monitor}
+}
+
+@section{Lateralus Companion Files}
+
+Every C module has a corresponding @code{.ltl} implementation:
+
+@list{
+  @item{@code{gui/terminal.ltl} — Full terminal emulator in Lateralus}
+  @item{@code{gui/wallpaper.ltl} — Animated wallpaper engine with sine tables}
+  @item{@code{gui/animation.ltl} — Window animation state machine with easing functions}
+  @item{@code{drivers/speaker.ltl} — PIT Channel 2 speaker driver with melody queue}
+  @item{@code{fs/vfs.ltl} — Updated with full RAMFS backend (~180 new lines)}
+  @item{@code{kernel/scheduler.ltl} — Updated with cooperative task scheduler section}
+}
+
+These represent the language-native implementation that will eventually replace
+the C stubs once the Lateralus-to-C transpiler can handle all the freestanding
+patterns.
+
+@section{Build Metrics}
+
+@table{
+  @header{Metric | Value}
+  @row{Build steps | 11 (up from 7)}
+  @row{Object files | 11 .o files linked}
+  @row{Kernel size | 375 KB (up from 136 KB)}
+  @row{ISO size | 13 MB}
+  @row{Compiler warnings | 0}
+  @row{Boot test | PASSED (QEMU serial verified)}
+  @row{Language tests | 1,158 passing (zero regressions)}
+}
+
+@section{What's Next}
+
+Phase 4 is on the horizon. Candidates include:
+@list{
+  @item{Persistent storage (ATA/AHCI disk driver)}
+  @item{Process isolation and preemptive scheduling}
+  @item{Network stack (virtio-net)}
+  @item{.ltl script execution from the terminal}
+  @item{GUI text editor for .ltl files}
+}
+
+@italic{Spiral Out, Keep Going.}
+
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>

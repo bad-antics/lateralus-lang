@@ -1,0 +1,1067 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The LATERALUS Cookbook</title>
+  <link rel="stylesheet" href="ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="./index.ltlml">Home</a>
+    <a href="./tutorial.ltlml">Tutorial</a>
+    <a href="./cookbook.ltlml">Cookbook</a>
+    <a href="./language-spec.ltlml">Spec</a>
+    <a href="./quick-reference.ltlml">Quick Ref</a>
+    <a href="./architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+{document
+  title: "The LATERALUS Cookbook"
+  subtitle: "Practical recipes for real-world LATERALUS programming"
+  version: "1.0"
+  authors: ["bad-antics"]
+}
+
+{h1 The LATERALUS Cookbook}
+
+{p
+  This cookbook provides concise, copy-paste-ready recipes for solving common
+  programming tasks in LATERALUS. Each recipe presents a problem, explains the
+  approach, and gives a complete working example.
+}
+
+{toc}
+
+{separator}
+
+{h2 Chapter 1: Pipeline Patterns}
+
+{h3 Recipe 1.1 — Data Transformation Pipeline}
+
+{p
+  {strong Problem}: Transform a list of raw records through multiple steps:
+  filter, normalize, enrich, and format.
+}
+
+{code lang="lateralus"
+let raw_data = [
+    {name: "alice", score: 87, dept: "engineering"},
+    {name: "bob",   score: 42, dept: "sales"},
+    {name: "diana", score: 95, dept: "engineering"},
+    {name: "eve",   score: 38, dept: "sales"},
+]
+
+let report = raw_data
+    |> filter(fn r => r.score >= 50)           -- keep passing scores
+    |> map(fn r => {
+        ...r,
+        name: capitalize(r.name),              -- normalize name
+        grade: if r.score >= 90 { "A" }
+               else if r.score >= 80 { "B" }
+               else { "C" },
+        passed: true
+    })
+    |> sort_by(fn r => -r.score)               -- best first
+    |> map(fn r => r.name + ": " + r.grade)    -- format
+
+println(report)
+-- ["Diana: A", "Alice: B"]
+}
+
+{h3 Recipe 1.2 — Safe Optional Pipeline}
+
+{p
+  {strong Problem}: Process a value that might be None at any step without
+  crashing or writing nested null checks.
+}
+
+{code lang="lateralus"
+-- |? propagates None automatically, skipping any step that receives None
+fn get_user_city(user_id: int) -> str | None {
+    return fetch_user(user_id)
+        |? fn u => u.address
+        |? fn a => a.city
+        |? fn c => c.name
+}
+
+-- If user doesn't exist or has no address, returns None silently
+let city = get_user_city(999)
+println(city)  -- None (no crash)
+}
+
+{h3 Recipe 1.3 — Pipeline with Error Accumulation}
+
+{p
+  {strong Problem}: Validate a form, collecting all errors rather than stopping
+  at the first one.
+}
+
+{code lang="lateralus"
+struct ValidationResult {
+    valid: bool
+    errors: list[str]
+}
+
+fn validate_form(data: dict) -> ValidationResult {
+    let errors = []
+
+    let errors = errors + if len(data.name) < 2 {
+        ["Name must be at least 2 characters"]
+    } else { [] }
+
+    let errors = errors + if not data.email |> contains("@") {
+        ["Invalid email address"]
+    } else { [] }
+
+    let errors = errors + if data.age < 18 {
+        ["Must be 18 or older"]
+    } else { [] }
+
+    return ValidationResult {
+        valid: len(errors) == 0,
+        errors: errors
+    }
+}
+
+let result = validate_form({name: "A", email: "bad", age: 15})
+println(result.errors)
+-- ["Name must be at least 2 chars", "Invalid email", "Must be 18+"]
+}
+
+{separator}
+
+{h2 Chapter 2: Data Processing}
+
+{h3 Recipe 2.1 — CSV Processing with Pipelines}
+
+{p
+  {strong Problem}: Load a CSV file, compute aggregates, and output results.
+}
+
+{code lang="lateralus"
+import "io"
+import "strings"
+
+fn parse_csv(text: str) -> list[dict] {
+    let lines = strings.split(text, "\n")
+    let header = strings.split(lines[0], ",")
+    return lines[1:]
+        |> filter(fn l => len(l) > 0)
+        |> map(fn l => {
+            let values = strings.split(l, ",")
+            return collections.zip_to_dict(header, values)
+        })
+}
+
+let csv_text = io.read_file("data/sales.csv")
+let records  = parse_csv(csv_text)
+
+let by_region = records
+    |> group_by(fn r => r["region"])
+    |> map_values(fn rows => sum(map(rows, fn r => float(r["amount"]))))
+
+println(by_region)
+}
+
+{h3 Recipe 2.2 — LQL Query on In-Memory Collections}
+
+{p
+  {strong Problem}: Filter and aggregate structured data using SQL-like syntax.
+}
+
+{code lang="lateralus"
+import "query"
+
+let users = [
+    {id: 1, name: "Alice", dept: "eng",   salary: 95000},
+    {id: 2, name: "Bob",   dept: "eng",   salary: 75000},
+    {id: 3, name: "Carol", dept: "sales", salary: 80000},
+]
+
+-- Using the fluent API
+let engineers = Query.from(users)
+    .where(fn u => u.dept == "eng")
+    .order_by("salary", ascending: false)
+    .select("name", "salary")
+    .execute()
+
+println(engineers)
+
+-- Using LQL string syntax
+let result = lql("SELECT * FROM users WHERE dept = 'eng' ORDER BY salary DESC", {users: users})
+println(result)
+}
+
+{h3 Recipe 2.3 — JSON API Response Processing}
+
+{p
+  {strong Problem}: Fetch data from a REST API, extract fields, and reformat.
+}
+
+{code lang="lateralus"
+import "network"
+import "json"
+
+let response = network.get_json("https://api.example.com/users")
+
+let active_users = response["data"]
+    |> filter(fn u => u["active"] == true)
+    |> map(fn u => {
+        id:    u["id"],
+        name:  u["firstName"] + " " + u["lastName"],
+        email: u["email"]
+    })
+    |> sort_by(fn u => u.name)
+
+json.save_file("output/active_users.json", active_users)
+println("Saved " + str(len(active_users)) + " active users")
+}
+
+{separator}
+
+{h2 Chapter 3: Pattern Matching}
+
+{h3 Recipe 3.1 — Algebraic Data Type Dispatch}
+
+{p
+  {strong Problem}: Process a tree-like structure using exhaustive pattern matching.
+}
+
+{code lang="lateralus"
+-- A simple expression tree
+struct Num   { value: float }
+struct Add   { left: any, right: any }
+struct Mul   { left: any, right: any }
+struct Neg   { expr: any }
+
+fn eval(expr: any) -> float {
+    match expr {
+        Num   { value } => value,
+        Add   { left, right } => eval(left) + eval(right),
+        Mul   { left, right } => eval(left) * eval(right),
+        Neg   { expr: e }    => -eval(e),
+        _                    => 0.0
+    }
+}
+
+-- (3 + 4) * -2 = -14
+let tree = Mul {
+    left:  Add { left: Num{3.0}, right: Num{4.0} },
+    right: Neg { expr: Num{2.0} }
+}
+
+println(eval(tree))  -- -14.0
+}
+
+{h3 Recipe 3.2 — HTTP Status Code Handler}
+
+{p
+  {strong Problem}: Handle different HTTP response status codes cleanly.
+}
+
+{code lang="lateralus"
+fn handle_response(status: int, body: str) -> str {
+    match status {
+        200 => "OK: " + body,
+        201 => "Created: " + body,
+        400 => "Bad request: " + body,
+        401 => "Unauthorized — check your API key",
+        403 => "Forbidden",
+        404 => "Not found",
+        429 => "Rate limited — retry after 60s",
+        500 | 502 | 503 => "Server error: " + body,
+        n if n >= 200 and n < 300 => "Success (2xx): " + body,
+        n if n >= 400 and n < 500 => "Client error " + str(n),
+        _ => "Unknown status " + str(status)
+    }
+}
+}
+
+{h3 Recipe 3.3 — Parsing Command-Line Arguments}
+
+{code lang="lateralus"
+fn parse_args(args: list[str]) -> dict {
+    let result = {verbose: false, output: "stdout", files: []}
+    let i = 0
+
+    while i < len(args) {
+        match args[i] {
+            "--verbose" | "-v" => {
+                result = {...result, verbose: true}
+                i = i + 1
+            },
+            "--output" | "-o" => {
+                result = {...result, output: args[i + 1]}
+                i = i + 2
+            },
+            flag if starts_with(flag, "--") => {
+                println("Unknown flag: " + flag)
+                i = i + 1
+            },
+            file => {
+                result = {...result, files: result.files + [file]}
+                i = i + 1
+            }
+        }
+    }
+
+    return result
+}
+}
+
+{separator}
+
+{h2 Chapter 4: Scientific Computing}
+
+{h3 Recipe 4.1 — Physics Simulation: Projectile Motion}
+
+{code lang="lateralus"
+import "science"
+import "math"
+
+-- Simulate projectile: position over time with air resistance
+struct State {
+    x: float
+    y: float
+    vx: float
+    vy: float
+}
+
+let g   = science.constants.G_STANDARD   -- 9.80665 m/s²
+let rho = 1.225                           -- air density kg/m³
+let Cd  = 0.47                            -- drag coeff (sphere)
+let A   = 0.01                            -- cross-section m²
+let m   = 0.145                           -- mass kg (baseball)
+
+fn drag(v: float) -> float {
+    return 0.5 * rho * Cd * A * v * v / m
+}
+
+fn projectile_ode(t: float, state: list[float]) -> list[float] {
+    let x, y, vx, vy = state
+    let speed = math.sqrt(vx * vx + vy * vy)
+    let dvx = -drag(speed) * vx / speed if speed > 0.001 else 0.0
+    let dvy = -g - (drag(speed) * vy / speed if speed > 0.001 else 0.0)
+    return [vx, vy, dvx, dvy]
+}
+
+-- Launch at 45° with 30 m/s
+let v0 = 30.0
+let angle = math.PI / 4.0
+let s0 = [0.0, 0.0, v0 * math.cos(angle), v0 * math.sin(angle)]
+
+let trajectory = science.ode_rk4(projectile_ode, 0.0, 3.0, s0, dt: 0.01)
+let landing = first(filter(trajectory, fn s => s[1] < 0.0))
+println("Range: " + str(landing[0]) + " m")
+}
+
+{h3 Recipe 4.2 — Statistical Analysis Pipeline}
+
+{code lang="lateralus"
+import "science"
+import "stats"
+
+let data = [23.1, 25.4, 22.8, 24.7, 26.1, 21.9, 25.0, 24.3, 23.7, 25.8]
+
+let analysis = {
+    n:       len(data),
+    mean:    stats.mean(data),
+    std:     stats.std(data),
+    median:  stats.median(data),
+    min:     min(data),
+    max:     max(data),
+    cv:      stats.std(data) / stats.mean(data) * 100.0,  -- coefficient of variation
+    ci_95:   stats.confidence_interval(data, 0.95)
+}
+
+-- Pretty print
+for key, val in analysis.items() {
+    println(key + ": " + str(round(val, 4) if type(val) == float else val))
+}
+
+-- Normality test (Shapiro-Wilk approximation)
+let is_normal = science.shapiro_wilk_approx(data).p_value > 0.05
+println("Data appears normal: " + str(is_normal))
+}
+
+{h3 Recipe 4.3 — Matrix Operations for Machine Learning}
+
+{code lang="lateralus"
+import "linalg"
+
+-- Simple linear regression: y = Xw using least squares
+fn linear_regression(X: Matrix, y: Vector) -> Vector {
+    -- w = (X^T X)^{-1} X^T y
+    let Xt  = linalg.transpose(X)
+    let XtX = linalg.matmul(Xt, X)
+    let Xty = linalg.matmul(Xt, linalg.col_vector(y))
+    return linalg.solve(XtX, Xty)
+}
+
+-- Feature matrix: [1, x] (bias + single feature)
+let X = linalg.matrix_from_rows([
+    [1.0, 1.0],
+    [1.0, 2.0],
+    [1.0, 3.0],
+    [1.0, 4.0],
+    [1.0, 5.0],
+])
+let y = [2.1, 4.0, 5.9, 8.1, 10.0]
+
+let weights = linear_regression(X, y)
+println("Intercept: " + str(weights[0]))
+println("Slope: " + str(weights[1]))
+}
+
+{separator}
+
+{h2 Chapter 5: Async and Concurrent Patterns}
+
+{h3 Recipe 5.1 — Parallel Data Fetch}
+
+{code lang="lateralus"
+import "async"
+import "network"
+
+-- Fetch multiple URLs concurrently using channels
+async fn fetch_all(urls: list[str]) -> list[dict] {
+    let tasks = urls |> map(fn url => async {
+        let resp = network.get_json(url)
+        return {url: url, data: resp, ok: resp != None}
+    })
+    return await async.gather(tasks)
+}
+
+let urls = [
+    "https://api.github.com/repos/lateralus-lang/lateralus",
+    "https://api.github.com/repos/lateralus-lang/stdlib",
+]
+
+let results = await fetch_all(urls)
+for r in results {
+    println(r.url + ": " + (if r.ok { "OK" } else { "FAILED" }))
+}
+}
+
+{h3 Recipe 5.2 — Rate-Limited API Client}
+
+{code lang="lateralus"
+import "async"
+
+-- Process items with a rate limit (max N requests per second)
+async fn process_with_rate_limit(items: list[any], handler: fn, rate: int = 10) -> list {
+    let limiter = async.RateLimiter(rate: rate, per: 1.0)
+    let results = []
+
+    for item in items {
+        await limiter.acquire()
+        let result = await handler(item)
+        results = results + [result]
+    }
+
+    return results
+}
+}
+
+{h3 Recipe 5.3 — Reactive Counter with Effects}
+
+{code lang="lateralus"
+import "reactive"
+
+let count   = Signal(0)
+let doubled = Computed(fn => count.get() * 2)
+let label   = Computed(fn => if count.get() == 0 { "zero" } else { "nonzero" })
+
+-- Effect: runs whenever count changes
+let eff = Effect(fn => {
+    println("count=" + str(count.get()) +
+            " doubled=" + str(doubled.get()) +
+            " label=" + label.get())
+})
+
+count.set(1)   -- prints: count=1 doubled=2 label=nonzero
+count.set(2)   -- prints: count=2 doubled=4 label=nonzero
+count.set(0)   -- prints: count=0 doubled=0 label=zero
+
+eff.dispose()  -- stop tracking
+count.set(99)  -- nothing printed
+}
+
+{separator}
+
+{h2 Chapter 6: Cryptography Recipes}
+
+{h3 Recipe 6.1 — Secure Password Hashing}
+
+{code lang="lateralus"
+import "crypto"
+
+-- Hash a password with PBKDF2 (use in user registration)
+fn hash_password(password: str) -> str {
+    let salt = crypto.random_bytes(32)  -- 256-bit salt
+    let hash = crypto.pbkdf2(
+        password: password,
+        salt:     salt,
+        iterations: 600_000,            -- NIST 2024 recommended
+        key_len:  32,
+        algorithm: "sha256"
+    )
+    -- Store as "salt:hash" (both hex-encoded)
+    return crypto.to_hex(salt) + ":" + crypto.to_hex(hash)
+}
+
+-- Verify a password against a stored hash
+fn verify_password(password: str, stored: str) -> bool {
+    let [salt_hex, hash_hex] = split(stored, ":")
+    let salt = crypto.from_hex(salt_hex)
+    let expected = crypto.from_hex(hash_hex)
+    let actual = crypto.pbkdf2(
+        password: password,
+        salt:     salt,
+        iterations: 600_000,
+        key_len:  32,
+        algorithm: "sha256"
+    )
+    return crypto.constant_time_compare(actual, expected)
+}
+}
+
+{h3 Recipe 6.2 — Encrypt and Decrypt a File}
+
+{code lang="lateralus"
+import "crypto"
+import "io"
+
+fn encrypt_file(input_path: str, output_path: str, password: str) -> None {
+    let plaintext = io.read_bytes(input_path)
+    let salt = crypto.random_bytes(16)
+    let key  = crypto.pbkdf2(password, salt, iterations: 100_000, key_len: 32)
+    let iv, ciphertext, tag = crypto.aes_gcm_encrypt(plaintext, key)
+    -- Format: [salt(16)] [iv(12)] [tag(16)] [ciphertext]
+    io.write_bytes(output_path, salt + iv + tag + ciphertext)
+}
+
+fn decrypt_file(input_path: str, output_path: str, password: str) -> None {
+    let data       = io.read_bytes(input_path)
+    let salt       = data[0:16]
+    let iv         = data[16:28]
+    let tag        = data[28:44]
+    let ciphertext = data[44:]
+    let key        = crypto.pbkdf2(password, salt, iterations: 100_000, key_len: 32)
+    let plaintext  = crypto.aes_gcm_decrypt(ciphertext, key, iv, tag)
+    io.write_bytes(output_path, plaintext)
+}
+}
+
+{separator}
+
+{h2 Chapter 7: Testing Patterns}
+
+{h3 Recipe 7.1 — Property-Based Tests}
+
+{code lang="lateralus"
+import "testing"
+
+-- Test a property that should hold for all inputs in a range
+@property_test(runs: 1000)
+fn test_sort_is_idempotent(lst: list[int]) {
+    -- Sorting twice equals sorting once
+    let once  = sort(lst)
+    let twice = sort(once)
+    assert once == twice, "sort is not idempotent"
+}
+
+@property_test(runs: 1000)
+fn test_reverse_twice_is_identity(lst: list[int]) {
+    assert reverse(reverse(lst)) == lst
+}
+
+@property_test(runs: 500)
+fn test_pipeline_associativity(x: int) {
+    -- (x |> f |> g) == (x |> (f then g))
+    let f = fn n => n * 2
+    let g = fn n => n + 1
+    assert (x |> f |> g) == ((f then g)(x))
+}
+}
+
+{h3 Recipe 7.2 — Integration Test with Fixtures}
+
+{code lang="lateralus"
+import "testing"
+
+@fixture
+fn test_db() -> dict {
+    let db = {users: [], orders: []}
+    yield db
+    -- cleanup: db goes out of scope
+}
+
+@test
+fn test_add_user(test_db: dict) {
+    test_db.users = test_db.users + [{id: 1, name: "Alice"}]
+    assert len(test_db.users) == 1
+    assert test_db.users[0].name == "Alice"
+}
+
+@test
+fn test_user_not_in_orders(test_db: dict) {
+    -- Fixtures are fresh per test
+    assert len(test_db.orders) == 0
+}
+}
+
+{separator}
+
+{h2 Chapter 8: Notebook Workflows}
+
+{h3 Recipe 8.1 — Exploratory Data Analysis Notebook}
+
+{code lang="lateralus"
+-- In a .ltlnb notebook, mix markdown, code, and math cells
+
+-- [MARKDOWN] Load and inspect dataset
+-- ## Sales Data Analysis
+
+-- [CODE]
+import "json"
+let data = json.load_file("data/sales_2024.json")
+println("Records: " + str(len(data)))
+println("Fields: " + str(keys(data[0])))
+
+-- [MATH]
+-- \bar{x} = \frac{1}{n}\sum_{i=1}^{n} x_i
+
+-- [CODE]
+import "stats"
+let revenues = pluck(data, "revenue")
+println("Mean revenue: $" + str(round(stats.mean(revenues), 2)))
+println("Std deviation: $" + str(round(stats.std(revenues), 2)))
+}
+
+{separator}
+
+{h2 Chapter 9: Configuration Management}
+
+{h3 Recipe 9.1 — Typed App Config with Validation}
+
+{code lang="lateralus"
+import "ltlcfg"
+
+-- Define schema
+let schema = ConfigSchema()
+schema.section("server")
+    .field("host",    "str",   default: "0.0.0.0")
+    .field("port",    "int",   default: 8080, min: 1, max: 65535)
+    .field("debug",   "bool",  default: false)
+    .field("workers", "int",   default: 4,    min: 1)
+
+schema.section("database")
+    .field("url",       "str",   required: true)
+    .field("pool_size", "int",   default: 5)
+
+-- Load and validate
+let config = ltlcfg.load_config("config/app.ltlcfg", schema)
+
+-- Access values
+println("Listening on " + config.server.host + ":" + str(config.server.port))
+println("DB: " + config.database.url)
+}
+
+{separator}
+
+{h2 Chapter 10: File Watching and Hot Reload}
+
+{h3 Recipe 10.1 — Watch and Recompile}
+
+{code lang="lateralus"
+import "watch"
+
+-- Start a file watcher that recompiles on change
+let watcher = FileWatcher("src/")
+    .on_change(fn event => {
+        if event.kind == "modified" {
+            println("Changed: " + event.path)
+            run_tests()  -- re-run tests automatically
+        }
+    })
+
+watcher.start()  -- blocks until Ctrl+C
+}
+
+{h3 Recipe 10.2 — Watch a Single Entry File}
+
+{p
+  From the command line, run the entry file every time any source file changes:
+}
+
+{code lang="shell"
+lateralus watch src/ --run --entry src/main.ltl
+}
+
+{separator}
+
+{h2 Appendix: Quick Reference}
+
+{h3 Pipeline Operators}
+
+{table
+  | Operator | Meaning                          | Example                    |
+  |----------|----------------------------------|----------------------------|
+  | {code |>}     | Pipe: pass left as arg to right  | {code x |> f |> g}              |
+  | {code |?}     | Safe pipe: skip if None/Error    | {code user |? get_address |? .city} |
+  | {code |>>}    | Parallel pipe (v1.4+)            | {code data |>> process}         |
+  | {code then}   | Function composition             | {code (f then g)(x)}            |
+}
+
+{h3 Common Stdlib Modules}
+
+{table
+  | Module      | Purpose                         |
+  |-------------|---------------------------------|
+  | {code math}      | Mathematical functions          |
+  | {code science}   | Physics constants, ODE, FFT     |
+  | {code linalg}    | Matrix / vector operations      |
+  | {code stats}     | Statistics: mean, std, CI       |
+  | {code crypto}    | Hashing, AES-GCM, PBKDF2        |
+  | {code json}      | JSON parse/stringify/path       |
+  | {code network}   | HTTP client, URL utilities      |
+  | {code graph}     | Graph theory algorithms         |
+  | {code signals}   | Signal processing, FFT, filters |
+  | {code reactive}  | Signals, Observables, Store     |
+  | {code testing}   | Unit test framework             |
+  | {code ltlcfg}    | Typed configuration files       |
+  | {code watch}     | File watcher / hot reload       |
+}
+
+{h3 Pattern Syntax Reference}
+
+{table
+  | Pattern        | Matches                              |
+  |----------------|--------------------------------------|
+  | {code _}            | Anything (wildcard)                  |
+  | {code 42}           | Exact value 42                       |
+  | {code "str"}        | Exact string                         |
+  | {code x}            | Anything, binds to x                 |
+  | {code int}          | Any integer                          |
+  | {code 1..10}        | Range 1 to 10 (inclusive)            |
+  | {code 1..<10}       | Range 1 to 9 (exclusive upper)       |
+  | {code [a, *rest]}   | List: head + tail binding            |
+  | {code (a, b)}       | Tuple                                |
+  | {code Point{x, y}}  | Struct field destructure             |
+  | {code A|B|C}        | OR pattern                           |
+  | {code p if guard}   | Guard: pattern with condition        |
+  | {code p @ name}     | As: match p, bind whole value        |
+  | {code /regex/}      | Regex match                          |
+}
+{h2 Chapter 12: ADT Patterns (v1.5)}
+
+{p
+  LATERALUS v1.5 introduces first-class algebraic data types through
+  {code Result<T, E>} and {code Option<T>} with full pattern-match support.
+}
+
+{h3 Recipe 12.1 — Result-based error handling}
+
+{p
+  {strong Problem}: Return either a value or an error from a function
+  without using exceptions, and handle both cases at the call site.
+}
+
+{code lang="lateralus"
+fn safe_divide(a: float, b: float) -> Result<float, str> {
+    guard b != 0.0 else {
+        return Result::Err("cannot divide by zero")
+    }
+    return Result::Ok(a / b)
+}
+
+let r = safe_divide(10.0, 0.0)
+let msg = match r {
+    Result::Ok(v)  => "Answer: {v}",
+    Result::Err(e) => "Failed: {e}",
+}
+println(msg)
+}
+
+{p
+  {strong Key}: The {code ::} separator distinguishes the enum name from
+  the variant. {code Result::Ok(v)} binds the inner value to {code v}.
+}
+
+{h3 Recipe 12.2 — Option for nullable values}
+
+{p
+  {strong Problem}: Represent an optional value without using nil checks.
+}
+
+{code lang="lateralus"
+fn find_user(id: int) -> Option<str> {
+    let db = {1: "Alice", 2: "Bob", 3: "Carol"}
+    if contains(db, id) {
+        return Option::Some(db[id])
+    }
+    return Option::None
+}
+
+let result = find_user(2)
+let name = match result {
+    Option::Some(n) => n,
+    Option::None    => "Anonymous",
+}
+println("Hello, {name}!")  // "Hello, Bob!"
+}
+
+{h3 Recipe 12.3 — Chain Option values}
+
+{p
+  {strong Problem}: Call a sequence of functions where each may return
+  {code Option::None}, short-circuiting on the first None.
+}
+
+{code lang="lateralus"
+fn get_user_city(id: int) -> Option<str> {
+    let user    = find_user(id)?            // propagate None
+    let profile = load_profile(user)?       // propagate None
+    let city    = profile["city"]?          // propagate None
+    return Option::Some(city)
+}
+
+let city = match get_user_city(5) {
+    Option::Some(c) => c,
+    Option::None    => "Unknown city",
+}
+}
+
+{h3 Recipe 12.4 — Type destructuring in match}
+
+{p
+  {strong Problem}: Dispatch on a struct type and destructure its fields
+  in one step.
+}
+
+{code lang="lateralus"
+struct Circle  { radius: float }
+struct Rect    { width: float, height: float }
+struct Triangle{ base: float, height: float }
+
+fn area(shape) -> float {
+    return match shape {
+        Circle(r)       => 3.14159 * r * r,
+        Rect(w, h)      => w * h,
+        Triangle(b, h)  => 0.5 * b * h,
+        _               => 0.0,
+    }
+}
+}
+
+{h3 Recipe 12.5 — Nested and OR patterns}
+
+{p
+  {strong Problem}: Match multiple variants with a single arm, or nest
+  patterns for deep destructuring.
+}
+
+{code lang="lateralus"
+let description = match status_code {
+    200 | 201 | 204 => "success",
+    301 | 302       => "redirect",
+    400             => "bad request",
+    401 | 403       => "auth error",
+    404             => "not found",
+    500 | 502 | 503 => "server error",
+    _               => "other",
+}
+}
+
+{h3 Recipe 12.6 — List head/tail pattern}
+
+{p
+  {strong Problem}: Recursively process a list using head/tail destructuring.
+}
+
+{code lang="lateralus"
+fn max_list(lst: list) -> int {
+    return match lst {
+        []              => throw "empty list",
+        [x]             => x,
+        [head, ...tail] => {
+            let rest_max = max_list(tail)
+            head > rest_max ? head : rest_max
+        },
+    }
+}
+
+println(max_list([3, 1, 4, 1, 5, 9, 2, 6]))  // 9
+}
+
+{separator}
+
+{h2 Chapter 13: v1.5 Type System Features}
+
+{h3 Recipe 13.1 — Optional Types with Nil Safety}
+
+{p
+  {strong Problem}: Handle values that might be absent without runtime crashes.
+  Use `int?` syntax for compiler-enforced nil checking.
+}
+
+{code lang="lateralus"
+fn find_user(id: int) -> map? {
+    let users = {"1": {name: "Alice"}, "2": {name: "Bob"}}
+    let key = to_str(id)
+    if key in users { return users[key] }
+    return nil
+}
+
+fn greet(id: int) -> str {
+    let user: map? = find_user(id)
+    if user != nil {
+        // Type narrowing: user is map here (not map?)
+        return "Hello, " + user["name"]
+    }
+    return "User not found"
+}
+
+println(greet(1))   // Hello, Alice
+println(greet(99))  // User not found
+}
+
+{h3 Recipe 13.2 — Generics with Trait Bounds}
+
+{p
+  {strong Problem}: Write a generic function that only accepts types satisfying
+  a specific interface constraint.
+}
+
+{code lang="lateralus"
+interface Comparable {
+    fn compare(self, other) -> int
+}
+
+fn sort_items<T: Comparable>(items: list) -> list {
+    // Bubble sort (for illustration)
+    let mut arr = items
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        let mut j = 0
+        while j < n - 1 - i {
+            if arr[j].compare(arr[j + 1]) > 0 {
+                let tmp = arr[j]
+                arr[j] = arr[j + 1]
+                arr[j + 1] = tmp
+            }
+            j += 1
+        }
+        i += 1
+    }
+    return arr
+}
+}
+
+{h3 Recipe 13.3 — Const Generics for Fixed-Size Types}
+
+{p
+  {strong Problem}: Define a matrix type with compile-time dimensions.
+}
+
+{code lang="lateralus"
+struct Matrix<N: int, M: int> {
+    data: list,
+    rows: int,
+    cols: int,
+}
+
+fn new_matrix<N: int, M: int>(fill: float) -> Matrix<N, M> {
+    let mut data = []
+    let mut i = 0
+    while i < N * M {
+        data = push(data, fill)
+        i += 1
+    }
+    return Matrix { data: data, rows: N, cols: M }
+}
+
+let m = new_matrix<3, 4>(0.0)
+println(m.rows)  // 3
+println(m.cols)  // 4
+}
+
+{h3 Recipe 13.4 — Result/Option Pattern Matching}
+
+{p
+  {strong Problem}: Use ADT-style pattern matching to handle success/error and
+  some/none cases elegantly.
+}
+
+{code lang="lateralus"
+fn parse_int(s: str) -> Result {
+    try {
+        return Result::Ok(int(s))
+    } catch e {
+        return Result::Err("not a number: " + s)
+    }
+}
+
+fn process(input: str) -> str {
+    return match parse_int(input) {
+        Result::Ok(n)  => "Got number: " + to_str(n * 2),
+        Result::Err(e) => "Error: " + e,
+    }
+}
+
+println(process("42"))     // Got number: 84
+println(process("hello"))  // Error: not a number: hello
+}
+
+{h3 Recipe 13.5 — C Backend Transpilation}
+
+{p
+  {strong Problem}: Compile Lateralus code to C99 for maximum performance
+  or bare-metal deployment.
+}
+
+{code lang="lateralus"
+// file: math_kernel.ltl
+fn fibonacci(n: int) -> int {
+    if n <= 1 { return n }
+    let mut a = 0
+    let mut b = 1
+    let mut i = 2
+    while i <= n {
+        let tmp = a + b
+        a = b
+        b = tmp
+        i += 1
+    }
+    return b
+}
+
+fn main() {
+    let result = fibonacci(40)
+    println("fib(40) = " + to_str(result))
+}
+}
+
+{p
+  Compile to C with the CLI:
+}
+
+{code lang="bash"
+# Hosted mode (links libc)
+lateralus c math_kernel.ltl -o math_kernel.c
+gcc -O2 math_kernel.c -o math_kernel && ./math_kernel
+
+# Freestanding mode (for OS kernels, embedded)
+lateralus c math_kernel.ltl --freestanding -o kernel_math.c
+}
+
+```
+  </script>
+  <script src="ltlml.js"></script>
+</body>
+</html>

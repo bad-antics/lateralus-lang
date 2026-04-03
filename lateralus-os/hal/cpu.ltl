@@ -1,0 +1,224 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// LateralusOS — CPU Hardware Abstraction
+// ═══════════════════════════════════════════════════════════════════════════
+// Copyright (c) 2025 bad-antics. All rights reserved.
+//
+// CPU feature detection, privilege management, and low-level CPU operations.
+// These functions wrap inline assembly for use by the Lateralus kernel.
+// ═══════════════════════════════════════════════════════════════════════════
+
+import hal::serial
+
+// ── CPU Feature Flags ───────────────────────────────────────────────────
+
+struct CpuFeatures {
+    has_sse:    bool,
+    has_sse2:   bool,
+    has_sse3:   bool,
+    has_avx:    bool,
+    has_avx2:   bool,
+    has_aes:    bool,
+    has_rdrand: bool,
+    has_1gb_pages: bool,
+    vendor:     str,
+    model_name: str,
+}
+
+let mut cpu_features = CpuFeatures {
+    has_sse:    false,
+    has_sse2:   false,
+    has_sse3:   false,
+    has_avx:    false,
+    has_avx2:   false,
+    has_aes:    false,
+    has_rdrand: false,
+    has_1gb_pages: false,
+    vendor:     "Unknown",
+    model_name: "Unknown",
+}
+
+pub fn detect_features() {
+    serial::log("[cpu] Detecting CPU features")
+
+    // CPUID leaf 0: vendor string
+    let vendor_ebx = cpuid(0, 1)  // EBX
+    let vendor_ecx = cpuid(0, 2)  // ECX
+    let vendor_edx = cpuid(0, 3)  // EDX
+    // Vendor string is EBX + EDX + ECX (12 chars)
+    serial::log("[cpu] Vendor detected")
+
+    // CPUID leaf 1: feature flags
+    let ecx = cpuid(1, 2)
+    let edx = cpuid(1, 3)
+
+    cpu_features.has_sse    = (edx & (1 << 25)) != 0
+    cpu_features.has_sse2   = (edx & (1 << 26)) != 0
+    cpu_features.has_sse3   = (ecx & (1 << 0))  != 0
+    cpu_features.has_avx    = (ecx & (1 << 28)) != 0
+    cpu_features.has_aes    = (ecx & (1 << 25)) != 0
+    cpu_features.has_rdrand = (ecx & (1 << 30)) != 0
+
+    serial::log("[cpu] SSE={cpu_features.has_sse} SSE2={cpu_features.has_sse2} AVX={cpu_features.has_avx} AES={cpu_features.has_aes}")
+}
+
+// ── Low-level CPU ops (would compile to inline asm via C backend) ────────
+
+pub fn cli() {
+    // Disable interrupts: __asm__ volatile ("cli")
+    foreign "asm" () { "cli" }
+}
+
+pub fn sti() {
+    // Enable interrupts: __asm__ volatile ("sti")
+    foreign "asm" () { "sti" }
+}
+
+pub fn halt() {
+    foreign "asm" () { "hlt" }
+}
+
+pub fn halt_forever() {
+    cli()
+    loop {
+        halt()
+    }
+}
+
+pub fn cpuid(leaf: int, reg: int) -> int {
+    // Returns specified register (0=EAX, 1=EBX, 2=ECX, 3=EDX) for given CPUID leaf
+    foreign "asm" (leaf: leaf, reg: reg) {
+        "cpuid"
+    }
+    return 0  // placeholder — C backend emits actual inline asm
+}
+
+pub fn read_cr0() -> int {
+    foreign "asm" () { "mov rax, cr0" }
+    return 0
+}
+
+pub fn read_cr2() -> int {
+    foreign "asm" () { "mov rax, cr2" }
+    return 0
+}
+
+pub fn read_cr3() -> int {
+    foreign "asm" () { "mov rax, cr3" }
+    return 0
+}
+
+pub fn read_cr4() -> int {
+    foreign "asm" () { "mov rax, cr4" }
+    return 0
+}
+
+pub fn write_cr3(val: int) {
+    foreign "asm" (val: val) { "mov cr3, rdi" }
+}
+
+pub fn write_msr(msr: int, val: int) {
+    foreign "asm" (msr: msr, val: val) {
+        "wrmsr"
+    }
+}
+
+pub fn read_msr(msr: int) -> int {
+    foreign "asm" (msr: msr) { "rdmsr" }
+    return 0
+}
+
+pub fn enable_sse() {
+    serial::log("[cpu] Enabling SSE")
+    // Set CR0.EM=0, CR0.MP=1
+    // Set CR4.OSFXSR=1, CR4.OSXMMEXCPT=1
+    foreign "asm" () {
+        "mov rax, cr0; and ax, 0xFFFB; or ax, 0x02; mov cr0, rax; mov rax, cr4; or ax, 0x600; mov cr4, rax"
+    }
+}
+
+pub fn enable_avx() {
+    if !cpu_features.has_avx { return }
+    serial::log("[cpu] Enabling AVX")
+    // Set XCR0 bits for SSE + AVX state
+    foreign "asm" () {
+        "xor ecx, ecx; xgetbv; or eax, 0x07; xsetbv"
+    }
+}
+
+// ── Memory access primitives ────────────────────────────────────────────
+
+pub fn read_mem8(addr: int) -> int {
+    // Volatile byte read
+    foreign "asm" (addr: addr) { "movzx eax, byte [rdi]" }
+    return 0
+}
+
+pub fn read_mem64(addr: int) -> int {
+    foreign "asm" (addr: addr) { "mov rax, [rdi]" }
+    return 0
+}
+
+pub fn write_mem8(addr: int, val: int) {
+    foreign "asm" (addr: addr, val: val) { "mov [rdi], sil" }
+}
+
+pub fn write_mem64(addr: int, val: int) {
+    foreign "asm" (addr: addr, val: val) { "mov [rdi], rsi" }
+}
+
+pub fn memset(addr: int, val: int, size: int) {
+    let i = 0
+    while i < size {
+        write_mem8(addr + i, val)
+        i = i + 1
+    }
+}
+
+pub fn memcpy(dst: int, src: int, size: int) {
+    let i = 0
+    while i < size {
+        write_mem8(dst + i, read_mem8(src + i))
+        i = i + 1
+    }
+}
+
+pub fn read_string(addr: int) -> str {
+    // Read null-terminated string from memory address
+    let buf = ""
+    let i = 0
+    loop {
+        let c = read_mem8(addr + i)
+        if c == 0 { break }
+        buf = buf + chr(c)
+        i = i + 1
+        if i > 255 { break }  // safety limit
+    }
+    return buf
+}
+
+// ── Register save/restore ───────────────────────────────────────────────
+
+pub fn save_registers(regs: RegisterState) {
+    // Save all general-purpose registers to the RegisterState struct
+    foreign "asm" (regs: regs) {
+        "mov [rdi], rax; mov [rdi+8], rbx; mov [rdi+16], rcx; mov [rdi+24], rdx"
+    }
+}
+
+pub fn restore_registers(regs: RegisterState) {
+    // Restore all general-purpose registers from the RegisterState struct
+    foreign "asm" (regs: regs) {
+        "mov rax, [rdi]; mov rbx, [rdi+8]; mov rcx, [rdi+16]; mov rdx, [rdi+24]"
+    }
+}
+
+pub fn read_all_registers() -> RegisterState {
+    return RegisterState {
+        rax: 0, rbx: 0, rcx: 0, rdx: 0,
+        rsi: 0, rdi: 0, rbp: 0, rsp: 0,
+        r8: 0, r9: 0, r10: 0, r11: 0,
+        r12: 0, r13: 0, r14: 0, r15: 0,
+        rip: 0, rflags: 0,
+        cs: 0, ss: 0,
+    }
+}
