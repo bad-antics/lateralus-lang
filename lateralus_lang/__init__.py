@@ -18,7 +18,7 @@ from .errors   import (
     get_bridge, ErrorBridge,
 )
 
-__version__ = "2.4.0"
+__version__ = "2.5.0"
 __author__  = "bad-antics"
 
 __all__ = [

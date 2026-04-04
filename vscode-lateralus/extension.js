@@ -1009,7 +1009,7 @@ function updateStatus(state) {
 
 function activate(context) {
     outputChannel = vscode.window.createOutputChannel("Lateralus");
-    outputChannel.appendLine("[lateralus] activated v2.5.0");
+    outputChannel.appendLine("[lateralus] activated v2.5.1");
 
     // Status bar
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);

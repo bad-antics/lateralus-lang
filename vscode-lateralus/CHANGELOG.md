@@ -2,6 +2,13 @@
 
 All notable changes to the Lateralus Language extension will be documented in this file.
 
+## [2.5.1] — 2026-04-03
+
+### Fixed
+- Marketplace icon now uses PNG (was SVG, which marketplace does not render)
+- README now shows full feature table with LSP providers on marketplace page
+- All LSP providers registered for all 5 Lateralus language types
+
 ## [2.5.0] — 2025-07-09
 
 ### Added

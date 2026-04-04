@@ -2,7 +2,7 @@
 
 > **A programming language that spirals outward — from simple ideas to profound compositions.**
 
-[![Version](https://img.shields.io/badge/version-2.4.0-6699ff.svg)](#)
+[![Version](https://img.shields.io/badge/version-2.5.0-6699ff.svg)](#)
 [![Tests](https://img.shields.io/badge/tests-1%2C976%20passing-00cc66.svg)](#)
 [![Python](https://img.shields.io/badge/python-3.10%2B-ffcc00.svg)](#)
 [![Zero Dependencies](https://img.shields.io/badge/deps-zero-ff6699.svg)](#)
