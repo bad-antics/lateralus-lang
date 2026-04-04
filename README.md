@@ -55,6 +55,19 @@ python -m lateralus_lang run examples/v15_showcase.ltl
 python -m lateralus_lang repl
 ```
 
+
+### VS Code Extension
+
+Install the Lateralus extension for syntax highlighting, snippets, and language support:
+
+```bash
+# From marketplace
+code --install-extension lateralus.lateralus-lang
+
+# Or install from .vsix
+cd vscode-lateralus && npx vsce package && code --install-extension lateralus-lang-2.5.1.vsix
+```
+
 ---
 
 ## What's New in v2.4
@@ -364,6 +377,43 @@ lateralus-lang/
 
 ---
 
+## Website
+
+**[bad-antics.github.io/lateralus](https://bad-antics.github.io/lateralus/)** — landing page with interactive code samples, feature comparison, and ecosystem directory.
+
+---
+
+## Ecosystem
+
+Lateralus has a growing ecosystem of 22+ repositories:
+
+| Repository | Description |
+|-----------|-------------|
+| [lateralus-lang](https://github.com/bad-antics/lateralus-lang) | Compiler, VM, stdlib, REPL (this repo) |
+| [lateralus-compiler](https://github.com/bad-antics/lateralus-compiler) | Lexer, parser, AST, IR, codegen |
+| [lateralus-grammar](https://github.com/bad-antics/lateralus-grammar) | TextMate grammars + 14 code samples |
+| [lateralus-tutorials](https://github.com/bad-antics/lateralus-tutorials) | 25 chapters: basics to web servers |
+| [lateralus-cookbook](https://github.com/bad-antics/lateralus-cookbook) | Recipes: strings, IO, concurrency, patterns |
+| [lateralus-exercises](https://github.com/bad-antics/lateralus-exercises) | Practice problems by topic |
+| [lateralus-koans](https://github.com/bad-antics/lateralus-koans) | Learn by fixing failing tests |
+| [lateralus-rosetta](https://github.com/bad-antics/lateralus-rosetta) | 220 Rosetta Code solutions |
+| [lateralus-euler](https://github.com/bad-antics/lateralus-euler) | 250 Project Euler solutions |
+| [lateralus-benchmarks](https://github.com/bad-antics/lateralus-benchmarks) | 30 performance benchmarks |
+| [lateralus-snippets](https://github.com/bad-antics/lateralus-snippets) | Copy-paste utility snippets |
+| [lateralus-patterns](https://github.com/bad-antics/lateralus-patterns) | 51 design patterns (GoF + concurrency) |
+| [lateralus-web](https://github.com/bad-antics/lateralus-web) | HTTP, routing, WebSocket, ORM, GraphQL |
+| [lateralus-crypto](https://github.com/bad-antics/lateralus-crypto) | Hashing, ciphers, signatures |
+| [lateralus-networking](https://github.com/bad-antics/lateralus-networking) | TCP/UDP, DNS, HTTP client |
+| [lateralus-ml](https://github.com/bad-antics/lateralus-ml) | ML algorithms from scratch |
+| [lateralus-science](https://github.com/bad-antics/lateralus-science) | Scientific computing toolkit |
+| [lateralus-games](https://github.com/bad-antics/lateralus-games) | Game implementations |
+| [lateralus-data-structures](https://github.com/bad-antics/lateralus-data-structures) | Trees, graphs, heaps, tries |
+| [lateralus-algorithms](https://github.com/bad-antics/lateralus-algorithms) | Sorting, searching, DP, greedy |
+| [lateralus-interview](https://github.com/bad-antics/lateralus-interview) | Interview prep problems |
+| [lateralus-aoc](https://github.com/bad-antics/lateralus-aoc) | Advent of Code solutions |
+
+---
+
 ## Running Tests
 
 ```bash
@@ -383,7 +433,7 @@ pytest tests/ --tb=short -q
 
 ## Version
 
-**LATERALUS v2.4.0**
+**LATERALUS v2.5.0**
 Created and maintained by **bad-antics**
 License: Proprietary — LATERALUS Research
 
