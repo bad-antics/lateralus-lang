@@ -1,42 +1,135 @@
-# Lateralus Language — VS Code Extension
+# Lateralus Language
 
-Syntax highlighting, bracket matching, code snippets, and file-icon support
-for the **Lateralus** programming language (`.ltl`) and **Lateralus Assembly**
-(`.ltasm`).
+[![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/lateralus.lateralus-lang?label=VS%20Code%20Marketplace&color=blue&logo=visual-studio-code)](https://marketplace.visualstudio.com/items?itemName=lateralus.lateralus-lang)
+[![Installs](https://img.shields.io/visual-studio-marketplace/i/lateralus.lateralus-lang?color=green)](https://marketplace.visualstudio.com/items?itemName=lateralus.lateralus-lang)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![GitHub](https://img.shields.io/github/stars/bad-antics/lateralus-lang?style=social)](https://github.com/bad-antics/lateralus-lang)
 
----
+> **Pipeline-native programming with full LSP intelligence.**
 
-## Features
-
-### Lateralus (`.ltl`)
-| Feature | Details |
-|---|---|
-| **Syntax highlighting** | Keywords, types, operators, literals, comments |
-| **String interpolation** | `{expr}` inside `"..."` strings highlighted correctly |
-| **Raw strings** | `r"..."` treated as plain string content |
-| **Decorators** | `@doc`, `@deprecated`, etc. |
-| **Type declarations** | `struct`, `enum`, `interface`, `impl`, `type` aliases |
-| **Function signatures** | `fn` / `async fn` names highlighted |
-| **Module system** | `module`, `import`, `from … import` |
-| **Comments** | `//` line, `/* */` block, `#` hash |
-| **Bracket matching** | `{}`, `[]`, `()` |
-| **Code snippets** | `fn`, `afn`, `let`, `letm`, `if`, `ife`, `match`, `while`, `for`, `try`, `struct`, `enum`, `impl`, and more |
-
-### Lateralus Assembly (`.ltasm`)
-| Feature | Details |
-|---|---|
-| **Opcode highlighting** | All ~80+ LTasm opcodes (`PUSH_IMM`, `CALL`, `FADD`, …) |
-| **Register highlighting** | `r0`–`r15`, `sp`, `pc`, `flags` |
-| **Directives** | `.section`, `.global`, `.data`, `.text`, `.align`, … |
-| **Labels** | Definition (`name:`) and reference (`.name`) |
-| **Semicolon comments** | `;` line comments |
-| **String literals** | `"…"` with escape sequences |
-| **Numeric literals** | Decimal, `0x` hex, `0b` binary |
-| **Code snippets** | `entry`, `prints`, `sub`, `call`, `jt`, `movimm`, `try`, `spawn` |
+Rich language support for the [Lateralus](https://github.com/bad-antics/lateralus-lang) programming language — a pipeline-native language with a VM, C backend, bare-metal OS support, and its own assembly format.
 
 ---
 
-## Language Quick Reference
+## ✨ Features
+
+### Language Server Protocol (LSP)
+
+The extension ships with a full LSP client that communicates with the Lateralus language server over JSON-RPC. Every standard LSP capability is wired up:
+
+| Feature | Keybinding | Description |
+|---|---|---|
+| **Diagnostics** | — | Real-time errors, warnings, and hints as you type |
+| **Completions** | `Ctrl+Space` | Context-aware completions with snippet support |
+| **Hover** | hover cursor | Type info, documentation, and signatures on hover |
+| **Go to Definition** | `F12` | Jump to the definition of any symbol |
+| **Find References** | `Shift+F12` | Find all references to a symbol across your project |
+| **Document Formatting** | `Shift+Alt+F` | Format entire files with the Lateralus formatter |
+| **Range Formatting** | select + `Ctrl+K Ctrl+F` | Format just the selected region |
+| **Code Actions** | `Ctrl+.` | Quick fixes, refactors, organize imports |
+| **Signature Help** | `(` / `,` | Parameter hints while typing function arguments |
+| **Document Symbols** | `Ctrl+Shift+O` | Navigate functions, structs, enums in the Outline view |
+| **Workspace Symbols** | `Ctrl+T` | Search symbols across your entire workspace |
+| **Rename Symbol** | `F2` | Safely rename symbols across all files |
+| **Folding Ranges** | — | Collapse functions, blocks, imports, and comments |
+| **Selection Range** | `Shift+Alt+→` | Smart expand/shrink selection |
+
+### Syntax Highlighting
+
+Full TextMate grammars for **7 file types** in the Lateralus ecosystem:
+
+| Language | Extension(s) | Highlights |
+|---|---|---|
+| **Lateralus** | `.ltl` | Keywords, types, operators, string interpolation, decorators, pipes |
+| **Lateralus Assembly** | `.ltasm` | 80+ opcodes, registers, directives, labels |
+| **Lateralus Markup** | `.ltlm` / `.ltlml` | Embedded Lateralus + Assembly blocks |
+| **Lateralus Config** | `.ltlcfg` | Key-value pairs, sections, comments |
+| **Lateralus Notebook** | `.ltlnb` | Cell markers, embedded code |
+| **Lateralus Bytecode** | `.ltbc` | Binary file icon support |
+| **Lateralus Compiled** | `.ltlc` | Binary file icon support |
+
+### Code Snippets
+
+**50+ snippets** across all file types for rapid development:
+
+<details>
+<summary><strong>.ltl snippets</strong> (click to expand)</summary>
+
+`fn` · `afn` · `let` · `letm` · `const` · `if` · `ife` · `ifee` · `match` ·
+`while` · `for` · `loop` · `try` · `trye` · `struct` · `enum` · `impl` ·
+`implfor` · `interface` · `type` · `pln` · `ret` · `spawn` · `await`
+</details>
+
+<details>
+<summary><strong>.ltasm snippets</strong></summary>
+
+`.section` · `.global` · `entry` · `prints` · `sub` · `call` · `jt` ·
+`movimm` · `try` · `spawn`
+</details>
+
+### File Icons
+
+Custom icons for every Lateralus file type — light and dark themes, 15 SVGs total.
+
+### Status Bar
+
+Live indicator showing the LSP server state (`running` / `error` / `stopped`). Click to restart.
+
+---
+
+## 📋 Supported File Types
+
+| File Type | Extension | Language ID |
+|---|---|---|
+| Lateralus source | `.ltl` | `lateralus` |
+| Lateralus Assembly | `.ltasm` | `lateralus-asm` |
+| Lateralus Markup | `.ltlm`, `.ltlml` | `lateralus-markup` |
+| Lateralus Config | `.ltlcfg` | `lateralus-cfg` |
+| Lateralus Notebook | `.ltlnb` | `lateralus-notebook` |
+| Lateralus Bytecode | `.ltbc` | `lateralus-bytecode` |
+| Lateralus Compiled | `.ltlc` | `lateralus-compiled` |
+
+---
+
+## 🚀 Quick Start
+
+### From the Marketplace
+
+1. Open VS Code
+2. `Ctrl+Shift+X` → Search **"Lateralus"**
+3. Click **Install**
+4. Open any `.ltl` file — the LSP starts automatically
+
+### From VSIX
+
+```bash
+code --install-extension lateralus-lang-2.5.0.vsix
+```
+
+### From Source
+
+```bash
+git clone https://github.com/bad-antics/lateralus-lang.git
+cd lateralus-lang/vscode-lateralus
+npm install -g @vscode/vsce
+vsce package
+code --install-extension lateralus-lang-2.5.0.vsix
+```
+
+---
+
+## ⚙️ Configuration
+
+| Setting | Default | Description |
+|---|---|---|
+| `lateralus.enableLSP` | `true` | Enable/disable the language server |
+| `lateralus.pythonPath` | `""` | Custom Python path for the LSP server |
+| `lateralus.formatOnSave` | `false` | Auto-format on save |
+| `lateralus.trace.server` | `"off"` | Trace LSP communication (`off` / `messages` / `verbose`) |
+
+---
+
+## 🗺️ Language Quick Reference
 
 ```lateralus
 module examples.hello
@@ -77,42 +170,28 @@ _start:
 
 ---
 
-## Snippets
+## 🧩 Commands
 
-### `.ltl` trigger list
-`fn` · `afn` · `let` · `letm` · `const` · `if` · `ife` · `ifee` · `match` ·
-`while` · `for` · `loop` · `try` · `trye` · `struct` · `enum` · `impl` ·
-`implfor` · `interface` · `type` · `pln` · `ret` · `spawn` · `await`
+Open the Command Palette (`Ctrl+Shift+P`) and type **Lateralus**:
 
-### `.ltasm` trigger list
-`.section` · `.global` · `entry` · `prints` · `sub` · `call` · `jt` ·
-`movimm` · `try` · `spawn`
-
----
-
-## Installation
-
-### From source (developer mode)
-
-```bash
-# Copy to VS Code extensions directory
-cp -r vscode-lateralus ~/.vscode/extensions/lateralus-lang.lateralus-1.3.0
-
-# Reload VS Code window
-# Ctrl+Shift+P → "Developer: Reload Window"
-```
-
-### Via VSIX package
-
-```bash
-npm install -g @vscode/vsce
-cd vscode-lateralus
-vsce package
-code --install-extension lateralus-lang-1.3.0.vsix
-```
+| Command | Description |
+|---|---|
+| `Lateralus: Restart Language Server` | Restart the LSP server |
+| `Lateralus: Show Output Channel` | Open the Lateralus output log |
+| `Lateralus: Format Document` | Format the current file |
+| `Lateralus: Organize Imports` | Sort and clean up imports (`Shift+Alt+O`) |
 
 ---
 
-## License
+## 🔗 Links
 
-MIT
+- **Repository**: [github.com/bad-antics/lateralus-lang](https://github.com/bad-antics/lateralus-lang)
+- **Issues**: [github.com/bad-antics/lateralus-lang/issues](https://github.com/bad-antics/lateralus-lang/issues)
+- **Marketplace**: [marketplace.visualstudio.com](https://marketplace.visualstudio.com/items?itemName=lateralus.lateralus-lang)
+- **Changelog**: [CHANGELOG.md](CHANGELOG.md)
+
+---
+
+## 📄 License
+
+MIT — see [LICENSE.txt](LICENSE.txt)
