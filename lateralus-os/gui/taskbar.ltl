@@ -1,0 +1,146 @@
+// LateralusOS — Taskbar / Dock
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import drivers::gpu
+import drivers::rtc
+import gui::theme_engine
+import gui::window_manager
+import gui::notifications
+
+const TB_HEIGHT  = 40
+const TB_BTN_W   = 160
+const TB_BTN_PAD = 4
+const TB_ICON_W  = 36
+const TB_ICON_H  = 36
+
+struct TaskbarButton {
+    wid:     int,
+    label:   str,
+    icon:    int,
+    x:       int,
+    active:  bool,
+    valid:   bool,
+}
+
+struct SysTrayIcon {
+    name:  str,
+    icon:  int,
+    x:     int,
+    valid: bool,
+}
+
+let mut buttons:   [TaskbarButton; 32]  = [TaskbarButton{}; 32]
+let mut tray:      [SysTrayIcon; 16]    = [SysTrayIcon{}; 16]
+let mut n_buttons: int = 0
+let mut n_tray:    int = 0
+let mut dirty:     bool = true
+let mut scr_w:     int = 1920
+let mut scr_h:     int = 1080
+let mut y_pos:     int = 0    // bottom of screen
+
+pub fn init() {
+    scr_w = gpu::get_width()
+    scr_h = gpu::get_height()
+    y_pos = scr_h - TB_HEIGHT
+    register_tray_icon("clock", 0)
+    register_tray_icon("network", 0)
+    register_tray_icon("battery", 0)
+    register_tray_icon("volume", 0)
+    serial::log("[taskbar] Initialized at y={y_pos}")
+}
+
+pub fn add_window(wid: int, title: str) {
+    let i = find_free_btn()
+    if i < 0 { return }
+    let x = TB_BTN_PAD + i * (TB_BTN_W + TB_BTN_PAD)
+    buttons[i] = TaskbarButton { wid: wid, label: title, icon: 0, x: x, active: true, valid: true }
+    n_buttons = n_buttons + 1
+    dirty = true
+}
+
+pub fn remove_window(wid: int) {
+    let i = find_btn_by_wid(wid)
+    if i < 0 { return }
+    buttons[i].valid = false
+    n_buttons = n_buttons - 1
+    relayout_buttons()
+    dirty = true
+}
+
+pub fn update_title(wid: int, title: str) {
+    let i = find_btn_by_wid(wid)
+    if i >= 0 { buttons[i].label = title; dirty = true }
+}
+
+pub fn paint() {
+    if !dirty { return }
+    let theme = theme_engine::get_active()
+
+    // Background bar
+    gpu::fill_rect(0, y_pos, scr_w, TB_HEIGHT, theme.taskbar_bg)
+
+    // App buttons
+    let focused = window_manager::get_focused_id()
+    let i = 0
+    while i < 32 {
+        if buttons[i].valid {
+            let active_col = if buttons[i].wid == focused { theme.accent } else { theme.taskbar_btn }
+            gpu::fill_rect(buttons[i].x, y_pos + TB_BTN_PAD, TB_BTN_W, TB_HEIGHT - TB_BTN_PAD * 2, active_col)
+        }
+        i = i + 1
+    }
+
+    // System tray (right side)
+    let tx = scr_w - (n_tray * (TB_ICON_W + TB_BTN_PAD)) - TB_BTN_PAD
+    let j = 0
+    while j < 16 {
+        if tray[j].valid {
+            tray[j].x = tx + j * (TB_ICON_W + TB_BTN_PAD)
+            gpu::fill_rect(tray[j].x, y_pos + 2, TB_ICON_W, TB_ICON_H, theme.taskbar_btn)
+        }
+        j = j + 1
+    }
+
+    // Clock (far right)
+    let dt = rtc::now()
+    let time_str = "{pad2(dt.hour)}:{pad2(dt.minute)}:{pad2(dt.second)}"
+    // Text rendering via GPU (simplified)
+    paint_text(scr_w - 70, y_pos + 12, time_str, theme.taskbar_text)
+
+    dirty = false
+}
+
+pub fn handle_click(x: int, y: int) {
+    if y < y_pos { return }
+    // Find which button was clicked
+    let i = 0
+    while i < 32 {
+        if buttons[i].valid && x >= buttons[i].x && x < buttons[i].x + TB_BTN_W {
+            let wid = buttons[i].wid
+            let idx = window_manager_find(wid)
+            // Toggle minimize/focus
+            window_manager::focus(wid)
+            dirty = true
+            return
+        }
+        i = i + 1
+    }
+}
+
+pub fn register_tray_icon(name: str, icon: int) {
+    if n_tray >= 16 { return }
+    tray[n_tray] = SysTrayIcon { name: name, icon: icon, x: 0, valid: true }
+    n_tray = n_tray + 1
+    dirty = true
+}
+
+pub fn mark_dirty() { dirty = true }
+pub fn get_height() -> int { return TB_HEIGHT }
+
+fn find_free_btn()    -> int { let i = 0; while i < 32 { if !buttons[i].valid { return i }; i = i + 1 }; return -1 }
+fn find_btn_by_wid(wid: int) -> int { let i = 0; while i < 32 { if buttons[i].valid && buttons[i].wid == wid { return i }; i = i + 1 }; return -1 }
+fn relayout_buttons() { let j = 0; let x = TB_BTN_PAD; let i = 0; while i < 32 { if buttons[i].valid { buttons[i].x = x; x = x + TB_BTN_W + TB_BTN_PAD; j = j + 1 }; i = i + 1 } }
+fn paint_text(x: int, y: int, text: str, color: int) {}
+fn window_manager_find(wid: int) -> int { return 0 }
+fn pad2(n: int) -> str { if n < 10 { return "0{n}" }; return "{n}" }

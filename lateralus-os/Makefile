@@ -1,164 +1,142 @@
-# ═══════════════════════════════════════════════════════════════════════════
-# LateralusOS — Master Build System
-# ═══════════════════════════════════════════════════════════════════════════
+# LateralusOS — Build System
 # Copyright (c) 2025 bad-antics. All rights reserved.
-# ═══════════════════════════════════════════════════════════════════════════
 
-# ── Configuration ─────────────────────────────────────────────────────────
+EDITION    ?= daily_driver
+ARCH       ?= x86_64
+OUT_DIR    := build/$(ARCH)
+ISO_DIR    := $(OUT_DIR)/iso
+KERNEL_ELF := $(OUT_DIR)/lateralus.elf
+ISO_FILE   := $(OUT_DIR)/lateralus-os-$(EDITION).iso
+LTLC       := ltlc
+CC         := gcc
+AS         := nasm
 
-ARCH        ?= x86_64
-EDITION     ?= workstation
-BUILD_DIR   := build/$(EDITION)-$(ARCH)
-ISO_NAME    := lateralus-os-$(EDITION)-$(ARCH).iso
+CFLAGS     := -ffreestanding -nostdlib -O2 -Wall -Wextra -m64 -std=c11 \
+              -Iinclude -Iboot
+ASFLAGS    := -f elf64
+LTLFLAGS   := --target=$(ARCH) --edition=$(EDITION) --os-mode
 
-# Lateralus compiler
-LTLC        := python -m lateralus_lang
-LTLC_CMD    := c
-LTLC_FLAGS  := --freestanding
+LTL_SOURCES := \
+    kernel/main.ltl \
+    kernel/scheduler.ltl \
+    kernel/memory.ltl \
+    kernel/ipc.ltl \
+    kernel/syscall.ltl \
+    kernel/panic.ltl \
+    kernel/signals.ltl \
+    kernel/pipe.ltl \
+    kernel/semaphore.ltl \
+    hal/cpu.ltl hal/interrupts.ltl hal/serial.ltl hal/timer.ltl \
+    drivers/vga.ltl drivers/keyboard.ltl drivers/disk.ltl \
+    drivers/network.ltl drivers/pci.ltl drivers/mouse.ltl \
+    drivers/sound.ltl drivers/gpu.ltl drivers/nvme.ltl \
+    drivers/wifi.ltl drivers/rtc.ltl drivers/usb.ltl \
+    net/ip.ltl net/tcp.ltl net/udp.ltl net/dns.ltl \
+    net/dhcp.ltl net/tls.ltl net/http.ltl \
+    fs/vfs.ltl fs/fat32.ltl fs/ltlfs.ltl \
+    fs/ext4.ltl fs/tmpfs.ltl fs/procfs.ltl fs/devfs.ltl \
+    gui/animation.ltl gui/app.ltl gui/shell_gui.ltl \
+    gui/terminal.ltl gui/wallpaper.ltl gui/widgets.ltl \
+    gui/window_manager.ltl gui/compositor.ltl \
+    gui/theme_engine.ltl gui/taskbar.ltl \
+    gui/desktop.ltl gui/notifications.ltl \
+    services/init.ltl services/crypto_svc.ltl \
+    services/mesh_agent.ltl services/monitor.ltl \
+    services/display.ltl services/audio.ltl \
+    services/network_manager.ltl services/power.ltl \
+    services/user_manager.ltl services/syslog.ltl \
+    services/pkg_manager.ltl \
+    shell/ltlsh.ltl shell/builtins.ltl \
+    shell/scripting.ltl shell/completion.ltl \
+    apps/chat.ltl apps/editor.ltl apps/ltlc.ltl \
+    apps/package.ltl apps/browser.ltl apps/file_manager.ltl \
+    apps/settings.ltl apps/calculator.ltl apps/calendar.ltl \
+    apps/music.ltl apps/video.ltl apps/image_viewer.ltl \
+    apps/pdf_reader.ltl apps/screenshot.ltl
 
-# Cross-compiler (set per architecture)
-ifeq ($(ARCH),x86_64)
-    CC      := $(shell which x86_64-elf-gcc 2>/dev/null || echo gcc)
-    AS      := nasm
-    LD      := $(shell which x86_64-elf-ld 2>/dev/null || echo ld)
-    ASFLAGS := -f elf64
-    CFLAGS  := -ffreestanding -nostdlib -O2 -Wall -Wextra -std=c99 \
-               -mno-red-zone -mcmodel=kernel -fno-exceptions -fno-stack-protector
-    LDFLAGS := -T tools/linker-$(ARCH).ld -nostdlib
-    QEMU    := qemu-system-x86_64
-    QEMUFLAGS := -m 256M -serial stdio -no-reboot -no-shutdown
-else ifeq ($(ARCH),arm-cortex-m4)
-    CC      := arm-none-eabi-gcc
-    AS      := arm-none-eabi-as
-    LD      := arm-none-eabi-ld
-    CFLAGS  := -ffreestanding -nostdlib -O2 -mcpu=cortex-m4 -mthumb \
-               -fno-exceptions -fno-stack-protector
-    LDFLAGS := -T tools/linker-arm.ld -nostdlib
-    QEMU    := qemu-system-arm
-    QEMUFLAGS := -M lm3s6965evb -nographic -serial stdio
-else ifeq ($(ARCH),riscv64)
-    CC      := riscv64-unknown-elf-gcc
-    AS      := riscv64-unknown-elf-as
-    LD      := riscv64-unknown-elf-ld
-    CFLAGS  := -ffreestanding -nostdlib -O2 -march=rv64imac -mabi=lp64 \
-               -fno-exceptions -fno-stack-protector
-    LDFLAGS := -T tools/linker-riscv.ld -nostdlib
-    QEMU    := qemu-system-riscv64
-    QEMUFLAGS := -M virt -nographic -bios none
-endif
+C_SOURCES := \
+    boot/boot.c \
+    kernel/heap.c \
+    kernel/ipc.c \
+    kernel/sched.c \
+    kernel/syscall.c
 
-# ── Source discovery ──────────────────────────────────────────────────────
+ASM_SOURCES := boot/entry.asm
 
-LTL_SRCS    := $(shell find kernel hal drivers fs shell services -name '*.ltl' 2>/dev/null)
-C_GENERATED := $(patsubst %.ltl,$(BUILD_DIR)/%.c,$(LTL_SRCS))
-OBJS        := $(patsubst %.c,%.o,$(C_GENERATED))
+C_OBJS  := $(patsubst %.c,  $(OUT_DIR)/%.o, $(C_SOURCES))
+ASM_OBJS := $(patsubst %.asm, $(OUT_DIR)/%.o, $(ASM_SOURCES))
+LTL_OBJ  := $(OUT_DIR)/lateralus_code.o
 
-# Boot assembly
-BOOT_ASM    := boot/boot.asm
-BOOT_OBJ    := $(BUILD_DIR)/boot/boot.o
+.PHONY: all clean iso run run-kvm install-deps
 
-# Boot C stub
-BOOT_C      := boot/boot_stub.c
-BOOT_C_OBJ  := $(BUILD_DIR)/boot/boot_stub.o
+all: $(KERNEL_ELF)
 
-# ── Edition config ────────────────────────────────────────────────────────
-
-EDITION_CFG := editions/$(EDITION).toml
-
-# ── Targets ───────────────────────────────────────────────────────────────
-
-.PHONY: all clean run test debug iso editions help
-
-all: $(BUILD_DIR)/kernel.elf
-	@echo "═══ LateralusOS $(EDITION) ($(ARCH)) built successfully ═══"
-
-help:
-	@echo "LateralusOS Build System"
-	@echo "────────────────────────"
-	@echo "  make                    Build default (workstation/x86_64)"
-	@echo "  make EDITION=industrial Build industrial edition"
-	@echo "  make EDITION=research   Build research edition"
-	@echo "  make EDITION=embedded   Build embedded edition"
-	@echo "  make run                Build and run in QEMU"
-	@echo "  make test               Run OS test suite"
-	@echo "  make iso                Build bootable ISO"
-	@echo "  make debug              Run in QEMU with GDB stub"
-	@echo "  make clean              Clean build artifacts"
-
-# ── Transpile .ltl → .c ──────────────────────────────────────────────────
-
-$(BUILD_DIR)/%.c: %.ltl $(EDITION_CFG)
+$(OUT_DIR)/%.o: %.c
 	@mkdir -p $(dir $@)
-	@echo "  LTLC    $<"
-	$(LTLC) $(LTLC_CMD) $< $(LTLC_FLAGS) --arch $(ARCH) -o $@
-
-# ── Compile .c → .o ──────────────────────────────────────────────────────
-
-$(BUILD_DIR)/%.o: $(BUILD_DIR)/%.c
-	@mkdir -p $(dir $@)
-	@echo "  CC      $<"
-	$(CC) $(CFLAGS) -I$(BUILD_DIR) -c $< -o $@
-
-# ── Assemble boot ─────────────────────────────────────────────────────────
-
-$(BOOT_OBJ): $(BOOT_ASM)
-	@mkdir -p $(dir $@)
-	@echo "  ASM     $<"
-	$(AS) $(ASFLAGS) $< -o $@
-
-$(BOOT_C_OBJ): $(BOOT_C)
-	@mkdir -p $(dir $@)
-	@echo "  CC      $<"
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# ── Link kernel ───────────────────────────────────────────────────────────
+$(OUT_DIR)/%.o: %.asm
+	@mkdir -p $(dir $@)
+	$(AS) $(ASFLAGS) $< -o $@
 
-$(BUILD_DIR)/kernel.elf: $(BOOT_OBJ) $(BOOT_C_OBJ) $(OBJS)
-	@echo "  LD      $@"
-	$(LD) $(LDFLAGS) $^ -o $@
-	@echo "  SIZE    $@"
-	@size $@ || true
+$(LTL_OBJ): $(LTL_SOURCES)
+	@mkdir -p $(OUT_DIR)
+	$(LTLC) $(LTLFLAGS) --compile-obj -o $@ $(LTL_SOURCES)
 
-# ── ISO image (x86_64 only) ──────────────────────────────────────────────
+$(KERNEL_ELF): $(C_OBJS) $(ASM_OBJS) $(LTL_OBJ)
+	$(CC) -nostdlib -T boot/linker.ld -o $@ $^ -lgcc
+	@echo "Built: $@"
 
-iso: $(BUILD_DIR)/kernel.elf
-	@mkdir -p $(BUILD_DIR)/iso/boot/grub
-	cp $< $(BUILD_DIR)/iso/boot/kernel.elf
-	cp tools/grub.cfg $(BUILD_DIR)/iso/boot/grub/grub.cfg
-	grub-mkrescue -o $(BUILD_DIR)/$(ISO_NAME) $(BUILD_DIR)/iso
-	@echo "═══ ISO: $(BUILD_DIR)/$(ISO_NAME) ═══"
+iso: $(KERNEL_ELF)
+	@mkdir -p $(ISO_DIR)/boot/grub
+	cp $(KERNEL_ELF) $(ISO_DIR)/boot/lateralus.elf
+	echo 'set timeout=3'                            > $(ISO_DIR)/boot/grub/grub.cfg
+	echo 'set default=0'                           >> $(ISO_DIR)/boot/grub/grub.cfg
+	echo 'menuentry "LateralusOS $(EDITION)" {'    >> $(ISO_DIR)/boot/grub/grub.cfg
+	echo '  multiboot2 /boot/lateralus.elf'        >> $(ISO_DIR)/boot/grub/grub.cfg
+	echo '  boot'                                  >> $(ISO_DIR)/boot/grub/grub.cfg
+	echo '}'                                       >> $(ISO_DIR)/boot/grub/grub.cfg
+	grub-mkrescue -o $(ISO_FILE) $(ISO_DIR)
+	@echo "ISO: $(ISO_FILE)"
 
-# ── Run in QEMU ──────────────────────────────────────────────────────────
+run: iso
+	qemu-system-x86_64 \
+	  -m 2G \
+	  -smp 4 \
+	  -cpu host \
+	  -cdrom $(ISO_FILE) \
+	  -boot d \
+	  -vga std \
+	  -audiodev pa,id=audio0 \
+	  -machine pcspk-audiodev=audio0 \
+	  -netdev user,id=net0 -device e1000,netdev=net0 \
+	  -usb -device usb-kbd -device usb-mouse \
+	  -serial stdio
 
-run: $(BUILD_DIR)/kernel.elf
-	$(QEMU) -kernel $< $(QEMUFLAGS)
+run-kvm: iso
+	qemu-system-x86_64 \
+	  -enable-kvm \
+	  -m 4G \
+	  -smp 8 \
+	  -cpu host \
+	  -cdrom $(ISO_FILE) \
+	  -boot d \
+	  -vga virtio \
+	  -netdev user,id=net0 -device virtio-net,netdev=net0 \
+	  -usb -device usb-kbd -device usb-mouse \
+	  -serial stdio
 
-debug: $(BUILD_DIR)/kernel.elf
-	$(QEMU) -kernel $< $(QEMUFLAGS) -s -S &
-	@echo "GDB stub listening on localhost:1234"
-	@echo "Run: gdb -ex 'target remote :1234' -ex 'symbol-file $<'"
-
-# ── Tests ─────────────────────────────────────────────────────────────────
-
-test:
-	@echo "═══ Running LateralusOS test suite ═══"
-	cd .. && python -m pytest lateralus-os/tests/ -v --tb=short
-	@echo "═══ OS integration tests ═══"
-	$(QEMU) -kernel $(BUILD_DIR)/kernel.elf $(QEMUFLAGS) \
-		-device isa-debug-exit,iobase=0xf4,iosize=0x04 \
-		-append "test_mode=1" || [ $$? -eq 33 ]
-
-# ── Clean ─────────────────────────────────────────────────────────────────
+rpi5: $(LTL_OBJ)
+	$(CC) $(CFLAGS) -march=armv8.2-a -DTARGET_RPI5 -T boot/linker-rpi5.ld \
+	  -o $(OUT_DIR)/lateralus-rpi5.elf $(C_OBJS) $(LTL_OBJ) -lgcc
+	@echo "RPi5 image: $(OUT_DIR)/lateralus-rpi5.elf"
 
 clean:
 	rm -rf build/
-	@echo "Cleaned."
 
-# ── Edition summary ──────────────────────────────────────────────────────
+install-deps:
+	sudo apt-get install -y nasm gcc grub-pc-bin grub-common xorriso qemu-system-x86
 
-editions:
-	@echo "Available editions:"
-	@for f in editions/*.toml; do \
-		name=$$(basename $$f .toml); \
-		echo "  $$name"; \
-	done
+loc:
+	@find . -name '*.ltl' | xargs wc -l | tail -1
+	@echo "files:" $$(find . -name '*.ltl' | wc -l)

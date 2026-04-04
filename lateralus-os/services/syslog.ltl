@@ -1,0 +1,118 @@
+// LateralusOS — System Logger
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import drivers::rtc
+
+const LOG_MAX_ENTRIES  = 4096
+const LOG_MAX_ROTATIONS = 4
+const LOG_PATH_PREFIX  = "/var/log"
+
+enum LogLevel { Debug, Info, Notice, Warn, Error, Critical, Alert, Emergency }
+
+struct LogEntry {
+    level:     LogLevel,
+    facility:  str,
+    message:   str,
+    timestamp: int,
+    pid:       int,
+    valid:     bool,
+}
+
+let mut ring:     [LogEntry; LOG_MAX_ENTRIES] = [LogEntry{}; LOG_MAX_ENTRIES]
+let mut head:     int = 0
+let mut count:    int = 0
+let mut running:  bool = false
+let mut serial_echo: bool = true
+
+pub fn start() {
+    running     = true
+    serial_echo = true
+    log_raw(LogLevel::Info, "syslog", "System logger started", 0)
+    serial::log("[syslog] Logger started")
+}
+
+pub fn log(facility: str, message: str) {
+    log_level(LogLevel::Info, facility, message)
+}
+
+pub fn log_level(level: LogLevel, facility: str, message: str) {
+    log_raw(level, facility, message, 0)
+}
+
+pub fn log_raw(level: LogLevel, facility: str, message: str, pid: int) {
+    let dt = rtc::now()
+    let entry = LogEntry { level: level, facility: facility, message: message, timestamp: dt.epoch, pid: pid, valid: true }
+
+    ring[head % LOG_MAX_ENTRIES] = entry
+    head  = head + 1
+    count = if count < LOG_MAX_ENTRIES { count + 1 } else { count }
+
+    if serial_echo {
+        let prefix = level_prefix(level)
+        serial::log("{prefix} [{facility}] {message}")
+    }
+}
+
+pub fn get_recent(n: int) -> [LogEntry] {
+    let result: [LogEntry] = []
+    let start = if count > n { head - n } else { 0 }
+    let i = start
+    while i < head && result.len() < n {
+        result.push(ring[i % LOG_MAX_ENTRIES])
+        i = i + 1
+    }
+    return result
+}
+
+pub fn filter_by_level(min_level: LogLevel) -> [LogEntry] {
+    let result: [LogEntry] = []
+    let i = if count > LOG_MAX_ENTRIES { head - LOG_MAX_ENTRIES } else { 0 }
+    while i < head {
+        let e = ring[i % LOG_MAX_ENTRIES]
+        if e.valid && level_value(e.level) >= level_value(min_level) { result.push(e) }
+        i = i + 1
+    }
+    return result
+}
+
+pub fn filter_by_facility(facility: str) -> [LogEntry] {
+    let result: [LogEntry] = []
+    let i = if count > LOG_MAX_ENTRIES { head - LOG_MAX_ENTRIES } else { 0 }
+    while i < head {
+        let e = ring[i % LOG_MAX_ENTRIES]
+        if e.valid && e.facility == facility { result.push(e) }
+        i = i + 1
+    }
+    return result
+}
+
+pub fn clear() { head = 0; count = 0 }
+pub fn set_serial_echo(v: bool) { serial_echo = v }
+pub fn get_count() -> int { return count }
+
+fn level_prefix(l: LogLevel) -> str {
+    match l {
+        LogLevel::Debug     => return "[DBG]"
+        LogLevel::Info      => return "[INF]"
+        LogLevel::Notice    => return "[NOT]"
+        LogLevel::Warn      => return "[WRN]"
+        LogLevel::Error     => return "[ERR]"
+        LogLevel::Critical  => return "[CRT]"
+        LogLevel::Alert     => return "[ALT]"
+        LogLevel::Emergency => return "[EMG]"
+    }
+}
+
+fn level_value(l: LogLevel) -> int {
+    match l {
+        LogLevel::Debug     => return 0
+        LogLevel::Info      => return 1
+        LogLevel::Notice    => return 2
+        LogLevel::Warn      => return 3
+        LogLevel::Error     => return 4
+        LogLevel::Critical  => return 5
+        LogLevel::Alert     => return 6
+        LogLevel::Emergency => return 7
+    }
+}

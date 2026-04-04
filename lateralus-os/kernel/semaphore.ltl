@@ -1,0 +1,183 @@
+// LateralusOS — Semaphores, Mutexes, Condition Variables
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import kernel::scheduler
+
+const MAX_SEMS    = 512
+const MAX_MUTEXES = 512
+const MAX_CONDVARS = 256
+
+struct Semaphore {
+    value:    int,
+    name:     str,
+    waiters:  [int; 32],  // blocked TIDs
+    n_waiters: int,
+    valid:    bool,
+}
+
+struct Mutex {
+    locked:   bool,
+    owner:    int,         // TID that holds the lock
+    waiters:  [int; 32],
+    n_waiters: int,
+    recursive: bool,
+    depth:    int,
+    valid:    bool,
+    name:     str,
+}
+
+struct CondVar {
+    mutex_id: int,
+    waiters:  [int; 32],
+    n_waiters: int,
+    valid:    bool,
+}
+
+let mut sems:     [Semaphore; MAX_SEMS]   = [Semaphore{}; MAX_SEMS]
+let mut mutexes:  [Mutex; MAX_MUTEXES]    = [Mutex{}; MAX_MUTEXES]
+let mut condvars: [CondVar; MAX_CONDVARS] = [CondVar{}; MAX_CONDVARS]
+
+// ── Semaphores ───────────────────────────────────────────────────────
+
+pub fn sem_create(name: str, init_val: int) -> int {
+    let i = 0
+    while i < MAX_SEMS {
+        if !sems[i].valid {
+            sems[i] = Semaphore { value: init_val, name: name, n_waiters: 0, valid: true }
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+pub fn sem_wait(id: int) {
+    if id < 0 || id >= MAX_SEMS || !sems[id].valid { return }
+    while sems[id].value <= 0 {
+        let tid = scheduler::current_tid()
+        sems[id].waiters[sems[id].n_waiters] = tid
+        sems[id].n_waiters = sems[id].n_waiters + 1
+        scheduler::block_current()
+        scheduler::schedule()
+    }
+    sems[id].value = sems[id].value - 1
+}
+
+pub fn sem_post(id: int) {
+    if id < 0 || id >= MAX_SEMS || !sems[id].valid { return }
+    sems[id].value = sems[id].value + 1
+    if sems[id].n_waiters > 0 {
+        let tid = sems[id].waiters[0]
+        let i = 0
+        while i < sems[id].n_waiters - 1 {
+            sems[id].waiters[i] = sems[id].waiters[i + 1]
+            i = i + 1
+        }
+        sems[id].n_waiters = sems[id].n_waiters - 1
+        scheduler::unblock(tid)
+    }
+}
+
+pub fn sem_destroy(id: int) { if id >= 0 && id < MAX_SEMS { sems[id].valid = false } }
+
+// ── Mutexes ──────────────────────────────────────────────────────────
+
+pub fn mutex_create(name: str, recursive: bool) -> int {
+    let i = 0
+    while i < MAX_MUTEXES {
+        if !mutexes[i].valid {
+            mutexes[i] = Mutex { locked: false, owner: -1, n_waiters: 0, recursive: recursive, depth: 0, valid: true, name: name }
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+pub fn mutex_lock(id: int) {
+    if id < 0 || id >= MAX_MUTEXES { return }
+    let tid = scheduler::current_tid()
+    if mutexes[id].recursive && mutexes[id].owner == tid {
+        mutexes[id].depth = mutexes[id].depth + 1
+        return
+    }
+    while mutexes[id].locked {
+        mutexes[id].waiters[mutexes[id].n_waiters] = tid
+        mutexes[id].n_waiters = mutexes[id].n_waiters + 1
+        scheduler::block_current()
+        scheduler::schedule()
+    }
+    mutexes[id].locked = true
+    mutexes[id].owner  = tid
+    mutexes[id].depth  = 1
+}
+
+pub fn mutex_unlock(id: int) {
+    if id < 0 || id >= MAX_MUTEXES { return }
+    if mutexes[id].recursive {
+        mutexes[id].depth = mutexes[id].depth - 1
+        if mutexes[id].depth > 0 { return }
+    }
+    mutexes[id].locked = false
+    mutexes[id].owner  = -1
+    if mutexes[id].n_waiters > 0 {
+        let tid = mutexes[id].waiters[0]
+        let i = 0
+        while i < mutexes[id].n_waiters - 1 {
+            mutexes[id].waiters[i] = mutexes[id].waiters[i + 1]
+            i = i + 1
+        }
+        mutexes[id].n_waiters = mutexes[id].n_waiters - 1
+        scheduler::unblock(tid)
+    }
+}
+
+pub fn mutex_destroy(id: int) { if id >= 0 && id < MAX_MUTEXES { mutexes[id].valid = false } }
+
+// ── Condition Variables ──────────────────────────────────────────────
+
+pub fn condvar_create(mutex_id: int) -> int {
+    let i = 0
+    while i < MAX_CONDVARS {
+        if !condvars[i].valid {
+            condvars[i] = CondVar { mutex_id: mutex_id, n_waiters: 0, valid: true }
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+pub fn condvar_wait(cv_id: int, mutex_id: int) {
+    if cv_id < 0 || cv_id >= MAX_CONDVARS { return }
+    let tid = scheduler::current_tid()
+    condvars[cv_id].waiters[condvars[cv_id].n_waiters] = tid
+    condvars[cv_id].n_waiters = condvars[cv_id].n_waiters + 1
+    mutex_unlock(mutex_id)
+    scheduler::block_current()
+    scheduler::schedule()
+    mutex_lock(mutex_id)
+}
+
+pub fn condvar_signal(cv_id: int) {
+    if cv_id < 0 || cv_id >= MAX_CONDVARS || condvars[cv_id].n_waiters == 0 { return }
+    let tid = condvars[cv_id].waiters[0]
+    let i = 0
+    while i < condvars[cv_id].n_waiters - 1 {
+        condvars[cv_id].waiters[i] = condvars[cv_id].waiters[i + 1]
+        i = i + 1
+    }
+    condvars[cv_id].n_waiters = condvars[cv_id].n_waiters - 1
+    scheduler::unblock(tid)
+}
+
+pub fn condvar_broadcast(cv_id: int) {
+    if cv_id < 0 || cv_id >= MAX_CONDVARS { return }
+    let i = 0
+    while i < condvars[cv_id].n_waiters {
+        scheduler::unblock(condvars[cv_id].waiters[i])
+        i = i + 1
+    }
+    condvars[cv_id].n_waiters = 0
+}

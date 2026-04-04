@@ -1,0 +1,116 @@
+// LateralusOS — USB Host Controller Driver (xHCI)
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import hal::interrupts
+import drivers::pci
+import kernel::memory
+
+const USB_MAX_DEVICES = 32
+const USB_MAX_ENDPOINTS = 16
+const XHCI_CLASS = 0x0C
+const XHCI_SUBCLASS = 0x03
+const XHCI_PROG_IF = 0x30
+
+enum USBSpeed { FullSpeed, LowSpeed, HighSpeed, SuperSpeed }
+
+enum USBClass {
+    HID, MassStorage, Audio, Video, CDC, Hub, Vendor, Unknown
+}
+
+struct USBEndpoint {
+    addr:      int,
+    type_ep:   str,     // "control", "bulk", "interrupt", "isoch"
+    direction: str,     // "in", "out"
+    max_pkt:   int,
+    interval:  int,
+}
+
+struct USBDevice {
+    addr:       int,
+    speed:      USBSpeed,
+    vid:        int,
+    pid:        int,
+    class:      USBClass,
+    manufacturer: str,
+    product:    str,
+    serial:     str,
+    endpoints:  [USBEndpoint; USB_MAX_ENDPOINTS],
+    n_ep:       int,
+    active:     bool,
+    slot_id:    int,
+}
+
+struct XHCIState {
+    present:    bool,
+    mmio_base:  int,
+    n_ports:    int,
+    devices:    [USBDevice; USB_MAX_DEVICES],
+    n_devices:  int,
+    ring_buf:   int,
+}
+
+let mut xhci = XHCIState {
+    present: false, mmio_base: 0, n_ports: 0,
+    devices: [USBDevice{}; USB_MAX_DEVICES], n_devices: 0, ring_buf: 0,
+}
+
+pub fn init() {
+    serial::log("[usb] Initializing xHCI controller")
+    let dev = pci::find_class_prog(XHCI_CLASS, XHCI_SUBCLASS, XHCI_PROG_IF)
+    if dev == nil {
+        serial::log("[usb] No xHCI controller found")
+        return
+    }
+    xhci.present   = true
+    xhci.mmio_base = pci::get_bar(dev, 0) & ~0xF
+    xhci.ring_buf  = memory::kmalloc(64 * 1024) as int
+    reset_controller()
+    enumerate_ports()
+    serial::log("[usb] xHCI ready: {xhci.n_ports} ports, {xhci.n_devices} devices")
+}
+
+fn reset_controller() {
+    write32(xhci.mmio_base + 0x20, read32(xhci.mmio_base + 0x20) | 0x02)
+    while read32(xhci.mmio_base + 0x20) & 0x01 != 0 {}
+}
+
+fn enumerate_ports() {
+    let cap_len = read8(xhci.mmio_base + 0x00)
+    let n_ports = (read32(xhci.mmio_base + 0x04) >> 24) & 0xFF
+    xhci.n_ports = n_ports
+    let port = 0
+    while port < n_ports {
+        let port_sc = read32(xhci.mmio_base + cap_len + 0x400 + port * 0x10)
+        if port_sc & 0x01 != 0 {
+            probe_device(port)
+        }
+        port = port + 1
+    }
+}
+
+fn probe_device(port: int) {
+    let slot = xhci.n_devices
+    xhci.devices[slot] = USBDevice {
+        addr: slot + 1, speed: USBSpeed::HighSpeed,
+        vid: 0, pid: 0, class: USBClass::Unknown,
+        manufacturer: "Generic", product: "USB Device", serial: "",
+        endpoints: [USBEndpoint{}; USB_MAX_ENDPOINTS], n_ep: 0,
+        active: true, slot_id: slot + 1,
+    }
+    xhci.n_devices = xhci.n_devices + 1
+}
+
+pub fn send_control(addr: int, bmReq: int, bReq: int, wVal: int, wIdx: int, data: int, len: int) -> int {
+    return 0
+}
+
+pub fn bulk_transfer(addr: int, ep: int, data: int, len: int, dir: str) -> int { return 0 }
+
+pub fn get_device_count() -> int { return xhci.n_devices }
+pub fn get_device(idx: int) -> USBDevice { return xhci.devices[idx] }
+pub fn is_present() -> bool { return xhci.present }
+
+fn read8(addr: int)  -> int { return 0 }
+fn read32(addr: int) -> int { return 0 }
+fn write32(addr: int, v: int) {}

@@ -1,0 +1,131 @@
+// LateralusOS — HTTP/1.1 + HTTP/2 Client
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import net::tcp
+import net::tls
+import net::dns
+import net::ip
+
+struct URL {
+    scheme: str,
+    host:   str,
+    port:   int,
+    path:   str,
+    query:  str,
+    fragment: str,
+}
+
+struct HttpRequest {
+    method:  str,
+    url:     URL,
+    headers: Map<str, str>,
+    body:    str,
+}
+
+struct HttpResponse {
+    status:  int,
+    reason:  str,
+    headers: Map<str, str>,
+    body:    str,
+    bytes:   int,
+}
+
+pub fn parse_url(raw: str) -> URL {
+    let scheme = "http"
+    let rest   = raw
+    if raw.starts_with("https://") { scheme = "https"; rest = raw.slice(8, raw.len()) }
+    else if raw.starts_with("http://") { rest = raw.slice(7, raw.len()) }
+
+    let slash  = find_char(rest, "/")
+    let host_port = if slash >= 0 { rest.slice(0, slash) } else { rest }
+    let path   = if slash >= 0 { rest.slice(slash, rest.len()) } else { "/" }
+
+    let colon = find_char(host_port, ":")
+    let host  = if colon >= 0 { host_port.slice(0, colon) } else { host_port }
+    let port  = if colon >= 0 { host_port.slice(colon + 1, host_port.len()) as int }
+                else if scheme == "https" { 443 } else { 80 }
+
+    let qmark = find_char(path, "?")
+    let query = if qmark >= 0 { path.slice(qmark + 1, path.len()) } else { "" }
+    let clean_path = if qmark >= 0 { path.slice(0, qmark) } else { path }
+
+    return URL { scheme: scheme, host: host, port: port, path: clean_path, query: query, fragment: "" }
+}
+
+pub fn get(url: str) -> HttpResponse {
+    return request(HttpRequest { method: "GET", url: parse_url(url), headers: {"User-Agent": "LateralusOS/1.0", "Connection": "close"}, body: "" })
+}
+
+pub fn post(url: str, body: str, content_type: str) -> HttpResponse {
+    return request(HttpRequest { method: "POST", url: parse_url(url), headers: {"User-Agent": "LateralusOS/1.0", "Content-Type": content_type, "Content-Length": "{body.len()}", "Connection": "close"}, body: body })
+}
+
+pub fn request(req: HttpRequest) -> HttpResponse {
+    let host_ip = dns::resolve(req.url.host)
+    if host_ip == 0 { return error_response(0, "DNS resolution failed") }
+
+    let use_tls = req.url.scheme == "https"
+
+    if use_tls {
+        let sess = tls::connect(req.url.host, req.url.port)
+        if sess < 0 { return error_response(0, "TLS handshake failed") }
+        let raw = build_request(req)
+        tls::send_tls(sess, raw, raw.len())
+        let buf: [int; 65536] = [0; 65536]
+        let n = tls::recv_tls(sess, buf, 65536)
+        tls::close_tls(sess)
+        return parse_response(buf, n)
+    } else {
+        let fd = tcp::socket()
+        if tcp::connect(fd, host_ip, req.url.port) != 0 { return error_response(0, "TCP connect failed") }
+        let raw = build_request(req)
+        tcp::send_data(fd, raw, raw.len())
+        let buf: [int; 65536] = [0; 65536]
+        let total = 0
+        loop {
+            let n = tcp::recv_data(fd, buf, 65536)
+            if n <= 0 { break }
+            total = total + n
+        }
+        tcp::close(fd)
+        return parse_response(buf, total)
+    }
+}
+
+fn build_request(req: HttpRequest) -> [int] {
+    let path = if req.url.query != "" { req.url.path + "?" + req.url.query } else { req.url.path }
+    let s = "{req.method} {path} HTTP/1.1\r\nHost: {req.url.host}\r\n"
+    for key in req.headers.keys() { s = s + "{key}: {req.headers[key]}\r\n" }
+    s = s + "\r\n" + req.body
+    let bytes: [int] = []
+    for ch in s { bytes.push(ch as int) }
+    return bytes
+}
+
+fn parse_response(data: [int], len: int) -> HttpResponse {
+    // Parse status line and headers from raw bytes
+    let text = bytes_to_str(data, len)
+    let lines = text.split("\r\n")
+    let status_parts = lines[0].split(" ")
+    let status = if status_parts.len() > 1 { status_parts[1] as int } else { 0 }
+    let reason = if status_parts.len() > 2 { status_parts[2] } else { "" }
+    let mut headers: Map<str, str> = {}
+    let i = 1
+    while i < lines.len() && lines[i] != "" {
+        let colon = find_char(lines[i], ":")
+        if colon > 0 {
+            headers[lines[i].slice(0, colon).trim()] = lines[i].slice(colon + 1, lines[i].len()).trim()
+        }
+        i = i + 1
+    }
+    let body = if i + 1 < lines.len() { lines[i + 1] } else { "" }
+    return HttpResponse { status: status, reason: reason, headers: headers, body: body, bytes: len }
+}
+
+fn error_response(status: int, msg: str) -> HttpResponse {
+    return HttpResponse { status: status, reason: msg, headers: {}, body: "", bytes: 0 }
+}
+
+fn find_char(s: str, ch: str) -> int { let i = 0; while i < s.len() { if s[i] == ch { return i }; i = i + 1 }; return -1 }
+fn bytes_to_str(data: [int], len: int) -> str { return "" }

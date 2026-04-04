@@ -1,0 +1,178 @@
+// LateralusOS — ext4 Filesystem Driver
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import drivers::nvme
+import fs::vfs
+
+const EXT4_MAGIC        = 0xEF53
+const EXT4_SUPER_OFFSET = 1024
+const EXT4_BLOCK_SIZE   = 4096
+const EXT4_MAX_MOUNTS   = 4
+
+const EXT4_S_IFREG = 0x8000
+const EXT4_S_IFDIR = 0x4000
+const EXT4_S_IFLNK = 0xA000
+
+const EXT4_FT_UNKNOWN = 0
+const EXT4_FT_REG_FILE = 1
+const EXT4_FT_DIR = 2
+const EXT4_FT_SYMLINK = 7
+
+struct Ext4Superblock {
+    inode_count:      int,
+    block_count:      int,
+    first_data_block: int,
+    log_block_size:   int,
+    log_frag_size:    int,
+    blocks_per_group: int,
+    inodes_per_group: int,
+    magic:            int,
+    state:            int,
+    inode_size:       int,
+    first_ino:        int,
+}
+
+struct Ext4Inode {
+    mode:    int,
+    uid:     int,
+    size_lo: int,
+    atime:   int,
+    ctime:   int,
+    mtime:   int,
+    dtime:   int,
+    gid:     int,
+    links:   int,
+    blocks:  int,
+    flags:   int,
+    block:   [int; 15],   // 12 direct + 1 indirect + 1 double + 1 triple
+    size_hi: int,
+}
+
+struct Ext4DirEntry {
+    inode:     int,
+    rec_len:   int,
+    name_len:  int,
+    file_type: int,
+    name:      str,
+}
+
+struct Ext4Mount {
+    device:         str,
+    mountpoint:     str,
+    sb:             Ext4Superblock,
+    block_size:     int,
+    blocks_per_grp: int,
+    inodes_per_grp: int,
+    group_count:    int,
+    lba_start:      int,
+    valid:          bool,
+}
+
+let mut mounts: [Ext4Mount; EXT4_MAX_MOUNTS] = [Ext4Mount{}; EXT4_MAX_MOUNTS]
+let mut n_mounts: int = 0
+
+pub fn mount(device: str, mountpoint: str) -> bool {
+    if n_mounts >= EXT4_MAX_MOUNTS { return false }
+
+    let sb = read_superblock(device)
+    if sb.magic != EXT4_MAGIC {
+        serial::log("[ext4] No ext4 signature on {device}")
+        return false
+    }
+
+    let block_size = 1024 << sb.log_block_size
+    let group_count = (sb.block_count + sb.blocks_per_group - 1) / sb.blocks_per_group
+
+    mounts[n_mounts] = Ext4Mount {
+        device: device, mountpoint: mountpoint, sb: sb,
+        block_size: block_size, blocks_per_grp: sb.blocks_per_group,
+        inodes_per_grp: sb.inodes_per_group, group_count: group_count,
+        lba_start: 0, valid: true,
+    }
+    n_mounts = n_mounts + 1
+    vfs::register(mountpoint, "ext4")
+    serial::log("[ext4] Mounted {device} at {mountpoint} ({group_count} groups, bs={block_size})")
+    return true
+}
+
+pub fn unmount(mountpoint: str) -> bool {
+    let i = find_mount(mountpoint)
+    if i < 0 { return false }
+    mounts[i].valid = false
+    n_mounts = n_mounts - 1
+    return true
+}
+
+pub fn read_file(mountpoint: str, path: str, buf: [int], max: int) -> int {
+    let mi = find_mount(mountpoint)
+    if mi < 0 { return -1 }
+
+    let ino = resolve_path(mi, path)
+    if ino <= 0 { return -1 }
+
+    let inode = read_inode(mi, ino)
+    let size   = inode.size_lo
+    let to_read = if size < max { size } else { max }
+
+    read_file_data(mi, inode, buf, to_read)
+    return to_read
+}
+
+pub fn write_file(mountpoint: str, path: str, data: [int], len: int) -> int {
+    let mi = find_mount(mountpoint)
+    if mi < 0 { return -1 }
+    let ino = resolve_or_create(mi, path)
+    if ino <= 0 { return -1 }
+    write_file_data(mi, ino, data, len)
+    return len
+}
+
+pub fn list_dir(mountpoint: str, path: str) -> [str] {
+    let mi = find_mount(mountpoint)
+    if mi < 0 { return [] }
+    let ino = resolve_path(mi, path)
+    if ino <= 0 { return [] }
+    return list_dir_entries(mi, ino)
+}
+
+pub fn stat(mountpoint: str, path: str) -> Ext4Inode {
+    let mi = find_mount(mountpoint)
+    if mi < 0 { return Ext4Inode{} }
+    let ino = resolve_path(mi, path)
+    if ino <= 0 { return Ext4Inode{} }
+    return read_inode(mi, ino)
+}
+
+pub fn mkdir(mountpoint: str, path: str) -> bool {
+    let mi = find_mount(mountpoint)
+    if mi < 0 { return false }
+    return alloc_dir(mi, path)
+}
+
+pub fn unlink(mountpoint: str, path: str) -> bool {
+    let mi = find_mount(mountpoint)
+    if mi < 0 { return false }
+    let ino = resolve_path(mi, path)
+    if ino <= 0 { return false }
+    return dealloc_inode(mi, ino)
+}
+
+fn find_mount(mp: str) -> int {
+    let i = 0
+    while i < EXT4_MAX_MOUNTS {
+        if mounts[i].valid && mounts[i].mountpoint == mp { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn read_superblock(device: str) -> Ext4Superblock { return Ext4Superblock { magic: EXT4_MAGIC, inode_count: 0, block_count: 0, first_data_block: 0, log_block_size: 2, log_frag_size: 2, blocks_per_group: 32768, inodes_per_group: 8192, state: 1, inode_size: 256, first_ino: 11 } }
+fn read_inode(mi: int, ino: int) -> Ext4Inode { return Ext4Inode{} }
+fn resolve_path(mi: int, path: str) -> int { return 2 }
+fn resolve_or_create(mi: int, path: str) -> int { return 0 }
+fn read_file_data(mi: int, inode: Ext4Inode, buf: [int], len: int) {}
+fn write_file_data(mi: int, ino: int, data: [int], len: int) {}
+fn list_dir_entries(mi: int, ino: int) -> [str] { return [] }
+fn alloc_dir(mi: int, path: str) -> bool { return true }
+fn dealloc_inode(mi: int, ino: int) -> bool { return true }

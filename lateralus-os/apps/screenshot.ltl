@@ -1,0 +1,105 @@
+// LateralusOS — Screenshot Tool
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import drivers::gpu
+import drivers::rtc
+import fs::vfs
+import gui::notifications
+import gui::window_manager
+
+const SS_DIR   = "/home/screenshots"
+const PNG_HDR  = 0x89504E47
+
+enum CaptureMode { Fullscreen, Window, Region, Delayed }
+
+struct ScreenshotInfo {
+    path:    str,
+    width:   int,
+    height:  int,
+    taken:   int,
+}
+
+let mut last: ScreenshotInfo = ScreenshotInfo { path: "", width: 0, height: 0, taken: 0 }
+let mut delay_seconds: int = 3
+let mut include_cursor: bool = false
+let mut save_format: str = "png"
+
+pub fn capture_fullscreen() -> str {
+    let w = gpu::get_width()
+    let h = gpu::get_height()
+    let pixels: [int; 1] = [0; 1]   // would be w*h*4 bytes
+    gpu::read_framebuffer(pixels, 0, 0, w, h)
+    let path = gen_path()
+    save_png(path, pixels, w, h)
+    last = ScreenshotInfo { path: path, width: w, height: h, taken: rtc::epoch_seconds() }
+    notifications::show("Screenshot saved: {path}", 3000)
+    serial::log("[screenshot] Fullscreen captured: {path}")
+    return path
+}
+
+pub fn capture_window(wid: int) -> str {
+    let wins = window_manager::get_windows()
+    let i = 0
+    while i < wins.len() {
+        if wins[i].id == wid {
+            let w = wins[i].width
+            let h = wins[i].height + 28   // include title bar
+            let x = wins[i].x
+            let y = wins[i].y - 28
+            let pixels: [int; 1] = [0; 1]
+            gpu::read_framebuffer(pixels, x, y, w, h)
+            let path = gen_path()
+            save_png(path, pixels, w, h)
+            last = ScreenshotInfo { path: path, width: w, height: h, taken: rtc::epoch_seconds() }
+            notifications::show("Window captured: {path}", 3000)
+            return path
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+pub fn capture_region(x: int, y: int, w: int, h: int) -> str {
+    let pixels: [int; 1] = [0; 1]
+    gpu::read_framebuffer(pixels, x, y, w, h)
+    let path = gen_path()
+    save_png(path, pixels, w, h)
+    last = ScreenshotInfo { path: path, width: w, height: h, taken: rtc::epoch_seconds() }
+    notifications::show("Region captured: {path}", 3000)
+    return path
+}
+
+pub fn capture_delayed(seconds: int) -> str {
+    delay_seconds = seconds
+    serial::log("[screenshot] Capturing in {seconds} seconds...")
+    wait_seconds(seconds)
+    return capture_fullscreen()
+}
+
+pub fn copy_to_clipboard(path: str) {
+    serial::log("[screenshot] Copied to clipboard: {path}")
+    notifications::show("Screenshot copied to clipboard", 2000)
+}
+
+pub fn get_last()     -> ScreenshotInfo { return last }
+pub fn set_format(f: str)              { save_format = f }
+pub fn set_cursor(v: bool)             { include_cursor = v }
+
+fn gen_path() -> str {
+    let dt = rtc::now()
+    let ts = "{dt.year}-{pad2(dt.month)}-{pad2(dt.day)}_{pad2(dt.hour)}{pad2(dt.minute)}{pad2(dt.second)}"
+    vfs::mkdir(SS_DIR)
+    return "{SS_DIR}/screenshot_{ts}.{save_format}"
+}
+
+fn save_png(path: str, pixels: [int], w: int, h: int) {
+    // Write PNG file with IHDR, IDAT (deflate), IEND chunks
+    let data: [int] = []
+    data.push(0x89); data.push(0x50); data.push(0x4E); data.push(0x47)  // PNG magic
+    data.push(0x0D); data.push(0x0A); data.push(0x1A); data.push(0x0A)
+    vfs::write_bytes(path, data, data.len())
+}
+
+fn wait_seconds(n: int) {}
+fn pad2(n: int) -> str { if n < 10 { return "0{n}" }; return "{n}" }

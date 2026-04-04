@@ -1,0 +1,161 @@
+// LateralusOS — IPv4/IPv6 Layer
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import drivers::network
+import kernel::memory
+
+const IP_PROTO_ICMP = 1
+const IP_PROTO_TCP  = 6
+const IP_PROTO_UDP  = 17
+const IP_TTL_DEFAULT = 64
+const IP_MAX_PACKET  = 65535
+const IPV4_HDR_LEN   = 20
+
+struct IPv4Header {
+    version_ihl: int,
+    dscp_ecn:    int,
+    length:      int,
+    id:          int,
+    flags_frag:  int,
+    ttl:         int,
+    protocol:    int,
+    checksum:    int,
+    src:         int,
+    dst:         int,
+}
+
+struct IPv6Header {
+    version_tc_flow: int,
+    payload_len:     int,
+    next_header:     int,
+    hop_limit:       int,
+    src:             [int; 16],
+    dst:             [int; 16],
+}
+
+struct RouteEntry {
+    network:  int,
+    mask:     int,
+    gateway:  int,
+    iface:    str,
+    metric:   int,
+    flags:    int,
+}
+
+struct IPState {
+    local_ip:     int,
+    netmask:      int,
+    gateway:      int,
+    dns_primary:  int,
+    dns_secondary: int,
+    route_table:  [RouteEntry; 32],
+    n_routes:     int,
+    tx_packets:   int,
+    rx_packets:   int,
+    tx_bytes:     int,
+    rx_bytes:     int,
+    id_counter:   int,
+}
+
+let mut ip_state = IPState {
+    local_ip: 0, netmask: 0xFFFFFF00, gateway: 0,
+    dns_primary: 0, dns_secondary: 0,
+    route_table: [RouteEntry{}; 32], n_routes: 0,
+    tx_packets: 0, rx_packets: 0, tx_bytes: 0, rx_bytes: 0, id_counter: 1,
+}
+
+pub fn init(ip: int, mask: int, gw: int) {
+    ip_state.local_ip = ip
+    ip_state.netmask  = mask
+    ip_state.gateway  = gw
+    add_route(ip & mask, mask, 0, "eth0", 0)
+    add_route(0, 0, gw, "eth0", 100)    // default route
+    serial::log("[ip] Configured: {ip_to_str(ip)}/{mask_to_prefix(mask)} gw={ip_to_str(gw)}")
+}
+
+pub fn send_packet(src: int, dst: int, proto: int, payload: [int], plen: int) -> int {
+    let hdr = IPv4Header {
+        version_ihl: 0x45,
+        dscp_ecn:    0,
+        length:      IPV4_HDR_LEN + plen,
+        id:          ip_state.id_counter,
+        flags_frag:  0x4000,
+        ttl:         IP_TTL_DEFAULT,
+        protocol:    proto,
+        checksum:    0,
+        src:         src,
+        dst:         dst,
+    }
+    ip_state.id_counter = ip_state.id_counter + 1
+
+    let packet = build_packet(hdr, payload, plen)
+    let gw = route_lookup(dst)
+    network::send_frame(gw, packet, IPV4_HDR_LEN + plen)
+
+    ip_state.tx_packets = ip_state.tx_packets + 1
+    ip_state.tx_bytes   = ip_state.tx_bytes + IPV4_HDR_LEN + plen
+    return IPV4_HDR_LEN + plen
+}
+
+pub fn recv_packet(data: [int], len: int) {
+    if len < IPV4_HDR_LEN { return }
+    let hdr = parse_header(data)
+    if hdr.version_ihl >> 4 != 4 { return }
+    if !verify_checksum(data, IPV4_HDR_LEN) { return }
+
+    ip_state.rx_packets = ip_state.rx_packets + 1
+    ip_state.rx_bytes   = ip_state.rx_bytes + len
+
+    let payload_off = (hdr.version_ihl & 0x0F) * 4
+    match hdr.protocol {
+        IP_PROTO_TCP  => tcp_recv(hdr.src, hdr.dst, data, payload_off, len - payload_off)
+        IP_PROTO_UDP  => udp_recv(hdr.src, hdr.dst, data, payload_off, len - payload_off)
+        IP_PROTO_ICMP => icmp_recv(hdr.src, data, payload_off, len - payload_off)
+        _ => {}
+    }
+}
+
+pub fn add_route(net: int, mask: int, gw: int, iface: str, metric: int) {
+    if ip_state.n_routes >= 32 { return }
+    ip_state.route_table[ip_state.n_routes] = RouteEntry { network: net, mask: mask, gateway: gw, iface: iface, metric: metric, flags: 1 }
+    ip_state.n_routes = ip_state.n_routes + 1
+}
+
+fn route_lookup(dst: int) -> int {
+    let best_metric = 99999
+    let best_gw     = ip_state.gateway
+    let i = 0
+    while i < ip_state.n_routes {
+        let r = ip_state.route_table[i]
+        if (dst & r.mask) == (r.network & r.mask) && r.metric < best_metric {
+            best_metric = r.metric
+            best_gw     = if r.gateway == 0 { dst } else { r.gateway }
+        }
+        i = i + 1
+    }
+    return best_gw
+}
+
+pub fn get_local_ip()  -> int  { return ip_state.local_ip }
+pub fn get_gateway()   -> int  { return ip_state.gateway }
+pub fn ip_to_str(ip: int) -> str {
+    let a = (ip >> 24) & 0xFF
+    let b = (ip >> 16) & 0xFF
+    let c = (ip >> 8)  & 0xFF
+    let d = ip & 0xFF
+    return "{a}.{b}.{c}.{d}"
+}
+pub fn str_to_ip(s: str) -> int {
+    let parts = s.split(".")
+    if parts.len() != 4 { return 0 }
+    return (parts[0] as int << 24) | (parts[1] as int << 16) | (parts[2] as int << 8) | (parts[3] as int)
+}
+
+fn mask_to_prefix(mask: int) -> int { let n = 0; let m = mask; while m != 0 { n = n + (m & 1); m = m >> 1 }; return n }
+fn build_packet(hdr: IPv4Header, payload: [int], plen: int) -> [int] { return [] }
+fn parse_header(data: [int]) -> IPv4Header { return IPv4Header{} }
+fn verify_checksum(data: [int], len: int) -> bool { return true }
+fn tcp_recv(src: int, dst: int, data: [int], off: int, len: int) {}
+fn udp_recv(src: int, dst: int, data: [int], off: int, len: int) {}
+fn icmp_recv(src: int, data: [int], off: int, len: int) {}

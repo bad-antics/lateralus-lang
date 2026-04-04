@@ -1,0 +1,109 @@
+// LateralusOS — AC'97 / HDA Sound Driver
+// Copyright (c) 2025 bad-antics. All rights reserved.
+//
+// Provides PCM output, mixing, volume control, and beep generation.
+
+import hal::serial
+import hal::timer
+import drivers::pci
+import kernel::memory
+
+const SOUND_SAMPLE_RATE = 44100
+const SOUND_CHANNELS    = 2
+const SOUND_BIT_DEPTH   = 16
+const DMA_BUF_FRAMES    = 4096
+
+struct AudioFormat {
+    sample_rate: int,
+    channels:    int,
+    bits:        int,
+}
+
+struct AudioBuffer {
+    data:     [int; 8192],
+    frames:   int,
+    head:     int,
+    tail:     int,
+    count:    int,
+}
+
+struct MixerChannel {
+    volume:  int,    // 0..100
+    mute:    bool,
+    balance: int,    // -100..+100, 0=center
+}
+
+struct SoundCard {
+    present:      bool,
+    format:       AudioFormat,
+    master_vol:   int,
+    master_mute:  bool,
+    channels:     [MixerChannel; 8],
+    buf:          AudioBuffer,
+    dma_base:     int,
+    irq:          int,
+}
+
+let mut snd = SoundCard {
+    present:     false,
+    format:      AudioFormat { sample_rate: SOUND_SAMPLE_RATE, channels: SOUND_CHANNELS, bits: SOUND_BIT_DEPTH },
+    master_vol:  75,
+    master_mute: false,
+    channels:    [MixerChannel { volume: 100, mute: false, balance: 0 }; 8],
+    buf:         AudioBuffer { data: [0; 8192], frames: 0, head: 0, tail: 0, count: 0 },
+    dma_base:    0,
+    irq:         5,
+}
+
+pub fn init() {
+    serial::log("[sound] Probing audio hardware")
+    let dev = pci::find_device(0x8086, 0x2415)  // Intel AC'97
+    if dev == nil {
+        let dev = pci::find_class(0x04, 0x01)    // HDA
+    }
+    if dev == nil {
+        serial::log("[sound] No audio device found")
+        return
+    }
+    snd.present  = true
+    snd.dma_base = memory::kmalloc(DMA_BUF_FRAMES * 4) as int
+    serial::log("[sound] Audio init complete: {SOUND_SAMPLE_RATE}Hz {SOUND_CHANNELS}ch {SOUND_BIT_DEPTH}bit")
+}
+
+pub fn set_volume(vol: int) {
+    snd.master_vol = clamp(vol, 0, 100)
+}
+
+pub fn mute(mute: bool) { snd.master_mute = mute }
+
+pub fn write(samples: [int], count: int) -> int {
+    if !snd.present || snd.master_mute { return 0 }
+    let written = 0
+    let i = 0
+    while i < count && snd.buf.count < 8192 {
+        let scaled = (samples[i] * snd.master_vol) / 100
+        snd.buf.data[snd.buf.tail] = scaled
+        snd.buf.tail  = (snd.buf.tail + 1) % 8192
+        snd.buf.count = snd.buf.count + 1
+        written = written + 1
+        i = i + 1
+    }
+    flush_dma()
+    return written
+}
+
+pub fn beep(freq_hz: int, duration_ms: int) {
+    // PC speaker beep via port 0x61
+    serial::log("[sound] beep({freq_hz}Hz, {duration_ms}ms)")
+}
+
+fn flush_dma() {}
+
+pub fn is_present() -> bool { return snd.present }
+pub fn get_format() -> AudioFormat { return snd.format }
+
+fn clamp(v: int, lo: int, hi: int) -> int {
+    if v < lo { return lo }
+    if v > hi { return hi }
+    return v
+}

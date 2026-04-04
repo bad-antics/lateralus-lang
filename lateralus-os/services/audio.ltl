@@ -1,0 +1,94 @@
+// LateralusOS — Audio Mixer Daemon
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import drivers::sound
+
+const AUDIO_MAX_STREAMS = 16
+const AUDIO_SAMPLE_RATE = 44100
+const AUDIO_CHANNELS    = 2
+const AUDIO_BUF_FRAMES  = 4096
+const AUDIO_MAX_VOLUME  = 100
+
+struct AudioStream {
+    pid:      int,
+    name:     str,
+    volume:   int,
+    muted:    bool,
+    buf:      [int; AUDIO_BUF_FRAMES * AUDIO_CHANNELS]
+    buf_len:  int,
+    playing:  bool,
+    valid:    bool,
+}
+
+let mut streams:     [AudioStream; AUDIO_MAX_STREAMS] = [AudioStream{}; AUDIO_MAX_STREAMS]
+let mut master_vol:  int = 80
+let mut master_mute: bool = false
+let mut n_streams:   int = 0
+let mut running:     bool = false
+
+pub fn start() {
+    if !sound::is_present() {
+        serial::log("[audio] No sound hardware found")
+        return
+    }
+    sound::init()
+    sound::set_volume(master_vol)
+    running = true
+    serial::log("[audio] Audio daemon started, {AUDIO_SAMPLE_RATE}Hz {AUDIO_CHANNELS}ch")
+    run_loop()
+}
+
+fn run_loop() {
+    let mixed: [int; AUDIO_BUF_FRAMES * AUDIO_CHANNELS] = [0; AUDIO_BUF_FRAMES * AUDIO_CHANNELS]
+    while running {
+        // Zero mix buffer
+        let i = 0; while i < AUDIO_BUF_FRAMES * AUDIO_CHANNELS { mixed[i] = 0; i = i + 1 }
+
+        // Mix all active streams
+        let s = 0
+        while s < AUDIO_MAX_STREAMS {
+            if streams[s].valid && streams[s].playing && !streams[s].muted {
+                let vol_scale = (streams[s].volume * master_vol) / (AUDIO_MAX_VOLUME * AUDIO_MAX_VOLUME)
+                let j = 0
+                while j < AUDIO_BUF_FRAMES * AUDIO_CHANNELS && j < streams[s].buf_len {
+                    mixed[j] = clamp(mixed[j] + (streams[s].buf[j] * vol_scale / 100), -32768, 32767)
+                    j = j + 1
+                }
+            }
+            s = s + 1
+        }
+
+        if !master_mute {
+            sound::write(mixed, AUDIO_BUF_FRAMES)
+        }
+    }
+}
+
+pub fn open_stream(pid: int, name: str) -> int {
+    let i = find_free()
+    if i < 0 { return -1 }
+    streams[i] = AudioStream { pid: pid, name: name, volume: 100, muted: false, buf: [0; AUDIO_BUF_FRAMES * AUDIO_CHANNELS], buf_len: 0, playing: false, valid: true }
+    n_streams = n_streams + 1
+    return i
+}
+
+pub fn write_stream(sid: int, data: [int], frames: int) -> int {
+    if !valid_sid(sid) { return -1 }
+    let n = if frames * AUDIO_CHANNELS < AUDIO_BUF_FRAMES * AUDIO_CHANNELS { frames * AUDIO_CHANNELS } else { AUDIO_BUF_FRAMES * AUDIO_CHANNELS }
+    let i = 0; while i < n { streams[sid].buf[i] = data[i]; i = i + 1 }
+    streams[sid].buf_len = n
+    streams[sid].playing = true
+    return frames
+}
+
+pub fn close_stream(sid: int) { if valid_sid(sid) { streams[sid].valid = false; n_streams = n_streams - 1 } }
+pub fn set_stream_volume(sid: int, vol: int) { if valid_sid(sid) { streams[sid].volume = clamp(vol, 0, AUDIO_MAX_VOLUME) } }
+pub fn mute_stream(sid: int, m: bool)        { if valid_sid(sid) { streams[sid].muted = m } }
+pub fn set_master_volume(vol: int)            { master_vol = clamp(vol, 0, AUDIO_MAX_VOLUME); sound::set_volume(master_vol) }
+pub fn get_master_volume() -> int             { return master_vol }
+pub fn set_master_mute(m: bool)               { master_mute = m; sound::mute(m) }
+pub fn stop()                                 { running = false }
+
+fn valid_sid(sid: int) -> bool { return sid >= 0 && sid < AUDIO_MAX_STREAMS && streams[sid].valid }
+fn clamp(v: int, lo: int, hi: int) -> int { if v < lo { return lo }; if v > hi { return hi }; return v }

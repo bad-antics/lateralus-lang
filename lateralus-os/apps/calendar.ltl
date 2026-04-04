@@ -1,0 +1,120 @@
+// LateralusOS — Calendar & Reminders
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import drivers::rtc
+import gui::window_manager
+import gui::notifications
+import fs::vfs
+
+const CAL_W      = 700
+const CAL_H      = 550
+const EVENT_MAX  = 512
+
+struct CalEvent {
+    title:     str,
+    date_year: int,
+    date_month: int,
+    date_day:  int,
+    hour:      int,
+    minute:    int,
+    duration:  int,    // minutes
+    all_day:   bool,
+    recur:     str,    // "none", "daily", "weekly", "monthly", "yearly"
+    remind_min: int,   // minutes before
+    color:     int,
+    valid:     bool,
+}
+
+let mut events:    [CalEvent; EVENT_MAX] = [CalEvent{}; EVENT_MAX]
+let mut n_events:  int = 0
+let mut view_year: int = 0
+let mut view_month: int = 0
+let mut sel_day:   int = 1
+let mut wid:       int = -1
+
+pub fn launch() {
+    let dt = rtc::now()
+    view_year  = dt.year
+    view_month = dt.month
+    sel_day    = dt.day
+    wid = window_manager::create_window("Calendar", 250, 100, CAL_W, CAL_H, 0)
+    load_events()
+    serial::log("[calendar] Calendar launched {dt.year}-{dt.month}")
+    run()
+}
+
+fn run() { while wid >= 0 { paint(); handle_input(); check_reminders() } }
+
+pub fn add_event(title: str, year: int, month: int, day: int, hour: int, minute: int, duration: int) -> int {
+    if n_events >= EVENT_MAX { return -1 }
+    let theme_color = 0x89B4FA
+    events[n_events] = CalEvent { title: title, date_year: year, date_month: month, date_day: day, hour: hour, minute: minute, duration: duration, all_day: false, recur: "none", remind_min: 15, color: theme_color, valid: true }
+    n_events = n_events + 1
+    save_events()
+    return n_events - 1
+}
+
+pub fn remove_event(idx: int) {
+    if idx >= 0 && idx < EVENT_MAX && events[idx].valid {
+        events[idx].valid = false
+        n_events = n_events - 1
+        save_events()
+    }
+}
+
+pub fn get_events_for_day(year: int, month: int, day: int) -> [CalEvent] {
+    let result: [CalEvent] = []
+    let i = 0
+    while i < EVENT_MAX {
+        if events[i].valid && events[i].date_year == year && events[i].date_month == month && events[i].date_day == day {
+            result.push(events[i])
+        }
+        i = i + 1
+    }
+    return result
+}
+
+pub fn navigate_month(delta: int) {
+    view_month = view_month + delta
+    if view_month > 12 { view_month = 1;  view_year = view_year + 1 }
+    if view_month < 1  { view_month = 12; view_year = view_year - 1 }
+}
+
+pub fn today() {
+    let dt = rtc::now()
+    view_year  = dt.year
+    view_month = dt.month
+    sel_day    = dt.day
+}
+
+fn days_in_month(year: int, month: int) -> int {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => return 31
+        4 | 6 | 9 | 11               => return 30
+        2 => return if is_leap(year) { 29 } else { 28 }
+        _ => return 30
+    }
+}
+
+fn is_leap(y: int) -> bool { return (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 }
+
+fn check_reminders() {
+    let dt = rtc::now()
+    let i = 0
+    while i < EVENT_MAX {
+        if events[i].valid {
+            let ev_min = events[i].date_year * 525960 + events[i].date_month * 43830 + events[i].date_day * 1440 + events[i].hour * 60 + events[i].minute
+            let now_min = dt.year * 525960 + dt.month * 43830 + dt.day * 1440 + dt.hour * 60 + dt.minute
+            if ev_min - now_min == events[i].remind_min {
+                notifications::notify("calendar", events[i].title, "Starting in {events[i].remind_min} minutes", NotifPriority::High, 10000)
+            }
+        }
+        i = i + 1
+    }
+}
+
+fn load_events() {}
+fn save_events() {}
+fn paint() {}
+fn handle_input() {}

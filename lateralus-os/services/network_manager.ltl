@@ -1,0 +1,147 @@
+// LateralusOS — Network Manager
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import drivers::wifi
+import drivers::network
+import net::dhcp
+import net::dns
+import net::ip
+
+const NET_MAX_PROFILES = 32
+
+struct NetworkProfile {
+    name:     str,
+    ssid:     str,
+    password: str,
+    use_dhcp: bool,
+    static_ip:  int,
+    static_mask: int,
+    static_gw:   int,
+    static_dns:  int,
+    priority: int,
+    auto_connect: bool,
+    valid:    bool,
+}
+
+enum NetState { Down, Scanning, Connecting, Up, Failed }
+
+struct NetManager {
+    state:       NetState,
+    active_ssid: str,
+    ip:          int,
+    iface:       str,
+    profiles:    [NetworkProfile; NET_MAX_PROFILES],
+    n_profiles:  int,
+}
+
+let mut nm = NetManager {
+    state: NetState::Down, active_ssid: "", ip: 0, iface: "",
+    profiles: [NetworkProfile{}; NET_MAX_PROFILES], n_profiles: 0,
+}
+
+pub fn start() {
+    serial::log("[netman] Network Manager starting")
+
+    // Try wired first
+    if network::is_present() {
+        nm.iface = "eth0"
+        serial::log("[netman] Ethernet detected, running DHCP")
+        dhcp::init("lateralus")
+        if dhcp::discover() {
+            nm.state = NetState::Up
+            nm.ip    = dhcp::get_ip()
+            serial::log("[netman] Ethernet UP: {ip::ip_to_str(nm.ip)}")
+            return
+        }
+    }
+
+    // Try WiFi
+    if wifi::init() {
+        nm.iface = "wlan0"
+        nm.state = NetState::Scanning
+        serial::log("[netman] WiFi detected, scanning")
+        auto_connect()
+        return
+    }
+
+    serial::log("[netman] No network hardware found")
+}
+
+fn auto_connect() {
+    let count = wifi::scan()
+    serial::log("[netman] Found {count} networks")
+
+    let best_prio = -1
+    let best_prof = -1
+    let i = 0
+    while i < nm.n_profiles {
+        if nm.profiles[i].valid && nm.profiles[i].auto_connect {
+            let j = 0
+            while j < count {
+                let nets = wifi::get_scan_results()
+                if nets[j].ssid == nm.profiles[i].ssid && nm.profiles[i].priority > best_prio {
+                    best_prio = nm.profiles[i].priority
+                    best_prof = i
+                }
+                j = j + 1
+            }
+        }
+        i = i + 1
+    }
+
+    if best_prof >= 0 {
+        connect_profile(best_prof)
+    } else {
+        serial::log("[netman] No known networks found")
+        nm.state = NetState::Failed
+    }
+}
+
+fn connect_profile(pi: int) {
+    let p = nm.profiles[pi]
+    nm.state = NetState::Connecting
+    serial::log("[netman] Connecting to {p.ssid}")
+
+    if !wifi::connect(p.ssid, p.password) {
+        nm.state = NetState::Failed
+        return
+    }
+
+    if p.use_dhcp {
+        dhcp::init("lateralus")
+        if dhcp::discover() {
+            nm.ip    = dhcp::get_ip()
+            nm.state = NetState::Up
+            nm.active_ssid = p.ssid
+            serial::log("[netman] WiFi UP: {p.ssid} ip={ip::ip_to_str(nm.ip)}")
+        } else {
+            nm.state = NetState::Failed
+        }
+    } else {
+        ip::init(p.static_ip, p.static_mask, p.static_gw)
+        dns::init(p.static_dns)
+        nm.ip    = p.static_ip
+        nm.state = NetState::Up
+        nm.active_ssid = p.ssid
+    }
+}
+
+pub fn add_wifi_profile(ssid: str, password: str) -> int {
+    if nm.n_profiles >= NET_MAX_PROFILES { return -1 }
+    nm.profiles[nm.n_profiles] = NetworkProfile { name: ssid, ssid: ssid, password: password, use_dhcp: true, static_ip: 0, static_mask: 0, static_gw: 0, static_dns: 0, priority: nm.n_profiles, auto_connect: true, valid: true }
+    nm.n_profiles = nm.n_profiles + 1
+    return nm.n_profiles - 1
+}
+
+pub fn disconnect() {
+    if nm.iface == "wlan0" { wifi::disconnect() }
+    nm.state = NetState::Down
+    nm.ip    = 0
+}
+
+pub fn is_up()           -> bool   { return nm.state == NetState::Up }
+pub fn get_ip()          -> int    { return nm.ip }
+pub fn get_iface()       -> str    { return nm.iface }
+pub fn get_ssid()        -> str    { return nm.active_ssid }
+pub fn get_state_str()   -> str    { match nm.state { NetState::Up => return "up"; NetState::Connecting => return "connecting"; NetState::Scanning => return "scanning"; _ => return "down" } }

@@ -1,0 +1,115 @@
+// LateralusOS — Display Server (Wayland-inspired surface protocol)
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import drivers::gpu
+import drivers::mouse
+import drivers::keyboard
+import gui::window_manager
+import gui::compositor
+import gui::desktop
+import gui::taskbar
+import gui::notifications
+import gui::theme_engine
+
+const DISPLAY_MAX_CLIENTS = 64
+const DISPLAY_FPS_TARGET  = 60
+const DISPLAY_FRAME_MS    = 1000 / DISPLAY_FPS_TARGET
+
+struct DisplayClient {
+    pid:      int,
+    socket:   int,
+    surfaces: [int; 16],
+    n_surf:   int,
+    valid:    bool,
+}
+
+struct DisplayServer {
+    running:     bool,
+    width:       int,
+    height:      int,
+    frame_count: int,
+    fps:         int,
+    clients:     [DisplayClient; DISPLAY_MAX_CLIENTS],
+    n_clients:   int,
+}
+
+let mut server = DisplayServer {
+    running: false, width: 0, height: 0,
+    frame_count: 0, fps: 0,
+    clients: [DisplayClient{}; DISPLAY_MAX_CLIENTS], n_clients: 0,
+}
+
+pub fn start() {
+    serial::log("[display] Starting display server")
+    server.width  = gpu::get_width()
+    server.height = gpu::get_height()
+    server.running = true
+
+    compositor::init()
+    window_manager::init()
+    taskbar::init()
+    desktop::init()
+    notifications::init()
+
+    serial::log("[display] Server ready at {server.width}x{server.height}")
+    run_loop()
+}
+
+fn run_loop() {
+    let last_fps_tick = 0
+    while server.running {
+        // Process input
+        let (mx, my, mb) = mouse::get_state()
+        let (dx, dy)     = mouse::get_delta()
+
+        if mb != 0 || dx != 0 || dy != 0 {
+            window_manager::handle_mouse_event(mx, my, mb)
+            desktop::handle_click(mx, my, mb)
+            taskbar::handle_click(mx, my)
+        }
+
+        // Composite and flip
+        let visible_windows = window_manager::get_windows()
+        let i = 0
+        while i < visible_windows.len() {
+            window_manager::paint_decorations(visible_windows[i].id)
+            i = i + 1
+        }
+        desktop::paint()
+        taskbar::paint()
+        notifications::paint()
+        compositor::composite()
+
+        server.frame_count = server.frame_count + 1
+        notifications::tick(DISPLAY_FRAME_MS)
+    }
+}
+
+pub fn stop() { server.running = false }
+
+pub fn connect(pid: int) -> int {
+    let i = find_free()
+    if i < 0 { return -1 }
+    server.clients[i] = DisplayClient { pid: pid, socket: i, surfaces: [0; 16], n_surf: 0, valid: true }
+    server.n_clients = server.n_clients + 1
+    return i
+}
+
+pub fn disconnect(cid: int) {
+    if cid < 0 || cid >= DISPLAY_MAX_CLIENTS { return }
+    server.clients[cid].valid = false
+    server.n_clients = server.n_clients - 1
+}
+
+pub fn create_window_for(cid: int, title: str, x: int, y: int, w: int, h: int) -> int {
+    if cid < 0 || cid >= DISPLAY_MAX_CLIENTS { return -1 }
+    let pid = server.clients[cid].pid
+    return window_manager::create_window(title, x, y, w, h, pid)
+}
+
+pub fn get_screen_width()  -> int { return server.width  }
+pub fn get_screen_height() -> int { return server.height }
+pub fn get_frame_count()   -> int { return server.frame_count }
+
+fn find_free() -> int { let i = 0; while i < DISPLAY_MAX_CLIENTS { if !server.clients[i].valid { return i }; i = i + 1 }; return -1 }

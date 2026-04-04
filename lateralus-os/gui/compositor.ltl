@@ -1,0 +1,136 @@
+// LateralusOS — Software Compositor (double-buffered)
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import drivers::gpu
+import kernel::memory
+
+const COMP_MAX_SURFACES = 128
+const COMP_MAX_DIRTY    = 256
+const ALPHA_OPAQUE      = 255
+
+struct Surface {
+    id:     int,
+    width:  int,
+    height: int,
+    stride: int,
+    pixels: [int; 1]   // dynamically sized pixel buffer
+    x:      int,
+    y:      int,
+    alpha:  int,
+    z:      int,
+    dirty:  bool,
+    valid:  bool,
+}
+
+struct DirtyRect {
+    x: int, y: int, w: int, h: int
+}
+
+let mut surfaces:   [Surface; COMP_MAX_SURFACES] = [Surface{}; COMP_MAX_SURFACES]
+let mut dirty_list: [DirtyRect; COMP_MAX_DIRTY]  = [DirtyRect{}; COMP_MAX_DIRTY]
+let mut n_dirty:    int = 0
+let mut back_buf:   int = 0   // pointer to back buffer
+let mut scr_w:      int = 1920
+let mut scr_h:      int = 1080
+let mut next_sid:   int = 1
+
+pub fn init() {
+    scr_w   = gpu::get_width()
+    scr_h   = gpu::get_height()
+    back_buf = memory::kmalloc(scr_w * scr_h * 4)
+    serial::log("[compositor] Initialized {scr_w}x{scr_h} double buffer")
+}
+
+pub fn alloc_surface(w: int, h: int) -> int {
+    let i = find_free()
+    if i < 0 { return -1 }
+    surfaces[i] = Surface {
+        id: next_sid, width: w, height: h, stride: w * 4,
+        pixels: [0; 1], x: 0, y: 0, alpha: ALPHA_OPAQUE,
+        z: 0, dirty: true, valid: true,
+    }
+    next_sid = next_sid + 1
+    return i
+}
+
+pub fn free_surface(sid: int) { if valid_sid(sid) { surfaces[sid].valid = false } }
+
+pub fn resize_surface(sid: int, w: int, h: int) {
+    if !valid_sid(sid) { return }
+    surfaces[sid].width  = w
+    surfaces[sid].height = h
+    surfaces[sid].stride = w * 4
+    surfaces[sid].dirty  = true
+}
+
+pub fn put_pixel(sid: int, x: int, y: int, color: int) {
+    if !valid_sid(sid) { return }
+    if x < 0 || x >= surfaces[sid].width || y < 0 || y >= surfaces[sid].height { return }
+    surfaces[sid].dirty = true
+}
+
+pub fn fill_rect(sid: int, x: int, y: int, w: int, h: int, color: int) {
+    if !valid_sid(sid) { return }
+    surfaces[sid].dirty = true
+}
+
+pub fn blit_text(sid: int, x: int, y: int, text: str, fg: int, bg: int) {
+    if !valid_sid(sid) { return }
+    surfaces[sid].dirty = true
+}
+
+pub fn damage_rect(x: int, y: int, w: int, h: int) {
+    if n_dirty < COMP_MAX_DIRTY {
+        dirty_list[n_dirty] = DirtyRect { x: x, y: y, w: w, h: h }
+        n_dirty = n_dirty + 1
+    }
+}
+
+pub fn damage_all() {
+    n_dirty = 1
+    dirty_list[0] = DirtyRect { x: 0, y: 0, w: scr_w, h: scr_h }
+}
+
+pub fn composite() {
+    if n_dirty == 0 { return }
+
+    // Composite all visible surfaces in z-order to back buffer
+    let sorted = sort_by_z()
+    let i = 0
+    while i < sorted.len() {
+        let s = sorted[i]
+        if s.valid { blend_surface(s) }
+        i = i + 1
+    }
+
+    // Flip back buffer to screen for dirty regions
+    let d = 0
+    while d < n_dirty {
+        let r = dirty_list[d]
+        gpu::blit(back_buf, scr_w * 4, r.x, r.y, r.w, r.h)
+        d = d + 1
+    }
+    n_dirty = 0
+}
+
+pub fn set_position(sid: int, x: int, y: int) {
+    if valid_sid(sid) { surfaces[sid].x = x; surfaces[sid].y = y; damage_all() }
+}
+
+pub fn set_alpha(sid: int, alpha: int) {
+    if valid_sid(sid) { surfaces[sid].alpha = alpha }
+}
+
+fn blend_surface(s: Surface) {
+    if s.alpha == ALPHA_OPAQUE {
+        gpu::blit(back_buf, scr_w * 4, s.x, s.y, s.width, s.height)
+    } else {
+        alpha_blend(s)
+    }
+}
+
+fn alpha_blend(s: Surface) {}
+fn sort_by_z() -> [Surface] { return [] }
+fn find_free() -> int { let i = 0; while i < COMP_MAX_SURFACES { if !surfaces[i].valid { return i }; i = i + 1 }; return -1 }
+fn valid_sid(sid: int) -> bool { return sid >= 0 && sid < COMP_MAX_SURFACES && surfaces[sid].valid }

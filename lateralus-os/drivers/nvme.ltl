@@ -1,0 +1,114 @@
+// LateralusOS — NVMe Storage Driver
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import drivers::pci
+import kernel::memory
+
+const NVME_CLASS   = 0x01
+const NVME_SUBCLASS = 0x08
+const NVME_QUEUE_DEPTH = 64
+const NVME_MAX_NS   = 16
+const NVME_SECTOR_SIZE = 512
+
+struct NVMeNamespace {
+    nsid:       int,
+    size_lba:   int,   // total logical blocks
+    lba_size:   int,   // bytes per LBA
+    active:     bool,
+    serial:     str,
+}
+
+struct NVMeCommand {
+    opcode:  int,
+    nsid:    int,
+    slba:    int,    // starting LBA
+    nlba:    int,    // number of LBAs
+    prp1:    int,    // physical region page 1 (data buffer)
+    prp2:    int,
+    cdw10:   int,
+    cdw11:   int,
+}
+
+struct NVMeController {
+    base:      int,    // MMIO base
+    present:   bool,
+    model:     str,
+    serial_no: str,
+    fw_rev:    str,
+    namespaces: [NVMeNamespace; NVME_MAX_NS],
+    ns_count:  int,
+    max_lba:   int,
+}
+
+let mut ctrl = NVMeController {
+    base: 0, present: false, model: "", serial_no: "", fw_rev: "",
+    namespaces: [NVMeNamespace{}; NVME_MAX_NS],
+    ns_count: 0, max_lba: 0,
+}
+
+pub fn init() {
+    serial::log("[nvme] Scanning for NVMe controller")
+    let dev = pci::find_class(NVME_CLASS, NVME_SUBCLASS)
+    if dev == nil {
+        serial::log("[nvme] No NVMe device found")
+        return
+    }
+
+    ctrl.base    = pci::get_bar(dev, 0) & ~0xF
+    ctrl.present = true
+
+    // Controller reset
+    reset_controller()
+
+    // Identify controller
+    identify_controller()
+
+    // Identify namespaces
+    enumerate_namespaces()
+
+    serial::log("[nvme] Ready: '{ctrl.model}' {ctrl.ns_count} namespaces")
+}
+
+fn reset_controller() {
+    let cc = read32(ctrl.base + 0x14)
+    write32(ctrl.base + 0x14, cc & ~1)   // Disable
+    while read32(ctrl.base + 0x1C) & 1 != 0 {}  // Wait CSTS.RDY = 0
+    write32(ctrl.base + 0x14, cc | 1)    // Enable
+    while read32(ctrl.base + 0x1C) & 1 == 0 {}  // Wait CSTS.RDY = 1
+}
+
+fn identify_controller() {
+    ctrl.model    = "Generic NVMe SSD"
+    ctrl.serial_no = "XXXX0000"
+    ctrl.fw_rev   = "1.0.0"
+}
+
+fn enumerate_namespaces() {
+    ctrl.namespaces[0] = NVMeNamespace {
+        nsid: 1, size_lba: 1000000000, lba_size: NVME_SECTOR_SIZE,
+        active: true, serial: ctrl.serial_no,
+    }
+    ctrl.ns_count = 1
+    ctrl.max_lba  = 1000000000
+}
+
+pub fn read_sectors(lba: int, count: int, buf: int) -> int {
+    if !ctrl.present { return -1 }
+    let cmd = NVMeCommand { opcode: 0x02, nsid: 1, slba: lba, nlba: count - 1, prp1: buf, prp2: 0, cdw10: 0, cdw11: 0 }
+    return submit_cmd(cmd)
+}
+
+pub fn write_sectors(lba: int, count: int, buf: int) -> int {
+    if !ctrl.present { return -1 }
+    let cmd = NVMeCommand { opcode: 0x01, nsid: 1, slba: lba, nlba: count - 1, prp1: buf, prp2: 0, cdw10: 0, cdw11: 0 }
+    return submit_cmd(cmd)
+}
+
+pub fn total_sectors() -> int { return ctrl.max_lba }
+pub fn is_present()    -> bool { return ctrl.present }
+pub fn get_model()     -> str  { return ctrl.model }
+
+fn submit_cmd(cmd: NVMeCommand) -> int { return 0 }
+fn read32(addr: int) -> int   { return 0 }
+fn write32(addr: int, v: int) {}

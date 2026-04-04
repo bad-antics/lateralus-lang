@@ -1,0 +1,136 @@
+// LateralusOS — Tab Completion Engine
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import fs::vfs
+import shell::builtins
+
+const COMPLETION_MAX = 256
+
+struct CompletionResult {
+    candidates: [str; COMPLETION_MAX],
+    n_candidates: int,
+    common_prefix: str,
+}
+
+let mut last_result: CompletionResult = CompletionResult { candidates: [""; COMPLETION_MAX], n_candidates: 0, common_prefix: "" }
+
+pub fn complete(line: str, cursor: int) -> CompletionResult {
+    let prefix = line.slice(0, cursor)
+    let words  = prefix.split(" ")
+    last_result.n_candidates = 0
+
+    if words.len() == 1 {
+        // Command completion
+        command_completions(words[0])
+    } else {
+        // Argument completion
+        let cmd  = words[0]
+        let arg  = words[words.len() - 1]
+        match cmd {
+            "cd" | "ls" | "cat" | "rm" | "cp" | "mv" | "less" | "more" | "vim" | "nano" | "open" => path_completions(arg, true)
+            "kill" | "pkill" => pid_completions(arg)
+            "ltlpkg" | "pkg" => package_completions(arg, words)
+            _ => path_completions(arg, false)
+        }
+    }
+
+    compute_common_prefix()
+    return last_result
+}
+
+fn command_completions(prefix: str) {
+    // Built-in commands
+    let cmds = builtins::list_commands()
+    let i = 0
+    while i < cmds.len() {
+        if cmds[i].starts_with(prefix) { add_candidate(cmds[i]) }
+        i = i + 1
+    }
+
+    // Executables in PATH dirs
+    let path_dirs = ["/bin", "/usr/bin", "/usr/local/bin", "/apps"]
+    let d = 0
+    while d < path_dirs.len() {
+        if vfs::is_dir(path_dirs[d]) {
+            let files = vfs::list_dir(path_dirs[d])
+            let f = 0
+            while f < files.len() {
+                if files[f].starts_with(prefix) { add_candidate(files[f]) }
+                f = f + 1
+            }
+        }
+        d = d + 1
+    }
+}
+
+fn path_completions(prefix: str, dirs_only: bool) {
+    let dir_part = dirname(prefix)
+    let base     = basename(prefix)
+    let scan_dir = if dir_part == "" { "." } else { dir_part }
+
+    if !vfs::is_dir(scan_dir) { return }
+    let entries = vfs::list_dir(scan_dir)
+    let i = 0
+    while i < entries.len() {
+        let name = entries[i]
+        if name.starts_with(base) {
+            if !dirs_only || vfs::is_dir("{scan_dir}/{name}") {
+                let candidate = if dir_part == "" { name } else { "{dir_part}/{name}" }
+                let is_dir    = vfs::is_dir("{scan_dir}/{name}")
+                add_candidate(if is_dir { candidate + "/" } else { candidate })
+            }
+        }
+        i = i + 1
+    }
+}
+
+fn pid_completions(prefix: str) {
+    let pids = vfs::list_dir("/proc")
+    let i = 0
+    while i < pids.len() {
+        if pids[i].starts_with(prefix) {
+            let p = pids[i]
+            if p as int > 0 { add_candidate(p) }
+        }
+        i = i + 1
+    }
+}
+
+fn package_completions(prefix: str, words: [str]) {
+    // Complete sub-commands or package names
+    if words.len() == 2 {
+        let subcmds = ["install", "remove", "search", "list", "update", "upgrade", "info", "show"]
+        let i = 0
+        while i < subcmds.len() { if subcmds[i].starts_with(prefix) { add_candidate(subcmds[i]) }; i = i + 1 }
+    }
+}
+
+fn compute_common_prefix() {
+    if last_result.n_candidates == 0 { last_result.common_prefix = ""; return }
+    if last_result.n_candidates == 1 { last_result.common_prefix = last_result.candidates[0]; return }
+    let prefix = last_result.candidates[0]
+    let i = 1
+    while i < last_result.n_candidates {
+        prefix = common_prefix(prefix, last_result.candidates[i])
+        i = i + 1
+    }
+    last_result.common_prefix = prefix
+}
+
+fn common_prefix(a: str, b: str) -> str {
+    let len = if a.len() < b.len() { a.len() } else { b.len() }
+    let i = 0
+    while i < len { if a[i] != b[i] { return a.slice(0, i) }; i = i + 1 }
+    return a.slice(0, len)
+}
+
+fn add_candidate(s: str) {
+    if last_result.n_candidates < COMPLETION_MAX {
+        last_result.candidates[last_result.n_candidates] = s
+        last_result.n_candidates = last_result.n_candidates + 1
+    }
+}
+
+fn dirname(p: str) -> str  { let i = p.rfind("/"); if i > 0 { return p.slice(0, i) }; return "" }
+fn basename(p: str) -> str { let i = p.rfind("/"); if i >= 0 { return p.slice(i + 1, p.len()) }; return p }

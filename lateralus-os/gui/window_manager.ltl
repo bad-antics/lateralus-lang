@@ -1,0 +1,210 @@
+// LateralusOS — Window Manager (tiling + floating hybrid)
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import drivers::gpu
+import drivers::mouse
+import drivers::keyboard
+import gui::compositor
+import gui::theme_engine
+
+const WM_MAX_WINDOWS  = 128
+const WM_TITLE_HEIGHT = 28
+const WM_BORDER_WIDTH = 2
+const WM_MIN_WIDTH    = 80
+const WM_MIN_HEIGHT   = 40
+
+enum WindowState { Normal, Minimized, Maximized, Fullscreen, Tiled }
+enum TileLayout  { Single, HSplit, VSplit, Grid }
+
+struct Window {
+    id:       int,
+    title:    str,
+    x:        int,
+    y:        int,
+    width:    int,
+    height:   int,
+    min_w:    int,
+    min_h:    int,
+    state:    WindowState,
+    focused:  bool,
+    resizable: bool,
+    decorated: bool,
+    pid:      int,
+    surface:  int,
+    prev_x:   int,
+    prev_y:   int,
+    prev_w:   int,
+    prev_h:   int,
+    z_order:  int,
+    valid:    bool,
+}
+
+struct DragState {
+    active:  bool,
+    wid:     int,
+    off_x:   int,
+    off_y:   int,
+    resize:  bool,
+}
+
+let mut windows:    [Window; WM_MAX_WINDOWS] = [Window{}; WM_MAX_WINDOWS]
+let mut n_windows:  int = 0
+let mut focused_id: int = -1
+let mut next_id:    int = 1
+let mut next_z:     int = 1
+let mut drag:       DragState = DragState { active: false, wid: -1, off_x: 0, off_y: 0, resize: false }
+let mut layout:     TileLayout = TileLayout::Single
+let mut screen_w:   int = 1920
+let mut screen_h:   int = 1080
+let mut taskbar_h:  int = 40
+
+pub fn init() {
+    screen_w = gpu::get_width()
+    screen_h = gpu::get_height()
+    serial::log("[wm] Initialized {screen_w}x{screen_h}")
+}
+
+pub fn create_window(title: str, x: int, y: int, w: int, h: int, pid: int) -> int {
+    let i = find_free()
+    if i < 0 { return -1 }
+    windows[i] = Window {
+        id: next_id, title: title, x: x, y: y, width: w, height: h,
+        min_w: WM_MIN_WIDTH, min_h: WM_MIN_HEIGHT,
+        state: WindowState::Normal, focused: false, resizable: true, decorated: true,
+        pid: pid, surface: compositor::alloc_surface(w, h),
+        prev_x: x, prev_y: y, prev_w: w, prev_h: h,
+        z_order: next_z, valid: true,
+    }
+    next_id = next_id + 1
+    next_z  = next_z  + 1
+    n_windows = n_windows + 1
+    focus(i)
+    compositor::damage_all()
+    serial::log("[wm] Created window '{title}' id={i}")
+    return i
+}
+
+pub fn destroy_window(wid: int) {
+    let i = find_by_id(wid)
+    if i < 0 { return }
+    compositor::free_surface(windows[i].surface)
+    windows[i].valid = false
+    n_windows = n_windows - 1
+    if focused_id == wid { focused_id = find_top_window() }
+    compositor::damage_all()
+}
+
+pub fn move_window(wid: int, x: int, y: int) {
+    let i = find_by_id(wid)
+    if i < 0 { return }
+    windows[i].x = x
+    windows[i].y = y
+    compositor::damage_rect(x - 2, y - WM_TITLE_HEIGHT - 2, windows[i].width + 4, windows[i].height + WM_TITLE_HEIGHT + 4)
+}
+
+pub fn resize_window(wid: int, w: int, h: int) {
+    let i = find_by_id(wid)
+    if i < 0 { return }
+    let nw = if w < WM_MIN_WIDTH  { WM_MIN_WIDTH  } else { w }
+    let nh = if h < WM_MIN_HEIGHT { WM_MIN_HEIGHT } else { h }
+    windows[i].width  = nw
+    windows[i].height = nh
+    compositor::resize_surface(windows[i].surface, nw, nh)
+    compositor::damage_all()
+}
+
+pub fn focus(wid: int) {
+    if focused_id >= 0 { let j = find_by_id(focused_id); if j >= 0 { windows[j].focused = false } }
+    let i = find_by_id(wid)
+    if i >= 0 { windows[i].focused = true; windows[i].z_order = next_z; next_z = next_z + 1 }
+    focused_id = wid
+    compositor::damage_all()
+}
+
+pub fn maximize_window(wid: int) {
+    let i = find_by_id(wid)
+    if i < 0 { return }
+    if windows[i].state == WindowState::Maximized {
+        windows[i].x = windows[i].prev_x; windows[i].y = windows[i].prev_y
+        windows[i].width = windows[i].prev_w; windows[i].height = windows[i].prev_h
+        windows[i].state = WindowState::Normal
+    } else {
+        windows[i].prev_x = windows[i].x; windows[i].prev_y = windows[i].y
+        windows[i].prev_w = windows[i].width; windows[i].prev_h = windows[i].height
+        windows[i].x = 0; windows[i].y = 0
+        windows[i].width = screen_w; windows[i].height = screen_h - taskbar_h
+        windows[i].state = WindowState::Maximized
+    }
+    compositor::damage_all()
+}
+
+pub fn minimize_window(wid: int) {
+    let i = find_by_id(wid)
+    if i < 0 { return }
+    windows[i].state = WindowState::Minimized
+    if focused_id == wid { focused_id = find_top_window() }
+    compositor::damage_all()
+}
+
+pub fn handle_mouse_event(x: int, y: int, buttons: int) {
+    if buttons & 1 != 0 && !drag.active {
+        // Button down: find window under cursor
+        let wid = hit_test(x, y)
+        if wid >= 0 {
+            focus(wid)
+            let i = find_by_id(wid)
+            // Check if click on title bar
+            if y >= windows[i].y - WM_TITLE_HEIGHT && y < windows[i].y {
+                drag = DragState { active: true, wid: wid, off_x: x - windows[i].x, off_y: y - (windows[i].y - WM_TITLE_HEIGHT), resize: false }
+            }
+            // Check resize grip (bottom-right corner)
+            if x > windows[i].x + windows[i].width - 12 && y > windows[i].y + windows[i].height - 12 {
+                drag = DragState { active: true, wid: wid, off_x: windows[i].width - (x - windows[i].x), off_y: windows[i].height - (y - windows[i].y), resize: true }
+            }
+        }
+    }
+    if drag.active {
+        if buttons & 1 != 0 {
+            if drag.resize {
+                resize_window(drag.wid, x - find_win_x(drag.wid) + drag.off_x, y - find_win_y(drag.wid) + drag.off_y)
+            } else {
+                move_window(drag.wid, x - drag.off_x, y - drag.off_y + WM_TITLE_HEIGHT)
+            }
+        } else {
+            drag.active = false
+        }
+    }
+}
+
+pub fn paint_decorations(wid: int) {
+    let i = find_by_id(wid)
+    if i < 0 || !windows[i].decorated { return }
+    let theme    = theme_engine::get_active()
+    let bar_col  = if windows[i].focused { theme.title_active } else { theme.title_inactive }
+    let tx = windows[i].x
+    let ty = windows[i].y - WM_TITLE_HEIGHT
+    let tw = windows[i].width
+    gpu::fill_rect(tx - WM_BORDER_WIDTH, ty - WM_BORDER_WIDTH, tw + WM_BORDER_WIDTH * 2, WM_TITLE_HEIGHT + windows[i].height + WM_BORDER_WIDTH * 2, theme.border)
+    gpu::fill_rect(tx, ty, tw, WM_TITLE_HEIGHT, bar_col)
+    // Window buttons: close, max, min
+    gpu::fill_rect(tx + tw - 20, ty + 6, 16, 16, theme.btn_close)
+    gpu::fill_rect(tx + tw - 40, ty + 6, 16, 16, theme.btn_max)
+    gpu::fill_rect(tx + tw - 60, ty + 6, 16, 16, theme.btn_min)
+}
+
+pub fn get_windows() -> [Window] {
+    let result: [Window] = []
+    let i = 0
+    while i < WM_MAX_WINDOWS { if windows[i].valid { result.push(windows[i]) }; i = i + 1 }
+    return result
+}
+
+pub fn get_focused_id() -> int { return focused_id }
+
+fn find_free() -> int { let i = 0; while i < WM_MAX_WINDOWS { if !windows[i].valid { return i }; i = i + 1 }; return -1 }
+fn find_by_id(id: int) -> int { let i = 0; while i < WM_MAX_WINDOWS { if windows[i].valid && windows[i].id == id { return i }; i = i + 1 }; return -1 }
+fn find_top_window() -> int { let best = -1; let bz = -1; let i = 0; while i < WM_MAX_WINDOWS { if windows[i].valid && windows[i].state != WindowState::Minimized && windows[i].z_order > bz { bz = windows[i].z_order; best = windows[i].id }; i = i + 1 }; return best }
+fn hit_test(mx: int, my: int) -> int { let best = -1; let bz = -1; let i = 0; while i < WM_MAX_WINDOWS { let w = windows[i]; if w.valid && w.state != WindowState::Minimized && mx >= w.x && mx < w.x + w.width && my >= w.y - WM_TITLE_HEIGHT && my < w.y + w.height && w.z_order > bz { bz = w.z_order; best = w.id }; i = i + 1 }; return best }
+fn find_win_x(id: int) -> int { let i = find_by_id(id); if i >= 0 { return windows[i].x }; return 0 }
+fn find_win_y(id: int) -> int { let i = find_by_id(id); if i >= 0 { return windows[i].y }; return 0 }

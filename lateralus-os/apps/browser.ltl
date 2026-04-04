@@ -1,0 +1,132 @@
+// LateralusOS — Web Browser
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import net::http
+import net::dns
+import gui::window_manager
+import gui::compositor
+import gui::theme_engine
+import gui::notifications
+
+const BROWSER_W    = 1200
+const BROWSER_H    = 800
+const TAB_MAX      = 16
+const HISTORY_MAX  = 256
+const BOOKMARK_MAX = 128
+
+struct Tab {
+    id:      int,
+    url:     str,
+    title:   str,
+    loading: bool,
+    scroll:  int,
+    content: str,
+    valid:   bool,
+}
+
+struct Bookmark {
+    title: str,
+    url:   str,
+    valid: bool,
+}
+
+let mut tabs:       [Tab; TAB_MAX]         = [Tab{}; TAB_MAX]
+let mut bookmarks:  [Bookmark; BOOKMARK_MAX] = [Bookmark{}; BOOKMARK_MAX]
+let mut history:    [str; HISTORY_MAX]     = [""; HISTORY_MAX]
+let mut active_tab: int = 0
+let mut n_tabs:     int = 0
+let mut n_bookmarks: int = 0
+let mut hist_head:  int = 0
+let mut wid:        int = -1
+let mut addr_bar:   str = ""
+
+pub fn launch() {
+    wid = window_manager::create_window("LateralusBrowser", 60, 60, BROWSER_W, BROWSER_H, 0)
+    new_tab("about:home")
+    serial::log("[browser] Browser launched")
+    run()
+}
+
+fn run() {
+    while wid >= 0 {
+        paint()
+        handle_input()
+    }
+}
+
+pub fn navigate(url: str) {
+    if active_tab < 0 || active_tab >= n_tabs { return }
+    let tab_idx = active_tab
+    tabs[tab_idx].url     = url
+    tabs[tab_idx].loading = true
+    tabs[tab_idx].title   = "Loading..."
+    tabs[tab_idx].scroll  = 0
+    push_history(url)
+    serial::log("[browser] Navigating to: {url}")
+
+    if url == "about:home"    { tabs[tab_idx].content = home_page(); tabs[tab_idx].title = "New Tab" }
+    else if url == "about:blank" { tabs[tab_idx].content = ""; tabs[tab_idx].title = "Blank" }
+    else {
+        let resp = http::get(url)
+        if resp.status == 200 {
+            tabs[tab_idx].content = render_html(resp.body)
+            tabs[tab_idx].title   = extract_title(resp.body)
+            window_manager::update_title(wid, tabs[tab_idx].title + " - LateralusBrowser")
+        } else {
+            tabs[tab_idx].content = "Error {resp.status}: {resp.reason}"
+            tabs[tab_idx].title   = "Error"
+        }
+    }
+    tabs[tab_idx].loading = false
+    notifications::show("Page loaded: {tabs[tab_idx].title}", 2000)
+}
+
+pub fn new_tab(url: str) -> int {
+    let i = find_free_tab()
+    if i < 0 { return -1 }
+    tabs[i] = Tab { id: i, url: "", title: "New Tab", loading: false, scroll: 0, content: "", valid: true }
+    n_tabs = n_tabs + 1
+    active_tab = i
+    navigate(url)
+    return i
+}
+
+pub fn close_tab(id: int) {
+    if tabs[id].valid { tabs[id].valid = false; n_tabs = n_tabs - 1 }
+    if active_tab == id && n_tabs > 0 {
+        let j = 0; while j < TAB_MAX { if tabs[j].valid { active_tab = j; break }; j = j + 1 }
+    }
+}
+
+pub fn go_back()    { if hist_head > 0 { hist_head = hist_head - 1; navigate(history[hist_head]) } }
+pub fn reload()     { if n_tabs > 0 { navigate(tabs[active_tab].url) } }
+pub fn bookmark()   { if n_tabs > 0 && n_bookmarks < BOOKMARK_MAX { bookmarks[n_bookmarks] = Bookmark { title: tabs[active_tab].title, url: tabs[active_tab].url, valid: true }; n_bookmarks = n_bookmarks + 1 } }
+
+fn render_html(html: str) -> str {
+    // Minimal HTML text extractor — strip tags
+    let out = ""
+    let in_tag = false
+    let i = 0
+    while i < html.len() {
+        let ch = html[i]
+        if ch == "<"  { in_tag = true }
+        else if ch == ">" { in_tag = false; out = out + " " }
+        else if !in_tag { out = out + ch }
+        i = i + 1
+    }
+    return out
+}
+
+fn extract_title(html: str) -> str {
+    let s = html.find("<title>")
+    let e = html.find("</title>")
+    if s >= 0 && e > s { return html.slice(s + 7, e) }
+    return "Untitled"
+}
+
+fn home_page() -> str { return "LateralusOS Browser\nWelcome to the Web\n\nBookmarks:\n" }
+fn paint() {}
+fn handle_input() {}
+fn push_history(url: str) { history[hist_head % HISTORY_MAX] = url; hist_head = hist_head + 1 }
+fn find_free_tab() -> int { let i = 0; while i < TAB_MAX { if !tabs[i].valid { return i }; i = i + 1 }; return -1 }

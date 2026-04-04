@@ -1,0 +1,119 @@
+// LateralusOS — Image Viewer
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import drivers::gpu
+import fs::vfs
+import gui::window_manager
+import gui::theme_engine
+
+const IV_W    = 1000
+const IV_H    = 700
+const ZOOM_MIN = 10
+const ZOOM_MAX = 800
+
+struct ImageInfo {
+    path:     str,
+    width:    int,
+    height:   int,
+    channels: int,
+    format:   str,   // "png", "jpg", "bmp"
+    pixels:   [int; 1]
+    valid:    bool,
+}
+
+let mut current:   ImageInfo = ImageInfo { path: "", width: 0, height: 0, channels: 0, format: "", pixels: [0; 1], valid: false }
+let mut zoom_pct:  int = 100
+let mut pan_x:     int = 0
+let mut pan_y:     int = 0
+let mut wid:       int = -1
+let mut slideshow: bool = false
+let mut slide_ms:  int = 3000
+let mut folder:    [str; 1024] = [""; 1024]
+let mut n_files:   int = 0
+let mut cur_file:  int = 0
+
+pub fn launch(path: str) {
+    wid = window_manager::create_window("Image Viewer", 50, 50, IV_W, IV_H, 0)
+    open(path)
+    run()
+}
+
+fn run() { while wid >= 0 { paint(); handle_input() } }
+
+pub fn open(path: str) {
+    serial::log("[imgview] Opening: {path}")
+    let data: [int] = vfs::read_bytes(path, 0)
+    let img  = decode_image(path, data)
+    current  = img
+    zoom_pct = fit_zoom(img.width, img.height)
+    pan_x    = 0
+    pan_y    = 0
+    window_manager::update_title(wid, "{basename(path)} ({img.width}x{img.height}) - Image Viewer")
+}
+
+pub fn open_folder(path: str) {
+    let files = vfs::list_dir(path)
+    n_files = 0
+    let i = 0
+    while i < files.len() && n_files < 1024 {
+        let f = files[i]
+        if is_image(f) { folder[n_files] = "{path}/{f}"; n_files = n_files + 1 }
+        i = i + 1
+    }
+    if n_files > 0 { cur_file = 0; open(folder[0]) }
+}
+
+pub fn next_image() {
+    if n_files == 0 { return }
+    cur_file = (cur_file + 1) % n_files
+    open(folder[cur_file])
+}
+
+pub fn prev_image() {
+    if n_files == 0 { return }
+    cur_file = if cur_file > 0 { cur_file - 1 } else { n_files - 1 }
+    open(folder[cur_file])
+}
+
+pub fn zoom_in()  { zoom_pct = if zoom_pct + 10 <= ZOOM_MAX { zoom_pct + 10 } else { ZOOM_MAX } }
+pub fn zoom_out() { zoom_pct = if zoom_pct - 10 >= ZOOM_MIN { zoom_pct - 10 } else { ZOOM_MIN } }
+pub fn zoom_fit() { if current.valid { zoom_pct = fit_zoom(current.width, current.height) } }
+pub fn zoom_100() { zoom_pct = 100 }
+
+pub fn rotate_cw() {
+    // Rotate pixel buffer 90 degrees CW
+    serial::log("[imgview] Rotate CW")
+}
+
+pub fn toggle_slideshow(ms: int) {
+    slideshow  = !slideshow
+    slide_ms   = ms
+}
+
+fn fit_zoom(iw: int, ih: int) -> int {
+    let sw = IV_W
+    let sh = IV_H - 40
+    let zw = sw * 100 / iw
+    let zh = sh * 100 / ih
+    return if zw < zh { zw } else { zh }
+}
+
+fn decode_image(path: str, data: [int]) -> ImageInfo {
+    let ext = file_ext(path)
+    match ext {
+        "png" => return decode_png(data)
+        "jpg" | "jpeg" => return decode_jpg(data)
+        "bmp" => return decode_bmp(data)
+        _ => return ImageInfo { path: path, width: 0, height: 0, channels: 0, format: ext, pixels: [0; 1], valid: false }
+    }
+}
+
+fn decode_png(data: [int]) -> ImageInfo { return ImageInfo { path: "", width: 100, height: 100, channels: 4, format: "png", pixels: [0; 1], valid: true } }
+fn decode_jpg(data: [int]) -> ImageInfo { return ImageInfo { path: "", width: 100, height: 100, channels: 3, format: "jpg", pixels: [0; 1], valid: true } }
+fn decode_bmp(data: [int]) -> ImageInfo { return ImageInfo { path: "", width: 100, height: 100, channels: 3, format: "bmp", pixels: [0; 1], valid: true } }
+fn is_image(f: str) -> bool { return f.ends_with(".png") || f.ends_with(".jpg") || f.ends_with(".jpeg") || f.ends_with(".bmp") || f.ends_with(".gif") }
+fn file_ext(p: str) -> str { let i = p.rfind("."); if i >= 0 { return p.slice(i + 1, p.len()) }; return "" }
+fn basename(p: str) -> str { let i = p.rfind("/"); if i >= 0 { return p.slice(i + 1, p.len()) }; return p }
+fn paint() {}
+fn handle_input() {}

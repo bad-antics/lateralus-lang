@@ -1,0 +1,128 @@
+// LateralusOS — WiFi Driver (nl80211-style interface)
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import drivers::pci
+import kernel::memory
+import kernel::semaphore
+
+const WIFI_MAX_SSID_LEN  = 32
+const WIFI_MAX_SCAN_RESULTS = 64
+const WIFI_STATE_DOWN    = 0
+const WIFI_STATE_SCAN    = 1
+const WIFI_STATE_AUTH    = 2
+const WIFI_STATE_ASSOC   = 3
+const WIFI_STATE_UP      = 4
+
+struct WifiNetwork {
+    ssid:     str,
+    bssid:    str,
+    channel:  int,
+    freq_mhz: int,
+    rssi:     int,
+    security: str,    // "open", "WPA2", "WPA3", "WEP"
+    quality:  int,    // 0..100
+}
+
+struct WifiState {
+    present:    bool,
+    state:      int,
+    iface:      str,
+    mac:        str,
+    ip:         str,
+    gateway:    str,
+    dns:        str,
+    ssid:       str,
+    scan_list:  [WifiNetwork; WIFI_MAX_SCAN_RESULTS],
+    scan_count: int,
+    scan_sem:   int,
+    tx_bytes:   int,
+    rx_bytes:   int,
+    tx_pkts:    int,
+    rx_pkts:    int,
+}
+
+let mut wifi = WifiState {
+    present: false, state: WIFI_STATE_DOWN, iface: "wlan0",
+    mac: "00:00:00:00:00:00", ip: "", gateway: "", dns: "",
+    ssid: "", scan_list: [WifiNetwork{}; WIFI_MAX_SCAN_RESULTS],
+    scan_count: 0, scan_sem: -1,
+    tx_bytes: 0, rx_bytes: 0, tx_pkts: 0, rx_pkts: 0,
+}
+
+pub fn init() {
+    serial::log("[wifi] Probing WiFi adapter")
+    let dev = pci::find_class(0x02, 0x80)   // Network, Other
+    if dev == nil {
+        serial::log("[wifi] No WiFi adapter found")
+        return
+    }
+    wifi.present  = true
+    wifi.scan_sem = semaphore::sem_create("wifi_scan", 0)
+    firmware_load()
+    serial::log("[wifi] WiFi adapter ready: {wifi.mac}")
+}
+
+pub fn scan() -> int {
+    if !wifi.present { return -1 }
+    wifi.state      = WIFI_STATE_SCAN
+    wifi.scan_count = 0
+    send_scan_cmd()
+    semaphore::sem_wait(wifi.scan_sem)
+    wifi.state = WIFI_STATE_DOWN
+    return wifi.scan_count
+}
+
+pub fn get_scan_results() -> [WifiNetwork] {
+    let results: [WifiNetwork] = []
+    let i = 0
+    while i < wifi.scan_count {
+        results.push(wifi.scan_list[i])
+        i = i + 1
+    }
+    return results
+}
+
+pub fn connect(ssid: str, password: str) -> bool {
+    if !wifi.present { return false }
+    serial::log("[wifi] Connecting to '{ssid}'")
+    wifi.state = WIFI_STATE_AUTH
+
+    if !authenticate(ssid, password) {
+        wifi.state = WIFI_STATE_DOWN
+        return false
+    }
+
+    wifi.state = WIFI_STATE_ASSOC
+    if !associate(ssid) {
+        wifi.state = WIFI_STATE_DOWN
+        return false
+    }
+
+    wifi.ssid  = ssid
+    wifi.state = WIFI_STATE_UP
+    serial::log("[wifi] Connected to '{ssid}'")
+    return true
+}
+
+pub fn disconnect() {
+    if wifi.state == WIFI_STATE_UP {
+        serial::log("[wifi] Disconnecting from '{wifi.ssid}'")
+        wifi.ssid  = ""
+        wifi.ip    = ""
+        wifi.state = WIFI_STATE_DOWN
+    }
+}
+
+pub fn is_connected() -> bool  { return wifi.state == WIFI_STATE_UP }
+pub fn get_ssid()     -> str   { return wifi.ssid }
+pub fn get_ip()       -> str   { return wifi.ip }
+pub fn get_rssi()     -> int   { return -65 }    // placeholder
+pub fn get_stats()    -> (int, int, int, int) {
+    return (wifi.tx_bytes, wifi.rx_bytes, wifi.tx_pkts, wifi.rx_pkts)
+}
+
+fn firmware_load()                            {}
+fn send_scan_cmd()                            {}
+fn authenticate(ssid: str, pass: str) -> bool { return true }
+fn associate(ssid: str)               -> bool { return true }

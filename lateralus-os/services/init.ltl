@@ -1,69 +1,92 @@
-// ═══════════════════════════════════════════════════════════════════════════
-// LateralusOS — Init System (PID 1)
-// ═══════════════════════════════════════════════════════════════════════════
+// LateralusOS — PID 1 (Init Process)
 // Copyright (c) 2025 bad-antics. All rights reserved.
-//
-// The first user-space process. Initializes system services and spawns
-// the login shell.
-// ═══════════════════════════════════════════════════════════════════════════
 
 import hal::serial
+import hal::cpu
 import drivers::vga
+import drivers::keyboard
+import drivers::mouse
+import drivers::sound
+import drivers::gpu
+import drivers::nvme
+import drivers::wifi
+import drivers::rtc
+import drivers::usb
 import drivers::pci
-import drivers::disk
-import drivers::network
 import fs::vfs
-import kernel::scheduler
-import kernel::ipc
-import shell::ltlsh
-import services::mesh_agent
-import services::crypto_svc
-import services::monitor
+import fs::ext4
+import fs::tmpfs
+import fs::procfs
+import fs::devfs
+import services::syslog
+import services::user_manager
+import services::network_manager
+import services::audio
+import services::power
+import services::pkg_manager
+import services::display
+import gui::theme_engine
+import gui::notifications
 
-// ── Boot phases ─────────────────────────────────────────────────────────
+const INIT_VERSION = "1.0.0"
+const EDITION      = "daily_driver"
 
 pub fn start() {
-    serial::log("[init] Init system starting (PID 1)")
+    serial::log("[init] LateralusOS init {INIT_VERSION} — {EDITION} edition")
 
-    // Phase 1: Enumerate hardware
-    serial::log("[init] Phase 1: Hardware enumeration")
-    pci::enumerate()
-    disk::init()
-    network::init()
+    // Phase 1: Logging
+    syslog::start()
+    syslog::log("init", "Boot phase 1: logging")
 
-    // Phase 2: Mount file systems
-    serial::log("[init] Phase 2: File systems")
+    // Phase 2: Filesystems
+    syslog::log("init", "Boot phase 2: filesystems")
     vfs::init()
-
-    // Phase 3: Start system services
-    serial::log("[init] Phase 3: System services")
-
-    // Crypto service (always start — needed for mesh security)
-    let crypto_pid = scheduler::spawn("crypto_svc", crypto_svc::start)
-    serial::log("[init] Crypto service started (PID={crypto_pid})")
-
-    // System monitor
-    let monitor_pid = scheduler::spawn("monitor", monitor::start)
-    serial::log("[init] System monitor started (PID={monitor_pid})")
-
-    // Mesh agent (if network is available)
-    if network::is_present() {
-        let mesh_pid = scheduler::spawn("mesh_agent", mesh_agent::start)
-        serial::log("[init] Mesh agent started (PID={mesh_pid})")
+    tmpfs::mount("/tmp")
+    tmpfs::mount("/run")
+    procfs::mount()
+    devfs::mount()
+    if nvme::is_present() {
+        ext4::mount("/dev/nvme0n1", "/")
+        ext4::mount("/dev/nvme0n1p2", "/home")
+        ext4::mount("/dev/nvme0n1p3", "/var")
     }
+    syslog::log("init", "Filesystems mounted")
 
-    // Phase 4: Start shell
-    serial::log("[init] Phase 4: Starting shell")
-    vga::set_color(vga::Color::LightGreen, vga::Color::Black)
-    vga::println("[init] System ready")
-    vga::set_color(vga::Color::White, vga::Color::Black)
-    vga::println("")
+    // Phase 3: System services
+    syslog::log("init", "Boot phase 3: system services")
+    user_manager::init()
+    power::init()
+    pkg_manager::init()
+    syslog::log("init", "Core services started")
 
-    let shell_pid = scheduler::spawn("ltlsh", ltlsh::start)
-    serial::log("[init] Shell started (PID={shell_pid})")
+    // Phase 4: Hardware
+    syslog::log("init", "Boot phase 4: hardware")
+    let dt = rtc::now()
+    syslog::log("init", "System time: {rtc::format_iso(dt)}")
+    usb::init()
+    mouse::init()
+    sound::init()
+    syslog::log("init", "Hardware initialized")
 
-    // Init stays alive to reap zombie processes
-    loop {
-        scheduler::wait_any()
-    }
+    // Phase 5: Network
+    syslog::log("init", "Boot phase 5: network")
+    network_manager::start()
+    syslog::log("init", "Network: {network_manager::get_state_str()} ip={ip_str()}")
+
+    // Phase 6: Audio daemon (background)
+    syslog::log("init", "Boot phase 6: audio")
+    spawn(fn() { audio::start() })
+
+    // Phase 7: GUI
+    syslog::log("init", "Boot phase 7: display server")
+    theme_engine::set_theme("catppuccin-mocha")
+    vga::println("LateralusOS ready")
+    display::start()    // This runs the main GUI event loop
+}
+
+fn ip_str() -> str {
+    let ip = network_manager::get_ip()
+    if ip == 0 { return "no ip" }
+    let a = (ip >> 24) & 0xFF; let b = (ip >> 16) & 0xFF; let c = (ip >> 8) & 0xFF; let d = ip & 0xFF
+    return "{a}.{b}.{c}.{d}"
 }

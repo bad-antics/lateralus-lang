@@ -1,0 +1,117 @@
+// LateralusOS — Notification Daemon
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import drivers::gpu
+import gui::theme_engine
+
+const NOTIF_MAX      = 16
+const NOTIF_W        = 320
+const NOTIF_H        = 72
+const NOTIF_PAD      = 8
+const NOTIF_X_OFFSET = 12
+const NOTIF_Y_START  = 60
+const NOTIF_GAP      = 8
+
+enum NotifPriority { Low, Normal, High, Critical }
+
+struct Notification {
+    id:       int,
+    summary:  str,
+    body:     str,
+    priority: NotifPriority,
+    timeout:  int,  // ms, -1 = persistent
+    elapsed:  int,
+    app_name: str,
+    actions:  [str; 4],
+    n_actions: int,
+    x:        int,
+    y:        int,
+    alpha:    int,   // 0-255 for fade
+    valid:    bool,
+}
+
+let mut notifs:   [Notification; NOTIF_MAX] = [Notification{}; NOTIF_MAX]
+let mut next_id:  int = 1
+let mut dirty:    bool = false
+
+pub fn init() {
+    serial::log("[notifications] Notification daemon started")
+}
+
+pub fn show(summary: str, timeout_ms: int) -> int {
+    return notify("system", summary, "", NotifPriority::Normal, timeout_ms)
+}
+
+pub fn notify(app: str, summary: str, body: str, priority: NotifPriority, timeout_ms: int) -> int {
+    let slot = find_free()
+    if slot < 0 {
+        // Evict oldest
+        slot = 0
+        let oldest = notifs[0].elapsed
+        let i = 1
+        while i < NOTIF_MAX { if notifs[i].valid && notifs[i].elapsed > oldest { oldest = notifs[i].elapsed; slot = i }; i = i + 1 }
+    }
+    let y = NOTIF_Y_START + slot * (NOTIF_H + NOTIF_GAP)
+    let scr_w = gpu::get_width()
+    notifs[slot] = Notification {
+        id: next_id, summary: summary, body: body, priority: priority,
+        timeout: timeout_ms, elapsed: 0, app_name: app,
+        actions: ["", "", "", ""], n_actions: 0,
+        x: scr_w - NOTIF_W - NOTIF_X_OFFSET, y: y,
+        alpha: 255, valid: true,
+    }
+    next_id = next_id + 1
+    dirty = true
+    serial::log("[notif] {app}: {summary}")
+    return notifs[slot].id
+}
+
+pub fn dismiss(id: int) {
+    let i = find_by_id(id)
+    if i >= 0 { notifs[i].valid = false; dirty = true; relayout() }
+}
+
+pub fn dismiss_all() {
+    let i = 0; while i < NOTIF_MAX { notifs[i].valid = false; i = i + 1 }
+    dirty = true
+}
+
+pub fn tick(ms: int) {
+    let i = 0
+    while i < NOTIF_MAX {
+        if notifs[i].valid && notifs[i].timeout > 0 {
+            notifs[i].elapsed = notifs[i].elapsed + ms
+            if notifs[i].elapsed >= notifs[i].timeout {
+                // Fade out
+                notifs[i].alpha = notifs[i].alpha - 15
+                if notifs[i].alpha <= 0 { notifs[i].valid = false; dirty = true; relayout() }
+                else { dirty = true }
+            }
+        }
+        i = i + 1
+    }
+}
+
+pub fn paint() {
+    if !dirty { return }
+    let theme = theme_engine::get_active()
+    let i = 0
+    while i < NOTIF_MAX {
+        if notifs[i].valid {
+            let bg = match notifs[i].priority {
+                NotifPriority::Critical => theme.red
+                NotifPriority::High     => theme.yellow
+                _                       => theme.surface1
+            }
+            gpu::fill_rect(notifs[i].x, notifs[i].y, NOTIF_W, NOTIF_H, bg)
+            gpu::fill_rect(notifs[i].x, notifs[i].y, 4, NOTIF_H, theme.accent)
+        }
+        i = i + 1
+    }
+    dirty = false
+}
+
+fn find_free() -> int { let i = 0; while i < NOTIF_MAX { if !notifs[i].valid { return i }; i = i + 1 }; return -1 }
+fn find_by_id(id: int) -> int { let i = 0; while i < NOTIF_MAX { if notifs[i].valid && notifs[i].id == id { return i }; i = i + 1 }; return -1 }
+fn relayout() { let y = NOTIF_Y_START; let i = 0; while i < NOTIF_MAX { if notifs[i].valid { notifs[i].y = y; y = y + NOTIF_H + NOTIF_GAP }; i = i + 1 } }

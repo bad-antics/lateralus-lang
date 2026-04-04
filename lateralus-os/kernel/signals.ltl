@@ -1,0 +1,148 @@
+// LateralusOS — POSIX-compatible Signal System
+// Copyright (c) 2025 bad-antics. All rights reserved.
+//
+// Full signal delivery, masking, handlers, and sigaction semantics.
+
+import hal::serial
+import kernel::scheduler
+import kernel::panic
+
+const SIG_DFL = 0
+const SIG_IGN = 1
+const NSIG     = 32
+
+const SIGHUP    = 1
+const SIGINT    = 2
+const SIGQUIT   = 3
+const SIGILL    = 4
+const SIGTRAP   = 5
+const SIGABRT   = 6
+const SIGBUS    = 7
+const SIGFPE    = 8
+const SIGKILL   = 9
+const SIGUSR1   = 10
+const SIGSEGV   = 11
+const SIGUSR2   = 12
+const SIGPIPE   = 13
+const SIGALRM   = 14
+const SIGTERM   = 15
+const SIGCHLD   = 17
+const SIGCONT   = 18
+const SIGSTOP   = 19
+const SIGTSTP   = 20
+const SIGWINCH  = 28
+
+struct SigAction {
+    handler:  fn(int),   // signal handler function
+    mask:     int,       // signals to block during handler
+    flags:    int,       // SA_RESTART, SA_SIGINFO, etc.
+    dispostn: int,       // SIG_DFL or SIG_IGN
+}
+
+struct SigPending {
+    signals:  int,       // bitmask of pending signals
+    queue:    [int; 32], // queued signal values (RT signals)
+    count:    int,
+}
+
+struct SigTable {
+    actions:  [SigAction; NSIG],
+    pending:  SigPending,
+    blocked:  int,       // bitmask of blocked signals
+    altstack: int,       // alternate signal stack address
+    altstack_size: int,
+}
+
+let mut sig_tables: [SigTable; 256] = [SigTable{}; 256]
+
+pub fn init_process_signals(pid: int) {
+    let i = 0
+    while i < NSIG {
+        sig_tables[pid].actions[i] = SigAction {
+            handler:  default_handler,
+            mask:     0,
+            flags:    0,
+            dispostn: SIG_DFL,
+        }
+        i = i + 1
+    }
+    sig_tables[pid].pending.signals = 0
+    sig_tables[pid].pending.count   = 0
+    sig_tables[pid].blocked         = 0
+}
+
+pub fn sigaction(pid: int, signum: int, action: SigAction) -> int {
+    if signum <= 0 || signum >= NSIG { return -1 }
+    if signum == SIGKILL || signum == SIGSTOP {
+        return -1  // cannot catch or ignore these
+    }
+    sig_tables[pid].actions[signum] = action
+    return 0
+}
+
+pub fn kill(target_pid: int, signum: int) -> int {
+    if signum <= 0 || signum >= NSIG { return -1 }
+    sig_tables[target_pid].pending.signals = sig_tables[target_pid].pending.signals | (1 << signum)
+    serial::log("[signal] kill(pid={target_pid}, sig={signum})")
+    return 0
+}
+
+pub fn deliver_pending(pid: int) {
+    let pending = sig_tables[pid].pending.signals & ~sig_tables[pid].blocked
+    if pending == 0 { return }
+
+    let signum = 1
+    while signum < NSIG {
+        if pending & (1 << signum) != 0 {
+            sig_tables[pid].pending.signals = sig_tables[pid].pending.signals & ~(1 << signum)
+            let action = sig_tables[pid].actions[signum]
+
+            if action.dispostn == SIG_IGN {
+                signum = signum + 1
+                continue
+            }
+
+            if action.dispostn == SIG_DFL {
+                apply_default(pid, signum)
+            } else {
+                (action.handler)(signum)
+            }
+        }
+        signum = signum + 1
+    }
+}
+
+fn apply_default(pid: int, signum: int) {
+    match signum {
+        SIGKILL | SIGTERM | SIGHUP | SIGINT | SIGQUIT | SIGPIPE | SIGALRM => {
+            serial::log("[signal] Default: terminate pid={pid} sig={signum}")
+            scheduler::exit_pid(pid, signum + 128)
+        }
+        SIGSTOP | SIGTSTP => {
+            serial::log("[signal] Default: stop pid={pid}")
+            scheduler::stop_process(pid)
+        }
+        SIGCONT => {
+            serial::log("[signal] Default: continue pid={pid}")
+            scheduler::continue_process(pid)
+        }
+        SIGSEGV | SIGBUS | SIGFPE | SIGILL => {
+            serial::log("[signal] Default: core dump pid={pid} sig={signum}")
+            scheduler::exit_pid(pid, signum + 128)
+        }
+        _ => {}
+    }
+}
+
+pub fn sigmask(how: str, newmask: int, pid: int) -> int {
+    let old = sig_tables[pid].blocked
+    match how {
+        "SIG_BLOCK"   => { sig_tables[pid].blocked = old | newmask }
+        "SIG_UNBLOCK" => { sig_tables[pid].blocked = old & ~newmask }
+        "SIG_SETMASK" => { sig_tables[pid].blocked = newmask }
+        _ => return -1
+    }
+    return old
+}
+
+fn default_handler(signum: int) {}

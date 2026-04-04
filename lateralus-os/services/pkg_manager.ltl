@@ -1,0 +1,151 @@
+// LateralusOS — LTL Package Manager
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import net::http
+import net::dns
+import fs::vfs
+import services::syslog
+
+const PKG_REPO_URL    = "https://packages.lateralus.os/repo"
+const PKG_CACHE_DIR   = "/var/cache/ltlpkg"
+const PKG_DB_PATH     = "/var/lib/ltlpkg/packages.db"
+const PKG_INSTALL_DIR = "/usr"
+const MAX_PACKAGES    = 2048
+const MAX_DEPENDS     = 32
+
+struct Package {
+    name:     str,
+    version:  str,
+    arch:     str,
+    size:     int,
+    desc:     str,
+    url:      str,
+    checksum: str,
+    depends:  [str; MAX_DEPENDS],
+    n_deps:   int,
+    installed: bool,
+    install_date: int,
+    valid:    bool,
+}
+
+struct PkgDB {
+    packages: [Package; MAX_PACKAGES],
+    n_pkgs:   int,
+    last_update: int,
+}
+
+let mut db: PkgDB = PkgDB { packages: [Package{}; MAX_PACKAGES], n_pkgs: 0, last_update: 0 }
+
+pub fn init() {
+    load_db()
+    serial::log("[ltlpkg] Package manager initialized, {db.n_pkgs} packages in DB")
+}
+
+pub fn update() -> bool {
+    serial::log("[ltlpkg] Updating package list from {PKG_REPO_URL}")
+    syslog::log("ltlpkg", "Package list update started")
+    let resp = http::get("{PKG_REPO_URL}/packages.json")
+    if resp.status != 200 {
+        serial::log("[ltlpkg] Failed to fetch package list: HTTP {resp.status}")
+        return false
+    }
+    parse_package_list(resp.body)
+    save_db()
+    serial::log("[ltlpkg] Update complete, {db.n_pkgs} packages available")
+    return true
+}
+
+pub fn install(name: str) -> bool {
+    let pi = find_package(name)
+    if pi < 0 {
+        serial::log("[ltlpkg] Package not found: {name}")
+        return false
+    }
+    if db.packages[pi].installed {
+        serial::log("[ltlpkg] Already installed: {name}")
+        return true
+    }
+
+    // Resolve dependencies
+    let i = 0
+    while i < db.packages[pi].n_deps {
+        let dep = db.packages[pi].depends[i]
+        if !install(dep) {
+            serial::log("[ltlpkg] Failed to install dependency: {dep}")
+            return false
+        }
+        i = i + 1
+    }
+
+    // Download
+    serial::log("[ltlpkg] Downloading {name} {db.packages[pi].version}")
+    let resp = http::get(db.packages[pi].url)
+    if resp.status != 200 {
+        serial::log("[ltlpkg] Download failed: HTTP {resp.status}")
+        return false
+    }
+
+    // Extract and install
+    if !extract_package(name, resp.body) { return false }
+    db.packages[pi].installed = true
+    save_db()
+    syslog::log("ltlpkg", "Installed {name} {db.packages[pi].version}")
+    serial::log("[ltlpkg] Installed: {name} {db.packages[pi].version}")
+    return true
+}
+
+pub fn remove(name: str) -> bool {
+    let pi = find_package(name)
+    if pi < 0 || !db.packages[pi].installed { return false }
+    serial::log("[ltlpkg] Removing {name}")
+    // Remove files
+    remove_package_files(name)
+    db.packages[pi].installed = false
+    save_db()
+    syslog::log("ltlpkg", "Removed {name}")
+    return true
+}
+
+pub fn search(query: str) -> [Package] {
+    let results: [Package] = []
+    let i = 0
+    while i < MAX_PACKAGES {
+        if db.packages[i].valid && (db.packages[i].name.contains(query) || db.packages[i].desc.contains(query)) {
+            results.push(db.packages[i])
+        }
+        i = i + 1
+    }
+    return results
+}
+
+pub fn list_installed() -> [Package] {
+    let results: [Package] = []
+    let i = 0
+    while i < MAX_PACKAGES {
+        if db.packages[i].valid && db.packages[i].installed { results.push(db.packages[i]) }
+        i = i + 1
+    }
+    return results
+}
+
+pub fn upgrade_all() -> int {
+    let count = 0
+    let i = 0
+    while i < MAX_PACKAGES {
+        if db.packages[i].valid && db.packages[i].installed {
+            let upgraded = install(db.packages[i].name)
+            if upgraded { count = count + 1 }
+        }
+        i = i + 1
+    }
+    serial::log("[ltlpkg] Upgraded {count} packages")
+    return count
+}
+
+fn find_package(name: str) -> int { let i = 0; while i < MAX_PACKAGES { if db.packages[i].valid && db.packages[i].name == name { return i }; i = i + 1 }; return -1 }
+fn load_db() {}
+fn save_db() {}
+fn parse_package_list(json: str) {}
+fn extract_package(name: str, data: str) -> bool { return true }
+fn remove_package_files(name: str) {}

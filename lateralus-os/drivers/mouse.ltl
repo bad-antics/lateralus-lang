@@ -1,0 +1,90 @@
+// LateralusOS — PS/2 & USB Mouse Driver
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::interrupts
+import hal::serial
+
+const MOUSE_IRQ        = 12
+const MOUSE_DATA_PORT  = 0x60
+const MOUSE_CMD_PORT   = 0x64
+const MOUSE_PACKET_SIZE = 3
+
+struct MouseState {
+    x:        int,
+    y:        int,
+    buttons:  int,      // bitmask: bit0=left, bit1=right, bit2=middle
+    dx:       int,
+    dy:       int,
+    scroll:   int,
+    packet:   [int; 4],
+    pkt_idx:  int,
+    enabled:  bool,
+}
+
+let mut mouse = MouseState {
+    x: 400, y: 300, buttons: 0, dx: 0, dy: 0, scroll: 0,
+    packet: [0; 4], pkt_idx: 0, enabled: false,
+}
+
+pub fn init() {
+    serial::log("[mouse] Initializing PS/2 mouse")
+    ps2_send_cmd(0xA8)           // Enable auxiliary device
+    ps2_send_aux(0xF4)           // Enable data reporting
+    ps2_send_aux(0xE8)           // Set resolution
+    ps2_send_aux(0x02)           // 4 counts/mm
+    ps2_send_aux(0xF3)           // Set sample rate
+    ps2_send_aux(80)             // 80 samples/sec
+    interrupts::register_handler(MOUSE_IRQ, irq_handler)
+    mouse.enabled = true
+    serial::log("[mouse] Mouse ready at (400, 300)")
+}
+
+fn irq_handler() {
+    let byte = inb(MOUSE_DATA_PORT)
+    mouse.packet[mouse.pkt_idx] = byte
+    mouse.pkt_idx = mouse.pkt_idx + 1
+
+    if mouse.pkt_idx >= MOUSE_PACKET_SIZE {
+        process_packet()
+        mouse.pkt_idx = 0
+    }
+}
+
+fn process_packet() {
+    let flags = mouse.packet[0]
+    let dx    = mouse.packet[1]
+    let dy    = mouse.packet[2]
+
+    // Sign extension
+    let sdx = if flags & 0x10 != 0 { dx | (-256) } else { dx }
+    let sdy = if flags & 0x20 != 0 { dy | (-256) } else { dy }
+
+    // Overflow check
+    if flags & 0x40 != 0 || flags & 0x80 != 0 { return }
+
+    mouse.dx      = sdx
+    mouse.dy      = -sdy   // Y axis inverted
+    mouse.buttons = flags & 0x07
+
+    mouse.x = clamp(mouse.x + sdx, 0, 1919)
+    mouse.y = clamp(mouse.y - sdy, 0, 1079)
+}
+
+pub fn get_state() -> (int, int, int) { return (mouse.x, mouse.y, mouse.buttons) }
+pub fn get_delta()  -> (int, int)     { return (mouse.dx, mouse.dy) }
+pub fn is_enabled() -> bool           { return mouse.enabled }
+
+pub fn set_bounds(w: int, h: int) {
+    mouse.x = clamp(mouse.x, 0, w - 1)
+    mouse.y = clamp(mouse.y, 0, h - 1)
+}
+
+fn clamp(v: int, lo: int, hi: int) -> int {
+    if v < lo { return lo }
+    if v > hi { return hi }
+    return v
+}
+
+fn inb(port: int) -> int       { return 0 }   // backed by HAL
+fn ps2_send_cmd(cmd: int)      {}
+fn ps2_send_aux(cmd: int)      {}

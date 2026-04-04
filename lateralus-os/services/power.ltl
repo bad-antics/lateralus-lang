@@ -1,0 +1,118 @@
+// LateralusOS — Power Manager
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import hal::cpu
+
+const ACPI_PM1A_CNT    = 0xB004
+const ACPI_SLP_TYP_S5  = 7
+const ACPI_SLP_EN      = 0x2000
+const BATTERY_PATH     = "/sys/class/power_supply/BAT0"
+const AC_PATH          = "/sys/class/power_supply/AC"
+
+const GOVERNOR_PERFORMANCE  = 0
+const GOVERNOR_POWERSAVE    = 1
+const GOVERNOR_ONDEMAND     = 2
+const GOVERNOR_CONSERVATIVE = 3
+
+enum PowerEvent { ACPlugged, ACUnplugged, LowBattery, CriticalBattery, LidClose, LidOpen, SuspendRequest, ShutdownRequest }
+
+struct BatteryInfo {
+    present:     bool,
+    capacity:    int,    // 0-100%
+    charging:    bool,
+    ac_online:   bool,
+    voltage_mv:  int,
+    current_ma:  int,
+    time_left:   int,    // minutes
+    health:      int,    // 0-100%
+    cycle_count: int,
+}
+
+struct PowerState {
+    battery:   BatteryInfo,
+    governor:  int,
+    cpu_freq:  int,
+    min_freq:  int,
+    max_freq:  int,
+    screen_on: bool,
+    dim_timer: int,
+    idle_timer: int,
+    suspend_on_lid: bool,
+}
+
+let mut pwr = PowerState {
+    battery: BatteryInfo { present: false, capacity: 100, charging: false, ac_online: true, voltage_mv: 0, current_ma: 0, time_left: -1, health: 100, cycle_count: 0 },
+    governor: GOVERNOR_ONDEMAND,
+    cpu_freq: 3600, min_freq: 800, max_freq: 3600,
+    screen_on: true, dim_timer: 120, idle_timer: 300,
+    suspend_on_lid: true,
+}
+
+pub fn init() {
+    read_battery()
+    if pwr.battery.present {
+        serial::log("[power] Battery: {pwr.battery.capacity}% {if pwr.battery.charging { 'charging' } else { 'discharging' }}")
+    } else {
+        serial::log("[power] No battery, AC power")
+    }
+    set_governor(GOVERNOR_ONDEMAND)
+}
+
+pub fn tick(seconds: int) {
+    read_battery()
+    if pwr.battery.present && !pwr.battery.ac_online {
+        if pwr.battery.capacity <= 5  { handle_event(PowerEvent::CriticalBattery) }
+        if pwr.battery.capacity <= 15 { handle_event(PowerEvent::LowBattery) }
+        if pwr.governor != GOVERNOR_POWERSAVE { set_governor(GOVERNOR_POWERSAVE) }
+    } else {
+        if pwr.governor == GOVERNOR_POWERSAVE { set_governor(GOVERNOR_ONDEMAND) }
+    }
+}
+
+pub fn shutdown() {
+    serial::log("[power] System shutdown")
+    sync_filesystems()
+    // ACPI S5 power-off
+    cpu::outw(ACPI_PM1A_CNT, (ACPI_SLP_TYP_S5 << 10) | ACPI_SLP_EN)
+    cpu::halt()
+}
+
+pub fn reboot() {
+    serial::log("[power] System reboot")
+    sync_filesystems()
+    cpu::outb(0x64, 0xFE)   // PS/2 controller reset
+    cpu::halt()
+}
+
+pub fn suspend() {
+    serial::log("[power] Suspending")
+    cpu::save_state()
+    cpu::halt()
+}
+
+pub fn set_governor(gov: int) {
+    pwr.governor = gov
+    match gov {
+        GOVERNOR_PERFORMANCE  => { pwr.cpu_freq = pwr.max_freq; serial::log("[power] Governor: performance") }
+        GOVERNOR_POWERSAVE    => { pwr.cpu_freq = pwr.min_freq; serial::log("[power] Governor: powersave") }
+        GOVERNOR_ONDEMAND     => { serial::log("[power] Governor: ondemand") }
+        _                     => {}
+    }
+}
+
+pub fn get_battery() -> BatteryInfo { return pwr.battery }
+pub fn is_on_ac()    -> bool        { return pwr.battery.ac_online || !pwr.battery.present }
+pub fn get_governor()-> int         { return pwr.governor }
+
+fn handle_event(ev: PowerEvent) {
+    match ev {
+        PowerEvent::LowBattery      => serial::log("[power] Low battery warning: {pwr.battery.capacity}%")
+        PowerEvent::CriticalBattery => { serial::log("[power] Critical battery: initiating shutdown"); shutdown() }
+        PowerEvent::LidClose        => { if pwr.suspend_on_lid { suspend() } }
+        _                           => {}
+    }
+}
+
+fn read_battery() {}
+fn sync_filesystems() {}

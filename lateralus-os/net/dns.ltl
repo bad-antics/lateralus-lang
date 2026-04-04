@@ -1,0 +1,112 @@
+// LateralusOS — DNS Client (RFC 1035)
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import net::udp
+import net::ip
+
+const DNS_PORT     = 53
+const DNS_TIMEOUT  = 5000
+const DNS_RETRIES  = 3
+const DNS_CACHE_SIZE = 256
+
+struct DNSCacheEntry {
+    name:    str,
+    ip:      int,
+    ttl:     int,
+    expires: int,
+    valid:   bool,
+}
+
+struct DNSQuery {
+    id:      int,
+    name:    str,
+    type_q:  int,
+    class_q: int,
+}
+
+struct DNSAnswer {
+    name:   str,
+    type_a: int,
+    class_a: int,
+    ttl:    int,
+    data:   int,   // IPv4 address for A records
+}
+
+let mut cache:      [DNSCacheEntry; DNS_CACHE_SIZE] = [DNSCacheEntry{}; DNS_CACHE_SIZE]
+let mut server_ip:  int = 0
+let mut query_id:   int = 1
+let mut sock_fd:    int = -1
+
+pub fn init(server: int) {
+    server_ip = server
+    sock_fd   = udp::socket()
+    serial::log("[dns] Initialized, server={ip::ip_to_str(server)}")
+}
+
+pub fn resolve(name: str) -> int {
+    // Check cache first
+    let cached = cache_lookup(name)
+    if cached != 0 {
+        serial::log("[dns] Cache hit: {name} = {ip::ip_to_str(cached)}")
+        return cached
+    }
+
+    // Send query
+    let retry = 0
+    while retry < DNS_RETRIES {
+        let ip = send_query(name)
+        if ip != 0 {
+            cache_store(name, ip, 300)
+            return ip
+        }
+        retry = retry + 1
+    }
+    serial::log("[dns] Failed to resolve: {name}")
+    return 0
+}
+
+pub fn resolve_reverse(ip: int) -> str {
+    let a = (ip >> 24) & 0xFF
+    let b = (ip >> 16) & 0xFF
+    let c = (ip >> 8)  & 0xFF
+    let d = ip & 0xFF
+    return resolve_ptr("{d}.{c}.{b}.{a}.in-addr.arpa")
+}
+
+fn send_query(name: str) -> int {
+    let qid  = query_id
+    query_id = query_id + 1
+    let pkt = build_query(qid, name, 1, 1)
+    udp::sendto(sock_fd, pkt, pkt.len(), server_ip, DNS_PORT)
+    let buf: [int; 512] = [0; 512]
+    let (n, _, _) = udp::recvfrom(sock_fd, buf, 512)
+    if n > 0 { return parse_response(buf, n, name) }
+    return 0
+}
+
+fn cache_lookup(name: str) -> int {
+    let i = 0
+    while i < DNS_CACHE_SIZE {
+        if cache[i].valid && cache[i].name == name { return cache[i].ip }
+        i = i + 1
+    }
+    return 0
+}
+
+fn cache_store(name: str, ip_addr: int, ttl: int) {
+    let i = 0
+    while i < DNS_CACHE_SIZE {
+        if !cache[i].valid {
+            cache[i] = DNSCacheEntry { name: name, ip: ip_addr, ttl: ttl, expires: 0, valid: true }
+            return
+        }
+        i = i + 1
+    }
+}
+
+pub fn flush_cache() { let i = 0; while i < DNS_CACHE_SIZE { cache[i].valid = false; i = i + 1 } }
+
+fn build_query(id: int, name: str, type_q: int, class_q: int) -> [int] { return [] }
+fn parse_response(data: [int], len: int, name: str) -> int { return 0 }
+fn resolve_ptr(arpa: str) -> str { return "" }

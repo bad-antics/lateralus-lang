@@ -1,0 +1,102 @@
+// LateralusOS — Video Player
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import services::audio
+import drivers::gpu
+import fs::vfs
+import gui::window_manager
+import gui::notifications
+
+const VIDEO_W    = 1024
+const VIDEO_H    = 640
+const FPS_TARGET = 30
+const FRAME_MS   = 1000 / FPS_TARGET
+
+struct VideoInfo {
+    path:     str,
+    width:    int,
+    height:   int,
+    fps:      float,
+    duration: int,    // seconds
+    codec:    str,
+    audio_codec: str,
+    valid:    bool,
+}
+
+enum VidState { Stopped, Playing, Paused }
+
+let mut info:       VideoInfo = VideoInfo { path: "", width: 0, height: 0, fps: 0.0, duration: 0, codec: "", audio_codec: "", valid: false }
+let mut state:      VidState  = VidState::Stopped
+let mut position:   int = 0    // milliseconds
+let mut volume:     int = 80
+let mut stream_id:  int = -1
+let mut wid:        int = -1
+let mut fullscreen: bool = false
+
+pub fn launch(path: str) {
+    wid = window_manager::create_window("Video Player", 40, 40, VIDEO_W, VIDEO_H, 0)
+    stream_id = audio::open_stream(0, "video")
+    open(path)
+    run()
+}
+
+fn run() { while wid >= 0 { if state == VidState::Playing { decode_frame(); render_frame() }; paint_controls(); handle_input() } }
+
+pub fn open(path: str) {
+    info = probe_video(path)
+    if info.valid {
+        window_manager::update_title(wid, "{basename(path)} - Video Player")
+        serial::log("[video] Opened {path}: {info.width}x{info.height} {info.fps}fps {info.codec}")
+    }
+}
+
+pub fn play() {
+    if !info.valid { return }
+    state = VidState::Playing
+    audio::mute_stream(stream_id, false)
+    notifications::show("Playing: {basename(info.path)}", 2000)
+}
+
+pub fn pause() {
+    if state == VidState::Playing { state = VidState::Paused; audio::mute_stream(stream_id, true) }
+    else if state == VidState::Paused { state = VidState::Playing; audio::mute_stream(stream_id, false) }
+}
+
+pub fn stop() {
+    state    = VidState::Stopped
+    position = 0
+    audio::mute_stream(stream_id, true)
+}
+
+pub fn seek(ms: int) {
+    position = if ms < 0 { 0 } else if ms > info.duration * 1000 { info.duration * 1000 } else { ms }
+}
+
+pub fn set_volume(vol: int) {
+    volume = vol
+    audio::set_stream_volume(stream_id, vol)
+}
+
+pub fn toggle_fullscreen() {
+    fullscreen = !fullscreen
+    if fullscreen { window_manager::maximize_window(wid) }
+    else           { window_manager::resize_window(wid, VIDEO_W, VIDEO_H) }
+}
+
+fn decode_frame() {
+    position = position + FRAME_MS
+    if position >= info.duration * 1000 { stop() }
+}
+
+fn render_frame() {
+    gpu::fill_rect(0, 0, info.width, info.height, 0xFF000000)
+}
+
+fn probe_video(path: str) -> VideoInfo {
+    return VideoInfo { path: path, width: 1280, height: 720, fps: 30.0, duration: 0, codec: "h264", audio_codec: "aac", valid: true }
+}
+
+fn basename(p: str) -> str { let i = p.rfind("/"); if i >= 0 { return p.slice(i + 1, p.len()) }; return p }
+fn paint_controls() {}
+fn handle_input() {}

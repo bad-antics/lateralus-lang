@@ -1,0 +1,110 @@
+// LateralusOS — UDP Stack
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import net::ip
+import kernel::semaphore
+
+const UDP_MAX_SOCKETS = 128
+const UDP_BUF_SIZE    = 8192
+const UDP_HDR_LEN     = 8
+
+struct UDPPacket {
+    src_ip:   int,
+    src_port: int,
+    dst_ip:   int,
+    dst_port: int,
+    data:     [int; 1472],
+    length:   int,
+}
+
+struct UDPSocket {
+    fd:        int,
+    local_ip:  int,
+    local_port: int,
+    bound:     bool,
+    connected: bool,
+    peer_ip:   int,
+    peer_port: int,
+    rx_queue:  [UDPPacket; 16],
+    rx_head:   int,
+    rx_tail:   int,
+    rx_count:  int,
+    rx_sem:    int,
+    valid:     bool,
+}
+
+let mut sockets:  [UDPSocket; UDP_MAX_SOCKETS] = [UDPSocket{}; UDP_MAX_SOCKETS]
+
+pub fn socket() -> int {
+    let i = 0
+    while i < UDP_MAX_SOCKETS {
+        if !sockets[i].valid {
+            sockets[i] = UDPSocket {
+                fd: i, local_ip: 0, local_port: 0, bound: false, connected: false,
+                peer_ip: 0, peer_port: 0,
+                rx_queue: [UDPPacket{}; 16], rx_head: 0, rx_tail: 0, rx_count: 0,
+                rx_sem: semaphore::sem_create("udp_rx", 0),
+                valid: true,
+            }
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+pub fn bind(fd: int, port: int) -> int {
+    if !valid_fd(fd) { return -1 }
+    sockets[fd].local_ip   = ip::get_local_ip()
+    sockets[fd].local_port = port
+    sockets[fd].bound      = true
+    return 0
+}
+
+pub fn sendto(fd: int, data: [int], len: int, dst_ip: int, dst_port: int) -> int {
+    if !valid_fd(fd) { return -1 }
+    if !sockets[fd].bound { bind(fd, alloc_port()) }
+    let hdr_and_data: [int] = []
+    let src_port = sockets[fd].local_port
+    let total    = UDP_HDR_LEN + len
+    ip::send_packet(ip::get_local_ip(), dst_ip, 17, hdr_and_data, total)
+    return len
+}
+
+pub fn recvfrom(fd: int, buf: [int], max: int) -> (int, int, int) {
+    if !valid_fd(fd) { return (0, 0, 0) }
+    while sockets[fd].rx_count == 0 {
+        semaphore::sem_wait(sockets[fd].rx_sem)
+    }
+    let pkt = sockets[fd].rx_queue[sockets[fd].rx_head]
+    sockets[fd].rx_head  = (sockets[fd].rx_head + 1) % 16
+    sockets[fd].rx_count = sockets[fd].rx_count - 1
+    let n = if pkt.length < max { pkt.length } else { max }
+    let i = 0
+    while i < n { buf[i] = pkt.data[i]; i = i + 1 }
+    return (n, pkt.src_ip, pkt.src_port)
+}
+
+pub fn deliver(src_ip: int, src_port: int, dst_port: int, data: [int], len: int) {
+    let i = 0
+    while i < UDP_MAX_SOCKETS {
+        if sockets[i].valid && sockets[i].local_port == dst_port {
+            if sockets[i].rx_count < 16 {
+                let pkt = UDPPacket { src_ip: src_ip, src_port: src_port, dst_ip: ip::get_local_ip(), dst_port: dst_port, data: [0; 1472], length: len }
+                let j = 0
+                while j < len && j < 1472 { pkt.data[j] = data[j]; j = j + 1 }
+                sockets[i].rx_queue[sockets[i].rx_tail] = pkt
+                sockets[i].rx_tail  = (sockets[i].rx_tail + 1) % 16
+                sockets[i].rx_count = sockets[i].rx_count + 1
+                semaphore::sem_post(sockets[i].rx_sem)
+            }
+        }
+        i = i + 1
+    }
+}
+
+pub fn close(fd: int) { if valid_fd(fd) { sockets[fd].valid = false } }
+
+fn valid_fd(fd: int) -> bool { return fd >= 0 && fd < UDP_MAX_SOCKETS && sockets[fd].valid }
+fn alloc_port() -> int { return 49152 + 100 }

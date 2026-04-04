@@ -1,0 +1,114 @@
+// LateralusOS — GPU Framebuffer Driver (VESA/GOP + basic 2D accel)
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import kernel::memory
+import drivers::pci
+
+const DEFAULT_WIDTH  = 1920
+const DEFAULT_HEIGHT = 1080
+const DEFAULT_BPP    = 32
+const MAX_MODES      = 32
+
+struct VideoMode {
+    width:  int,
+    height: int,
+    bpp:    int,
+    pitch:  int,   // bytes per scanline
+}
+
+struct Framebuffer {
+    base:   int,   // physical address
+    virt:   int,   // virtual (mapped) address
+    width:  int,
+    height: int,
+    bpp:    int,
+    pitch:  int,
+    size:   int,
+}
+
+struct GPUState {
+    fb:      Framebuffer,
+    modes:   [VideoMode; MAX_MODES],
+    n_modes: int,
+    accel:   bool,
+    dirty:   bool,
+    cursor_x: int,
+    cursor_y: int,
+}
+
+let mut gpu = GPUState {
+    fb: Framebuffer { base: 0, virt: 0, width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT, bpp: DEFAULT_BPP, pitch: DEFAULT_WIDTH * 4, size: DEFAULT_WIDTH * DEFAULT_HEIGHT * 4 },
+    modes: [VideoMode{}; MAX_MODES],
+    n_modes: 0,
+    accel: false,
+    dirty: false,
+    cursor_x: 0,
+    cursor_y: 0,
+}
+
+pub fn init() {
+    serial::log("[gpu] Initializing framebuffer")
+    gpu.fb.base  = get_gop_framebuffer()
+    gpu.fb.virt  = memory::map_physical(gpu.fb.base, gpu.fb.size)
+    clear(0x000000)
+    serial::log("[gpu] Framebuffer at 0x{gpu.fb.virt} ({DEFAULT_WIDTH}x{DEFAULT_HEIGHT}x{DEFAULT_BPP})")
+}
+
+pub fn put_pixel(x: int, y: int, color: int) {
+    if x < 0 || x >= gpu.fb.width || y < 0 || y >= gpu.fb.height { return }
+    let offset = y * gpu.fb.pitch + x * (gpu.fb.bpp / 8)
+    write32(gpu.fb.virt + offset, color)
+    gpu.dirty = true
+}
+
+pub fn get_pixel(x: int, y: int) -> int {
+    if x < 0 || x >= gpu.fb.width || y < 0 || y >= gpu.fb.height { return 0 }
+    let offset = y * gpu.fb.pitch + x * (gpu.fb.bpp / 8)
+    return read32(gpu.fb.virt + offset)
+}
+
+pub fn fill_rect(x: int, y: int, w: int, h: int, color: int) {
+    let row = 0
+    while row < h {
+        let col = 0
+        while col < w {
+            put_pixel(x + col, y + row, color)
+            col = col + 1
+        }
+        row = row + 1
+    }
+}
+
+pub fn blit(src: int, src_pitch: int, dx: int, dy: int, w: int, h: int) {
+    let row = 0
+    while row < h {
+        let src_off  = row * src_pitch
+        let dst_off  = (dy + row) * gpu.fb.pitch + dx * 4
+        memcpy(gpu.fb.virt + dst_off, src + src_off, w * 4)
+        row = row + 1
+    }
+    gpu.dirty = true
+}
+
+pub fn clear(color: int) { fill_rect(0, 0, gpu.fb.width, gpu.fb.height, color) }
+
+pub fn scroll_up(lines: int) {
+    let bytes_per_line = gpu.fb.pitch
+    let src = gpu.fb.virt + lines * bytes_per_line
+    let dst = gpu.fb.virt
+    let size = (gpu.fb.height - lines) * bytes_per_line
+    memmove(dst, src, size)
+    fill_rect(0, gpu.fb.height - lines, gpu.fb.width, lines, 0x000000)
+}
+
+pub fn get_width()  -> int { return gpu.fb.width }
+pub fn get_height() -> int { return gpu.fb.height }
+pub fn get_pitch()  -> int { return gpu.fb.pitch }
+pub fn get_virt()   -> int { return gpu.fb.virt }
+
+fn get_gop_framebuffer() -> int { return 0xFD000000 }
+fn write32(addr: int, val: int)        {}
+fn read32(addr: int) -> int            { return 0 }
+fn memcpy(dst: int, src: int, n: int)  {}
+fn memmove(dst: int, src: int, n: int) {}

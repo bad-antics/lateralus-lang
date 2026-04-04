@@ -1,0 +1,95 @@
+// LateralusOS — Real-Time Clock (x86 CMOS RTC)
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+
+const RTC_INDEX = 0x70
+const RTC_DATA  = 0x71
+
+const RTC_SEC   = 0x00
+const RTC_MIN   = 0x02
+const RTC_HOUR  = 0x04
+const RTC_WDAY  = 0x06
+const RTC_MDAY  = 0x07
+const RTC_MON   = 0x08
+const RTC_YEAR  = 0x09
+const RTC_STATUS_A = 0x0A
+const RTC_STATUS_B = 0x0B
+
+struct DateTime {
+    year:   int,
+    month:  int,
+    day:    int,
+    hour:   int,
+    minute: int,
+    second: int,
+    wday:   int,
+    epoch:  int,
+}
+
+let mut cached_time = DateTime { year: 2025, month: 1, day: 1, hour: 0, minute: 0, second: 0, wday: 3, epoch: 0 }
+let mut epoch_base:  int = 0
+
+pub fn init() {
+    serial::log("[rtc] Reading CMOS RTC")
+    let dt = read_time()
+    cached_time = dt
+    epoch_base  = to_epoch(dt)
+    serial::log("[rtc] System time: {dt.year}-{dt.month}-{dt.day} {dt.hour}:{dt.minute}:{dt.second}")
+}
+
+pub fn now() -> DateTime { return cached_time }
+
+pub fn epoch_seconds() -> int { return epoch_base }
+
+fn read_time() -> DateTime {
+    while read_cmos(RTC_STATUS_A) & 0x80 != 0 {}  // wait update
+    let sec  = bcd(read_cmos(RTC_SEC))
+    let min  = bcd(read_cmos(RTC_MIN))
+    let hour = bcd(read_cmos(RTC_HOUR))
+    let mday = bcd(read_cmos(RTC_MDAY))
+    let mon  = bcd(read_cmos(RTC_MON))
+    let year = bcd(read_cmos(RTC_YEAR)) + 2000
+    let wday = bcd(read_cmos(RTC_WDAY))
+    return DateTime { year: year, month: mon, day: mday, hour: hour, minute: min, second: sec, wday: wday, epoch: 0 }
+}
+
+fn bcd(v: int) -> int { return (v >> 4) * 10 + (v & 0x0F) }
+
+fn read_cmos(reg: int) -> int {
+    outb(RTC_INDEX, reg)
+    return inb(RTC_DATA)
+}
+
+fn to_epoch(dt: DateTime) -> int {
+    // Simplified epoch calculation (days since 1970-01-01)
+    let years_since_1970 = dt.year - 1970
+    let leap_days = years_since_1970 / 4
+    let days = years_since_1970 * 365 + leap_days + day_of_year(dt)
+    return days * 86400 + dt.hour * 3600 + dt.minute * 60 + dt.second
+}
+
+fn day_of_year(dt: DateTime) -> int {
+    let days_in_month = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    let doy = 0
+    let m = 1
+    while m < dt.month {
+        doy = doy + days_in_month[m]
+        m = m + 1
+    }
+    return doy + dt.day - 1
+}
+
+pub fn format_iso(dt: DateTime) -> str {
+    return "{dt.year}-{pad2(dt.month)}-{pad2(dt.day)}T{pad2(dt.hour)}:{pad2(dt.minute)}:{pad2(dt.second)}"
+}
+
+pub fn format_human(dt: DateTime) -> str {
+    let days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    let months = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    return "{days[dt.wday]} {months[dt.month]} {dt.day} {pad2(dt.hour)}:{pad2(dt.minute)}:{pad2(dt.second)} {dt.year}"
+}
+
+fn pad2(n: int) -> str { if n < 10 { return "0{n}" } else { return "{n}" } }
+fn outb(port: int, val: int) {}
+fn inb(port: int) -> int { return 0 }

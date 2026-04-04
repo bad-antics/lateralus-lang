@@ -1,0 +1,144 @@
+// LateralusOS — tmpfs (In-Memory Filesystem)
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import fs::vfs
+import kernel::memory
+
+const TMPFS_MAX_NODES  = 1024
+const TMPFS_MAX_DATA   = 67108864  // 64 MB total capacity
+const TMPFS_MAX_NAME   = 256
+const TMPFS_ROOT_INO   = 1
+
+enum NodeType { File, Dir, Symlink }
+
+struct TmpfsNode {
+    ino:      int,
+    parent:   int,
+    name:     str,
+    type_n:   NodeType,
+    data:     [int; 65536],   // max 64KB per file (simplified)
+    size:     int,
+    mode:     int,
+    uid:      int,
+    gid:      int,
+    atime:    int,
+    mtime:    int,
+    ctime:    int,
+    link_target: str,
+    children: [int; 256],
+    n_children: int,
+    valid:    bool,
+}
+
+struct TmpfsMountPoint {
+    path:    str,
+    root:    int,
+    valid:   bool,
+}
+
+let mut nodes:     [TmpfsNode; TMPFS_MAX_NODES]  = [TmpfsNode{}; TMPFS_MAX_NODES]
+let mut mounts:    [TmpfsMountPoint; 8]          = [TmpfsMountPoint{}; 8]
+let mut next_ino:  int = 2
+let mut n_mounts:  int = 0
+let mut used_bytes: int = 0
+
+pub fn mount(mountpoint: str) -> bool {
+    if n_mounts >= 8 { return false }
+
+    // Create root node for this mount
+    let root_ino = alloc_ino()
+    nodes[root_ino] = TmpfsNode {
+        ino: root_ino, parent: root_ino, name: "/", type_n: NodeType::Dir,
+        data: [0; 65536], size: 0, mode: 0o755, uid: 0, gid: 0,
+        atime: 0, mtime: 0, ctime: 0, link_target: "",
+        children: [0; 256], n_children: 0, valid: true,
+    }
+    mounts[n_mounts] = TmpfsMountPoint { path: mountpoint, root: root_ino, valid: true }
+    n_mounts = n_mounts + 1
+    vfs::register(mountpoint, "tmpfs")
+    serial::log("[tmpfs] Mounted tmpfs at {mountpoint}")
+    return true
+}
+
+pub fn create_file(path: str) -> int {
+    let (parent_ino, name) = resolve_parent(path)
+    if parent_ino < 0 { return -1 }
+    let ino = alloc_ino()
+    nodes[ino] = TmpfsNode {
+        ino: ino, parent: parent_ino, name: name, type_n: NodeType::File,
+        data: [0; 65536], size: 0, mode: 0o644, uid: 0, gid: 0,
+        atime: 0, mtime: 0, ctime: 0, link_target: "",
+        children: [0; 256], n_children: 0, valid: true,
+    }
+    add_child(parent_ino, ino)
+    return ino
+}
+
+pub fn write_file(path: str, data: [int], len: int) -> int {
+    let ino = resolve_path(path)
+    if ino < 0 { ino = create_file(path) }
+    if ino < 0 { return -1 }
+    let n = if len < 65536 { len } else { 65536 }
+    let i = 0
+    while i < n { nodes[ino].data[i] = data[i]; i = i + 1 }
+    nodes[ino].size = n
+    return n
+}
+
+pub fn read_file(path: str, buf: [int], max: int) -> int {
+    let ino = resolve_path(path)
+    if ino < 0 { return -1 }
+    let n = if nodes[ino].size < max { nodes[ino].size } else { max }
+    let i = 0
+    while i < n { buf[i] = nodes[ino].data[i]; i = i + 1 }
+    return n
+}
+
+pub fn mkdir(path: str) -> bool {
+    let (parent_ino, name) = resolve_parent(path)
+    if parent_ino < 0 { return false }
+    let ino = alloc_ino()
+    nodes[ino] = TmpfsNode {
+        ino: ino, parent: parent_ino, name: name, type_n: NodeType::Dir,
+        data: [0; 65536], size: 0, mode: 0o755, uid: 0, gid: 0,
+        atime: 0, mtime: 0, ctime: 0, link_target: "",
+        children: [0; 256], n_children: 0, valid: true,
+    }
+    add_child(parent_ino, ino)
+    return true
+}
+
+pub fn list_dir(path: str) -> [str] {
+    let ino = resolve_path(path)
+    if ino < 0 { return [] }
+    let result: [str] = []
+    let i = 0
+    while i < nodes[ino].n_children {
+        let child = nodes[ino].children[i]
+        if nodes[child].valid { result.push(nodes[child].name) }
+        i = i + 1
+    }
+    return result
+}
+
+pub fn unlink(path: str) -> bool {
+    let ino = resolve_path(path)
+    if ino < 0 { return false }
+    nodes[ino].valid = false
+    used_bytes = used_bytes - nodes[ino].size
+    return true
+}
+
+pub fn stat_size(path: str) -> int {
+    let ino = resolve_path(path)
+    if ino < 0 { return -1 }
+    return nodes[ino].size
+}
+
+pub fn usage() -> (int, int) { return (used_bytes, TMPFS_MAX_DATA) }
+
+fn alloc_ino() -> int { let i = next_ino; next_ino = next_ino + 1; return i }
+fn add_child(parent: int, child: int) { if nodes[parent].n_children < 256 { nodes[parent].children[nodes[parent].n_children] = child; nodes[parent].n_children = nodes[parent].n_children + 1 } }
+fn resolve_path(path: str) -> int { return -1 }
+fn resolve_parent(path: str) -> (int, str) { return (-1, "") }

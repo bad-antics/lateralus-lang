@@ -1,0 +1,100 @@
+// LateralusOS — procfs (/proc virtual filesystem)
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import fs::vfs
+import kernel::scheduler
+import kernel::memory
+
+const PROC_MAX_ENTRIES = 512
+const PROC_MAX_PIDS    = 256
+
+struct ProcEntry {
+    path:     str,
+    pid:      int,
+    content_fn: str,   // name of generator function
+    valid:    bool,
+}
+
+let mut entries: [ProcEntry; PROC_MAX_ENTRIES] = [ProcEntry{}; PROC_MAX_ENTRIES]
+let mut n_entries: int = 0
+
+pub fn mount() {
+    vfs::register("/proc", "procfs")
+    register_static("/proc/version",    "gen_version")
+    register_static("/proc/cpuinfo",    "gen_cpuinfo")
+    register_static("/proc/meminfo",    "gen_meminfo")
+    register_static("/proc/uptime",     "gen_uptime")
+    register_static("/proc/loadavg",    "gen_loadavg")
+    register_static("/proc/filesystems","gen_filesystems")
+    register_static("/proc/mounts",     "gen_mounts")
+    register_static("/proc/net/dev",    "gen_net_dev")
+    register_static("/proc/net/route",  "gen_net_route")
+    serial::log("[procfs] Mounted at /proc")
+}
+
+pub fn read(path: str) -> str {
+    if path.starts_with("/proc/") {
+        let parts = path.split("/")
+        if parts.len() >= 3 {
+            let maybe_pid = parts[2] as int
+            if maybe_pid > 0 { return read_pid_file(maybe_pid, parts[3]) }
+        }
+        match path {
+            "/proc/version"     => return gen_version()
+            "/proc/cpuinfo"     => return gen_cpuinfo()
+            "/proc/meminfo"     => return gen_meminfo()
+            "/proc/uptime"      => return gen_uptime()
+            "/proc/loadavg"     => return gen_loadavg()
+            "/proc/filesystems" => return gen_filesystems()
+            "/proc/mounts"      => return gen_mounts()
+            "/proc/net/dev"     => return gen_net_dev()
+            "/proc/net/route"   => return gen_net_route()
+            _ => return ""
+        }
+    }
+    return ""
+}
+
+pub fn list_pids() -> [int] {
+    return scheduler::list_pids()
+}
+
+fn read_pid_file(pid: int, file: str) -> str {
+    match file {
+        "status"  => return gen_pid_status(pid)
+        "cmdline" => return scheduler::get_cmdline(pid)
+        "maps"    => return gen_pid_maps(pid)
+        "fd"      => return gen_pid_fd(pid)
+        "stat"    => return gen_pid_stat(pid)
+        _         => return ""
+    }
+}
+
+fn gen_version() -> str {
+    return "LateralusOS version 1.0.0 (bad-antics@lateralus) (lateralus 1.0) #1 SMP"
+}
+
+fn gen_cpuinfo() -> str {
+    return "processor\t: 0\nvendor_id\t: AuthenticAMD\ncpu family\t: 25\nmodel name\t: x86_64 LateralusOS CPU\ncpu MHz\t\t: 3600.000\ncache size\t: 512 KB\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic\n"
+}
+
+fn gen_meminfo() -> str {
+    let (total, free, used) = memory::get_stats()
+    let total_kb = total / 1024
+    let free_kb  = free  / 1024
+    let avail_kb = (free + memory::get_cache()) / 1024
+    return "MemTotal:\t{total_kb} kB\nMemFree:\t{free_kb} kB\nMemAvailable:\t{avail_kb} kB\nBuffers:\t0 kB\nCached:\t\t0 kB\nSwapTotal:\t0 kB\nSwapFree:\t0 kB\n"
+}
+
+fn gen_uptime() -> str { return "42.00 30.00\n" }
+fn gen_loadavg() -> str { return "0.10 0.05 0.01 1/64 1\n" }
+fn gen_filesystems() -> str { return "nodev\tproc\nnodev\ttmpfs\n\text4\n\tltlfs\n\tfat32\n" }
+fn gen_mounts() -> str { return "ltlfs / ltlfs rw 0 0\nproc /proc procfs rw 0 0\ntmpfs /tmp tmpfs rw 0 0\ntmpfs /run tmpfs rw 0 0\n" }
+fn gen_net_dev() -> str { return "Inter-| Receive | Transmit\n face |bytes packets|bytes packets\n  lo: 0 0 | 0 0\n eth0: 0 0 | 0 0\n" }
+fn gen_net_route() -> str { return "Iface Destination Gateway Flags Metric Mask\n" }
+fn gen_pid_status(pid: int) -> str { let info = scheduler::get_process(pid); return "Name:\t{info.name}\nPid:\t{pid}\nState:\tS (sleeping)\nVmRSS:\t4096 kB\nThreads:\t1\n" }
+fn gen_pid_maps(pid: int) -> str { return "0000000000400000-0000000000401000 r-xp 00000000 00:00 0\n" }
+fn gen_pid_fd(pid: int) -> str { return "" }
+fn gen_pid_stat(pid: int) -> str { return "{pid} (lateralus) S 1 {pid} {pid} 0 0 4194304\n" }
+fn register_static(path: str, fn_name: str) { if n_entries < PROC_MAX_ENTRIES { entries[n_entries] = ProcEntry { path: path, pid: 0, content_fn: fn_name, valid: true }; n_entries = n_entries + 1 } }

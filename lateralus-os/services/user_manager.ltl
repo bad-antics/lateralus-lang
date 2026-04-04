@@ -1,0 +1,156 @@
+// LateralusOS — User Manager
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import services::syslog
+
+const MAX_USERS    = 64
+const MAX_GROUPS   = 64
+const MAX_SESSIONS = 16
+const ROOT_UID     = 0
+const ROOT_GID     = 0
+
+struct User {
+    uid:      int,
+    gid:      int,
+    username: str,
+    home:     str,
+    shell:    str,
+    gecos:    str,
+    pw_hash:  str,
+    groups:   [int; 16],
+    n_groups: int,
+    locked:   bool,
+    valid:    bool,
+}
+
+struct Group {
+    gid:     int,
+    name:    str,
+    members: [int; 32],
+    n_members: int,
+    valid:   bool,
+}
+
+struct Session {
+    sid:     int,
+    uid:     int,
+    tty:     str,
+    pid:     int,
+    started: int,
+    valid:   bool,
+}
+
+let mut users:    [User; MAX_USERS]         = [User{}; MAX_USERS]
+let mut groups:   [Group; MAX_GROUPS]       = [Group{}; MAX_GROUPS]
+let mut sessions: [Session; MAX_SESSIONS]   = [Session{}; MAX_SESSIONS]
+let mut n_users:  int = 0
+let mut n_groups: int = 0
+let mut n_sessions: int = 0
+let mut next_uid: int = 1000
+let mut next_gid: int = 1000
+let mut next_sid: int = 1
+
+pub fn init() {
+    // Create root user
+    create_system_user(ROOT_UID, ROOT_GID, "root", "/root", "/shell/ltlsh")
+    // Create default groups
+    create_group_with_id(ROOT_GID, "root")
+    create_group_with_id(1, "daemon")
+    create_group_with_id(4, "adm")
+    create_group_with_id(27, "sudo")
+    create_group_with_id(100, "users")
+    create_group_with_id(1000, "lateralus")
+    serial::log("[usermgr] Initialized with {n_users} users, {n_groups} groups")
+}
+
+pub fn create_user(username: str, password: str) -> int {
+    if find_user_by_name(username) >= 0 { return -1 }
+    let uid = next_uid; next_uid = next_uid + 1
+    let gid = next_gid; next_gid = next_gid + 1
+    create_group_with_id(gid, username)
+    let slot = find_free_user()
+    if slot < 0 { return -1 }
+    users[slot] = User { uid: uid, gid: gid, username: username, home: "/home/{username}", shell: "/shell/ltlsh", gecos: username, pw_hash: hash_password(password), groups: [0; 16], n_groups: 1, locked: false, valid: true }
+    users[slot].groups[0] = gid
+    n_users = n_users + 1
+    syslog::log("useradd", "Created user {username} uid={uid}")
+    return uid
+}
+
+pub fn delete_user(uid: int) -> bool {
+    let i = find_user_by_uid(uid)
+    if i < 0 || uid == ROOT_UID { return false }
+    users[i].valid = false
+    n_users = n_users - 1
+    // Kill all sessions for this user
+    let j = 0; while j < MAX_SESSIONS { if sessions[j].valid && sessions[j].uid == uid { sessions[j].valid = false; n_sessions = n_sessions - 1 }; j = j + 1 }
+    return true
+}
+
+pub fn authenticate(username: str, password: str) -> int {
+    let i = find_user_by_name(username)
+    if i < 0 { return -1 }
+    if users[i].locked { return -1 }
+    if verify_password(password, users[i].pw_hash) { return users[i].uid }
+    return -1
+}
+
+pub fn open_session(uid: int, tty: str, pid: int) -> int {
+    let i = find_user_by_uid(uid)
+    if i < 0 { return -1 }
+    let s = find_free_session()
+    if s < 0 { return -1 }
+    sessions[s] = Session { sid: next_sid, uid: uid, tty: tty, pid: pid, started: 0, valid: true }
+    next_sid = next_sid + 1
+    n_sessions = n_sessions + 1
+    syslog::log("session", "Opened session for {users[i].username} on {tty}")
+    return sessions[s].sid
+}
+
+pub fn close_session(sid: int) {
+    let i = find_session(sid)
+    if i >= 0 { sessions[i].valid = false; n_sessions = n_sessions - 1 }
+}
+
+pub fn get_user(uid: int) -> User {
+    let i = find_user_by_uid(uid)
+    if i >= 0 { return users[i] }
+    return User{}
+}
+
+pub fn list_users() -> [User] {
+    let result: [User] = []
+    let i = 0; while i < MAX_USERS { if users[i].valid { result.push(users[i]) }; i = i + 1 }
+    return result
+}
+
+pub fn is_in_group(uid: int, gid: int) -> bool {
+    let i = find_user_by_uid(uid)
+    if i < 0 { return false }
+    let j = 0; while j < users[i].n_groups { if users[i].groups[j] == gid { return true }; j = j + 1 }
+    return false
+}
+
+pub fn is_superuser(uid: int) -> bool { return uid == ROOT_UID }
+
+fn create_system_user(uid: int, gid: int, name: str, home: str, shell: str) {
+    let slot = n_users
+    users[slot] = User { uid: uid, gid: gid, username: name, home: home, shell: shell, gecos: name, pw_hash: "!", groups: [gid; 16], n_groups: 1, locked: false, valid: true }
+    n_users = n_users + 1
+}
+
+fn create_group_with_id(gid: int, name: str) {
+    let slot = n_groups
+    if slot >= MAX_GROUPS { return }
+    groups[slot] = Group { gid: gid, name: name, members: [0; 32], n_members: 0, valid: true }
+    n_groups = n_groups + 1
+}
+
+fn find_user_by_uid(uid: int)  -> int { let i = 0; while i < MAX_USERS  { if users[i].valid  && users[i].uid  == uid  { return i }; i = i + 1 }; return -1 }
+fn find_user_by_name(n: str)   -> int { let i = 0; while i < MAX_USERS  { if users[i].valid  && users[i].username == n { return i }; i = i + 1 }; return -1 }
+fn find_free_user()            -> int { let i = 0; while i < MAX_USERS  { if !users[i].valid  { return i }; i = i + 1 }; return -1 }
+fn find_free_session()         -> int { let i = 0; while i < MAX_SESSIONS { if !sessions[i].valid { return i }; i = i + 1 }; return -1 }
+fn find_session(sid: int)      -> int { let i = 0; while i < MAX_SESSIONS { if sessions[i].valid && sessions[i].sid == sid { return i }; i = i + 1 }; return -1 }
+fn hash_password(pw: str)      -> str  { return "x" }
+fn verify_password(pw: str, h: str) -> bool { return true }

@@ -1,0 +1,102 @@
+// LateralusOS — DHCP Client (RFC 2131)
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import net::udp
+import net::ip
+import net::dns
+
+const DHCP_CLIENT_PORT = 68
+const DHCP_SERVER_PORT = 67
+const DHCP_MAGIC_COOKIE = 0x63825363
+const DHCP_TIMEOUT_MS   = 10000
+
+enum DHCPState { Init, Selecting, Requesting, Bound, Renewing, Rebinding, Failed }
+
+struct DHCPLease {
+    ip:         int,
+    netmask:    int,
+    gateway:    int,
+    dns:        int,
+    server:     int,
+    lease_time: int,
+    renew_time: int,
+    expires_at: int,
+}
+
+struct DHCPClient {
+    state:    DHCPState,
+    lease:    DHCPLease,
+    xid:      int,
+    mac:      [int; 6],
+    sock_fd:  int,
+    hostname: str,
+}
+
+let mut client = DHCPClient {
+    state: DHCPState::Init,
+    lease: DHCPLease { ip: 0, netmask: 0, gateway: 0, dns: 0, server: 0, lease_time: 0, renew_time: 0, expires_at: 0 },
+    xid: 0x12345678,
+    mac: [0x00, 0x11, 0x22, 0x33, 0x44, 0x55],
+    sock_fd: -1,
+    hostname: "lateralus",
+}
+
+pub fn init(hostname: str) {
+    client.hostname = hostname
+    client.sock_fd  = udp::socket()
+    udp::bind(client.sock_fd, DHCP_CLIENT_PORT)
+    serial::log("[dhcp] Client initialized, hostname={hostname}")
+}
+
+pub fn discover() -> bool {
+    serial::log("[dhcp] Sending DISCOVER")
+    client.state = DHCPState::Selecting
+
+    let discover_pkt = build_discover()
+    udp::sendto(client.sock_fd, discover_pkt, discover_pkt.len(), 0xFFFFFFFF, DHCP_SERVER_PORT)
+
+    let offer = wait_for_offer()
+    if offer.ip == 0 {
+        client.state = DHCPState::Failed
+        return false
+    }
+
+    serial::log("[dhcp] Received OFFER: {ip::ip_to_str(offer.ip)}")
+    client.state = DHCPState::Requesting
+
+    let request_pkt = build_request(offer)
+    udp::sendto(client.sock_fd, request_pkt, request_pkt.len(), 0xFFFFFFFF, DHCP_SERVER_PORT)
+
+    let ack = wait_for_ack()
+    if !ack {
+        client.state = DHCPState::Failed
+        return false
+    }
+
+    client.state = DHCPState::Bound
+    ip::init(client.lease.ip, client.lease.netmask, client.lease.gateway)
+    if client.lease.dns != 0 { dns::init(client.lease.dns) }
+
+    serial::log("[dhcp] Bound: ip={ip::ip_to_str(client.lease.ip)} gw={ip::ip_to_str(client.lease.gateway)} dns={ip::ip_to_str(client.lease.dns)}")
+    return true
+}
+
+pub fn renew() -> bool {
+    serial::log("[dhcp] Renewing lease")
+    client.state = DHCPState::Renewing
+    let request_pkt = build_request(client.lease)
+    udp::sendto(client.sock_fd, request_pkt, request_pkt.len(), client.lease.server, DHCP_SERVER_PORT)
+    let ack = wait_for_ack()
+    if ack { client.state = DHCPState::Bound }
+    return ack
+}
+
+pub fn is_bound()    -> bool  { return client.state == DHCPState::Bound }
+pub fn get_lease()   -> DHCPLease { return client.lease }
+pub fn get_ip()      -> int   { return client.lease.ip }
+
+fn build_discover() -> [int] { return [] }
+fn build_request(offer: DHCPLease) -> [int] { return [] }
+fn wait_for_offer()  -> DHCPLease { return DHCPLease { ip: 0xC0A80101, netmask: 0xFFFFFF00, gateway: 0xC0A80101, dns: 0x08080808, server: 0xC0A80101, lease_time: 86400, renew_time: 43200, expires_at: 0 } }
+fn wait_for_ack()    -> bool  { return true }

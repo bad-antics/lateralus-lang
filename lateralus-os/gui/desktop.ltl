@@ -1,0 +1,182 @@
+// LateralusOS — Desktop (wallpaper + icon grid + context menu)
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import drivers::gpu
+import gui::theme_engine
+import gui::window_manager
+import gui::taskbar
+import gui::compositor
+import gui::notifications
+
+const DESKTOP_ICON_W    = 72
+const DESKTOP_ICON_H    = 88
+const DESKTOP_ICON_GAP  = 16
+const DESKTOP_GRID_COLS = 10
+const DESKTOP_PADDING   = 12
+const MAX_ICONS         = 100
+
+struct DesktopIcon {
+    name:    str,
+    exec:    str,
+    icon:    int,
+    col:     int,
+    row:     int,
+    x:       int,
+    y:       int,
+    selected: bool,
+    valid:   bool,
+}
+
+struct ContextMenuItem {
+    label:  str,
+    action: str,
+    valid:  bool,
+}
+
+let mut icons:        [DesktopIcon; MAX_ICONS]   = [DesktopIcon{}; MAX_ICONS]
+let mut ctx_menu:     [ContextMenuItem; 16]      = [ContextMenuItem{}; 16]
+let mut n_icons:      int = 0
+let mut ctx_visible:  bool = false
+let mut ctx_x:        int = 0
+let mut ctx_y:        int = 0
+let mut scr_w:        int = 1920
+let mut scr_h:        int = 1080
+let mut wallpaper_col: int = 0x1E1E2E
+let mut dirty:        bool = true
+
+pub fn init() {
+    scr_w = gpu::get_width()
+    scr_h = gpu::get_height()
+    wallpaper_col = theme_engine::get_active().bg
+
+    // Default desktop icons
+    add_icon("Files",      "/apps/file_manager", 0)
+    add_icon("Terminal",   "/apps/terminal",     1)
+    add_icon("Browser",    "/apps/browser",      2)
+    add_icon("Settings",   "/apps/settings",     3)
+    add_icon("Music",      "/apps/music",        4)
+    add_icon("Calculator", "/apps/calculator",   5)
+    add_icon("Calendar",   "/apps/calendar",     6)
+    add_icon("Editor",     "/apps/editor",       7)
+
+    // Context menu items
+    ctx_menu[0] = ContextMenuItem { label: "Open Terminal",  action: "spawn_terminal",  valid: true }
+    ctx_menu[1] = ContextMenuItem { label: "New Folder",     action: "new_folder",      valid: true }
+    ctx_menu[2] = ContextMenuItem { label: "Change Wallpaper",action: "wallpaper",      valid: true }
+    ctx_menu[3] = ContextMenuItem { label: "Display Settings",action: "disp_settings",  valid: true }
+    ctx_menu[4] = ContextMenuItem { label: "Refresh",        action: "refresh",         valid: true }
+
+    serial::log("[desktop] Initialized with {n_icons} icons")
+}
+
+pub fn paint() {
+    if !dirty { return }
+
+    // Wallpaper
+    gpu::clear(wallpaper_col)
+
+    // Draw icon grid
+    let i = 0
+    while i < MAX_ICONS {
+        if icons[i].valid { paint_icon(i) }
+        i = i + 1
+    }
+
+    // Draw context menu if visible
+    if ctx_visible { paint_context_menu() }
+
+    dirty = false
+}
+
+pub fn handle_click(x: int, y: int, button: int) {
+    if ctx_visible {
+        ctx_visible = false
+        dirty = true
+        handle_ctx_click(x, y)
+        return
+    }
+
+    if button == 2 {    // right click
+        ctx_x = x; ctx_y = y; ctx_visible = true; dirty = true
+        return
+    }
+
+    // Check icon clicks
+    let i = 0
+    while i < MAX_ICONS {
+        if icons[i].valid && x >= icons[i].x && x < icons[i].x + DESKTOP_ICON_W && y >= icons[i].y && y < icons[i].y + DESKTOP_ICON_H {
+            icons[i].selected = true
+            dirty = true
+            // Double-click would launch; single click selects
+            return
+        }
+        i = i + 1
+    }
+
+    // Deselect all
+    let j = 0
+    while j < MAX_ICONS { if icons[j].valid { icons[j].selected = false }; j = j + 1 }
+    dirty = true
+}
+
+pub fn handle_double_click(x: int, y: int) {
+    let i = 0
+    while i < MAX_ICONS {
+        if icons[i].valid && x >= icons[i].x && x < icons[i].x + DESKTOP_ICON_W && y >= icons[i].y && y < icons[i].y + DESKTOP_ICON_H {
+            launch_app(icons[i].exec, icons[i].name)
+            return
+        }
+        i = i + 1
+    }
+}
+
+pub fn add_icon(name: str, exec: str, icon: int) {
+    if n_icons >= MAX_ICONS { return }
+    let col = n_icons % DESKTOP_GRID_COLS
+    let row = n_icons / DESKTOP_GRID_COLS
+    let x   = DESKTOP_PADDING + col * (DESKTOP_ICON_W + DESKTOP_ICON_GAP)
+    let y   = DESKTOP_PADDING + row * (DESKTOP_ICON_H + DESKTOP_ICON_GAP)
+    icons[n_icons] = DesktopIcon { name: name, exec: exec, icon: icon, col: col, row: row, x: x, y: y, selected: false, valid: true }
+    n_icons = n_icons + 1
+    dirty = true
+}
+
+pub fn set_wallpaper_color(color: int) { wallpaper_col = color; dirty = true }
+
+fn paint_icon(i: int) {
+    let theme = theme_engine::get_active()
+    let sel_col = if icons[i].selected { theme.selection } else { 0x00000000 }
+    if icons[i].selected { gpu::fill_rect(icons[i].x - 4, icons[i].y - 4, DESKTOP_ICON_W + 8, DESKTOP_ICON_H + 8, sel_col) }
+    gpu::fill_rect(icons[i].x + 12, icons[i].y, 48, 48, theme.surface1)
+}
+
+fn paint_context_menu() {
+    let theme  = theme_engine::get_active()
+    let menu_h = 5 * 28 + 4
+    gpu::fill_rect(ctx_x, ctx_y, 200, menu_h, theme.surface0)
+    let i = 0
+    while i < 16 {
+        if ctx_menu[i].valid { gpu::fill_rect(ctx_x + 1, ctx_y + 2 + i * 28, 198, 26, theme.surface0) }
+        i = i + 1
+    }
+}
+
+fn handle_ctx_click(x: int, y: int) {
+    let i = 0
+    while i < 16 {
+        if ctx_menu[i].valid && x >= ctx_x && x <= ctx_x + 200 && y >= ctx_y + 2 + i * 28 && y <= ctx_y + 2 + i * 28 + 26 {
+            match ctx_menu[i].action {
+                "spawn_terminal" => launch_app("/apps/terminal",  "Terminal")
+                "refresh"        => { dirty = true }
+                _                => {}
+            }
+        }
+        i = i + 1
+    }
+}
+
+fn launch_app(exec: str, name: str) {
+    serial::log("[desktop] Launching: {exec}")
+    notifications::show("Launching {name}...", 2000)
+}

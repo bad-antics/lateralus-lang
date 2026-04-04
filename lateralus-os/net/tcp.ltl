@@ -1,0 +1,220 @@
+// LateralusOS — TCP Stack
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import net::ip
+import kernel::semaphore
+
+const TCP_MAX_SOCKETS  = 256
+const TCP_RX_BUF_SIZE  = 65536
+const TCP_TX_BUF_SIZE  = 65536
+const TCP_MSS          = 1460
+const TCP_WINDOW       = 65535
+const TCP_TIMEOUT_MS   = 30000
+const TCP_SYN_RETRIES  = 5
+
+enum TCPState {
+    Closed, Listen, SynSent, SynReceived,
+    Established, FinWait1, FinWait2,
+    CloseWait, Closing, LastAck, TimeWait
+}
+
+struct TCPSocket {
+    fd:         int,
+    state:      TCPState,
+    local_ip:   int,
+    local_port: int,
+    remote_ip:  int,
+    remote_port: int,
+    seq:        int,
+    ack:        int,
+    window:     int,
+    mss:        int,
+    rx_buf:     [int; TCP_RX_BUF_SIZE],
+    rx_head:    int,
+    rx_tail:    int,
+    rx_count:   int,
+    tx_buf:     [int; TCP_TX_BUF_SIZE],
+    tx_head:    int,
+    tx_tail:    int,
+    tx_count:   int,
+    rx_sem:     int,
+    tx_sem:     int,
+    accept_q:   [int; 16],
+    accept_cnt: int,
+    backlog:    int,
+    valid:      bool,
+}
+
+let mut sockets:  [TCPSocket; TCP_MAX_SOCKETS] = [TCPSocket{}; TCP_MAX_SOCKETS]
+let mut sock_cnt: int = 0
+
+pub fn socket() -> int {
+    let i = 0
+    while i < TCP_MAX_SOCKETS {
+        if !sockets[i].valid {
+            sockets[i] = TCPSocket {
+                fd: i, state: TCPState::Closed,
+                local_ip: 0, local_port: 0, remote_ip: 0, remote_port: 0,
+                seq: random_u32(), ack: 0, window: TCP_WINDOW, mss: TCP_MSS,
+                rx_buf: [0; TCP_RX_BUF_SIZE], rx_head: 0, rx_tail: 0, rx_count: 0,
+                tx_buf: [0; TCP_TX_BUF_SIZE], tx_head: 0, tx_tail: 0, tx_count: 0,
+                rx_sem: semaphore::sem_create("tcp_rx", 0),
+                tx_sem: semaphore::sem_create("tcp_tx", 1),
+                accept_q: [0; 16], accept_cnt: 0, backlog: 0,
+                valid: true,
+            }
+            sock_cnt = sock_cnt + 1
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+pub fn bind(fd: int, port: int) -> int {
+    if !valid_fd(fd) { return -1 }
+    sockets[fd].local_ip   = ip::get_local_ip()
+    sockets[fd].local_port = port
+    return 0
+}
+
+pub fn listen(fd: int, backlog: int) -> int {
+    if !valid_fd(fd) { return -1 }
+    sockets[fd].state   = TCPState::Listen
+    sockets[fd].backlog = backlog
+    return 0
+}
+
+pub fn accept(fd: int) -> int {
+    if !valid_fd(fd) { return -1 }
+    if sockets[fd].state != TCPState::Listen { return -1 }
+    while sockets[fd].accept_cnt == 0 {
+        semaphore::sem_wait(sockets[fd].rx_sem)
+    }
+    let new_fd = sockets[fd].accept_q[0]
+    let i = 0
+    while i < sockets[fd].accept_cnt - 1 {
+        sockets[fd].accept_q[i] = sockets[fd].accept_q[i + 1]
+        i = i + 1
+    }
+    sockets[fd].accept_cnt = sockets[fd].accept_cnt - 1
+    return new_fd
+}
+
+pub fn connect(fd: int, ip: int, port: int) -> int {
+    if !valid_fd(fd) { return -1 }
+    sockets[fd].remote_ip   = ip
+    sockets[fd].remote_port = port
+    sockets[fd].local_port  = alloc_ephemeral_port()
+
+    send_syn(fd)
+    sockets[fd].state = TCPState::SynSent
+    semaphore::sem_wait(sockets[fd].rx_sem)   // wait for SYN-ACK
+
+    if sockets[fd].state != TCPState::Established {
+        return -1
+    }
+    return 0
+}
+
+pub fn send_data(fd: int, data: [int], len: int) -> int {
+    if !valid_fd(fd) || sockets[fd].state != TCPState::Established { return -1 }
+    let written = 0
+    let i = 0
+    while i < len && sockets[fd].tx_count < TCP_TX_BUF_SIZE {
+        sockets[fd].tx_buf[sockets[fd].tx_tail] = data[i]
+        sockets[fd].tx_tail  = (sockets[fd].tx_tail + 1) % TCP_TX_BUF_SIZE
+        sockets[fd].tx_count = sockets[fd].tx_count + 1
+        written = written + 1
+        i = i + 1
+    }
+    flush_tx(fd)
+    return written
+}
+
+pub fn recv_data(fd: int, buf: [int], max: int) -> int {
+    if !valid_fd(fd) { return -1 }
+    while sockets[fd].rx_count == 0 {
+        if sockets[fd].state != TCPState::Established { return 0 }
+        semaphore::sem_wait(sockets[fd].rx_sem)
+    }
+    let read = 0
+    while read < max && sockets[fd].rx_count > 0 {
+        buf[read] = sockets[fd].rx_buf[sockets[fd].rx_head]
+        sockets[fd].rx_head  = (sockets[fd].rx_head + 1) % TCP_RX_BUF_SIZE
+        sockets[fd].rx_count = sockets[fd].rx_count - 1
+        read = read + 1
+    }
+    return read
+}
+
+pub fn close(fd: int) {
+    if !valid_fd(fd) { return }
+    if sockets[fd].state == TCPState::Established {
+        send_fin(fd)
+        sockets[fd].state = TCPState::FinWait1
+    }
+    sockets[fd].valid = false
+    sock_cnt = sock_cnt - 1
+}
+
+pub fn recv_segment(src_ip: int, src_port: int, dst_port: int, seq: int, ack: int, flags: int, data: [int], dlen: int) {
+    let fd = find_socket(dst_port, src_ip, src_port)
+    if fd < 0 { return }
+    handle_flags(fd, flags, seq, ack, data, dlen)
+}
+
+fn handle_flags(fd: int, flags: int, seq: int, ack_n: int, data: [int], dlen: int) {
+    let SYN = 0x02; let ACK = 0x10; let FIN = 0x01; let RST = 0x04
+    match sockets[fd].state {
+        TCPState::SynSent => {
+            if flags & SYN != 0 && flags & ACK != 0 {
+                sockets[fd].ack   = seq + 1
+                sockets[fd].state = TCPState::Established
+                send_ack(fd)
+                semaphore::sem_post(sockets[fd].rx_sem)
+            }
+        }
+        TCPState::Listen => {
+            if flags & SYN != 0 { accept_incoming(fd, seq) }
+        }
+        TCPState::Established => {
+            if dlen > 0 {
+                let i = 0
+                while i < dlen && sockets[fd].rx_count < TCP_RX_BUF_SIZE {
+                    sockets[fd].rx_buf[sockets[fd].rx_tail] = data[i]
+                    sockets[fd].rx_tail  = (sockets[fd].rx_tail + 1) % TCP_RX_BUF_SIZE
+                    sockets[fd].rx_count = sockets[fd].rx_count + 1
+                    i = i + 1
+                }
+                sockets[fd].ack = seq + dlen
+                send_ack(fd)
+                semaphore::sem_post(sockets[fd].rx_sem)
+            }
+            if flags & FIN != 0 { sockets[fd].state = TCPState::CloseWait; send_ack(fd) }
+        }
+        _ => {}
+    }
+}
+
+fn find_socket(local_port: int, remote_ip: int, remote_port: int) -> int {
+    let i = 0
+    while i < TCP_MAX_SOCKETS {
+        if sockets[i].valid && sockets[i].local_port == local_port {
+            if sockets[i].remote_ip == remote_ip && sockets[i].remote_port == remote_port { return i }
+            if sockets[i].state == TCPState::Listen { return i }
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+fn valid_fd(fd: int) -> bool { return fd >= 0 && fd < TCP_MAX_SOCKETS && sockets[fd].valid }
+fn alloc_ephemeral_port() -> int { return 49152 + (random_u32() % 16384) }
+fn random_u32() -> int { return 0x12345678 }
+fn send_syn(fd: int)  {}
+fn send_ack(fd: int)  {}
+fn send_fin(fd: int)  {}
+fn flush_tx(fd: int)  {}
+fn accept_incoming(fd: int, seq: int) {}

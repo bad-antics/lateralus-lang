@@ -1,0 +1,130 @@
+// LateralusOS — devfs (/dev device node filesystem)
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import fs::vfs
+import drivers::vga
+import drivers::keyboard
+import drivers::mouse
+import drivers::sound
+import drivers::rtc
+import drivers::nvme
+import drivers::usb
+
+const DEV_MAX_NODES = 256
+
+enum DevType { CharDevice, BlockDevice, Null, Zero, Random, Tty }
+
+struct DevNode {
+    name:      str,
+    path:      str,
+    type_d:    DevType,
+    major:     int,
+    minor:     int,
+    mode:      int,
+    read_fn:   str,
+    write_fn:  str,
+    valid:     bool,
+}
+
+let mut devices: [DevNode; DEV_MAX_NODES] = [DevNode{}; DEV_MAX_NODES]
+let mut n_devices: int = 0
+
+pub fn mount() {
+    vfs::register("/dev", "devfs")
+
+    // Standard character devices
+    register_char("null",    1, 3, DevType::Null,   0o666)
+    register_char("zero",    1, 5, DevType::Zero,   0o666)
+    register_char("random",  1, 8, DevType::Random, 0o666)
+    register_char("urandom", 1, 9, DevType::Random, 0o666)
+    register_char("tty",     5, 0, DevType::Tty,    0o666)
+    register_char("tty0",    4, 0, DevType::Tty,    0o620)
+    register_char("tty1",    4, 1, DevType::Tty,    0o620)
+    register_char("console", 5, 1, DevType::Tty,    0o620)
+    register_char("stdin",   5, 0, DevType::Tty,    0o666)
+    register_char("stdout",  5, 1, DevType::Tty,    0o666)
+    register_char("stderr",  5, 2, DevType::Tty,    0o666)
+    register_char("input/event0", 13, 64, DevType::CharDevice, 0o640)  // keyboard
+    register_char("input/event1", 13, 65, DevType::CharDevice, 0o640)  // mouse
+
+    // Sound devices
+    register_char("snd/pcmC0D0p", 116, 0, DevType::CharDevice, 0o660)
+    register_char("snd/controlC0", 116, 1, DevType::CharDevice, 0o660)
+
+    // Block devices
+    if nvme::is_present() {
+        register_block("nvme0",   259, 0, 0o660)
+        register_block("nvme0n1", 259, 1, 0o660)
+    }
+
+    // USB devices
+    let i = 0
+    while i < usb::get_device_count() {
+        register_char("usb/lp{i}", 180, i, DevType::CharDevice, 0o660)
+        i = i + 1
+    }
+
+    // GPU / framebuffer
+    register_char("fb0", 29, 0, DevType::CharDevice, 0o660)
+
+    // RTC
+    register_char("rtc0", 254, 0, DevType::CharDevice, 0o644)
+    register_char("hwclock", 254, 1, DevType::CharDevice, 0o644)
+
+    serial::log("[devfs] Mounted /dev with {n_devices} nodes")
+}
+
+pub fn open(path: str) -> int {
+    let name = strip_dev_prefix(path)
+    let i = find_device(name)
+    if i < 0 { return -1 }
+    return i
+}
+
+pub fn read(fd: int, buf: [int], max: int) -> int {
+    if !valid_fd(fd) { return -1 }
+    match devices[fd].type_d {
+        DevType::Null   => return 0
+        DevType::Zero   => { let i = 0; while i < max { buf[i] = 0; i = i + 1 }; return max }
+        DevType::Random => { let i = 0; while i < max { buf[i] = pseudo_random(); i = i + 1 }; return max }
+        DevType::Tty    => return keyboard::read_byte()
+        _               => return 0
+    }
+}
+
+pub fn write(fd: int, data: [int], len: int) -> int {
+    if !valid_fd(fd) { return -1 }
+    match devices[fd].type_d {
+        DevType::Null => return len
+        DevType::Tty  => { let i = 0; while i < len { vga::putc(data[i] as str); i = i + 1 }; return len }
+        _             => return 0
+    }
+}
+
+pub fn list() -> [str] {
+    let result: [str] = []
+    let i = 0
+    while i < DEV_MAX_NODES {
+        if devices[i].valid { result.push(devices[i].name) }
+        i = i + 1
+    }
+    return result
+}
+
+pub fn register_char(name: str, major: int, minor: int, type_d: DevType, mode: int) {
+    if n_devices >= DEV_MAX_NODES { return }
+    devices[n_devices] = DevNode { name: name, path: "/dev/{name}", type_d: type_d, major: major, minor: minor, mode: mode, read_fn: "", write_fn: "", valid: true }
+    n_devices = n_devices + 1
+}
+
+pub fn register_block(name: str, major: int, minor: int, mode: int) {
+    if n_devices >= DEV_MAX_NODES { return }
+    devices[n_devices] = DevNode { name: name, path: "/dev/{name}", type_d: DevType::BlockDevice, major: major, minor: minor, mode: mode, read_fn: "", write_fn: "", valid: true }
+    n_devices = n_devices + 1
+}
+
+fn find_device(name: str) -> int { let i = 0; while i < DEV_MAX_NODES { if devices[i].valid && devices[i].name == name { return i }; i = i + 1 }; return -1 }
+fn valid_fd(fd: int) -> bool { return fd >= 0 && fd < DEV_MAX_NODES && devices[fd].valid }
+fn strip_dev_prefix(path: str) -> str { if path.starts_with("/dev/") { return path.slice(5, path.len()) }; return path }
+fn pseudo_random() -> int { return 0x5A3C }

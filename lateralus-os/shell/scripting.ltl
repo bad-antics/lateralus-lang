@@ -1,0 +1,289 @@
+// LateralusOS — Shell Scripting Engine (.ltlsh scripts)
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import shell::builtins
+import fs::vfs
+
+const SCRIPT_MAX_VARS  = 256
+const SCRIPT_MAX_FUNCS = 64
+const SCRIPT_MAX_DEPTH = 32
+
+enum TokenType { Word, Assign, Pipe, Redirect, RedirectAppend, RedirectErr, Background, Semicolon, Newline, LParen, RParen, If, Then, Else, Fi, For, In, Do, Done, While, Until, Case, Esac, Function, Return, Break, Continue, Export, Local }
+
+struct ScriptVar {
+    name:   str,
+    value:  str,
+    exported: bool,
+    readonly: bool,
+    valid:  bool,
+}
+
+struct ScriptFunc {
+    name:  str,
+    body:  str,
+    valid: bool,
+}
+
+struct ScriptEnv {
+    vars:    [ScriptVar; SCRIPT_MAX_VARS],
+    funcs:   [ScriptFunc; SCRIPT_MAX_FUNCS],
+    n_vars:  int,
+    n_funcs: int,
+    exit_code: int,
+    break_flag:  bool,
+    return_flag: bool,
+    return_val:  str,
+    depth:       int,
+}
+
+let mut env = ScriptEnv {
+    vars: [ScriptVar{}; SCRIPT_MAX_VARS], funcs: [ScriptFunc{}; SCRIPT_MAX_FUNCS],
+    n_vars: 0, n_funcs: 0, exit_code: 0,
+    break_flag: false, return_flag: false, return_val: "", depth: 0,
+}
+
+pub fn run_script(path: str) -> int {
+    let source = read_script(path)
+    if source == "" { return 1 }
+    serial::log("[script] Running: {path}")
+    return execute(source)
+}
+
+pub fn run_string(code: str) -> int {
+    return execute(code)
+}
+
+fn execute(code: str) -> int {
+    let lines = code.split("\n")
+    let i = 0
+    while i < lines.len() && !env.return_flag {
+        let line = lines[i].trim()
+        if line == "" || line.starts_with("#") { i = i + 1; continue }
+
+        if line.starts_with("if ") {
+            i = exec_if(lines, i)
+        } else if line.starts_with("for ") {
+            i = exec_for(lines, i)
+        } else if line.starts_with("while ") {
+            i = exec_while(lines, i)
+        } else if line.starts_with("function ") || line.ends_with("() {") {
+            i = define_func(lines, i)
+        } else if line.starts_with("return") {
+            exec_return(line)
+            i = lines.len()
+        } else if line.starts_with("export ") {
+            exec_export(line)
+            i = i + 1
+        } else if line.contains("=") && !line.contains(" ") {
+            exec_assign(line)
+            i = i + 1
+        } else {
+            exec_command(expand_vars(line))
+            i = i + 1
+        }
+    }
+    return env.exit_code
+}
+
+fn exec_if(lines: [str], start: int) -> int {
+    let cond_line = lines[start].slice(3, lines[start].len()).trim()
+    let cond = eval_condition(cond_line)
+    let i = start + 1
+    // Find then/else/fi
+    let in_then = cond
+    while i < lines.len() {
+        let l = lines[i].trim()
+        if l == "then" { i = i + 1; continue }
+        if l == "else" { in_then = !in_then; i = i + 1; continue }
+        if l == "fi"   { return i + 1 }
+        if in_then { exec_command(expand_vars(l)) }
+        i = i + 1
+    }
+    return i
+}
+
+fn exec_for(lines: [str], start: int) -> int {
+    // for VAR in ITEMS; do ... done
+    let parts = lines[start].split(" ")
+    let var_name = if parts.len() > 1 { parts[1] } else { "" }
+    let items: [str] = []
+    // collect items after "in"
+    let collecting = false
+    let pi = 0
+    while pi < parts.len() { if parts[pi] == "in" { collecting = true } else if collecting && parts[pi] != "do" { items.push(parts[pi]) }; pi = pi + 1 }
+    let i = start + 1
+    let body_start = i
+    let body_lines: [str] = []
+    while i < lines.len() {
+        let l = lines[i].trim()
+        if l == "done" { break }
+        body_lines.push(l)
+        i = i + 1
+    }
+    let item_i = 0
+    while item_i < items.len() && !env.break_flag {
+        set_var(var_name, items[item_i])
+        execute(body_lines.join("\n"))
+        item_i = item_i + 1
+    }
+    env.break_flag = false
+    return i + 1
+}
+
+fn exec_while(lines: [str], start: int) -> int {
+    let cond_line = lines[start].slice(6, lines[start].len()).trim()
+    let i = start + 1
+    let body_lines: [str] = []
+    while i < lines.len() {
+        let l = lines[i].trim()
+        if l == "done" { break }
+        body_lines.push(l)
+        i = i + 1
+    }
+    let end = i
+    while eval_condition(cond_line) && !env.break_flag {
+        execute(body_lines.join("\n"))
+    }
+    env.break_flag = false
+    return end + 1
+}
+
+fn define_func(lines: [str], start: int) -> int {
+    let name = lines[start].split(" ")[1].trim_end("() {").trim()
+    let body_lines: [str] = []
+    let i = start + 1
+    let depth = 1
+    while i < lines.len() && depth > 0 {
+        let l = lines[i].trim()
+        if l == "}" { depth = depth - 1 } else if l.ends_with("{") { depth = depth + 1 }
+        if depth > 0 { body_lines.push(l) }
+        i = i + 1
+    }
+    let slot = find_free_func()
+    if slot >= 0 { env.funcs[slot] = ScriptFunc { name: name, body: body_lines.join("\n"), valid: true }; env.n_funcs = env.n_funcs + 1 }
+    return i
+}
+
+fn exec_command(line: str) {
+    let parts = line.split(" ")
+    let cmd = parts[0]
+
+    // Check user-defined functions first
+    let fi = find_func(cmd)
+    if fi >= 0 { execute(env.funcs[fi].body); return }
+
+    // Built-in or external
+    let args = parts.slice(1, parts.len())
+    env.exit_code = builtins::run(cmd, args)
+}
+
+fn exec_assign(line: int) {
+    let eq = find_char(line as str, "=")
+    if eq < 0 { return }
+    let name  = line as str.slice(0, eq)
+    let value = line as str.slice(eq + 1, line as str.len())
+    set_var(name, expand_vars(value))
+}
+
+fn exec_export(line: str) {
+    let parts = line.split(" ")
+    if parts.len() < 2 { return }
+    let spec = parts[1]
+    let eq = find_char(spec, "=")
+    if eq >= 0 {
+        let name  = spec.slice(0, eq)
+        let value = spec.slice(eq + 1, spec.len())
+        set_var(name, value)
+        set_exported(name, true)
+    } else {
+        set_exported(spec, true)
+    }
+}
+
+fn exec_return(line: str) {
+    let parts = line.split(" ")
+    env.return_flag = true
+    env.return_val  = if parts.len() > 1 { parts[1] } else { "0" }
+    env.exit_code   = env.return_val as int
+}
+
+pub fn set_var(name: str, value: str) {
+    let i = find_var(name)
+    if i >= 0 { env.vars[i].value = value; return }
+    let slot = find_free_var()
+    if slot >= 0 { env.vars[slot] = ScriptVar { name: name, value: value, exported: false, readonly: false, valid: true }; env.n_vars = env.n_vars + 1 }
+}
+
+pub fn get_var(name: str) -> str {
+    let i = find_var(name)
+    if i >= 0 { return env.vars[i].value }
+    return ""
+}
+
+fn expand_vars(s: str) -> str {
+    let result = ""
+    let i = 0
+    while i < s.len() {
+        if s[i] == "$" && i + 1 < s.len() {
+            let j = i + 1
+            if s[j] == "{" {
+                let k = j + 1
+                while k < s.len() && s[k] != "}" { k = k + 1 }
+                result = result + get_var(s.slice(j + 1, k))
+                i = k + 1
+            } else {
+                let k = j
+                while k < s.len() && is_ident_char(s[k]) { k = k + 1 }
+                result = result + get_var(s.slice(j, k))
+                i = k
+            }
+        } else {
+            result = result + s[i]
+            i = i + 1
+        }
+    }
+    return result
+}
+
+fn eval_condition(cond: str) -> bool {
+    let parts = cond.split(" ")
+    if parts.len() == 3 {
+        let lhs = expand_vars(parts[0])
+        let op  = parts[1]
+        let rhs = expand_vars(parts[2])
+        match op {
+            "==" | "=" => return lhs == rhs
+            "!="       => return lhs != rhs
+            "-eq"      => return lhs as int == rhs as int
+            "-ne"      => return lhs as int != rhs as int
+            "-lt"      => return lhs as int <  rhs as int
+            "-le"      => return lhs as int <= rhs as int
+            "-gt"      => return lhs as int >  rhs as int
+            "-ge"      => return lhs as int >= rhs as int
+            _          => return false
+        }
+    }
+    if parts.len() == 2 {
+        let flag = parts[0]
+        let arg  = expand_vars(parts[1])
+        match flag {
+            "-z" => return arg.len() == 0
+            "-n" => return arg.len() > 0
+            "-f" => return vfs::is_file(arg)
+            "-d" => return vfs::is_dir(arg)
+            "-e" => return vfs::exists(arg)
+            _    => return false
+        }
+    }
+    return false
+}
+
+fn read_script(path: str) -> str { return "" }
+fn find_var(name: str)   -> int { let i = 0; while i < SCRIPT_MAX_VARS  { if env.vars[i].valid  && env.vars[i].name  == name { return i }; i = i + 1 }; return -1 }
+fn find_func(name: str)  -> int { let i = 0; while i < SCRIPT_MAX_FUNCS { if env.funcs[i].valid && env.funcs[i].name == name { return i }; i = i + 1 }; return -1 }
+fn find_free_var()  -> int { let i = 0; while i < SCRIPT_MAX_VARS  { if !env.vars[i].valid  { return i }; i = i + 1 }; return -1 }
+fn find_free_func() -> int { let i = 0; while i < SCRIPT_MAX_FUNCS { if !env.funcs[i].valid { return i }; i = i + 1 }; return -1 }
+fn set_exported(name: str, v: bool) { let i = find_var(name); if i >= 0 { env.vars[i].exported = v } }
+fn find_char(s: str, ch: str) -> int { let i = 0; while i < s.len() { if s[i] == ch { return i }; i = i + 1 }; return -1 }
+fn is_ident_char(ch: str) -> bool { return (ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z") || (ch >= "0" && ch <= "9") || ch == "_" }

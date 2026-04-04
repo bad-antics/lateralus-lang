@@ -1,0 +1,102 @@
+// LateralusOS — Scientific Calculator
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import gui::window_manager
+import gui::theme_engine
+
+const CALC_W = 320
+const CALC_H = 480
+const HISTORY_MAX = 64
+
+enum CalcMode { Basic, Scientific, Programmer }
+
+struct CalcState {
+    display:   str,
+    operand1:  float,
+    operand2:  float,
+    operator:  str,
+    awaiting:  bool,
+    mode:      CalcMode,
+    memory:    float,
+    deg_mode:  bool,
+    history:   [str; HISTORY_MAX],
+    hist_cnt:  int,
+    wid:       int,
+}
+
+let mut calc = CalcState {
+    display: "0", operand1: 0.0, operand2: 0.0, operator: "",
+    awaiting: false, mode: CalcMode::Basic, memory: 0.0, deg_mode: true,
+    history: [""; HISTORY_MAX], hist_cnt: 0, wid: -1,
+}
+
+pub fn launch() {
+    calc.wid = window_manager::create_window("Calculator", 400, 200, CALC_W, CALC_H, 0)
+    serial::log("[calc] Calculator launched")
+    run()
+}
+
+fn run() { while calc.wid >= 0 { paint(); handle_input() } }
+
+pub fn press(key: str) {
+    match key {
+        "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" => {
+            if calc.display == "0" || calc.awaiting { calc.display = key; calc.awaiting = false }
+            else { calc.display = calc.display + key }
+        }
+        "." => { if !calc.display.contains(".") { calc.display = calc.display + "." } }
+        "+" | "-" | "*" | "/" => {
+            calc.operand1 = calc.display as float
+            calc.operator = key
+            calc.awaiting = true
+        }
+        "=" => { calculate() }
+        "C" => { calc.display = "0"; calc.operand1 = 0.0; calc.operator = ""; calc.awaiting = false }
+        "CE" => { calc.display = "0" }
+        "+/-" => { if calc.display != "0" { if calc.display.starts_with("-") { calc.display = calc.display.slice(1, calc.display.len()) } else { calc.display = "-" + calc.display } } }
+        "%" => { calc.display = "{calc.display as float / 100.0}" }
+        "sqrt" => { let v = calc.display as float; if v >= 0.0 { calc.display = "{sqrt(v)}" } else { calc.display = "Error" } }
+        "x^2" => { let v = calc.display as float; calc.display = "{v * v}" }
+        "1/x" => { let v = calc.display as float; if v != 0.0 { calc.display = "{1.0 / v}" } else { calc.display = "Error" } }
+        "sin" => { calc.display = "{sin_deg(calc.display as float)}" }
+        "cos" => { calc.display = "{cos_deg(calc.display as float)}" }
+        "tan" => { calc.display = "{tan_deg(calc.display as float)}" }
+        "log" => { let v = calc.display as float; if v > 0.0 { calc.display = "{log10(v)}" } else { calc.display = "Error" } }
+        "ln"  => { let v = calc.display as float; if v > 0.0 { calc.display = "{ln(v)}" } else { calc.display = "Error" } }
+        "pi"  => { calc.display = "3.14159265358979" }
+        "e"   => { calc.display = "2.71828182845905" }
+        "MR"  => { calc.display = "{calc.memory}" }
+        "MS"  => { calc.memory  = calc.display as float }
+        "M+"  => { calc.memory  = calc.memory + calc.display as float }
+        "M-"  => { calc.memory  = calc.memory - calc.display as float }
+        _ => {}
+    }
+}
+
+fn calculate() {
+    calc.operand2 = calc.display as float
+    let result: float = match calc.operator {
+        "+" => calc.operand1 + calc.operand2
+        "-" => calc.operand1 - calc.operand2
+        "*" => calc.operand1 * calc.operand2
+        "/" => if calc.operand2 != 0.0 { calc.operand1 / calc.operand2 } else { 0.0 }
+        _ => calc.operand2
+    }
+    let expr = "{calc.operand1} {calc.operator} {calc.operand2} = {result}"
+    push_history(expr)
+    calc.display  = format_result(result)
+    calc.operator = ""
+    calc.awaiting = true
+}
+
+fn format_result(v: float) -> str { if v == v as int as float { return "{v as int}" }; return "{v}" }
+fn push_history(s: str) { calc.history[calc.hist_cnt % HISTORY_MAX] = s; calc.hist_cnt = calc.hist_cnt + 1 }
+fn sqrt(v: float)     -> float { return v }
+fn sin_deg(v: float)  -> float { return 0.0 }
+fn cos_deg(v: float)  -> float { return 0.0 }
+fn tan_deg(v: float)  -> float { return 0.0 }
+fn log10(v: float)    -> float { return 0.0 }
+fn ln(v: float)       -> float { return 0.0 }
+fn paint() {}
+fn handle_input() {}

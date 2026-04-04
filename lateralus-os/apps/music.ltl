@@ -1,0 +1,138 @@
+// LateralusOS — Music Player
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import services::audio
+import fs::vfs
+import gui::window_manager
+import gui::theme_engine
+import gui::notifications
+
+const MUSIC_W      = 480
+const MUSIC_H      = 600
+const PLAYLIST_MAX = 512
+const SAMPLE_RATE  = 44100
+
+enum PlayState  { Stopped, Playing, Paused }
+enum RepeatMode { Off, One, All }
+
+struct Track {
+    path:     str,
+    title:    str,
+    artist:   str,
+    album:    str,
+    duration: int,   // seconds
+    valid:    bool,
+}
+
+let mut playlist:   [Track; PLAYLIST_MAX]  = [Track{}; PLAYLIST_MAX]
+let mut n_tracks:   int = 0
+let mut cur_track:  int = 0
+let mut state:      PlayState = PlayState::Stopped
+let mut repeat:     RepeatMode = RepeatMode::Off
+let mut shuffle:    bool = false
+let mut position:   int = 0    // seconds
+let mut volume:     int = 80
+let mut stream_id:  int = -1
+let mut wid:        int = -1
+
+pub fn launch() {
+    wid = window_manager::create_window("Music Player", 300, 150, MUSIC_W, MUSIC_H, 0)
+    stream_id = audio::open_stream(0, "music")
+    audio::set_stream_volume(stream_id, volume)
+    serial::log("[music] Music player launched")
+    run()
+}
+
+fn run() { while wid >= 0 { paint(); handle_input(); if state == PlayState::Playing { tick() } } }
+
+pub fn load_folder(path: str) {
+    let files = vfs::list_dir(path)
+    let i = 0
+    while i < files.len() && n_tracks < PLAYLIST_MAX {
+        let f = files[i]
+        if f.ends_with(".mp3") || f.ends_with(".ogg") || f.ends_with(".wav") || f.ends_with(".flac") {
+            let full = "{path}/{f}"
+            playlist[n_tracks] = Track { path: full, title: f, artist: "Unknown", album: "Unknown", duration: 0, valid: true }
+            n_tracks = n_tracks + 1
+        }
+        i = i + 1
+    }
+    serial::log("[music] Loaded {n_tracks} tracks from {path}")
+}
+
+pub fn play() {
+    if n_tracks == 0 { return }
+    state = PlayState::Playing
+    load_track(cur_track)
+    notifications::show("Playing: {playlist[cur_track].title}", 2000)
+}
+
+pub fn pause() {
+    if state == PlayState::Playing { state = PlayState::Paused }
+    else if state == PlayState::Paused { state = PlayState::Playing }
+}
+
+pub fn stop() {
+    state    = PlayState::Stopped
+    position = 0
+    audio::mute_stream(stream_id, true)
+}
+
+pub fn next() {
+    if shuffle { cur_track = pseudo_random() % n_tracks }
+    else { cur_track = (cur_track + 1) % n_tracks }
+    load_track(cur_track)
+    if state == PlayState::Playing { play() }
+}
+
+pub fn prev() {
+    if position > 3 { position = 0; return }
+    cur_track = if cur_track > 0 { cur_track - 1 } else { n_tracks - 1 }
+    load_track(cur_track)
+    if state == PlayState::Playing { play() }
+}
+
+pub fn seek(seconds: int) {
+    position = if seconds < 0 { 0 } else { seconds }
+}
+
+pub fn set_volume(vol: int) {
+    volume = if vol < 0 { 0 } else if vol > 100 { 100 } else { vol }
+    audio::set_stream_volume(stream_id, volume)
+}
+
+pub fn add_to_queue(path: str) {
+    if n_tracks >= PLAYLIST_MAX { return }
+    playlist[n_tracks] = Track { path: path, title: basename(path), artist: "Unknown", album: "Unknown", duration: 0, valid: true }
+    n_tracks = n_tracks + 1
+}
+
+pub fn set_repeat(mode: RepeatMode)  { repeat  = mode }
+pub fn toggle_shuffle()              { shuffle = !shuffle }
+pub fn get_state()    -> PlayState   { return state }
+pub fn get_position() -> int         { return position }
+pub fn get_current()  -> Track       { if n_tracks > 0 { return playlist[cur_track] }; return Track{} }
+
+fn tick() {
+    position = position + 1
+    if playlist[cur_track].duration > 0 && position >= playlist[cur_track].duration {
+        match repeat {
+            RepeatMode::One => { position = 0; play() }
+            RepeatMode::All => { next() }
+            _               => { if cur_track + 1 < n_tracks { next() } else { stop() } }
+        }
+    }
+}
+
+fn load_track(idx: int) {
+    position = 0
+    let track_data: [int] = []
+    // Decode audio file and write to stream
+    audio::write_stream(stream_id, track_data, 0)
+}
+
+fn basename(p: str) -> str { let i = p.rfind("/"); if i >= 0 { return p.slice(i + 1, p.len()) }; return p }
+fn pseudo_random() -> int { return 0x3A }
+fn paint() {}
+fn handle_input() {}

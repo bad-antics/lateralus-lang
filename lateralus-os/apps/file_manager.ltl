@@ -1,0 +1,157 @@
+// LateralusOS — File Manager
+// Copyright (c) 2025 bad-antics. All rights reserved.
+
+import hal::serial
+import fs::vfs
+import fs::ext4
+import gui::window_manager
+import gui::theme_engine
+import gui::notifications
+
+const FM_W    = 900
+const FM_H    = 600
+const SIDEBAR_W = 200
+const PANE_W    = 700
+
+struct FileEntry {
+    name:  str,
+    path:  str,
+    is_dir: bool,
+    size:  int,
+    mtime: int,
+    selected: bool,
+}
+
+struct Clipboard {
+    paths:    [str; 256],
+    n_paths:  int,
+    is_cut:   bool,
+}
+
+let mut cwd:        str = "/home"
+let mut entries:    [FileEntry; 1024] = [FileEntry{}; 1024]
+let mut n_entries:  int = 0
+let mut clipboard:  Clipboard = Clipboard { paths: [""; 256], n_paths: 0, is_cut: false }
+let mut wid:        int = -1
+let mut show_hidden: bool = false
+let mut sort_by:    str = "name"
+let mut view_mode:  str = "list"   // "list" or "grid"
+
+pub fn launch() {
+    wid = window_manager::create_window("Files - {cwd}", 80, 80, FM_W, FM_H, 0)
+    navigate_to("/home")
+    serial::log("[fileman] File manager launched")
+    run()
+}
+
+fn run() {
+    while wid >= 0 {
+        paint()
+        handle_input()
+    }
+}
+
+pub fn navigate_to(path: str) {
+    cwd = path
+    refresh()
+    window_manager::update_title(wid, "Files - {cwd}")
+}
+
+fn refresh() {
+    let names = vfs::list_dir(cwd)
+    n_entries = 0
+    let i = 0
+    while i < names.len() && n_entries < 1024 {
+        let name = names[i]
+        if !show_hidden && name.starts_with(".") { i = i + 1; continue }
+        let full = if cwd == "/" { "/{name}" } else { "{cwd}/{name}" }
+        let stat  = vfs::stat(full)
+        entries[n_entries] = FileEntry { name: name, path: full, is_dir: stat.is_dir, size: stat.size, mtime: stat.mtime, selected: false }
+        n_entries = n_entries + 1
+        i = i + 1
+    }
+    sort_entries()
+    serial::log("[fileman] Listed {n_entries} entries in {cwd}")
+}
+
+pub fn open(path: str) {
+    let stat = vfs::stat(path)
+    if stat.is_dir {
+        navigate_to(path)
+    } else {
+        launch_with_default(path)
+    }
+}
+
+pub fn copy(path: str) {
+    clipboard.paths[0] = path
+    clipboard.n_paths  = 1
+    clipboard.is_cut   = false
+    notifications::show("Copied: {path}", 1500)
+}
+
+pub fn cut(path: str) {
+    clipboard.paths[0] = path
+    clipboard.n_paths  = 1
+    clipboard.is_cut   = true
+}
+
+pub fn paste() {
+    let i = 0
+    while i < clipboard.n_paths {
+        let src  = clipboard.paths[i]
+        let name = basename(src)
+        let dst  = if cwd == "/" { "/{name}" } else { "{cwd}/{name}" }
+        if clipboard.is_cut { vfs::rename(src, dst) } else { vfs::copy(src, dst) }
+        i = i + 1
+    }
+    if clipboard.is_cut { clipboard.n_paths = 0 }
+    refresh()
+    notifications::show("Paste complete", 1500)
+}
+
+pub fn delete(path: str) {
+    vfs::unlink(path)
+    refresh()
+    notifications::show("Deleted: {path}", 1500)
+}
+
+pub fn new_folder(name: str) {
+    vfs::mkdir("{cwd}/{name}")
+    refresh()
+}
+
+pub fn rename(old_path: str, new_name: str) {
+    let new_path = "{parent_dir(old_path)}/{new_name}"
+    vfs::rename(old_path, new_path)
+    refresh()
+}
+
+pub fn go_up() {
+    let parent = parent_dir(cwd)
+    if parent != cwd { navigate_to(parent) }
+}
+
+pub fn toggle_hidden() { show_hidden = !show_hidden; refresh() }
+pub fn set_sort(by: str) { sort_by = by; sort_entries() }
+pub fn set_view(mode: str) { view_mode = mode }
+
+fn sort_entries() {}
+fn paint() {}
+fn handle_input() {}
+fn launch_with_default(path: str) {
+    let ext = file_ext(path)
+    match ext {
+        "ltl"  => {}
+        "txt"  => {}
+        "png"  => {}
+        "jpg"  => {}
+        "mp3"  => {}
+        "mp4"  => {}
+        "pdf"  => {}
+        _ => { serial::log("[fileman] No default app for .{ext}") }
+    }
+}
+fn basename(p: str) -> str { let i = p.rfind("/"); if i >= 0 { return p.slice(i + 1, p.len()) }; return p }
+fn parent_dir(p: str) -> str { let i = p.rfind("/"); if i > 0 { return p.slice(0, i) }; return "/" }
+fn file_ext(p: str) -> str { let i = p.rfind("."); if i >= 0 { return p.slice(i + 1, p.len()) }; return "" }
