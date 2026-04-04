@@ -635,7 +635,7 @@ class TestV15Codegen:
 class TestVersioning:
     def test_package_version(self):
         import lateralus_lang
-        assert lateralus_lang.__version__ == "2.4.0"
+        assert lateralus_lang.__version__ == "2.5.0"
 
     def test_compiler_output_header(self):
         py = compile_py("let x = 1")

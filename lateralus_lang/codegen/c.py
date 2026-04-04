@@ -140,6 +140,9 @@ _TYPE_MAP: Dict[str, str] = {
     "i64":    "int64_t",
     "usize":  "size_t",
     "isize":  "int64_t",
+    # Function type → function pointer (generic)
+    "fn":     "void*",
+    "Fn":     "void*",
 }
 
 
@@ -237,11 +240,51 @@ static ltl_string_t* ltl_str_concat(ltl_string_t *a, ltl_string_t *b) {
     return r;
 }
 
-/* ── I/O ─────────────────────────────────────────────────────────────── */
+/* ── I/O & Lateralus stdlib bindings ────────────────────────────────── */
 
-static void println(const char *s) { puts(s); }
-static void print_int(int64_t v)   { printf("%lld", (long long)v); }
-static void print_float(double v)  { printf("%g", v); }
+static void println(const char *s)         { puts(s ? s : ""); }
+static void print_int(int64_t v)           { printf("%lld", (long long)v); }
+static void print_float(double v)          { printf("%g", v); }
+
+/* io module */
+static void ltl_io_println(ltl_string_t *s)  { puts(s && s->len ? s->data : ""); }
+static void ltl_io_print(ltl_string_t *s)    { if (s) fputs(s->data, stdout); }
+static void ltl_io_eprintln(ltl_string_t *s) { if (s) { fputs(s->data, stderr); fputc('\\n', stderr); } else fputs("\\n", stderr); }
+static ltl_string_t* ltl_io_readline(void) {
+    char buf[4096]; if (!fgets(buf, sizeof(buf), stdin)) return ltl_str_new("");
+    size_t n = strlen(buf); if (n && buf[n-1] == '\\n') buf[n-1] = '\\0';
+    return ltl_str_new(buf);
+}
+
+/* Type-to-string helpers */
+static ltl_string_t* ltl_int_to_str(int64_t v) {
+    char buf[32]; snprintf(buf, sizeof(buf), "%lld", (long long)v);
+    return ltl_str_new(buf);
+}
+static ltl_string_t* ltl_float_to_str(double v) {
+    char buf[64]; snprintf(buf, sizeof(buf), "%g", v);
+    return ltl_str_new(buf);
+}
+static ltl_string_t* ltl_bool_to_str(bool v) { return ltl_str_new(v ? "true" : "false"); }
+static ltl_string_t* ltl_value_to_str(ltl_value_t v) {
+    switch (v.tag) {
+        case LTL_STRING: return v.s;
+        case LTL_INT:    return ltl_int_to_str(v.i);
+        case LTL_FLOAT:  return ltl_float_to_str(v.f);
+        case LTL_BOOL:   return ltl_bool_to_str(v.b);
+        default:         return ltl_str_new("nil");
+    }
+}
+/* Generic println for any value */
+static void ltl_println_any(ltl_value_t v) {
+    switch (v.tag) {
+        case LTL_STRING: puts(v.s ? v.s->data : ""); break;
+        case LTL_INT:    printf("%lld\\n", (long long)v.i); break;
+        case LTL_FLOAT:  printf("%g\\n", v.f); break;
+        case LTL_BOOL:   puts(v.b ? "true" : "false"); break;
+        default:         puts("nil"); break;
+    }
+}
 
 /* ── Dynamic list (growable array) ───────────────────────────────────── */
 
@@ -429,6 +472,8 @@ class CTranspiler(ASTVisitor):
         self._indent = 0
         self._temp_counter = 0
         self._in_fn = False
+        self._local_types: Dict[str, str] = {}    # name → C type for current fn
+        self._fn_return_types: Dict[str, str] = {}  # fn name → C return type
 
     # ── helpers ───────────────────────────────────────────────────────────
 
@@ -465,9 +510,12 @@ class CTranspiler(ASTVisitor):
         w.comment("═══ Forward Declarations ═══")
         w.line()
 
-        # First pass: collect struct/fn forward declarations
+        # First pass: collect enum/struct/fn forward declarations
         for node in ast.body:
-            if isinstance(node, StructDecl):
+            if isinstance(node, EnumDecl):
+                self._w.comment(f"enum {node.name} (defined below)")
+                self._w.line(f"typedef struct ltl_enum_{self._mangle(node.name)} {self._mangle(node.name)};")
+            elif isinstance(node, StructDecl):
                 self._emit_struct_forward(node)
             elif isinstance(node, FnDecl):
                 self._emit_fn_forward(node)
@@ -489,6 +537,11 @@ class CTranspiler(ASTVisitor):
         for node in ast.body:
             if isinstance(node, StructDecl):
                 continue  # already emitted
+            if isinstance(node, ExprStmt):
+                # Bare expression statements at file scope are invalid C
+                # (e.g. top-level function calls). Skip them — main() handles entry.
+                w.comment(f"top-level expr (skipped in C — handled by main)")
+                continue
             self._visit(node)
             w.line()
 
@@ -501,6 +554,112 @@ class CTranspiler(ASTVisitor):
         return w.result()
 
     # ── visit dispatch ────────────────────────────────────────────────────
+
+    # ── type inference helpers ────────────────────────────────────────────
+
+    def _infer_ctype_from_expr(self, node) -> str:
+        """Heuristically infer a C type from an AST expression node."""
+        if node is None:
+            return "ltl_value_t"
+        if isinstance(node, Literal):
+            if isinstance(node.value, bool):  return "bool"
+            if isinstance(node.value, int):   return "int64_t"
+            if isinstance(node.value, float): return "double"
+            if isinstance(node.value, str):   return "ltl_string_t*"
+            return "ltl_value_t"
+        if isinstance(node, (InterpolatedStr,)):
+            return "ltl_string_t*"
+        if isinstance(node, Ident):
+            # Look up known local variable types
+            nm = self._mangle(node.name)
+            if nm in self._local_types:
+                return self._local_types[nm]
+            # Look up known function return types
+            if nm in self._fn_return_types:
+                return self._fn_return_types[nm]
+        if isinstance(node, BinOp):
+            op = getattr(node, "op", "+")
+            if op in ("+", "-", "*", "/", "%"):
+                lt = self._infer_ctype_from_expr(node.left)
+                rt = self._infer_ctype_from_expr(node.right)
+                if "ltl_string_t*" in (lt, rt): return "ltl_string_t*"
+                if "double" in (lt, rt):         return "double"
+                if lt == "int64_t" and rt == "int64_t": return "int64_t"
+            if op in ("==", "!=", "<", ">", "<=", ">=", "and", "or", "not"):
+                return "bool"
+        if isinstance(node, CastExpr):
+            tname = getattr(node.target, "name", None) if node.target else None
+            if tname == "str":   return "ltl_string_t*"
+            if tname == "int":   return "int64_t"
+            if tname == "float": return "double"
+            if tname == "bool":  return "bool"
+            return _c_type(node.target, "ltl_value_t")
+        if isinstance(node, CallExpr):
+            if isinstance(node.callee, Ident):
+                nm = self._mangle(node.callee.name)
+                if nm in ("ltl_int_to_str", "ltl_float_to_str",
+                          "ltl_bool_to_str", "ltl_str_new", "ltl_str_concat"):
+                    return "ltl_string_t*"
+                # Look up fn return type
+                if nm in self._fn_return_types:
+                    return self._fn_return_types[nm]
+        return "ltl_value_t"
+
+    # ── stdlib module call mapping ─────────────────────────────────────────
+
+    _IO_MATH = {
+        "sqrt": "sqrt", "cbrt": "cbrt", "abs": "fabs", "fabs": "fabs",
+        "floor": "floor", "ceil": "ceil", "round": "round",
+        "pow": "pow", "exp": "exp", "log": "log", "log2": "log2",
+        "log10": "log10", "sin": "sin", "cos": "cos", "tan": "tan",
+        "asin": "asin", "acos": "acos", "atan": "atan", "atan2": "atan2",
+        "min": "fmin", "max": "fmax",
+    }
+
+    def _map_stdlib_call(self, mod: str, method: str, args: "List[str]") -> "Optional[str]":
+        """Map a Lateralus module.method call to a C expression."""
+        a0 = args[0] if args else 'ltl_str_new("")'
+        all_args = ", ".join(args)
+        # io module
+        if mod == "io":
+            if method == "println":  return f"ltl_io_println({a0})"
+            if method == "print":    return f"ltl_io_print({a0})"
+            if method == "eprintln": return f"ltl_io_eprintln({a0})"
+            if method == "readline": return f"ltl_io_readline()"
+            if method in ("println_int",):
+                return f"printf(\"%%lld\\n\", (long long){a0})"
+        # fmt module
+        if mod == "fmt":
+            if method in ("println", "writeln"): return f"ltl_io_println({a0})"
+            if method in ("print", "write"):     return f"ltl_io_print({a0})"
+        # math module
+        if mod == "math":
+            if method in self._IO_MATH:
+                cfn = self._IO_MATH[method]
+                return f"{cfn}({all_args})"
+            if method == "pi": return "M_PI"
+            if method == "tau": return "(2.0 * M_PI)"
+            if method == "inf": return "INFINITY"
+        # mem module
+        if mod == "mem":
+            if method == "alloc": return f"malloc({a0})"
+            if method == "free":  return f"free({a0}), 0"
+            if method == "realloc": return f"realloc({all_args})"
+            if method == "copy": return f"memcpy({all_args})"
+            if method == "set":  return f"memset({all_args})"
+        # sys / os module
+        if mod in ("sys", "os"):
+            if method == "exit": return f"exit({a0})"
+            if method == "abort": return "abort()"
+            if method == "panic": return f"(puts({a0}->data), abort(), 0)"
+        # str / strings module
+        if mod in ("str", "strings"):
+            if method == "len": return f"({a0}->len)"
+            if method == "concat": return f"ltl_str_concat({all_args})"
+        # process
+        if mod == "process":
+            if method == "exit": return f"exit({a0})"
+        return None
 
     def _visit(self, node: Node):
         method = f"_visit_{type(node).__name__}"
@@ -544,6 +703,7 @@ class CTranspiler(ASTVisitor):
         params = self._format_params(node.params)
         self._w.line(f"static {ret} {name}({params});")
         self._functions.append(name)
+        self._fn_return_types[name] = ret  # track for type inference
 
     def _format_params(self, params: List[Param]) -> str:
         if not params:
@@ -565,6 +725,7 @@ class CTranspiler(ASTVisitor):
 
         self._in_fn = True
         self._local_vars = set()
+        self._local_types = {}
 
         w.block_open(f"static {ret} {name}({params})")
         if node.body:
@@ -586,16 +747,33 @@ class CTranspiler(ASTVisitor):
     # ── statements ────────────────────────────────────────────────────────
 
     def _visit_LetDecl(self, node: LetDecl):
-        ctype = _c_type(getattr(node, "type_", None), "ltl_value_t")
+        explicit = _c_type(getattr(node, "type_", None), None)
+        if explicit is not None:
+            ctype = explicit
+        elif node.value is not None:
+            ctype = self._infer_ctype_from_expr(node.value)
+        else:
+            ctype = "ltl_value_t"
         name = self._mangle(node.name)
-        val = self._visit_expr(node.value) if node.value else "({0})"
+        val  = self._visit_expr(node.value) if node.value else "/* uninitialized */ {0}"
         self._w.line(f"{ctype} {name} = {val};")
+        self._local_types[name] = ctype
         self._local_vars.add(name)
 
     def _visit_AssignStmt(self, node: AssignStmt):
         target = self._visit_expr(node.target)
-        value = self._visit_expr(node.value)
-        self._w.line(f"{target} = {value};")
+        value  = self._visit_expr(node.value)
+        op     = getattr(node, "op", "=") or "="
+        # Compound assignment operators
+        compound_map = {
+            "+=": "+=", "-=": "-=", "*=": "*=", "/=": "/=", "%=": "%=",
+            "&=": "&=", "|=": "|=", "^=": "^=", "<<=": "<<=", ">>=": ">>=",
+            "|>=": "= /* |>= */ ",  # pipeline assign
+        }
+        if op in compound_map:
+            self._w.line(f"{target} {compound_map[op]} {value};")
+        else:
+            self._w.line(f"{target} = {value};")
 
     def _visit_ReturnStmt(self, node: ReturnStmt):
         if node.value:
@@ -824,21 +1002,44 @@ class CTranspiler(ASTVisitor):
         return self._mangle(node.name)
 
     def _expr_BinOp(self, node: BinOp) -> str:
-        left = self._visit_expr(node.left)
+        op = getattr(node, "op", "+")
+        if op == "|>":
+            right = self._visit_expr(node.right)
+            left  = self._visit_expr(node.left)
+            return f"{right}({left})"
+        if op == "**":
+            left  = self._visit_expr(node.left)
+            right = self._visit_expr(node.right)
+            return f"pow({left}, {right})"
+        # Detect string concatenation before visiting (needs type info)
+        if op == "+":
+            lt = self._infer_ctype_from_expr(node.left)
+            rt = self._infer_ctype_from_expr(node.right)
+            left  = self._visit_expr(node.left)
+            right = self._visit_expr(node.right)
+            if lt == "ltl_string_t*" or rt == "ltl_string_t*":
+                # Coerce non-string side if needed
+                if lt != "ltl_string_t*":
+                    if lt == "int64_t":   left  = f"ltl_int_to_str({left})"
+                    elif lt == "double":  left  = f"ltl_float_to_str({left})"
+                    elif lt == "bool":    left  = f"ltl_bool_to_str({left})"
+                    elif lt == "ltl_value_t": left = f"ltl_value_to_str({left})"
+                if rt != "ltl_string_t*":
+                    if rt == "int64_t":   right = f"ltl_int_to_str({right})"
+                    elif rt == "double":  right = f"ltl_float_to_str({right})"
+                    elif rt == "bool":    right = f"ltl_bool_to_str({right})"
+                    elif rt == "ltl_value_t": right = f"ltl_value_to_str({right})"
+                return f"ltl_str_concat({left}, {right})"
+        left  = self._visit_expr(node.left)
         right = self._visit_expr(node.right)
         op_map = {
             "+": "+", "-": "-", "*": "*", "/": "/", "%": "%",
-            "**": "/* pow */", "==": "==", "!=": "!=",
+            "==": "==", "!=": "!=",
             "<": "<", ">": ">", "<=": "<=", ">=": ">=",
             "and": "&&", "or": "||",
             "&": "&", "|": "|", "^": "^", "<<": "<<", ">>": ">>",
         }
-        op = getattr(node, "op", "+")
         c_op = op_map.get(op, op)
-        if op == "**":
-            return f"pow({left}, {right})"
-        if op == "|>":
-            return f"{right}({left})"
         return f"({left} {c_op} {right})"
 
     def _expr_UnaryOp(self, node: UnaryOp) -> str:
@@ -849,6 +1050,14 @@ class CTranspiler(ASTVisitor):
         return f"({op}{operand})"
 
     def _expr_CallExpr(self, node: CallExpr) -> str:
+        # Intercept stdlib module calls: io.println(...), math.sqrt(...), etc.
+        if isinstance(node.callee, FieldExpr) and isinstance(node.callee.obj, Ident):
+            mod    = node.callee.obj.name
+            method = node.callee.field
+            args   = [self._visit_expr(a) for a in node.args]
+            mapped = self._map_stdlib_call(mod, method, args)
+            if mapped is not None:
+                return mapped
         func = self._visit_expr(node.callee)
         args = ", ".join(self._visit_expr(a) for a in node.args)
         return f"{func}({args})"
@@ -859,8 +1068,18 @@ class CTranspiler(ASTVisitor):
         return f"{obj}->items[{idx}]"
 
     def _expr_FieldExpr(self, node: FieldExpr) -> str:
+        # Handle module constant access: math.PI, sys.STDOUT, etc.
+        if isinstance(node.obj, Ident):
+            mod = node.obj.name
+            field = node.field
+            if mod == "math":
+                consts = {"PI": "M_PI", "E": "M_E", "INF": "INFINITY",
+                          "NAN": "NAN", "TAU": "(2.0*M_PI)"}
+                if field in consts:
+                    return consts[field]
         obj = self._visit_expr(node.obj)
-        return f"{obj}.{self._mangle(node.field)}"
+        # Use -> for pointer types, . for value types
+        return f"{obj}->{self._mangle(node.field)}" if obj.endswith("*") or "ltl_" in obj else f"{obj}.{self._mangle(node.field)}"
 
     def _expr_ListExpr(self, node: ListExpr) -> str:
         # Build a list from elements
@@ -933,6 +1152,19 @@ class CTranspiler(ASTVisitor):
 
     def _expr_CastExpr(self, node: CastExpr) -> str:
         val = self._visit_expr(node.value)
+        src_type = self._infer_ctype_from_expr(node.value)
+        tname = getattr(node.target, "name", None) if node.target else None
+        # Smart cast: value-to-string
+        if tname == "str":
+            if src_type == "int64_t":    return f"ltl_int_to_str({val})"
+            if src_type == "double":     return f"ltl_float_to_str({val})"
+            if src_type == "bool":       return f"ltl_bool_to_str({val})"
+            if src_type == "ltl_value_t": return f"ltl_value_to_str({val})"
+            return f"ltl_value_to_str((ltl_value_t){{.tag=LTL_STRING,.s=(ltl_string_t*){val}}})"
+        # String-to-int/float
+        if tname == "int":   return f"(int64_t)({val})"
+        if tname == "float": return f"(double)({val})"
+        if tname == "bool":  return f"(bool)({val})"
         target = _c_type(node.target, "ltl_value_t")
         return f"(({target}){val})"
 

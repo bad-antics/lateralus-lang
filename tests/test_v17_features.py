@@ -762,7 +762,7 @@ class TestVersion:
 
     def test_version_is_1_7_0(self):
         from lateralus_lang import __version__
-        assert __version__ == "2.4.0"
+        assert __version__ == "2.5.0"
 
 
 # ═══════════════════════════════════════════════════════════════════════

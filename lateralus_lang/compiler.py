@@ -70,6 +70,8 @@ class Target(Enum):
     WASM       = auto()   # WebAssembly Text Format (.wat) compilation
     ASSEMBLE   = auto()   # .ltasm source → Bytecode → VM
     CHECK      = auto()   # Lex + parse + semantic analysis only (no codegen)
+    LLVM       = auto()   # LLVM IR source (.ll) — compile with clang or llc
+    X86_64     = auto()   # Native x86_64 NASM assembly (.asm)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -86,6 +88,8 @@ class CompileResult:
     c_src:       Optional[str]        = None
     js_src:      Optional[str]        = None
     wasm_src:    Optional[str]        = None
+    llvm_src:    Optional[str]        = None
+    x86_src:     Optional[str]        = None
     ir_module:   Optional[IRModule]   = None
     exit_code:   int                  = 0
     elapsed_ms:  float                = 0.0
@@ -265,6 +269,32 @@ class Compiler:
             elapsed = (time.monotonic() - t0) * 1000
             return CompileResult(ok=True, target=target, source_file=filename,
                                  wasm_src=wasm_src, ir_module=ir_module,
+                                 elapsed_ms=elapsed,
+                                 errors=[], warnings=reporter.all())
+
+        if target == Target.LLVM:
+            try:
+                from .codegen.llvm import transpile_to_llvm
+                llvm_src = transpile_to_llvm(ast, source_file=filename)
+            except Exception as exc:
+                reporter.add_exception(exc, Severity.FATAL)
+                return self._failed(reporter, filename, target, t0, ir_module=ir_module)
+            elapsed = (time.monotonic() - t0) * 1000
+            return CompileResult(ok=True, target=target, source_file=filename,
+                                 llvm_src=llvm_src, ir_module=ir_module,
+                                 elapsed_ms=elapsed,
+                                 errors=[], warnings=reporter.all())
+
+        if target == Target.X86_64:
+            try:
+                from .codegen.x86_64 import transpile_to_x86_64
+                x86_src = transpile_to_x86_64(ast, source_file=filename)
+            except Exception as exc:
+                reporter.add_exception(exc, Severity.FATAL)
+                return self._failed(reporter, filename, target, t0, ir_module=ir_module)
+            elapsed = (time.monotonic() - t0) * 1000
+            return CompileResult(ok=True, target=target, source_file=filename,
+                                 x86_src=x86_src, ir_module=ir_module,
                                  elapsed_ms=elapsed,
                                  errors=[], warnings=reporter.all())
 

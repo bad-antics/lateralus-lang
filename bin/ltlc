@@ -38,6 +38,13 @@ from lateralus_lang import (
 )
 from lateralus_lang.errors import ErrorReporter, Severity
 
+# Ensure lateralus_lang is importable from generated Python scripts
+import os as _os
+_LTL_PKG_ROOT = str(_HERE)
+if _LTL_PKG_ROOT not in _os.environ.get("PYTHONPATH", ""):
+    _os.environ["PYTHONPATH"] = _LTL_PKG_ROOT + _os.pathsep + _os.environ.get("PYTHONPATH", "")
+sys.path.insert(0, _LTL_PKG_ROOT)
+
 
 def _make_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -81,6 +88,37 @@ def _make_parser() -> argparse.ArgumentParser:
 
     # repl
     sub.add_parser("repl", help="Launch interactive REPL")
+
+    # llvm
+    ll = sub.add_parser("llvm", help="Transpile to LLVM IR (.ll)")
+    ll.add_argument("file")
+    ll.add_argument("-o", "--output", default=None)
+    ll.add_argument("--no-opt", action="store_true", help="Skip opt pass")
+
+    # compile  (full native pipeline: .ltl → LLVM IR → native binary)
+    nc = sub.add_parser("compile", help="Compile to native binary via LLVM")
+    nc.add_argument("file")
+    nc.add_argument("-o", "--output", default=None)
+    nc.add_argument("--opt", default="2", choices=["0","1","2","3","s","z"],
+                    help="Optimisation level (default: 2)")
+    nc.add_argument("--target", default=None,
+                    help="Target triple (default: host)")
+    nc.add_argument("--emit-llvm", action="store_true",
+                    help="Also save the intermediate .ll file")
+    nc.add_argument("--link", nargs="*", default=[],
+                    help="Extra link flags (e.g. --link -lm -lpthread)")
+
+    # x86_64
+    x64 = sub.add_parser("x86_64", help="Emit NASM x86_64 assembly (.asm)")
+    x64.add_argument("file")
+    x64.add_argument("-o", "--output", default=None)
+
+    # nasm  (full native pipeline: .ltl → x86_64 asm → NASM → binary)
+    nm = sub.add_parser("nasm", help="Compile to native binary via NASM")
+    nm.add_argument("file")
+    nm.add_argument("-o", "--output", default=None)
+    nm.add_argument("--emit-asm", action="store_true",
+                    help="Also save the intermediate .asm file")
 
     # asm
     a = sub.add_parser("asm", help="Assemble .ltasm to bytecode")
@@ -174,6 +212,164 @@ def main(argv=None) -> int:
         with open(out, "wb") as f:
             pickle.dump(bc, f)
         _ok(f"Assembled → {out}")
+        return 0
+
+    # ── llvm ─────────────────────────────────────────────────────────────────
+    if args.command == "llvm":
+        from lateralus_lang.codegen.llvm import transpile_to_llvm
+        from lateralus_lang import parse
+        src_file = args.file
+        source = pathlib.Path(src_file).read_text(encoding="utf-8")
+        try:
+            ast = parse(source, filename=src_file)
+            ll_src = transpile_to_llvm(ast, source_file=src_file)
+        except Exception as exc:
+            _err(str(exc)); return 1
+        if args.output:
+            pathlib.Path(args.output).write_text(ll_src, encoding="utf-8")
+            _ok(f"Wrote LLVM IR → {args.output}")
+        else:
+            print(ll_src)
+        return 0
+
+    # ── compile ───────────────────────────────────────────────────────────────
+    if args.command == "compile":
+        import subprocess, tempfile, shutil
+        from lateralus_lang.codegen.llvm import transpile_to_llvm
+        from lateralus_lang import parse
+
+        src_file = args.file
+        source   = pathlib.Path(src_file).read_text(encoding="utf-8")
+        out_bin  = args.output or pathlib.Path(src_file).stem
+
+        # 1. Parse + emit LLVM IR
+        try:
+            ast    = parse(source, filename=src_file)
+            ll_src = transpile_to_llvm(ast, source_file=src_file)
+        except Exception as exc:
+            _err(f"Transpile error: {exc}"); return 1
+
+        # 2. Write to temp .ll file
+        with tempfile.NamedTemporaryFile(suffix=".ll", delete=False, mode="w",
+                                         encoding="utf-8") as tf:
+            tf.write(ll_src)
+            ll_path = tf.name
+
+        if getattr(args, "emit_llvm", False):
+            ll_save = pathlib.Path(src_file).with_suffix(".ll")
+            pathlib.Path(ll_save).write_text(ll_src, encoding="utf-8")
+            _ok(f"Saved LLVM IR → {ll_save}")
+
+        # 3. Try clang first (best one-shot compile), fall back to llc+gcc
+        opt_lvl = getattr(args, "opt", "2")
+        extra   = list(getattr(args, "link", []) or [])
+
+        clang   = shutil.which("clang")
+        llc     = shutil.which("llc")
+        gcc     = shutil.which("gcc")
+
+        try:
+            if clang:
+                cmd = [clang, f"-O{opt_lvl}", "-o", str(out_bin), ll_path] + extra + ["-lm"]
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                if result.returncode == 0:
+                    _ok(f"Compiled → {out_bin}  (clang)")
+                else:
+                    _err("clang compilation failed:")
+                    if result.stderr: print(result.stderr, file=sys.stderr)
+                    return 1
+            elif llc and gcc:
+                obj_path = ll_path.replace(".ll", ".o")
+                r1 = subprocess.run([llc, "-filetype=obj", ll_path, "-o", obj_path],
+                                    capture_output=True, text=True)
+                if r1.returncode != 0:
+                    _err("llc failed:"); print(r1.stderr, file=sys.stderr); return 1
+                r2 = subprocess.run([gcc, "-O2", "-o", str(out_bin), obj_path] + extra + ["-lm"],
+                                    capture_output=True, text=True)
+                if r2.returncode != 0:
+                    _err("gcc link failed:"); print(r2.stderr, file=sys.stderr); return 1
+                _ok(f"Compiled → {out_bin}  (llc+gcc)")
+            else:
+                _err("No clang or llc found — install LLVM to use 'compile'"); return 1
+        finally:
+            import os
+            try: os.unlink(ll_path)
+            except OSError: pass
+        return 0
+
+    # ── x86_64 ───────────────────────────────────────────────────────────────
+    if args.command == "x86_64":
+        from lateralus_lang.codegen.x86_64 import transpile_to_x86_64
+        from lateralus_lang import parse
+        src_file = args.file
+        source = pathlib.Path(src_file).read_text(encoding="utf-8")
+        try:
+            ast = parse(source, filename=src_file)
+            asm_src = transpile_to_x86_64(ast, source_file=src_file)
+        except Exception as exc:
+            _err(str(exc)); return 1
+        if args.output:
+            pathlib.Path(args.output).write_text(asm_src, encoding="utf-8")
+            _ok(f"Wrote x86_64 ASM → {args.output}")
+        else:
+            print(asm_src)
+        return 0
+
+    # ── nasm ──────────────────────────────────────────────────────────────────
+    if args.command == "nasm":
+        import subprocess, tempfile, shutil
+        from lateralus_lang.codegen.x86_64 import transpile_to_x86_64
+        from lateralus_lang import parse
+
+        src_file = args.file
+        source   = pathlib.Path(src_file).read_text(encoding="utf-8")
+        out_bin  = args.output or pathlib.Path(src_file).stem
+
+        try:
+            ast     = parse(source, filename=src_file)
+            asm_src = transpile_to_x86_64(ast, source_file=src_file)
+        except Exception as exc:
+            _err(f"Transpile error: {exc}"); return 1
+
+        # Write .asm
+        with tempfile.NamedTemporaryFile(suffix=".asm", delete=False, mode="w",
+                                          encoding="utf-8") as tf:
+            tf.write(asm_src)
+            asm_path = tf.name
+
+        if getattr(args, "emit_asm", False):
+            asm_save = pathlib.Path(src_file).with_suffix(".asm")
+            pathlib.Path(asm_save).write_text(asm_src, encoding="utf-8")
+            _ok(f"Saved x86_64 ASM → {asm_save}")
+
+        nasm_bin = shutil.which("nasm")
+        gcc_bin  = shutil.which("gcc")
+
+        try:
+            if not nasm_bin:
+                _err("nasm not found — install with: sudo apt install nasm"); return 1
+            if not gcc_bin:
+                _err("gcc not found — install with: sudo apt install gcc"); return 1
+
+            obj_path = asm_path.replace(".asm", ".o")
+            r1 = subprocess.run(
+                [nasm_bin, "-f", "elf64", asm_path, "-o", obj_path],
+                capture_output=True, text=True)
+            if r1.returncode != 0:
+                _err("nasm failed:"); print(r1.stderr, file=sys.stderr); return 1
+
+            r2 = subprocess.run(
+                [gcc_bin, obj_path, "-o", str(out_bin), "-no-pie", "-lm"],
+                capture_output=True, text=True)
+            if r2.returncode != 0:
+                _err("gcc link failed:"); print(r2.stderr, file=sys.stderr); return 1
+
+            _ok(f"Compiled → {out_bin}  (nasm+gcc)")
+        finally:
+            import os
+            for f in [asm_path, asm_path.replace(".asm", ".o")]:
+                try: os.unlink(f)
+                except OSError: pass
         return 0
 
     # ── disasm ────────────────────────────────────────────────────────────────
