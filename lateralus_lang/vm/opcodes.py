@@ -1,18 +1,18 @@
 """
-lateralus_lang/vm/opcodes.py  ─  LATERALUS Assembly Opcode Definitions
-═══════════════════════════════════════════════════════════════════════════
+lateralus_lang/vm/opcodes.py  -  LATERALUS Assembly Opcode Definitions
+===========================================================================
 The Lateralus Assembly Language (.ltasm) targets the LTasm virtual machine
 — a register-assisted, stack-based bytecode VM.
 
 Register file
-─────────────
+-------------
   r0–r15   general-purpose (64-bit)
   sp       stack pointer        (auto-managed)
   pc       program counter      (auto-managed)
   flags    condition flags: Z (zero) C (carry) N (negative) O (overflow)
 
 Instruction encoding (variable width, little-endian)
-──────────────────────────────────────────────────────
+------------------------------------------------------
   [1 byte opcode][optional operand bytes]
 
 Operand encoding helpers
@@ -20,7 +20,7 @@ Operand encoding helpers
   - reg  (1 byte: 0–15)
   - mem  (4 bytes: absolute address in data segment)
   - str  (4 bytes: index into string table)
-═══════════════════════════════════════════════════════════════════════════
+===========================================================================
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ from enum import IntEnum
 
 
 class Op(IntEnum):
-    # ── Stack manipulation ────────────────────────────────────────────────────
+    # -- Stack manipulation ----------------------------------------------------
     NOP        = 0x00   # no-op
     PUSH_IMM   = 0x01   # PUSH  <imm64>   — push literal int/float
     PUSH_STR   = 0x02   # PUSH  <str_idx> — push string from string table
@@ -39,7 +39,7 @@ class Op(IntEnum):
     DUP2       = 0x07   # DUP2            — duplicate top two
     SWAP       = 0x08   # SWAP            — swap top two
 
-    # ── Arithmetic ────────────────────────────────────────────────────────────
+    # -- Arithmetic ------------------------------------------------------------
     ADD        = 0x10   # pop b, pop a → push a+b
     SUB        = 0x11   # pop b, pop a → push a-b
     MUL        = 0x12   # pop b, pop a → push a*b
@@ -54,7 +54,7 @@ class Op(IntEnum):
     FMUL       = 0x1B   # float mul
     FDIV       = 0x1C   # float div
 
-    # ── Bitwise ───────────────────────────────────────────────────────────────
+    # -- Bitwise ---------------------------------------------------------------
     AND        = 0x20
     OR         = 0x21
     XOR        = 0x22
@@ -62,7 +62,7 @@ class Op(IntEnum):
     SHL        = 0x24   # shift left  (pop count, pop value)
     SHR        = 0x25   # shift right
 
-    # ── Comparison ────────────────────────────────────────────────────────────
+    # -- Comparison ------------------------------------------------------------
     CMP        = 0x30   # pop b, pop a → sets flags, pushes 0/1
     CMPEQ      = 0x31   # push (a == b)
     CMPNE      = 0x32   # push (a != b)
@@ -71,7 +71,7 @@ class Op(IntEnum):
     CMPGT      = 0x35   # push (a >  b)
     CMPGE      = 0x36   # push (a >= b)
 
-    # ── Control flow ──────────────────────────────────────────────────────────
+    # -- Control flow ----------------------------------------------------------
     JMP        = 0x40   # JMP  <addr32>   — unconditional
     JT         = 0x41   # JT   <addr32>   — jump if top truthy (pop)
     JF         = 0x42   # JF   <addr32>   — jump if top falsy  (pop)
@@ -83,7 +83,7 @@ class Op(IntEnum):
     TAIL_CALL  = 0x48   # TAIL_CALL <addr32> — tail-call optimised
     HALT       = 0x49   # stop execution, top of stack = exit value
 
-    # ── Memory / registers ────────────────────────────────────────────────────
+    # -- Memory / registers ----------------------------------------------------
     LOAD       = 0x50   # LOAD  r<n>, <addr32> — memory → register
     STORE      = 0x51   # STORE r<n>, <addr32> — register → memory
     LOAD_IDX   = 0x52   # LOAD_IDX r<dst>, r<base>, r<idx>
@@ -92,13 +92,13 @@ class Op(IntEnum):
     MOV_IMM    = 0x55   # MOV   r<dst>, <imm64>
     LEA        = 0x56   # LEA   r<dst>, <label>  — load effective address
 
-    # ── Heap / GC ─────────────────────────────────────────────────────────────
+    # -- Heap / GC -------------------------------------------------------------
     ALLOC      = 0x60   # ALLOC r<dst>, <size_imm> — heap allocation
     FREE       = 0x61   # FREE  r<src>
     GCPAUSE    = 0x62   # hint the GC to run
     SIZEOF_OP  = 0x63   # SIZEOF_OP r<dst>, r<src>  — runtime size of object
 
-    # ── Type coercion ─────────────────────────────────────────────────────────
+    # -- Type coercion ---------------------------------------------------------
     INT_TO_F   = 0x70   # int → float
     F_TO_INT   = 0x71   # float → int (truncate)
     INT_TO_STR = 0x72
@@ -107,7 +107,7 @@ class Op(IntEnum):
     STR_TO_F   = 0x75
     TYPEOF_OP  = 0x76   # push type string of top
 
-    # ── String / collection ops ───────────────────────────────────────────────
+    # -- String / collection ops -----------------------------------------------
     STR_CAT    = 0x80   # concatenate two strings
     STR_LEN    = 0x81   # push length of string
     STR_SLICE  = 0x82   # STR_SLICE (str, start, end) → str
@@ -124,7 +124,7 @@ class Op(IntEnum):
     MAP_DEL    = 0x8D
     MAP_KEYS   = 0x8E
 
-    # ── I/O ───────────────────────────────────────────────────────────────────
+    # -- I/O -------------------------------------------------------------------
     PRINT      = 0x90   # print top (no newline)
     PRINTLN    = 0x91   # print top + newline
     READ_LINE  = 0x92   # push input line
@@ -132,7 +132,7 @@ class Op(IntEnum):
     READ_FLOAT = 0x94
     FLUSH      = 0x95
 
-    # ── System / FFI ──────────────────────────────────────────────────────────
+    # -- System / FFI ----------------------------------------------------------
     SYSCALL    = 0xA0   # SYSCALL <syscall_id_imm8> — host system call
     FOREIGN    = 0xA1   # FOREIGN <func_name_str_idx> — call native via FFI
     SPAWN      = 0xA2   # spawn lightweight coroutine, push coroutine handle
@@ -140,7 +140,7 @@ class Op(IntEnum):
     YIELD      = 0xA4   # yield from current coroutine
     SLEEP      = 0xA5   # SLEEP (ms on stack)
 
-    # ── Error handling ────────────────────────────────────────────────────────
+    # -- Error handling --------------------------------------------------------
     TRY_BEGIN  = 0xB0   # TRY_BEGIN <recover_addr32> — push error frame
     TRY_END    = 0xB1   # pop error frame (normal exit)
     THROW      = 0xB2   # THROW — pop error object, unwind stack
@@ -149,14 +149,14 @@ class Op(IntEnum):
     ENSURE_END = 0xB5   # mark ensure block end
     RETHROW    = 0xB6   # re-throw current error
 
-    # ── Debug ─────────────────────────────────────────────────────────────────
+    # -- Debug -----------------------------------------------------------------
     BREAKPOINT = 0xF0   # debugger breakpoint
     TRACE      = 0xF1   # TRACE <str_idx> — emit trace message
     ASSERT     = 0xF2   # ASSERT — pop bool, throw if false
     DUMP_STACK = 0xF3   # print VM stack (debug)
     DUMP_REGS  = 0xF4   # print registers
 
-    # ── Short aliases (test-friendly names) ───────────────────────────────────
+    # -- Short aliases (test-friendly names) -----------------------------------
     EQ        = 0x31   # alias for CMPEQ
     NE        = 0x32   # alias for CMPNE
     LT        = 0x33   # alias for CMPLT
@@ -167,9 +167,9 @@ class Op(IntEnum):
     STORE_REG = 0x05   # alias for POP_REG   (pop top into register)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Opcode metadata (name, operand schema, description)
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 _NONE  = ()          # no operands
 _IMM64 = ("imm64",)

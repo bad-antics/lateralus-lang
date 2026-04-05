@@ -1,5 +1,5 @@
 """
-tests/test_compiler.py  ─  End-to-end compiler pipeline tests
+tests/test_compiler.py  -  End-to-end compiler pipeline tests
 """
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
@@ -17,7 +17,7 @@ def check(src: str, target=Target.PYTHON) -> CompileResult:
     return Compiler().compile_source(src, target=target, filename="<test>")
 
 
-# ─── Compilation success guard ─────────────────────────────────────────────────
+# --- Compilation success guard -------------------------------------------------
 
 class TestBasicCompilation:
     def test_empty_source(self):
@@ -38,7 +38,7 @@ class TestBasicCompilation:
         assert r.ok
 
 
-# ─── Python transpiler output ──────────────────────────────────────────────────
+# --- Python transpiler output --------------------------------------------------
 
 class TestPythonTranspiler:
     def test_let_becomes_assignment(self):
@@ -101,7 +101,7 @@ class TestPythonTranspiler:
         assert "None" in r.python_src
 
 
-# ─── Error reporting ──────────────────────────────────────────────────────────
+# --- Error reporting ----------------------------------------------------------
 
 class TestErrorReporting:
     def test_syntax_error_not_ok(self):
@@ -126,7 +126,7 @@ class TestErrorReporting:
         assert "error" in s.lower() or "fail" in s.lower()
 
 
-# ─── Target: CHECK (lex + parse + semantic only) ───────────────────────────────
+# --- Target: CHECK (lex + parse + semantic only) -------------------------------
 
 class TestCheckTarget:
     def test_valid_code_ok(self):
@@ -140,7 +140,7 @@ class TestCheckTarget:
         assert not r.ok
 
 
-# ─── Assembly target ──────────────────────────────────────────────────────────
+# --- Assembly target ----------------------------------------------------------
 
 class TestAssemblyTarget:
     def test_assemble_simple(self):
@@ -155,7 +155,7 @@ class TestAssemblyTarget:
         assert not r.ok
 
 
-# ─── CompileResult helpers ────────────────────────────────────────────────────
+# --- CompileResult helpers ----------------------------------------------------
 
 class TestCompileResult:
     def test_result_ok_flag(self):

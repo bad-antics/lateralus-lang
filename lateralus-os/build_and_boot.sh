@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 # LateralusOS — Quick Build & Boot Script
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 # Copyright (c) 2025 bad-antics. All rights reserved.
 #
 # Usage:
@@ -10,7 +10,7 @@
 #   ./build_and_boot.sh --iso    # Build + create ISO only (GUI menu default)
 #   ./build_and_boot.sh --test   # Build + run headless test (text shell)
 #   ./build_and_boot.sh --vnc    # Build + run with VNC display on :1
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 
 set -e
 cd "$(dirname "$0")"
@@ -19,17 +19,17 @@ BUILD=build
 CFLAGS="-ffreestanding -nostdlib -O2 -Wall -std=c99 -mno-red-zone -mgeneral-regs-only -fno-exceptions -fno-stack-protector"
 GUI_CFLAGS="$CFLAGS -Wno-unused-function"
 
-echo "═══════════════════════════════════════════════════"
+echo "==================================================="
 echo "  LateralusOS Build System"
-echo "═══════════════════════════════════════════════════"
+echo "==================================================="
 
 mkdir -p "$BUILD/boot" "$BUILD/gui" "$BUILD/fs" "$BUILD/drivers" "$BUILD/kernel"
 
-# ── Assemble ─────────────────────────────────────────────────────────────
+# -- Assemble -------------------------------------------------------------
 echo "[1/25] ASM  boot/boot.asm"
 nasm -f elf64 boot/boot.asm -o "$BUILD/boot/boot.o"
 
-# ── Compile boot stubs ───────────────────────────────────────────────────
+# -- Compile boot stubs ---------------------------------------------------
 echo "[2/25] CC   boot/boot_stub.c"
 gcc $CFLAGS -c boot/boot_stub.c -o "$BUILD/boot/boot_stub.o"
 
@@ -37,7 +37,7 @@ echo "[3/25] CC   boot/kernel_stub.c"
 gcc $CFLAGS -Wno-unused-variable -Wno-unused-function \
     -c boot/kernel_stub.c -o "$BUILD/boot/kernel_stub.o"
 
-# ── Compile GUI subsystem ───────────────────────────────────────────────
+# -- Compile GUI subsystem -----------------------------------------------
 echo "[4/25] CC   gui/framebuffer.c"
 gcc $GUI_CFLAGS -c gui/framebuffer.c -o "$BUILD/gui/framebuffer.o"
 
@@ -49,7 +49,7 @@ gcc $GUI_CFLAGS -c gui/desktop.c -o "$BUILD/gui/desktop.o"
 gcc $GUI_CFLAGS -c gui/mouse.c   -o "$BUILD/gui/mouse.o"
 gcc $GUI_CFLAGS -c gui/terminal.c -o "$BUILD/gui/terminal.o"
 
-# ── Compile filesystem ──────────────────────────────────────────────────
+# -- Compile filesystem --------------------------------------------------
 echo "[7/25] CC   fs/ramfs.c"
 gcc $GUI_CFLAGS -c fs/ramfs.c -o "$BUILD/fs/ramfs.o"
 
@@ -62,7 +62,7 @@ gcc $GUI_CFLAGS -c fs/procfs.c -o "$BUILD/fs/procfs.o"
 echo "[10/25] CC  fs/devfs.c"
 gcc $GUI_CFLAGS -c fs/devfs.c -o "$BUILD/fs/devfs.o"
 
-# ── Compile network stack ───────────────────────────────────────────────
+# -- Compile network stack -----------------------------------------------
 mkdir -p "$BUILD/net"
 echo "[10/25] CC  net/ip.c"
 gcc $GUI_CFLAGS -c net/ip.c -o "$BUILD/net/ip.o"
@@ -73,13 +73,13 @@ gcc $GUI_CFLAGS -c net/tcp.c -o "$BUILD/net/tcp.o"
 echo "[13/25] CC  net/http.c"
 gcc $GUI_CFLAGS -c net/http.c -o "$BUILD/net/http.o"
 
-# ── Compile drivers ─────────────────────────────────────────────────────
+# -- Compile drivers -----------------------------------------------------
 echo "[14/25] CC  drivers/speaker.c + drivers/ata.c + drivers/net.c"
 gcc $GUI_CFLAGS -c drivers/speaker.c -o "$BUILD/drivers/speaker.o"
 gcc $GUI_CFLAGS -c drivers/ata.c     -o "$BUILD/drivers/ata.o"
 gcc $GUI_CFLAGS -c drivers/net.c     -o "$BUILD/drivers/net.o"
 
-# ── Compile kernel modules ──────────────────────────────────────────────
+# -- Compile kernel modules ----------------------------------------------
 echo "[15/25] CC  kernel/tasks.c"
 gcc $GUI_CFLAGS -c kernel/tasks.c -o "$BUILD/kernel/tasks.o"
 
@@ -95,12 +95,12 @@ gcc $GUI_CFLAGS -c kernel/syscall.c -o "$BUILD/kernel/syscall.o"
 echo "[19/25] CC  kernel/heap.c"
 gcc $GUI_CFLAGS -c kernel/heap.c -o "$BUILD/kernel/heap.o"
 
-# ── Compile application stubs ────────────────────────────────────────────
+# -- Compile application stubs --------------------------------------------
 mkdir -p "$BUILD/apps"
 echo "[19b/25] CC apps/apps.c"
 gcc $GUI_CFLAGS -Wno-unused-variable -c apps/apps.c -o "$BUILD/apps/apps.o"
 
-# ── Link ─────────────────────────────────────────────────────────────────
+# -- Link -----------------------------------------------------------------
 echo "[20/25] LD  lateralus.elf"
 ld -T tools/linker-boot.ld -nostdlib \
     "$BUILD/boot/boot.o" \
@@ -133,12 +133,12 @@ ld -T tools/linker-boot.ld -nostdlib \
 SIZE=$(size "$BUILD/lateralus.elf" | tail -1 | awk '{print $4}')
 echo "       Kernel size: $SIZE bytes"
 
-# ── ISO ──────────────────────────────────────────────────────────────────
+# -- ISO ------------------------------------------------------------------
 echo "[21/25] ISO lateralus-os.iso"
 mkdir -p "$BUILD/iso/boot/grub"
 cp "$BUILD/lateralus.elf" "$BUILD/iso/boot/lateralus.elf"
 
-# ── GRUB config — clean, no host theme contamination ─────────────────────
+# -- GRUB config — clean, no host theme contamination ---------------------
 # grub-mkrescue pulls in the host OS theme/fonts by default.
 # We override everything to ensure a pure LateralusOS boot experience.
 
@@ -161,10 +161,10 @@ menuentry "LateralusOS (Text Shell)" {
 EOF
 else
     cat > "$BUILD/iso/boot/grub/grub.cfg" << 'EOF'
-# ═══════════════════════════════════════════════════════
+# =======================================================
 # LateralusOS v0.2.0 — Boot Configuration
 # Copyright (c) 2025 bad-antics. All rights reserved.
-# ═══════════════════════════════════════════════════════
+# =======================================================
 
 # Disable any inherited theme from host system
 set theme=
@@ -181,12 +181,12 @@ set color_highlight=white/blue
 
 # Boot splash text
 echo ""
-echo "  ╔════════════════════════════════════════════════╗"
-echo "  ║          LateralusOS v0.2.0                   ║"
-echo "  ║      Spiral Out, Keep Going                   ║"
-echo "  ║                                               ║"
-echo "  ║      Copyright (c) 2025 bad-antics            ║"
-echo "  ╚════════════════════════════════════════════════╝"
+echo "  +================================================+"
+echo "  |          LateralusOS v0.2.0                   |"
+echo "  |      Spiral Out, Keep Going                   |"
+echo "  |                                               |"
+echo "  |      Copyright (c) 2025 bad-antics            |"
+echo "  +================================================+"
 echo ""
 
 menuentry "LateralusOS Desktop (GUI)" {
@@ -222,10 +222,10 @@ grub-mkrescue \
 echo "[24/25] ISO: $BUILD/lateralus-os.iso ($(du -h "$BUILD/lateralus-os.iso" | cut -f1))"
 
 echo ""
-echo "═══ Build complete ═══"
+echo "=== Build complete ==="
 echo ""
 
-# ── Run ──────────────────────────────────────────────────────────────────
+# -- Run ------------------------------------------------------------------
 case "${1:-run}" in
     --iso)
         echo "ISO ready at: $BUILD/lateralus-os.iso"
@@ -241,7 +241,7 @@ case "${1:-run}" in
             -no-reboot -no-shutdown \
             2>/dev/null || true
         echo ""
-        echo "═══ Serial Output ═══"
+        echo "=== Serial Output ==="
         cat "$BUILD/serial.log"
         echo ""
         if grep -q "Boot sequence complete" "$BUILD/serial.log"; then
@@ -255,7 +255,7 @@ case "${1:-run}" in
         echo "Starting QEMU with GUI desktop (default boots into GUI)..."
         echo "  ESC = exit GUI → text shell"
         echo "  Ctrl+Alt+G = release mouse grab"
-        echo "────────────────────────────────────────────────────"
+        echo "----------------------------------------------------"
         # Use KVM if available for fast MMIO framebuffer writes
         KVM_FLAG=""
         if [ -w /dev/kvm ]; then
@@ -283,7 +283,7 @@ case "${1:-run}" in
         ;;
     *)
         echo "Starting QEMU (serial output below, Ctrl-A X to quit)..."
-        echo "────────────────────────────────────────────────────"
+        echo "----------------------------------------------------"
         qemu-system-x86_64 \
             -cdrom "$BUILD/lateralus-os.iso" \
             -m 256M \

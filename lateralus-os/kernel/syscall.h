@@ -1,6 +1,6 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — System Call Interface
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Syscall dispatch table and handler. In the current stub kernel all
  * calls execute in ring 0 (no privilege separation yet), so these are
  * really internal kernel services exposed via a numbered table.
@@ -11,14 +11,14 @@
  *   Return value in rax
  *
  * Copyright (c) 2025-2026 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #ifndef LATERALUS_SYSCALL_H
 #define LATERALUS_SYSCALL_H
 
 #include "../gui/types.h"
 
-/* ── Syscall numbers ─────────────────────────────────────────────────── */
+/* -- Syscall numbers --------------------------------------------------- */
 
 #define SYS_EXIT         0
 #define SYS_READ         1
@@ -63,11 +63,11 @@
 #define SYS_NET_INFO    40
 #define MAX_SYSCALLS     64
 
-/* ── Syscall handler type ────────────────────────────────────────────── */
+/* -- Syscall handler type ---------------------------------------------- */
 
 typedef int64_t (*SyscallFn)(uint64_t arg1, uint64_t arg2, uint64_t arg3);
 
-/* ── Public API ──────────────────────────────────────────────────────── */
+/* -- Public API -------------------------------------------------------- */
 
 /* Initialize the syscall dispatch table. Returns number of registered calls. */
 int  syscall_init(void);

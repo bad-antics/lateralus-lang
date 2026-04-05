@@ -1,49 +1,49 @@
 """
-lateralus_lang/ast_nodes.py  ─  LATERALUS Language AST Node Definitions
-═══════════════════════════════════════════════════════════════════════════
+lateralus_lang/ast_nodes.py  -  LATERALUS Language AST Node Definitions
+===========================================================================
 All Abstract Syntax Tree nodes for the Lateralus scripting language (.ltl).
 
 Node hierarchy
-──────────────
+--------------
   Node (base)
-  ├── Program
-  ├── Module
-  ├── Stmt
-  │   ├── FnDecl / AsyncFnDecl
-  │   ├── LetDecl
-  │   ├── ReturnStmt
-  │   ├── IfStmt / MatchStmt
-  │   ├── WhileStmt / ForStmt / LoopStmt
-  │   ├── TryStmt  (try / recover / ensure)
-  │   ├── ImportStmt
-  │   ├── ExprStmt
-  │   └── BlockStmt
-  └── Expr
-      ├── Literal  (int, float, str, bool, nil)
-      ├── Ident
-      ├── BinOp  (arithmetic, logical, comparison, pipeline |>)
-      ├── UnaryOp
-      ├── CallExpr
-      ├── IndexExpr
-      ├── FieldExpr
-      ├── LambdaExpr
-      ├── ListExpr / MapExpr
-      ├── AwaitExpr
-      └── CastExpr      ├── TypeMatchExpr           (v1.5 — ADT / type pattern matching)
-      ├── ResultExpr              (v1.5 — Result::Ok / Result::Err constructors)
-      └── OptionExpr              (v1.5 — Option::Some / Option::None constructors)
+  +-- Program
+  +-- Module
+  +-- Stmt
+  |   +-- FnDecl / AsyncFnDecl
+  |   +-- LetDecl
+  |   +-- ReturnStmt
+  |   +-- IfStmt / MatchStmt
+  |   +-- WhileStmt / ForStmt / LoopStmt
+  |   +-- TryStmt  (try / recover / ensure)
+  |   +-- ImportStmt
+  |   +-- ExprStmt
+  |   +-- BlockStmt
+  +-- Expr
+      +-- Literal  (int, float, str, bool, nil)
+      +-- Ident
+      +-- BinOp  (arithmetic, logical, comparison, pipeline |>)
+      +-- UnaryOp
+      +-- CallExpr
+      +-- IndexExpr
+      +-- FieldExpr
+      +-- LambdaExpr
+      +-- ListExpr / MapExpr
+      +-- AwaitExpr
+      +-- CastExpr      +-- TypeMatchExpr           (v1.5 — ADT / type pattern matching)
+      +-- ResultExpr              (v1.5 — Result::Ok / Result::Err constructors)
+      +-- OptionExpr              (v1.5 — Option::Some / Option::None constructors)
 
   Pattern (v1.5 — used inside TypeMatchArm)
-      ├── WildcardPattern         (_)
-      ├── LiteralPattern          (42, "str", true)
-      ├── BindingPattern          (x — captures value as variable)
-      ├── TypePattern             (SomeType(a, b))
-      ├── EnumVariantPattern      (Result::Ok(v), Option::Some(v))
-      ├── TuplePattern            ((a, b, c))
-      ├── ListPattern             ([head, ...tail])
-      └── OrPattern               (pat1 | pat2)
+      +-- WildcardPattern         (_)
+      +-- LiteralPattern          (42, "str", true)
+      +-- BindingPattern          (x — captures value as variable)
+      +-- TypePattern             (SomeType(a, b))
+      +-- EnumVariantPattern      (Result::Ok(v), Option::Some(v))
+      +-- TuplePattern            ((a, b, c))
+      +-- ListPattern             ([head, ...tail])
+      +-- OrPattern               (pat1 | pat2)
 Every node carries a SourceSpan for precise error reporting.
-═══════════════════════════════════════════════════════════════════════════
+===========================================================================
 """
 from __future__ import annotations
 
@@ -52,9 +52,9 @@ from enum import Enum, auto
 from typing import Any, List, Optional, Tuple
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Source location
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class SourceSpan:
@@ -72,9 +72,9 @@ class SourceSpan:
         return SourceSpan(file, 0, 0)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Type annotations
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class PrimitiveType(Enum):
     INT    = "int"
@@ -104,9 +104,9 @@ class TypeRef:
         return base
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Base Node
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 @dataclass(kw_only=True)
 class Node:
@@ -118,9 +118,9 @@ class Node:
         return fn(self)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Top-level
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 @dataclass
 class Program(Node):
@@ -137,9 +137,9 @@ class ImportStmt(Node):
     items:   List[str]        = field(default_factory=list)  # selective import
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Statements
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 @dataclass
 class Stmt(Node):
@@ -270,9 +270,9 @@ class AssignStmt(Stmt):
     value:  "Expr"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Expressions
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 @dataclass(kw_only=True)
 class Expr(Node):
@@ -372,9 +372,9 @@ class InterpolatedStr(Expr):
     parts: List[Any]   # alternating str literals and Expr
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # v1.1 – Struct / Enum / Impl / Interface / Type-alias / Decorator  (NEW)
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 @dataclass
 class StructField:
@@ -515,9 +515,9 @@ class ForeignBlock(Stmt):
     params:  List[ForeignParam] = field(default_factory=list)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # v1.3 nodes
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 @dataclass
 class ThrowStmt(Stmt):
@@ -582,9 +582,9 @@ class MeasureBlock(Stmt):
     body:   "BlockStmt"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Visitor base
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class ASTVisitor:
     """Visitor base — override visit_<ClassName> for specific nodes."""
@@ -684,9 +684,9 @@ class ASTVisitor:
     def visit_OffsetofExpr(self, node: "OffsetofExpr") -> Any:       return self.generic_visit(node)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # v1.4 nodes — Error chaining, propagation, comprehensions, guards, where
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 @dataclass
 class ChainExpr(Expr):
@@ -790,11 +790,11 @@ class TernaryExpr(Expr):
     else_val:  "Expr"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # v1.5 nodes — ADTs, type pattern matching, Result/Option
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
-# ── Patterns ─────────────────────────────────────────────────────────────────
+# -- Patterns -----------------------------------------------------------------
 
 @dataclass
 class WildcardPattern(Node):
@@ -893,7 +893,7 @@ class OrPattern(Node):
     right: "Node"
 
 
-# ── TypeMatchArm & TypeMatchExpr ─────────────────────────────────────────────
+# -- TypeMatchArm & TypeMatchExpr ---------------------------------------------
 
 @dataclass
 class TypeMatchArm:
@@ -927,7 +927,7 @@ class TypeMatchExpr(Expr):
     arms:    List[TypeMatchArm] = field(default_factory=list)
 
 
-# ── Result / Option constructors ─────────────────────────────────────────────
+# -- Result / Option constructors ---------------------------------------------
 
 @dataclass
 class ResultExpr(Expr):
@@ -959,9 +959,9 @@ class OptionExpr(Expr):
     value:   Optional["Expr"] = None  # None only for Option::None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # v1.6 nodes — Low-level / OS-dev constructs
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 @dataclass
 class UnsafeBlock(Stmt):
@@ -1082,9 +1082,9 @@ class OffsetofExpr(Expr):
     field_name:  str
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # v1.6 – Concurrency & Async  (NEW)
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 @dataclass
 class SelectArm:
@@ -1194,9 +1194,9 @@ class ParallelExpr(Expr):
     init:  Optional["Expr"] = None   # initial value for reduce
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # v1.7 – Package Manager & Build System
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 @dataclass
 class CfgAttr(Node):
@@ -1231,9 +1231,9 @@ class CfgExpr(Expr):
     value: str
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # v1.8 — Metaprogramming
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 @dataclass
 class ConstFnDecl(Stmt):

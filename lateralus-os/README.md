@@ -1,6 +1,6 @@
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 # LateralusOS — A Research & Industrial Operating System
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 #
 # Copyright (c) 2025 bad-antics. All rights reserved.
 #
@@ -10,117 +10,117 @@
 #
 # Built with the Lateralus programming language (v2.1.0+)
 # https://github.com/bad-antics/lateralus-lang
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 
 ## Architecture
 
 ```
-                    ┌─────────────────────────────────┐
-                    │         User Applications       │
-                    │  (Lateralus programs, agents)    │
-                    ├─────────────────────────────────┤
-                    │      Graphical Desktop (GUI)     │
-                    │  animated wallpaper │ Alt+Tab    │
-                    │  terminal │ window animations    │
-                    ├─────────────────────────────────┤
-                    │       System Services Layer      │
-                    │  mesh agent │ crypto │ monitor   │
-                    ├─────────────────────────────────┤
-                    │         LateralusOS Shell        │
-                    │   ltlsh — 17 commands, VFS ops   │
-                    ├─────────────────────────────────┤
-                    │     Kernel Services (Lateralus)  │
-                    │  scheduler │ IPC │ VFS │ ramfs   │
-                    ├─────────────────────────────────┤
-                    │     Memory Manager (Lateralus)   │
-                    │  page tables │ bump alloc        │
-                    ├─────────────────────────────────┤
-                    │  HAL + Drivers                   │
-                    │  PIT│PIC│speaker│keyboard│mouse  │
-                    ├─────────────────────────────────┤
-                    │     Bootstrap (C + ASM)          │
-                    │  GDT │ IDT │ paging │ entry      │
-                    ├─────────────────────────────────┤
-                    │       Bare Metal Hardware        │
-                    └─────────────────────────────────┘
+                    +---------------------------------+
+                    |         User Applications       |
+                    |  (Lateralus programs, agents)    |
+                    +---------------------------------+
+                    |      Graphical Desktop (GUI)     |
+                    |  animated wallpaper | Alt+Tab    |
+                    |  terminal | window animations    |
+                    +---------------------------------+
+                    |       System Services Layer      |
+                    |  mesh agent | crypto | monitor   |
+                    +---------------------------------+
+                    |         LateralusOS Shell        |
+                    |   ltlsh — 17 commands, VFS ops   |
+                    +---------------------------------+
+                    |     Kernel Services (Lateralus)  |
+                    |  scheduler | IPC | VFS | ramfs   |
+                    +---------------------------------+
+                    |     Memory Manager (Lateralus)   |
+                    |  page tables | bump alloc        |
+                    +---------------------------------+
+                    |  HAL + Drivers                   |
+                    |  PIT|PIC|speaker|keyboard|mouse  |
+                    +---------------------------------+
+                    |     Bootstrap (C + ASM)          |
+                    |  GDT | IDT | paging | entry      |
+                    +---------------------------------+
+                    |       Bare Metal Hardware        |
+                    +---------------------------------+
 ```
 
 ## Directory Structure
 
 ```
 lateralus-os/
-├── boot/            — Multiboot2 bootstrap (ASM + C)
-├── kernel/          — Core kernel in Lateralus
-│   ├── main.ltl     — kernel_main entry point
-│   ├── memory.ltl   — Physical/virtual memory manager
-│   ├── scheduler.ltl— Process/thread scheduler
-│   ├── ipc.ltl      — Inter-process communication
-│   ├── syscall.ltl  — System call table & dispatcher
-│   └── panic.ltl    — Kernel panic handler
-├── hal/             — Hardware Abstraction Layer
-│   ├── cpu.ltl      — CPU feature detection, ring management
-│   ├── interrupts.ltl— IDT, IRQ handling
-│   ├── timer.ltl    — PIT/APIC timer
-│   └── serial.ltl   — Serial port (debug output)
-├── drivers/         — Device drivers
-│   ├── vga.ltl      — VGA text mode display
-│   ├── keyboard.ltl — PS/2 keyboard
-│   ├── pci.ltl      — PCI bus enumeration
-│   ├── disk.ltl     — ATA/AHCI disk driver
-│   └── network.ltl  — NIC driver (RTL8139/virtio-net)
-├── gui/             — Graphical Desktop Environment
-│   ├── framebuffer.h/c — Double-buffered framebuffer driver + 8×16 font
-│   ├── gui.h/c      — Widget system (windows, menus, icons, buttons, animations)
-│   ├── desktop.h/c  — Desktop manager (start menu, icons, sysmon, taskbar)
-│   ├── mouse.h/c    — PS/2 mouse driver (IRQ12, 3-byte packets)
-│   ├── terminal.h/c — Functional terminal emulator (17 commands, VFS)
-│   ├── types.h      — Shared freestanding type definitions
-│   ├── bootinfo.h   — Multiboot2 boot info struct
-│   ├── app.ltl      — GUI app framework (Lateralus)
-│   ├── widgets.ltl  — Widget library (Lateralus)
-│   ├── terminal.ltl — Terminal emulator (Lateralus)
-│   ├── wallpaper.ltl— Animated wallpaper engine (Lateralus)
-│   ├── animation.ltl— Window animation system (Lateralus)
-│   └── shell_gui.ltl— Graphical shell (Lateralus)
-├── fs/              — File systems
-│   ├── ramfs.h/c    — In-memory RAM filesystem (64 inodes)
-│   ├── vfs.ltl      — Virtual File System layer + RAMFS backend
-│   ├── ltlfs.ltl    — Native LateralusFS
-│   └── fat32.ltl    — FAT32 compatibility
-├── drivers/         — Device drivers
-│   ├── speaker.h/c  — PC speaker (PIT Channel 2, melody queue)
-│   ├── speaker.ltl  — Speaker driver (Lateralus)
-│   ├── vga.ltl      — VGA text mode display
-│   ├── keyboard.ltl — PS/2 keyboard
-│   ├── pci.ltl      — PCI bus enumeration
-│   ├── disk.ltl     — ATA/AHCI disk driver
-│   └── network.ltl  — NIC driver (RTL8139/virtio-net)
-├── kernel/          — Core kernel
-│   ├── tasks.h/c    — Cooperative task scheduler (16 tasks)
-│   ├── main.ltl     — kernel_main entry point
-│   ├── memory.ltl   — Physical/virtual memory manager
-│   ├── scheduler.ltl— Process/thread scheduler + cooperative tasks
-│   ├── ipc.ltl      — Inter-process communication
-│   ├── syscall.ltl  — System call table & dispatcher
-│   └── panic.ltl    — Kernel panic handler
-│   ├── ltlsh.ltl    — Shell interpreter
-│   ├── builtins.ltl — Built-in commands
-│   └── utils/       — Userspace utilities
-├── services/        — System services
-│   ├── init.ltl     — Init system (PID 1)
-│   ├── mesh_agent.ltl— Mesh network agent
-│   ├── crypto_svc.ltl— Cryptographic services
-│   └── monitor.ltl  — System health monitor
-├── editions/        — Build profiles
-│   ├── industrial.toml
-│   ├── research.toml
-│   ├── embedded.toml
-│   └── workstation.toml
-├── tests/           — OS test harness
-├── tools/           — Build tools & image creation
-├── docs/            — OS documentation
-├── Makefile         — Master build system
-└── README.md        — This file
++-- boot/            — Multiboot2 bootstrap (ASM + C)
++-- kernel/          — Core kernel in Lateralus
+|   +-- main.ltl     — kernel_main entry point
+|   +-- memory.ltl   — Physical/virtual memory manager
+|   +-- scheduler.ltl— Process/thread scheduler
+|   +-- ipc.ltl      — Inter-process communication
+|   +-- syscall.ltl  — System call table & dispatcher
+|   +-- panic.ltl    — Kernel panic handler
++-- hal/             — Hardware Abstraction Layer
+|   +-- cpu.ltl      — CPU feature detection, ring management
+|   +-- interrupts.ltl— IDT, IRQ handling
+|   +-- timer.ltl    — PIT/APIC timer
+|   +-- serial.ltl   — Serial port (debug output)
++-- drivers/         — Device drivers
+|   +-- vga.ltl      — VGA text mode display
+|   +-- keyboard.ltl — PS/2 keyboard
+|   +-- pci.ltl      — PCI bus enumeration
+|   +-- disk.ltl     — ATA/AHCI disk driver
+|   +-- network.ltl  — NIC driver (RTL8139/virtio-net)
++-- gui/             — Graphical Desktop Environment
+|   +-- framebuffer.h/c — Double-buffered framebuffer driver + 8×16 font
+|   +-- gui.h/c      — Widget system (windows, menus, icons, buttons, animations)
+|   +-- desktop.h/c  — Desktop manager (start menu, icons, sysmon, taskbar)
+|   +-- mouse.h/c    — PS/2 mouse driver (IRQ12, 3-byte packets)
+|   +-- terminal.h/c — Functional terminal emulator (17 commands, VFS)
+|   +-- types.h      — Shared freestanding type definitions
+|   +-- bootinfo.h   — Multiboot2 boot info struct
+|   +-- app.ltl      — GUI app framework (Lateralus)
+|   +-- widgets.ltl  — Widget library (Lateralus)
+|   +-- terminal.ltl — Terminal emulator (Lateralus)
+|   +-- wallpaper.ltl— Animated wallpaper engine (Lateralus)
+|   +-- animation.ltl— Window animation system (Lateralus)
+|   +-- shell_gui.ltl— Graphical shell (Lateralus)
++-- fs/              — File systems
+|   +-- ramfs.h/c    — In-memory RAM filesystem (64 inodes)
+|   +-- vfs.ltl      — Virtual File System layer + RAMFS backend
+|   +-- ltlfs.ltl    — Native LateralusFS
+|   +-- fat32.ltl    — FAT32 compatibility
++-- drivers/         — Device drivers
+|   +-- speaker.h/c  — PC speaker (PIT Channel 2, melody queue)
+|   +-- speaker.ltl  — Speaker driver (Lateralus)
+|   +-- vga.ltl      — VGA text mode display
+|   +-- keyboard.ltl — PS/2 keyboard
+|   +-- pci.ltl      — PCI bus enumeration
+|   +-- disk.ltl     — ATA/AHCI disk driver
+|   +-- network.ltl  — NIC driver (RTL8139/virtio-net)
++-- kernel/          — Core kernel
+|   +-- tasks.h/c    — Cooperative task scheduler (16 tasks)
+|   +-- main.ltl     — kernel_main entry point
+|   +-- memory.ltl   — Physical/virtual memory manager
+|   +-- scheduler.ltl— Process/thread scheduler + cooperative tasks
+|   +-- ipc.ltl      — Inter-process communication
+|   +-- syscall.ltl  — System call table & dispatcher
+|   +-- panic.ltl    — Kernel panic handler
+|   +-- ltlsh.ltl    — Shell interpreter
+|   +-- builtins.ltl — Built-in commands
+|   +-- utils/       — Userspace utilities
++-- services/        — System services
+|   +-- init.ltl     — Init system (PID 1)
+|   +-- mesh_agent.ltl— Mesh network agent
+|   +-- crypto_svc.ltl— Cryptographic services
+|   +-- monitor.ltl  — System health monitor
++-- editions/        — Build profiles
+|   +-- industrial.toml
+|   +-- research.toml
+|   +-- embedded.toml
+|   +-- workstation.toml
++-- tests/           — OS test harness
++-- tools/           — Build tools & image creation
++-- docs/            — OS documentation
++-- Makefile         — Master build system
++-- README.md        — This file
 ```
 
 ## Build Targets

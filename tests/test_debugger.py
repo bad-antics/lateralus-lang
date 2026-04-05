@@ -13,7 +13,7 @@ from lateralus_lang.debugger import (
 )
 
 
-# ─── Breakpoint Tests ──────────────────────────────────────────────────
+# --- Breakpoint Tests --------------------------------------------------
 
 class TestBreakpoint:
     def test_basic_breakpoint(self):
@@ -38,7 +38,7 @@ class TestBreakpoint:
         assert bp.hit_count == 5
 
 
-# ─── StackFrame Tests ──────────────────────────────────────────────────
+# --- StackFrame Tests --------------------------------------------------
 
 class TestStackFrame:
     def test_basic_frame(self):
@@ -66,7 +66,7 @@ class TestStackFrame:
         assert frame.args["b"] == 2
 
 
-# ─── WatchExpression Tests ──────────────────────────────────────────────
+# --- WatchExpression Tests ----------------------------------------------
 
 class TestWatchExpression:
     def test_basic_watch(self):
@@ -92,7 +92,7 @@ class TestWatchExpression:
         assert "Error" in result or "error" in str(result).lower() or result is not None
 
 
-# ─── Debugger Tests ────────────────────────────────────────────────────
+# --- Debugger Tests ----------------------------------------------------
 
 class TestDebugger:
     def setup_method(self):
@@ -184,7 +184,7 @@ class TestDebugger:
         assert "x" in str(variables) or len(variables) > 0
 
 
-# ─── Integration Tests ──────────────────────────────────────────────────
+# --- Integration Tests --------------------------------------------------
 
 class TestDebuggerIntegration:
     def test_multiple_breakpoints_same_file(self):

@@ -1,5 +1,5 @@
 """
-lateralus_lang/__main__.py  ─  Entry point for `python -m lateralus_lang`
+lateralus_lang/__main__.py  -  Entry point for `python -m lateralus_lang`
 """
 import sys
 from .compiler import Compiler, Target

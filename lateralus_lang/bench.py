@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Any, Optional
 
 
-# ─── Benchmark Infrastructure ─────────────────────────────────────────
+# --- Benchmark Infrastructure -----------------------------------------
 
 @dataclass
 class BenchmarkResult:
@@ -121,7 +121,7 @@ class BenchmarkSuite:
         }
 
 
-# ─── Math Engine Benchmarks ───────────────────────────────────────────
+# --- Math Engine Benchmarks -------------------------------------------
 
 def bench_math_engine(iterations: int = 1000) -> BenchmarkSuite:
     """Benchmark the math engine."""
@@ -196,7 +196,7 @@ def bench_math_engine(iterations: int = 1000) -> BenchmarkSuite:
     return suite
 
 
-# ─── Crypto Engine Benchmarks ─────────────────────────────────────────
+# --- Crypto Engine Benchmarks -----------------------------------------
 
 def bench_crypto_engine(iterations: int = 1000) -> BenchmarkSuite:
     """Benchmark the crypto engine."""
@@ -247,7 +247,7 @@ def bench_crypto_engine(iterations: int = 1000) -> BenchmarkSuite:
     return suite
 
 
-# ─── Markup Engine Benchmarks ─────────────────────────────────────────
+# --- Markup Engine Benchmarks -----------------------------------------
 
 def bench_markup_engine(iterations: int = 500) -> BenchmarkSuite:
     """Benchmark the LTLML markup engine."""
@@ -302,7 +302,7 @@ fn hello() {
     return suite
 
 
-# ─── Bytecode Engine Benchmarks ───────────────────────────────────────
+# --- Bytecode Engine Benchmarks ---------------------------------------
 
 def bench_bytecode_engine(iterations: int = 500) -> BenchmarkSuite:
     """Benchmark the bytecode compilation engine."""
@@ -334,7 +334,7 @@ println(result)
     return suite
 
 
-# ─── Optimizer Benchmarks ──────────────────────────────────────────────
+# --- Optimizer Benchmarks ----------------------------------------------
 
 def bench_optimizer(iterations: int = 1000) -> BenchmarkSuite:
     """Benchmark the optimizer."""
@@ -362,7 +362,7 @@ println(result)
     return suite
 
 
-# ─── Type System Benchmarks ───────────────────────────────────────────
+# --- Type System Benchmarks -------------------------------------------
 
 def bench_type_system(iterations: int = 1000) -> BenchmarkSuite:
     """Benchmark the type system."""
@@ -400,7 +400,7 @@ def bench_type_system(iterations: int = 1000) -> BenchmarkSuite:
     return suite
 
 
-# ─── Compiler Pipeline Benchmarks ─────────────────────────────────────
+# --- Compiler Pipeline Benchmarks -------------------------------------
 
 def bench_compiler_pipeline(iterations: int = 100) -> BenchmarkSuite:
     """Benchmark the full compiler pipeline."""
@@ -465,7 +465,7 @@ println("Pipeline result = " + str(total))
     return suite
 
 
-# ─── All Suites ────────────────────────────────────────────────────────
+# --- All Suites --------------------------------------------------------
 
 SUITES = {
     "math": bench_math_engine,
@@ -519,7 +519,7 @@ def run_all_benchmarks(iterations: int = 500, suites: Optional[list[str]] = None
     return results
 
 
-# ─── CLI ───────────────────────────────────────────────────────────────
+# --- CLI ---------------------------------------------------------------
 
 def main():
     import argparse

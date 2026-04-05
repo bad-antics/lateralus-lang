@@ -1,10 +1,10 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — PC Speaker Driver
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * PIT Channel 2 tone generation with non-blocking melodies.
  *
  * Copyright (c) 2025 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #ifndef LATERALUS_SPEAKER_H
 #define LATERALUS_SPEAKER_H
@@ -15,7 +15,7 @@
 extern void    outb(uint16_t port, uint8_t val);
 extern uint8_t inb(uint16_t port);
 
-/* ── Tone control ─────────────────────────────────────────────────────── */
+/* -- Tone control ------------------------------------------------------- */
 
 /* Play a tone at given frequency (Hz). Runs until speaker_stop(). */
 void speaker_play_tone(uint32_t freq);
@@ -31,7 +31,7 @@ void speaker_start_timed(uint32_t freq, uint32_t duration_ms,
 /* Call from timer ISR / main loop at 1kHz to handle auto-stop and melodies */
 void speaker_tick(uint64_t current_tick);
 
-/* ── Pre-defined sounds ───────────────────────────────────────────────── */
+/* -- Pre-defined sounds ------------------------------------------------- */
 
 /* Schedule a startup melody (ascending C-E-G-C) */
 void speaker_boot_chime(uint64_t current_tick);

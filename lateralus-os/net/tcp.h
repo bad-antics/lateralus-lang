@@ -1,6 +1,6 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — TCP Transport Layer
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Minimal TCP implementation over IPv4 providing:
  *   - Connection state machine (RFC 793 simplified)
  *   - Three-way handshake (SYN → SYN+ACK → ACK)
@@ -17,14 +17,14 @@
  *   - Fixed 4 KB receive buffer per connection
  *
  * Copyright (c) 2025-2026 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #ifndef LATERALUS_TCP_H
 #define LATERALUS_TCP_H
 
 #include "../gui/types.h"
 
-/* ── TCP header (RFC 793 §3.1) ────────────────────────────────────────── */
+/* -- TCP header (RFC 793 §3.1) ------------------------------------------ */
 
 typedef struct __attribute__((packed)) {
     uint16_t src_port;    /* big-endian */
@@ -38,7 +38,7 @@ typedef struct __attribute__((packed)) {
     uint16_t urgent;      /* big-endian */
 } TcpHeader;
 
-/* ── TCP flags ────────────────────────────────────────────────────────── */
+/* -- TCP flags ---------------------------------------------------------- */
 
 #define TCP_FIN   0x01
 #define TCP_SYN   0x02
@@ -47,7 +47,7 @@ typedef struct __attribute__((packed)) {
 #define TCP_ACK   0x10
 #define TCP_URG   0x20
 
-/* ── TCP connection states (RFC 793 §3.2) ─────────────────────────────── */
+/* -- TCP connection states (RFC 793 §3.2) ------------------------------- */
 
 #define TCP_STATE_CLOSED       0
 #define TCP_STATE_LISTEN       1
@@ -61,7 +61,7 @@ typedef struct __attribute__((packed)) {
 #define TCP_STATE_LAST_ACK     9
 #define TCP_STATE_TIME_WAIT   10
 
-/* ── Constants ────────────────────────────────────────────────────────── */
+/* -- Constants ---------------------------------------------------------- */
 
 #define TCP_MAX_CONNECTIONS  8
 #define TCP_RECV_BUF_SIZE   4096
@@ -71,7 +71,7 @@ typedef struct __attribute__((packed)) {
 #define TCP_MAX_RETRIES     5
 #define TCP_TIME_WAIT_MS    5000     /* TIME_WAIT duration (shortened for demo) */
 
-/* ── TCP connection block ─────────────────────────────────────────────── */
+/* -- TCP connection block ----------------------------------------------- */
 
 typedef struct {
     /* Connection identification */
@@ -104,7 +104,7 @@ typedef struct {
     uint64_t time_wait_tick;  /* when TIME_WAIT started */
 } TcpConnection;
 
-/* ── Public API ───────────────────────────────────────────────────────── */
+/* -- Public API --------------------------------------------------------- */
 
 /* Initialize TCP subsystem. Call after ip_init(). */
 void tcp_init(void);
@@ -117,7 +117,7 @@ void tcp_recv(uint32_t src_ip, const void *segment, uint16_t seg_len);
    Handles retransmits and TIME_WAIT cleanup. */
 void tcp_tick(void);
 
-/* ── Connection API ─── */
+/* -- Connection API --- */
 
 /* Open a TCP connection (active open / connect).
    Returns connection index (0..MAX-1), or -1 on failure.

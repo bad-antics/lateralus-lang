@@ -1,12 +1,12 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — /proc Virtual Filesystem Implementation
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Generates dynamic text content from live kernel state and writes it
  * into ramfs files under /proc/.  All files are read-only and refreshed
  * on demand before reading.
  *
  * Copyright (c) 2025-2026 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #include "procfs.h"
 #include "ramfs.h"
@@ -14,10 +14,10 @@
 #include "../kernel/sched.h"
 #include "../net/ip.h"
 
-/* ── Externals from kernel_stub.c / boot ──────────────────────────── */
+/* -- Externals from kernel_stub.c / boot ---------------------------- */
 extern volatile uint64_t tick_count;
 
-/* ── Forward declarations for kernel helpers ──────────────────────── */
+/* -- Forward declarations for kernel helpers ------------------------ */
 /* (defined in kernel_stub.c — we redefine minimal helpers locally) */
 
 static int pf_strlen(const char *s) {
@@ -69,10 +69,10 @@ static void pf_hex_strip(char *buf) {
     }
 }
 
-/* ── /proc directory index in ramfs ───────────────────────────────── */
+/* -- /proc directory index in ramfs --------------------------------- */
 static int proc_dir_idx = -1;
 
-/* ── Proc file ramfs indices ──────────────────────────────────────── */
+/* -- Proc file ramfs indices ---------------------------------------- */
 static int pf_version_idx  = -1;
 static int pf_uptime_idx   = -1;
 static int pf_meminfo_idx  = -1;
@@ -83,9 +83,9 @@ static int pf_net_idx      = -1;
 static int pf_mounts_idx   = -1;
 static int pf_cmdline_idx  = -1;
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Content Generators
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 static void gen_version(void) {
     char buf[256];
@@ -401,9 +401,9 @@ static void gen_cmdline(void) {
     ramfs_write(pf_cmdline_idx, buf, pf_strlen(buf));
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Public API
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 void procfs_init(void) {
     /* Create /proc directory under root (ramfs index 0) */

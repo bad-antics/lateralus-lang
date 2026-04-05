@@ -1,10 +1,10 @@
 """
-lateralus_lang/lexer.py  ─  LATERALUS Language Lexer
-═══════════════════════════════════════════════════════════════════════════
+lateralus_lang/lexer.py  -  LATERALUS Language Lexer
+===========================================================================
 Converts raw .ltl / .ltasm source text into a token stream.
 
 Supports
-────────
+--------
   · Keywords: module import fn async let const return if elif else
               match while loop for break continue try recover ensure
               true false nil pub typeof sizeof as
@@ -16,7 +16,7 @@ Supports
   · Comments:   // single-line, /* multi-line */, # hash (scripting compat)
 
 All tokens carry file, line, col for error reporting.
-═══════════════════════════════════════════════════════════════════════════
+===========================================================================
 """
 from __future__ import annotations
 
@@ -26,9 +26,9 @@ from enum import Enum, auto
 from typing import Iterator, List, Optional
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Token kinds
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class TK(Enum):
     # Literals
@@ -265,9 +265,9 @@ _KEYWORDS: dict[str, TK] = {
 }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Token
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class Token:
@@ -281,9 +281,9 @@ class Token:
         return f"Token({self.kind.name}, {self.value!r}, {self.line}:{self.col})"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Lexer errors
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class LexError(Exception):
     def __init__(self, message: str, file: str, line: int, col: int):
@@ -291,9 +291,9 @@ class LexError(Exception):
         self.file, self.line, self.col = file, line, col
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Lexer
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class Lexer:
     """
@@ -309,7 +309,7 @@ class Lexer:
         self._col   = 1
         self._tokens: List[Token] = []
 
-    # ── public API ────────────────────────────────────────────────────────────
+    # -- public API ------------------------------------------------------------
 
     def tokenize(self) -> List[Token]:
         while self._pos < len(self._src):
@@ -317,7 +317,7 @@ class Lexer:
         self._tokens.append(Token(TK.EOF, None, self._file, self._line, self._col))
         return self._tokens
 
-    # ── internal scanner ──────────────────────────────────────────────────────
+    # -- internal scanner ------------------------------------------------------
 
     def _cur(self) -> str:
         return self._src[self._pos] if self._pos < len(self._src) else "\0"
@@ -453,7 +453,7 @@ class Lexer:
 
         raise LexError(f"Unexpected character {ch!r}", self._file, line, col)
 
-    # ── helpers ───────────────────────────────────────────────────────────────
+    # -- helpers ---------------------------------------------------------------
 
     def _skip_line_comment(self) -> None:
         while self._pos < len(self._src) and self._src[self._pos] != "\n":
@@ -589,9 +589,9 @@ class Lexer:
         self._emit(TK.CHAR, ch, line, col)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Convenience
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def lex(source: str, filename: str = "<source>") -> List[Token]:
     """Tokenize *source* and return the full token list."""

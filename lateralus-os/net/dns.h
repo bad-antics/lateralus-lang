@@ -1,6 +1,6 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — DNS Resolver
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Minimal DNS stub resolver providing:
  *   - A record (IPv4) queries
  *   - DNS response parsing
@@ -10,14 +10,14 @@
  * Uses the UDP infrastructure from net/ip.{h,c}.
  *
  * Copyright (c) 2025-2026 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #ifndef LATERALUS_DNS_H
 #define LATERALUS_DNS_H
 
 #include "../gui/types.h"
 
-/* ── DNS constants ────────────────────────────────────────────────────── */
+/* -- DNS constants ------------------------------------------------------ */
 
 #define DNS_PORT          53
 #define DNS_LOCAL_PORT    10053    /* our ephemeral source port */
@@ -39,7 +39,7 @@
 #define DNS_TIMEOUT_MS    3000    /* 3-second timeout per query */
 #define DNS_MAX_RETRIES   2       /* retry count */
 
-/* ── DNS header (RFC 1035, §4.1.1) ───────────────────────────────────── */
+/* -- DNS header (RFC 1035, §4.1.1) ------------------------------------- */
 
 typedef struct __attribute__((packed)) {
     uint16_t id;          /* query ID */
@@ -50,7 +50,7 @@ typedef struct __attribute__((packed)) {
     uint16_t arcount;     /* additional records */
 } DnsHeader;
 
-/* ── DNS cache entry ──────────────────────────────────────────────────── */
+/* -- DNS cache entry ---------------------------------------------------- */
 
 typedef struct {
     char     name[DNS_MAX_NAME];  /* hostname */
@@ -60,7 +60,7 @@ typedef struct {
     uint8_t  valid;               /* 1 if entry is valid */
 } DnsCacheEntry;
 
-/* ── Public API ───────────────────────────────────────────────────────── */
+/* -- Public API --------------------------------------------------------- */
 
 /* Initialise the DNS resolver (call after ip_init) */
 void dns_init(void);

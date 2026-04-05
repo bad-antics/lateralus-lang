@@ -1,6 +1,6 @@
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 // LateralusOS — Application Stubs (C implementation)
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 // Copyright (c) 2025-2026 bad-antics. All rights reserved.
 //
 // This file implements the shell commands for the Lateralus-native apps:
@@ -8,14 +8,14 @@
 //   • chat  — IRC-style chat client with local loopback bot
 //   • edit  — retro text editor with syntax highlighting
 //   • pkg   — package manager for Lateralus modules
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 
 #include "apps.h"
 
-/* ──────────────────────────────────────────────────────────────────────────
+/* --------------------------------------------------------------------------
  * Kernel imports — these are defined in kernel_stub.c and linked at link
  * time.  We declare them extern here to avoid #include kernel_stub.c.
- * ────────────────────────────────────────────────────────────────────────── */
+ * -------------------------------------------------------------------------- */
 
 extern void     k_print(const char *s);
 extern void     k_putc(char c);
@@ -43,7 +43,7 @@ extern int ramfs_write(int node, const char *data, int len);
 extern int ramfs_mkdir(int parent, const char *name);
 extern int ramfs_root(void);
 
-/* ── Local memory helpers (no libc in freestanding) ────────────────────── */
+/* -- Local memory helpers (no libc in freestanding) ---------------------- */
 static void k_memset(void *dst, int val, uint64_t n) {
     uint8_t *d = (uint8_t *)dst;
     for (uint64_t i = 0; i < n; i++) d[i] = (uint8_t)val;
@@ -118,9 +118,9 @@ static void ltl_itoa(int val, char *buf, int bufsz) {
     buf[p] = '\0';
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  *  LTLC — Built-in Lateralus Compiler
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 /* Keyword table */
 static const char *ltlc_keywords[] = {
@@ -395,11 +395,11 @@ void cmd_ltlc(const char *args) {
 
 void cmd_ltlc_repl(void) {
     k_set_color(0x0E, 0x00);
-    k_print("╔══════════════════════════════════════════╗\n");
-    k_print("║  Lateralus REPL v2.2.0                  ║\n");
-    k_print("║  Type expressions to evaluate            ║\n");
-    k_print("║  Type 'exit' or 'quit' to leave          ║\n");
-    k_print("╚══════════════════════════════════════════╝\n");
+    k_print("+==========================================+\n");
+    k_print("|  Lateralus REPL v2.2.0                  |\n");
+    k_print("|  Type expressions to evaluate            |\n");
+    k_print("|  Type 'exit' or 'quit' to leave          |\n");
+    k_print("+==========================================+\n");
     k_set_color(0x0F, 0x00);
 
     char line_buf[512];
@@ -454,9 +454,9 @@ void cmd_ltlc_repl(void) {
     k_set_color(0x0F, 0x00);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  *  CHAT — Retro IRC-style Chat Client
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static ChatState chat_state;
 
@@ -758,9 +758,9 @@ void cmd_chat(const char *args) {
     serial_puts("[chat] exited\n");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  *  EDIT — Retro Text Editor
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static EditorState edit_state;
 
@@ -1090,9 +1090,9 @@ void cmd_edit(const char *args) {
     serial_puts("[edit] closed\n");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  *  PKG — Package Manager
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 typedef struct {
     char name[32];

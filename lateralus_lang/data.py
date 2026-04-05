@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 
-# ─── Stack ────────────────────────────────────────────────────────────
+# --- Stack ------------------------------------------------------------
 
 def stack_new() -> dict:
     return {"items": [], "size": 0}
@@ -38,7 +38,7 @@ def stack_is_empty(s: dict) -> bool:
     return s["size"] == 0
 
 
-# ─── Queue ────────────────────────────────────────────────────────────
+# --- Queue ------------------------------------------------------------
 
 def queue_new() -> dict:
     return {"items": [], "size": 0}
@@ -69,7 +69,7 @@ def queue_is_empty(q: dict) -> bool:
     return q["size"] == 0
 
 
-# ─── Set (map-based) ─────────────────────────────────────────────────
+# --- Set (map-based) -------------------------------------------------
 
 def set_new() -> dict:
     return {}
@@ -103,7 +103,7 @@ def set_intersection(a: dict, b: dict) -> dict:
     return {k: v for k, v in a.items() if k in b}
 
 
-# ─── Priority Queue (min-heap) ───────────────────────────────────────
+# --- Priority Queue (min-heap) ---------------------------------------
 
 def pq_new() -> dict:
     return {"items": [], "size": 0}

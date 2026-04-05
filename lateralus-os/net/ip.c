@@ -1,21 +1,21 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — IP / ARP / UDP / ICMP / DHCP implementation
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Minimal but functional IPv4 stack.
  *
  * Copyright (c) 2025-2026 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #include "ip.h"
 #include "tcp.h"
 #include "../drivers/net.h"
 #include "../kernel/heap.h"
 
-/* ── Serial logging (from kernel_stub) ────────────────────────────────── */
+/* -- Serial logging (from kernel_stub) ---------------------------------- */
 extern void serial_puts(const char *s);
 extern void serial_putc(char c);
 
-/* ── Local helpers ────────────────────────────────────────────────────── */
+/* -- Local helpers ------------------------------------------------------ */
 
 static void net_memcpy(void *dst, const void *src, uint64_t n) {
     uint8_t *d = (uint8_t *)dst;
@@ -38,7 +38,7 @@ static int net_memcmp(const void *a, const void *b, uint64_t n) {
     return 0;
 }
 
-/* ── Byte-order helpers (x86 is little-endian, network is big-endian) ── */
+/* -- Byte-order helpers (x86 is little-endian, network is big-endian) -- */
 
 static inline uint16_t htons(uint16_t h) {
     return (h >> 8) | (h << 8);
@@ -53,7 +53,7 @@ static inline uint32_t htonl(uint32_t h) {
 }
 static inline uint32_t ntohl(uint32_t n) { return htonl(n); }
 
-/* ── State ────────────────────────────────────────────────────────────── */
+/* -- State -------------------------------------------------------------- */
 
 static NetConfig  net_cfg;
 static ArpEntry   arp_cache[ARP_CACHE_SIZE];
@@ -74,7 +74,7 @@ static volatile int     ping_reply_received = 0;
 static volatile uint16_t ping_reply_seq     = 0;
 static volatile uint32_t ping_reply_src     = 0;
 
-/* ── Checksum ─────────────────────────────────────────────────────────── */
+/* -- Checksum ----------------------------------------------------------- */
 
 static uint16_t ip_checksum(const void *data, uint16_t len) {
     const uint16_t *p = (const uint16_t *)data;
@@ -88,7 +88,7 @@ static uint16_t ip_checksum(const void *data, uint16_t len) {
     return (uint16_t)~sum;
 }
 
-/* ── IP address utilities ─────────────────────────────────────────────── */
+/* -- IP address utilities ----------------------------------------------- */
 
 static void uint_to_str_local(uint64_t val, char *buf, int bufsz) {
     if (bufsz < 2) return;
@@ -129,7 +129,7 @@ uint32_t ip_from_str(const char *s) {
     return IP4(parts[0], parts[1], parts[2], parts[3]);
 }
 
-/* ── Ethernet frame helpers ───────────────────────────────────────────── */
+/* -- Ethernet frame helpers --------------------------------------------- */
 
 static void ip_get_mac(uint8_t *out) {
     const NetDeviceInfo *info = net_get_info();
@@ -146,9 +146,9 @@ static uint8_t *eth_build(const uint8_t *dst_mac, uint16_t type) {
     return tx_frame + ETH_HLEN;
 }
 
-/* ════════════════════════════════════════════════════════════════════════
+/* ========================================================================
  * ARP
- * ════════════════════════════════════════════════════════════════════════ */
+ * ======================================================================== */
 
 static void arp_cache_add(uint32_t ip, const uint8_t *mac) {
     /* Check if already cached */
@@ -262,9 +262,9 @@ void arp_dump(void) {
     }
 }
 
-/* ════════════════════════════════════════════════════════════════════════
+/* ========================================================================
  * IPv4
- * ════════════════════════════════════════════════════════════════════════ */
+ * ======================================================================== */
 
 int ip_send(uint32_t dst_ip, uint8_t protocol,
             const void *payload, uint16_t payload_len)
@@ -322,9 +322,9 @@ int ip_send(uint32_t dst_ip, uint8_t protocol,
 
 static void ipv4_handle(const uint8_t *frame, uint16_t len);
 
-/* ════════════════════════════════════════════════════════════════════════
+/* ========================================================================
  * ICMP
- * ════════════════════════════════════════════════════════════════════════ */
+ * ======================================================================== */
 
 static void icmp_handle(uint32_t src_ip, const uint8_t *data, uint16_t len) {
     if (len < sizeof(IcmpHeader)) return;
@@ -389,9 +389,9 @@ int icmp_ping_received(void) {
     return ping_reply_received;
 }
 
-/* ════════════════════════════════════════════════════════════════════════
+/* ========================================================================
  * UDP
- * ════════════════════════════════════════════════════════════════════════ */
+ * ======================================================================== */
 
 int udp_bind(uint16_t port, udp_recv_fn callback) {
     for (int i = 0; i < UDP_MAX_BINDS; i++) {
@@ -442,9 +442,9 @@ static void udp_handle(uint32_t src_ip, const uint8_t *data, uint16_t len) {
     /* No binding — silently discard */
 }
 
-/* ════════════════════════════════════════════════════════════════════════
+/* ========================================================================
  * DHCP (minimal: DISCOVER → OFFER → REQUEST → ACK)
- * ════════════════════════════════════════════════════════════════════════ */
+ * ======================================================================== */
 
 #define DHCP_SERVER_PORT  67
 #define DHCP_CLIENT_PORT  68
@@ -659,9 +659,9 @@ int dhcp_discover(void) {
     return 0;
 }
 
-/* ════════════════════════════════════════════════════════════════════════
+/* ========================================================================
  * IPv4 receive
- * ════════════════════════════════════════════════════════════════════════ */
+ * ======================================================================== */
 
 static void ipv4_handle(const uint8_t *frame, uint16_t len) {
     if (len < ETH_HLEN + sizeof(Ipv4Header)) return;
@@ -697,9 +697,9 @@ static void ipv4_handle(const uint8_t *frame, uint16_t len) {
     }
 }
 
-/* ════════════════════════════════════════════════════════════════════════
+/* ========================================================================
  * Main poll + init
- * ════════════════════════════════════════════════════════════════════════ */
+ * ======================================================================== */
 
 void ip_poll(void) {
     uint16_t len = net_recv(rx_buf, sizeof(rx_buf));

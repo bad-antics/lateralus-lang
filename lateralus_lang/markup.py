@@ -1,6 +1,6 @@
 """
-lateralus_lang/markup.py  ─  LTLML: LATERALUS Markup Language
-═══════════════════════════════════════════════════════════════════════════════
+lateralus_lang/markup.py  -  LTLML: LATERALUS Markup Language
+===============================================================================
 A domain-specific markup language for LATERALUS documentation, scientific
 papers, and technical writing.  Inspired by Markdown but extended with:
 
@@ -18,7 +18,7 @@ papers, and technical writing.  Inspired by Markdown but extended with:
 File extension: .ltlml
 
 Syntax Overview:
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
   ---                           Frontmatter (YAML-like)
   title: My Document
   author: Dr. Smith
@@ -69,7 +69,7 @@ Syntax Overview:
   @eq{label}                   Equation labels
 
 v1.5.0
-═══════════════════════════════════════════════════════════════════════════════
+===============================================================================
 """
 from __future__ import annotations
 
@@ -80,9 +80,9 @@ from enum import Enum, auto
 from typing import Any, Dict, List, Optional, Tuple
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # AST Nodes for LTLML
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class NodeKind(Enum):
     DOCUMENT    = auto()
@@ -128,9 +128,9 @@ class LTLMLNode:
         return self
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # LTLML Parser
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class LTLMLParser:
     """Parse .ltlml files into an AST."""
@@ -162,7 +162,7 @@ class LTLMLParser:
         self.pos += 1
         return line
 
-    # ── Frontmatter ───────────────────────────────────────────────────────
+    # -- Frontmatter -------------------------------------------------------
 
     def _parse_frontmatter(self):
         self._advance()  # skip opening ---
@@ -178,7 +178,7 @@ class LTLMLParser:
             self._advance()
         self.doc.add(LTLMLNode(kind=NodeKind.FRONTMATTER, attrs=meta))
 
-    # ── Block-level parsing ───────────────────────────────────────────────
+    # -- Block-level parsing -----------------------------------------------
 
     def _parse_block(self):
         line = self._current()
@@ -406,7 +406,7 @@ class LTLMLParser:
         para.children = self._parse_inline(text)
         self.doc.add(para)
 
-    # ── Inline-level parsing ──────────────────────────────────────────────
+    # -- Inline-level parsing ----------------------------------------------
 
     def _parse_inline(self, text: str) -> List[LTLMLNode]:
         """Parse inline formatting: bold, italic, code, links, math, refs."""
@@ -462,9 +462,9 @@ class LTLMLParser:
         return nodes
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # LTLML Renderer → HTML
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class LTLMLRenderer:
     """Render an LTLML AST to HTML."""
@@ -647,7 +647,7 @@ class LTLMLRenderer:
     def _render_hr(self, node: LTLMLNode) -> str:
         return "<hr>"
 
-    # ── Inline rendering ─────────────────────────────────────────────────
+    # -- Inline rendering -------------------------------------------------
 
     def _render_inline_children(self, node: LTLMLNode) -> str:
         return "".join(self._render_inline(c) for c in node.children)
@@ -679,7 +679,7 @@ class LTLMLRenderer:
             return f'<cite>[{html.escape(key)}]</cite>'
         return html.escape(node.text)
 
-    # ── Stylesheet ────────────────────────────────────────────────────────
+    # -- Stylesheet --------------------------------------------------------
 
     def _get_stylesheet(self) -> str:
         return """
@@ -862,9 +862,9 @@ cite { color: #8b949e; font-style: normal; }
 """
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Convenience API
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def parse_ltlml(source: str) -> LTLMLNode:
     """Parse LTLML source into an AST."""

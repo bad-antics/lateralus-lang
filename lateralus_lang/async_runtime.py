@@ -24,7 +24,7 @@ T = TypeVar("T")
 R = TypeVar("R")
 
 
-# ─── Task Status ───────────────────────────────────────────────────────
+# --- Task Status -------------------------------------------------------
 
 class TaskStatus(Enum):
     PENDING = auto()
@@ -34,7 +34,7 @@ class TaskStatus(Enum):
     CANCELLED = auto()
 
 
-# ─── Task Result ───────────────────────────────────────────────────────
+# --- Task Result -------------------------------------------------------
 
 @dataclass
 class TaskResult:
@@ -54,7 +54,7 @@ class TaskResult:
         return self.status == TaskStatus.FAILED
 
 
-# ─── Channel (CSP-style) ──────────────────────────────────────────────
+# --- Channel (CSP-style) ----------------------------------------------
 
 class Channel:
     """
@@ -171,7 +171,7 @@ class Channel:
             yield val
 
 
-# ─── Task Group ────────────────────────────────────────────────────────
+# --- Task Group --------------------------------------------------------
 
 class TaskGroup:
     """
@@ -267,7 +267,7 @@ class TaskGroup:
         return False
 
 
-# ─── Parallel Pipeline ────────────────────────────────────────────────
+# --- Parallel Pipeline ------------------------------------------------
 
 class ParallelPipeline:
     """
@@ -323,7 +323,7 @@ class ParallelPipeline:
         self.shutdown()
 
 
-# ─── Rate Limiter ──────────────────────────────────────────────────────
+# --- Rate Limiter ------------------------------------------------------
 
 class RateLimiter:
     """
@@ -382,7 +382,7 @@ class RateLimiter:
         self._last_time = now
 
 
-# ─── Async Pipeline Executor ──────────────────────────────────────────
+# --- Async Pipeline Executor ------------------------------------------
 
 class AsyncPipelineExecutor:
     """
@@ -419,7 +419,7 @@ class AsyncPipelineExecutor:
         return result
 
 
-# ─── Convenience functions ─────────────────────────────────────────────
+# --- Convenience functions ---------------------------------------------
 
 def parallel_map(fn: Callable, items: List[Any], workers: int = 4) -> List[Any]:
     """Map a function over items in parallel."""
@@ -464,7 +464,7 @@ def run_with_timeout(fn: Callable, timeout: float, *args, **kwargs) -> TaskResul
             )
 
 
-# ─── Builtins registry ────────────────────────────────────────────────
+# --- Builtins registry ------------------------------------------------
 
 ASYNC_BUILTINS = {
     "Channel": Channel,
@@ -481,7 +481,7 @@ ASYNC_BUILTINS = {
 }
 
 
-# ─── Cancellation Token ───────────────────────────────────────────────
+# --- Cancellation Token -----------------------------------------------
 
 class CancellationToken:
     """
@@ -543,7 +543,7 @@ class CancelledError(Exception):
     pass
 
 
-# ─── Nursery (structured concurrency) ─────────────────────────────────
+# --- Nursery (structured concurrency) ---------------------------------
 
 class Nursery:
     """
@@ -608,7 +608,7 @@ class Nursery:
         return False
 
 
-# ─── Select (channel multiplexing) ────────────────────────────────────
+# --- Select (channel multiplexing) ------------------------------------
 
 def select(*channels: Channel, timeout: Optional[float] = None) -> Optional[dict]:
     """
@@ -634,7 +634,7 @@ def select(*channels: Channel, timeout: Optional[float] = None) -> Optional[dict
         time.sleep(0.001)   # avoid busy-spin
 
 
-# ─── Parallel reduce ──────────────────────────────────────────────────
+# --- Parallel reduce --------------------------------------------------
 
 def parallel_reduce(fn: Callable, items: List[Any],
                     initial: Any = None, workers: int = 4) -> Any:
@@ -661,7 +661,7 @@ def parallel_reduce(fn: Callable, items: List[Any],
     return _reduce(fn, partials)
 
 
-# ─── Update builtins registry with concrete references ────────────────
+# --- Update builtins registry with concrete references ----------------
 
 ASYNC_BUILTINS["CancellationToken"] = CancellationToken
 ASYNC_BUILTINS["Nursery"] = Nursery

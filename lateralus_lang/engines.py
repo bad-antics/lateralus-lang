@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-# ─── Lazy engine loaders ────────────────────────────────────────────────
+# --- Lazy engine loaders ------------------------------------------------
 # We use lazy imports so that importing engines.py doesn't force loading
 # every heavy engine at startup — only when first accessed.
 
@@ -65,7 +65,7 @@ def errors():
     return _error_engine
 
 
-# ─── Unified builtins registry ─────────────────────────────────────────
+# --- Unified builtins registry -----------------------------------------
 
 def get_all_builtins() -> Dict[str, Any]:
     """
@@ -155,7 +155,7 @@ def get_preamble_code() -> str:
     This is designed to be prepended to the transpiler's existing preamble.
     """
     return '''
-# ─── LATERALUS Engine Extensions ────────────────────────────────────
+# --- LATERALUS Engine Extensions ------------------------------------
 try:
     from lateralus_lang.math_engine import (
         LTLNumber, Matrix, Vector, Interval, Dual,
@@ -193,7 +193,7 @@ except ImportError:
 '''
 
 
-# ─── Engine info ────────────────────────────────────────────────────────
+# --- Engine info --------------------------------------------------------
 
 ENGINE_VERSIONS = {
     "math_engine": "1.5.0",
@@ -233,7 +233,7 @@ def print_engine_status():
     print()
 
 
-# ─── New engine lazy loaders (added in session 4) ──────────────────────
+# --- New engine lazy loaders (added in session 4) ----------------------
 
 _query_engine = None
 _reactive_engine = None

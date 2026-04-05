@@ -1,6 +1,6 @@
-; ═══════════════════════════════════════════════════════════════════════════
+; ===========================================================================
 ; LateralusOS — Multiboot2 Boot Entry (x86_64)
-; ═══════════════════════════════════════════════════════════════════════════
+; ===========================================================================
 ; Copyright (c) 2025 bad-antics. All rights reserved.
 ;
 ; This is the very first code that runs when the bootloader (GRUB) hands
@@ -10,11 +10,11 @@
 ;   3. Page tables (identity-map first 4 GB)
 ;   4. Stack
 ;   5. Jump to the C bootstrap stub → kernel_main (Lateralus)
-; ═══════════════════════════════════════════════════════════════════════════
+; ===========================================================================
 
 BITS 32
 
-; ── Multiboot2 Header ─────────────────────────────────────────────────────
+; -- Multiboot2 Header -----------------------------------------------------
 section .multiboot
 align 8
 
@@ -47,7 +47,7 @@ multiboot_start:
 multiboot_end:
 
 
-; ── BSS: Stack & Page Tables ──────────────────────────────────────────────
+; -- BSS: Stack & Page Tables ----------------------------------------------
 section .bss
 align 4096
 
@@ -66,7 +66,7 @@ stack_bottom:
 stack_top:
 
 
-; ── Boot Code ─────────────────────────────────────────────────────────────
+; -- Boot Code -------------------------------------------------------------
 section .text
 global _start
 extern boot_init            ; C bootstrap stub
@@ -79,7 +79,7 @@ _start:
     ; Set up stack
     mov esp, stack_top
 
-    ; ── Check for CPUID ──────────────────────────────────────────────────
+    ; -- Check for CPUID --------------------------------------------------
     pushfd
     pop eax
     mov ecx, eax
@@ -93,7 +93,7 @@ _start:
     cmp eax, ecx
     je .no_cpuid
 
-    ; ── Check for Long Mode ──────────────────────────────────────────────
+    ; -- Check for Long Mode ----------------------------------------------
     mov eax, 0x80000000
     cpuid
     cmp eax, 0x80000001
@@ -104,7 +104,7 @@ _start:
     test edx, 1 << 29      ; LM bit
     jz .no_long_mode
 
-    ; ── Set up paging ────────────────────────────────────────────────────
+    ; -- Set up paging ----------------------------------------------------
 
     ; PML4[0] → PDPT
     mov eax, pdpt_table
@@ -195,7 +195,7 @@ _start:
     or eax, 1 << 31         ; PG bit
     mov cr0, eax
 
-    ; ── Load 64-bit GDT and jump to long mode ───────────────────────────
+    ; -- Load 64-bit GDT and jump to long mode ---------------------------
     lgdt [gdt64.pointer]
     jmp gdt64.code_segment:long_mode_start
 
@@ -216,7 +216,7 @@ _start:
     hlt
 
 
-; ── 64-bit Long Mode Entry ───────────────────────────────────────────────
+; -- 64-bit Long Mode Entry -----------------------------------------------
 BITS 64
 
 long_mode_start:
@@ -245,7 +245,7 @@ long_mode_start:
     jmp .halt
 
 
-; ── GDT (64-bit) ─────────────────────────────────────────────────────────
+; -- GDT (64-bit) ---------------------------------------------------------
 section .rodata
 align 16
 

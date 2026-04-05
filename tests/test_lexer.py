@@ -1,5 +1,5 @@
 """
-tests/test_lexer.py  ─  Lexer unit tests
+tests/test_lexer.py  -  Lexer unit tests
 """
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))

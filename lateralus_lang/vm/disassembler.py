@@ -1,11 +1,11 @@
 """
-lateralus_lang/vm/disassembler.py  ─  LATERALUS Bytecode Disassembler
-═══════════════════════════════════════════════════════════════════════════
+lateralus_lang/vm/disassembler.py  -  LATERALUS Bytecode Disassembler
+===========================================================================
 Converts a Bytecode object (or raw bytes) back into human-readable
 .ltasm assembly text.
 
 Usage
-─────
+-----
     from lateralus_lang.vm.disassembler import disassemble
     from lateralus_lang.vm import assemble
 
@@ -15,7 +15,7 @@ Usage
 
 Output format matches .ltasm syntax so it can be round-tripped back
 through the assembler (modulo label names — we synthesise L0, L1, …).
-═══════════════════════════════════════════════════════════════════════════
+===========================================================================
 """
 from __future__ import annotations
 
@@ -27,9 +27,9 @@ from .opcodes import Op, OPCODE_META
 from .assembler import Bytecode
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Operand decoders
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def _read_u8(code: bytes | bytearray, off: int) -> Tuple[int, int]:
     """Read 1-byte unsigned int.  Returns (value, new_offset)."""
@@ -59,17 +59,17 @@ def _u64_to_float(bits: int) -> float:
     return struct.unpack("<d", struct.pack("<Q", bits))[0]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Error
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class DisassemblerError(Exception):
     """Raised on malformed bytecode during disassembly."""
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Reverse label map
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def _build_reverse_labels(bc: Bytecode) -> Dict[int, str]:
     """Map code-offset → label name from the Bytecode label table."""
@@ -81,9 +81,9 @@ def _build_reverse_labels(bc: Bytecode) -> Dict[int, str]:
     return rev
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # First pass: collect jump targets so we can synthesise labels
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def _collect_jump_targets(code: bytes | bytearray) -> Set[int]:
     """Scan bytecode and return the set of target offsets from jumps/calls."""
@@ -122,16 +122,16 @@ _BRANCH_OPS = frozenset({
 })
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Register names
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 _REG_NAMES = {i: f"r{i}" for i in range(16)}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Main disassembler
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def disassemble(bc: Bytecode, *, show_hex: bool = False,
                 show_offsets: bool = True) -> str:
@@ -168,8 +168,8 @@ def disassemble(bc: Bytecode, *, show_hex: bool = False,
 
     out = StringIO()
 
-    # ── Header ────────────────────────────────────────────────────────────
-    out.write("; ── Lateralus VM Disassembly ──\n")
+    # -- Header ------------------------------------------------------------
+    out.write("; -- Lateralus VM Disassembly --\n")
     out.write(f"; Code size:     {len(code)} bytes\n")
     out.write(f"; Strings:       {len(strings)}\n")
     out.write(f"; Entry point:   0x{bc.entry_point:04X}\n")
@@ -177,7 +177,7 @@ def disassemble(bc: Bytecode, *, show_hex: bool = False,
         out.write(f"; Data segment:  {len(bc.data_segment)} bytes\n")
     out.write("\n")
 
-    # ── String table ──────────────────────────────────────────────────────
+    # -- String table ------------------------------------------------------
     if strings:
         out.write(".section data\n")
         for i, s in enumerate(strings):
@@ -186,7 +186,7 @@ def disassemble(bc: Bytecode, *, show_hex: bool = False,
             out.write(f"  .string \"{escaped}\"    ; str[{i}]\n")
         out.write("\n")
 
-    # ── Code section ──────────────────────────────────────────────────────
+    # -- Code section ------------------------------------------------------
     out.write(".section code\n")
 
     # Mark entry
@@ -278,7 +278,7 @@ def disassemble(bc: Bytecode, *, show_hex: bool = False,
 
         out.write(line + "\n")
 
-    # ── Data segment ──────────────────────────────────────────────────────
+    # -- Data segment ------------------------------------------------------
     if bc.data_segment:
         out.write("\n.section data\n")
         for i in range(0, len(bc.data_segment), 16):
@@ -290,9 +290,9 @@ def disassemble(bc: Bytecode, *, show_hex: bool = False,
     return out.getvalue()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Helpers
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def _fmt_offset(off: int, show: bool) -> str:
     return f"  {off:04X}:" if show else ""
@@ -322,9 +322,9 @@ def _looks_like_float(bits: int) -> bool:
     return False
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Convenience: disassemble a single instruction
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def disassemble_instruction(code: bytes | bytearray, offset: int,
                             string_table: Optional[List[str]] = None
@@ -372,9 +372,9 @@ def disassemble_instruction(code: bytes | bytearray, offset: int,
     return " ".join(parts), off
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Instruction length calculator
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def instruction_length(op: Op) -> int:
     """Return the byte length of a complete instruction for *op*."""

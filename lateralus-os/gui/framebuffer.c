@@ -1,6 +1,6 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — Framebuffer Driver + Bitmap Font (Enhanced v0.2.0)
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Copyright (c) 2025-2026 bad-antics. All rights reserved.
  *
  * Pure freestanding — no libc. Directly writes to the linear framebuffer
@@ -14,16 +14,16 @@
  *   - Detailed serial tracing of all framebuffer state changes
  *   - Self-healing on detected corruption
  *   - Diagnostics dump for debugging
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #include "framebuffer.h"
 
-/* ── Serial tracing (forward decl — defined in kernel_stub.c) ─────────── */
+/* -- Serial tracing (forward decl — defined in kernel_stub.c) ----------- */
 
 extern void serial_puts(const char *s);
 extern void serial_putc(char c);
 
-/* ── Local trace helpers ──────────────────────────────────────────────── */
+/* -- Local trace helpers ------------------------------------------------ */
 
 static void fb_trace(const char *msg) {
     serial_puts("[FB] ");
@@ -60,22 +60,22 @@ static void fb_trace_dec(const char *prefix, uint64_t val) {
     serial_puts("\n");
 }
 
-/* ── Write barrier for write-combining memory ─────────────────────────── */
+/* -- Write barrier for write-combining memory --------------------------- */
 
 static inline void fb_write_fence(void) {
     __asm__ volatile ("sfence" ::: "memory");
 }
 
-/* ── Global framebuffer instance ──────────────────────────────────────── */
+/* -- Global framebuffer instance ---------------------------------------- */
 
 Framebuffer fb = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 
-/* ── Framebuffer diagnostic counters ──────────────────────────────────── */
+/* -- Framebuffer diagnostic counters ------------------------------------ */
 
 static uint32_t fb_fault_count   = 0;
 static uint32_t fb_swap_count    = 0;
 
-/* ── Validation helpers ───────────────────────────────────────────────── */
+/* -- Validation helpers ------------------------------------------------- */
 
 static int fb_is_valid(void) {
     if (!fb.available) return 0;
@@ -85,7 +85,7 @@ static int fb_is_valid(void) {
     return 1;
 }
 
-/* ── Framebuffer self-test ────────────────────────────────────────────── */
+/* -- Framebuffer self-test ---------------------------------------------- */
 
 static int fb_self_test(void) {
     if (!fb.available || !fb.addr) {
@@ -128,9 +128,9 @@ static int fb_self_test(void) {
     return 1;
 }
 
-/* ══════════════════════════════════════════════════════════════════════
+/* ======================================================================
  * fb_init — Initialize framebuffer with full validation
- * ══════════════════════════════════════════════════════════════════════ */
+ * ====================================================================== */
 
 void fb_init(uint32_t *addr, uint32_t w, uint32_t h, uint32_t pitch, uint8_t bpp) {
     fb_trace("fb_init: initializing framebuffer...");
@@ -186,9 +186,9 @@ void fb_init(uint32_t *addr, uint32_t w, uint32_t h, uint32_t pitch, uint8_t bpp
     fb_trace("fb_init: complete");
 }
 
-/* ══════════════════════════════════════════════════════════════════════
+/* ======================================================================
  * Double Buffering — with full error recovery
- * ══════════════════════════════════════════════════════════════════════ */
+ * ====================================================================== */
 
 void fb_enable_double_buffer(void *backbuf_mem) {
     if (!backbuf_mem) {
@@ -234,9 +234,9 @@ void fb_enable_double_buffer(void *backbuf_mem) {
     fb_trace("fb_enable_double_buffer: enabled OK");
 }
 
-/* ══════════════════════════════════════════════════════════════════════
+/* ======================================================================
  * fb_swap — Copy back buffer → hardware framebuffer (fenced)
- * ══════════════════════════════════════════════════════════════════════ */
+ * ====================================================================== */
 
 void fb_swap(void) {
     if (!fb.double_buf || !fb.backbuf || !fb.hw_addr) return;
@@ -272,9 +272,9 @@ void fb_swap(void) {
     fb_write_fence();
 }
 
-/* ══════════════════════════════════════════════════════════════════════
+/* ======================================================================
  * Pixel Operations — with full bounds checking
- * ══════════════════════════════════════════════════════════════════════ */
+ * ====================================================================== */
 
 void fb_putpixel(int32_t x, int32_t y, uint32_t color) {
     if (!fb_is_valid()) return;
@@ -284,9 +284,9 @@ void fb_putpixel(int32_t x, int32_t y, uint32_t color) {
     row[x] = color;
 }
 
-/* ══════════════════════════════════════════════════════════════════════
+/* ======================================================================
  * Filled Rectangle — rep stosd (fast hardware-accelerated fill)
- * ══════════════════════════════════════════════════════════════════════ */
+ * ====================================================================== */
 
 void fb_fill_rect(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t color) {
     if (!fb_is_valid()) return;
@@ -312,7 +312,7 @@ void fb_fill_rect(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t color) {
     }
 }
 
-/* ── Outline rectangle ────────────────────────────────────────────────── */
+/* -- Outline rectangle -------------------------------------------------- */
 
 void fb_draw_rect(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t color) {
     if (!fb_is_valid()) return;
@@ -323,7 +323,7 @@ void fb_draw_rect(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t color) {
     fb_fill_rect(x + w - 1, y, 1, h, color);
 }
 
-/* ── Line (Bresenham with step limiter) ───────────────────────────────── */
+/* -- Line (Bresenham with step limiter) --------------------------------- */
 
 static int32_t _abs(int32_t v) { return v < 0 ? -v : v; }
 
@@ -351,7 +351,7 @@ void fb_draw_line(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint32_t color
     }
 }
 
-/* ── Circle (Midpoint with sanity limit) ──────────────────────────────── */
+/* -- Circle (Midpoint with sanity limit) -------------------------------- */
 
 void fb_draw_circle(int32_t cx, int32_t cy, int32_t r, uint32_t color) {
     if (!fb_is_valid()) return;
@@ -386,7 +386,7 @@ void fb_fill_circle(int32_t cx, int32_t cy, int32_t r, uint32_t color) {
     }
 }
 
-/* ── Rounded rectangle ────────────────────────────────────────────────── */
+/* -- Rounded rectangle -------------------------------------------------- */
 
 void fb_fill_rounded_rect(int32_t x, int32_t y, int32_t w, int32_t h,
                            int32_t radius, uint32_t color) {
@@ -415,7 +415,7 @@ void fb_fill_rounded_rect(int32_t x, int32_t y, int32_t w, int32_t h,
     }
 }
 
-/* ── Clear ────────────────────────────────────────────────────────────── */
+/* -- Clear -------------------------------------------------------------- */
 
 void fb_clear(uint32_t color) {
     if (!fb_is_valid()) return;
@@ -432,7 +432,7 @@ void fb_clear(uint32_t color) {
     );
 }
 
-/* ── Color blending ───────────────────────────────────────────────────── */
+/* -- Color blending ----------------------------------------------------- */
 
 uint32_t fb_blend(uint32_t bg, uint32_t fg, uint8_t alpha) {
     uint8_t br = (bg >> 16) & 0xFF, bg_g = (bg >> 8) & 0xFF, bb = bg & 0xFF;
@@ -443,7 +443,7 @@ uint32_t fb_blend(uint32_t bg, uint32_t fg, uint8_t alpha) {
     return FB_RGB(r, g, b);
 }
 
-/* ── Vertical gradient fill ───────────────────────────────────────────── */
+/* -- Vertical gradient fill --------------------------------------------- */
 
 void fb_fill_gradient_v(int32_t x, int32_t y, int32_t w, int32_t h,
                          uint32_t top_color, uint32_t bot_color) {
@@ -477,9 +477,9 @@ void fb_fill_gradient_v(int32_t x, int32_t y, int32_t w, int32_t h,
     }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Embedded Bitmap Font — 8x16 (ASCII 32..126)
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 static const uint8_t font8x16[95][16] = {
     {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
@@ -579,7 +579,7 @@ static const uint8_t font8x16[95][16] = {
     {0x00,0x76,0xDC,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
 };
 
-/* ── Text rendering (with full bounds checking) ──────────────────────── */
+/* -- Text rendering (with full bounds checking) ------------------------ */
 
 void fb_putchar(int32_t x, int32_t y, char c, uint32_t fg, uint32_t bg) {
     if (!fb_is_valid()) return;
@@ -622,7 +622,7 @@ void fb_puts(int32_t x, int32_t y, const char *s, uint32_t fg, uint32_t bg) {
     }
 }
 
-/* ── Transparent-background text (foreground pixels only) ─────────────
+/* -- Transparent-background text (foreground pixels only) -------------
  * These variants only draw the glyph foreground pixels and leave the
  * background untouched.  Use when rendering text over a gradient or
  * image where a flat bg color would create visible banding artefacts. */
@@ -676,7 +676,7 @@ int fb_text_width(const char *s) {
     return w;
 }
 
-/* ── Hardware cursor helpers (bypass double buffer) ───────────────────── */
+/* -- Hardware cursor helpers (bypass double buffer) --------------------- */
 
 void fb_putpixel_hw(int32_t x, int32_t y, uint32_t color) {
     if (!fb.hw_addr) return;
@@ -694,9 +694,9 @@ uint32_t fb_getpixel_hw(int32_t x, int32_t y) {
     return row[x];
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Diagnostics — callable from kernel for debugging
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 void fb_dump_diagnostics(void) {
     fb_trace("=== Framebuffer Diagnostics ===");

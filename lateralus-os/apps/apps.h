@@ -1,17 +1,17 @@
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 // LateralusOS — Application C Stubs
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 // C implementations for the Lateralus-native apps (ltlc, chat, editor, pkg).
 // These stubs are compiled into the kernel and provide the VGA/framebuffer
 // rendering + keyboard I/O that the pure-Lateralus modules describe.
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 
 #ifndef APPS_H
 #define APPS_H
 
 #include "../gui/types.h"
 
-// ── ltlc: Built-in Lateralus Compiler ───────────────────────────────────
+// -- ltlc: Built-in Lateralus Compiler -----------------------------------
 
 // Token kinds (matches apps/ltlc.ltl TokenKind enum)
 enum LtlcTokenKind {
@@ -59,7 +59,7 @@ void cmd_ltlc(const char *args);
 void cmd_ltlc_repl(void);
 LtlcCompileResult ltlc_compile(const char *source, int len);
 
-// ── chat: IRC-style Chat Client ─────────────────────────────────────────
+// -- chat: IRC-style Chat Client -----------------------------------------
 
 #define CHAT_MAX_MESSAGES   200
 #define CHAT_MAX_USERS       32
@@ -105,7 +105,7 @@ typedef struct {
 // Public API
 void cmd_chat(const char *args);
 
-// ── editor: Text Editor ─────────────────────────────────────────────────
+// -- editor: Text Editor -------------------------------------------------
 
 #define EDIT_MAX_LINES      2048
 #define EDIT_MAX_LINE_LEN    256
@@ -134,7 +134,7 @@ typedef struct {
 // Public API
 void cmd_edit(const char *args);
 
-// ── pkg: Package Manager ────────────────────────────────────────────────
+// -- pkg: Package Manager ------------------------------------------------
 
 void cmd_pkg(const char *args);
 

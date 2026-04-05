@@ -1,5 +1,5 @@
 """
-tests/test_vm.py  ─  VM & assembler integration tests
+tests/test_vm.py  -  VM & assembler integration tests
 """
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
@@ -10,7 +10,7 @@ from lateralus_lang.vm.assembler  import Bytecode, assemble
 from lateralus_lang.vm.vm         import VM, VMError, ThrownError
 
 
-# ─── helpers ──────────────────────────────────────────────────────────────────
+# --- helpers ------------------------------------------------------------------
 
 def _make_bytecode(*ops_and_args: int) -> Bytecode:
     """Assemble a raw byte sequence into a Bytecode with default meta."""
@@ -26,7 +26,7 @@ def _run(bc: Bytecode) -> VM:
     return vm
 
 
-# ─── Stack operations ──────────────────────────────────────────────────────────
+# --- Stack operations ----------------------------------------------------------
 
 class TestStackOps:
     def test_push_pop_int(self):
@@ -69,7 +69,7 @@ class TestStackOps:
         assert vm.stack == [2, 1]
 
 
-# ─── Arithmetic ────────────────────────────────────────────────────────────────
+# --- Arithmetic ----------------------------------------------------------------
 
 class TestArithmetic:
     def _arith_result(self, op_byte):
@@ -101,7 +101,7 @@ class TestArithmetic:
         assert vm.stack[-1] == -5
 
 
-# ─── Comparison ────────────────────────────────────────────────────────────────
+# --- Comparison ----------------------------------------------------------------
 
 class TestComparison:
     def _cmp(self, a, b, op):
@@ -123,7 +123,7 @@ class TestComparison:
     def test_ge_larger(self): assert self._cmp(5, 3, Op.GE)  == 1
 
 
-# ─── Registers ─────────────────────────────────────────────────────────────────
+# --- Registers -----------------------------------------------------------------
 
 class TestRegisters:
     def test_store_load(self):
@@ -139,7 +139,7 @@ class TestRegisters:
         assert vm.stack[-1] == 99
 
 
-# ─── Jump / Branch ──────────────────────────────────────────────────────────────
+# --- Jump / Branch --------------------------------------------------------------
 
 class TestControlFlow:
     def test_jmp_unconditional(self):
@@ -170,7 +170,7 @@ class TestControlFlow:
         assert 1 not in vm.stack
 
 
-# ─── Assembler ─────────────────────────────────────────────────────────────────
+# --- Assembler -----------------------------------------------------------------
 
 class TestAssembler:
     def test_assemble_halt(self):
@@ -210,7 +210,7 @@ end:
         assert vm.stack[-1] == 1
 
 
-# ─── Error Handling ─────────────────────────────────────────────────────────────
+# --- Error Handling -------------------------------------------------------------
 
 class TestErrorHandling:
     def test_throw_unhandled_raises(self):

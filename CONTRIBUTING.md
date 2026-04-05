@@ -167,3 +167,47 @@ under the same license as the project.
 ---
 
 *Spiral outward. Build something beautiful.*
+
+---
+
+## ⚠️ NO BOX-DRAWING CHARACTERS — MANDATORY POLICY
+
+**Unicode box-drawing characters are permanently banned from this project.**
+
+Do **NOT** use any of the following characters anywhere — code, comments,
+strings, output, documentation, READMEs, or data files:
+
+```
+BANNED:  = | + + + + + + + + + + + + + - | + + + + + - | + + + + + + + + +
+```
+
+Use **plain ASCII** instead:
+
+| Need             | Use   | Example                  |
+|------------------|-------|--------------------------|
+| Horizontal line  | `-`   | `----------`             |
+| Thick h-line     | `=`   | `==========`             |
+| Vertical line    | `\|`  | `\|  content  \|`        |
+| Corner / joint   | `+`   | `+----------+`           |
+| Section break    | `=`   | `# ==================`   |
+
+### Correct box style
+
+```
++==================================+
+|  LateralusOS v0.3.0             |
++==================================+
+```
+
+### Wrong box style (REJECTED)
+
+```
++==================================+
+|  LateralusOS v0.3.0             |
++==================================+
+```
+
+This policy applies to **all files** — `.py`, `.ltl`, `.c`, `.h`, `.sh`,
+`.md`, `.asm`, `.json`, and everything else in the repository.
+
+PRs containing box-drawing characters will not be merged.

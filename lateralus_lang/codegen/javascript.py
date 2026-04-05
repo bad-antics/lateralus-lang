@@ -1,10 +1,10 @@
 """
-lateralus_lang/codegen/javascript.py  ─  LTL → JavaScript Transpiler
-═══════════════════════════════════════════════════════════════════════════
+lateralus_lang/codegen/javascript.py  -  LTL → JavaScript Transpiler
+===========================================================================
 Converts a Lateralus (.ltl) AST directly to JavaScript (ES2022+).
 
 Supported constructs
-────────────────────
+--------------------
   · module / import → ESM import / CJS require
   · fn / async fn   → function / async function (or arrow)
   · let / const     → let / const
@@ -25,7 +25,7 @@ Supported constructs
   · v1.6 concurrency → async/await + Promise.all
   · v1.7 cfg        → compile-time boolean
   · v1.8 macros     → compile-time expansion
-═══════════════════════════════════════════════════════════════════════════
+===========================================================================
 """
 from __future__ import annotations
 
@@ -101,7 +101,7 @@ class JSBuffer:
 # ---------------------------------------------------------------------------
 
 JS_RUNTIME = """\
-// ── LATERALUS JavaScript Runtime ──────────────────────────────────────────
+// -- LATERALUS JavaScript Runtime ------------------------------------------
 // Auto-generated. Do not edit.
 
 const __ltl = {
@@ -224,7 +224,7 @@ const { pipe, pipeSafe, range, println, len, str, int, float, bool,
         abs, sqrt, floor, ceil, round, pow, log, exp, sin, cos, tan,
         min, max, PI, E, TAU, INF } = __ltl;
 
-// ──────────────────────────────────────────────────────────────────────────
+// --------------------------------------------------------------------------
 """
 
 
@@ -271,7 +271,7 @@ class JavaScriptTranspiler:
         self._in_method = False
         self._current_fn: str | None = None
 
-    # ── Entry points ────────────────────────────────────────────────────
+    # -- Entry points ----------------------------------------------------
 
     def transpile_string(self, source: str) -> str:
         """Transpile LATERALUS source code to JavaScript."""
@@ -297,7 +297,7 @@ class JavaScriptTranspiler:
         self._emit_Program(program)
         return self._buf.get()
 
-    # ── Dispatch ────────────────────────────────────────────────────────
+    # -- Dispatch --------------------------------------------------------
 
     def _emit_node(self, node: Any) -> None:
         """Dispatch to the correct _emit_* method."""
@@ -590,7 +590,7 @@ class JavaScriptTranspiler:
         # Fallback
         return f"/* expr:{type(node).__name__} */"
 
-    # ── Helper: pipeline emission ───────────────────────────────────────
+    # -- Helper: pipeline emission ---------------------------------------
 
     def _emit_pipe(self, left: Any, right: Any) -> str:
         """Emit x |> f or x |> f(args)."""
@@ -640,7 +640,7 @@ class JavaScriptTranspiler:
             return f"{subject} === {val}"
         return "true"
 
-    # ── Helper: render parameter list ───────────────────────────────────
+    # -- Helper: render parameter list -----------------------------------
 
     def _render_params(self, params: list) -> str:
         """Render a parameter list, stripping type annotations."""
@@ -664,13 +664,13 @@ class JavaScriptTranspiler:
                 parts.append(str(p))
         return ", ".join(parts)
 
-    # ── Helper: emit a body (list of statements) ───────────────────────
+    # -- Helper: emit a body (list of statements) -----------------------
 
     def _emit_body(self, stmts: list) -> None:
         for s in stmts:
             self._emit_node(s)
 
-    # ── Visitor: Program ────────────────────────────────────────────────
+    # -- Visitor: Program ------------------------------------------------
 
     def _emit_Program(self, node: Program) -> None:
         # Imports
@@ -682,7 +682,7 @@ class JavaScriptTranspiler:
         for stmt in node.body:
             self._emit_node(stmt)
 
-    # ── Visitor: ImportStmt ─────────────────────────────────────────────
+    # -- Visitor: ImportStmt ---------------------------------------------
 
     def _emit_ImportStmt(self, node: ImportStmt) -> None:
         mod = node.path.replace("/", "_").replace(".", "_").replace("-", "_")
@@ -702,7 +702,7 @@ class JavaScriptTranspiler:
             else:
                 self._buf.write(f"import * as {alias} from \"./{node.path}.js\";")
 
-    # ── Visitor: FnDecl ─────────────────────────────────────────────────
+    # -- Visitor: FnDecl -------------------------------------------------
 
     def _emit_FnDecl(self, node: FnDecl) -> None:
         # Decorators
@@ -753,7 +753,7 @@ class JavaScriptTranspiler:
         elif body is not None:
             self._emit_node(body)
 
-    # ── Visitor: ConstFnDecl ────────────────────────────────────────────
+    # -- Visitor: ConstFnDecl --------------------------------------------
 
     def _emit_ConstFnDecl(self, node: ConstFnDecl) -> None:
         params = self._render_params(node.params)
@@ -765,7 +765,7 @@ class JavaScriptTranspiler:
         self._buf.write("}")
         self._buf.blank()
 
-    # ── Visitor: LetDecl ────────────────────────────────────────────────
+    # -- Visitor: LetDecl ------------------------------------------------
 
     def _emit_LetDecl(self, node: LetDecl) -> None:
         kw = "let" if node.mutable else "const"
@@ -775,7 +775,7 @@ class JavaScriptTranspiler:
         else:
             self._buf.write(f"{kw} {node.name};")
 
-    # ── Visitor: AssignStmt ─────────────────────────────────────────────
+    # -- Visitor: AssignStmt ---------------------------------------------
 
     def _emit_AssignStmt(self, node: AssignStmt) -> None:
         target = self._expr(node.target)
@@ -783,7 +783,7 @@ class JavaScriptTranspiler:
         val = self._expr(node.value)
         self._buf.write(f"{target} {op} {val};")
 
-    # ── Visitor: ReturnStmt ─────────────────────────────────────────────
+    # -- Visitor: ReturnStmt ---------------------------------------------
 
     def _emit_ReturnStmt(self, node: ReturnStmt) -> None:
         if node.value:
@@ -791,7 +791,7 @@ class JavaScriptTranspiler:
         else:
             self._buf.write("return;")
 
-    # ── Visitor: BreakStmt ──────────────────────────────────────────────
+    # -- Visitor: BreakStmt ----------------------------------------------
 
     def _emit_BreakStmt(self, node: BreakStmt) -> None:
         if node.label:
@@ -799,7 +799,7 @@ class JavaScriptTranspiler:
         else:
             self._buf.write("break;")
 
-    # ── Visitor: ContinueStmt ───────────────────────────────────────────
+    # -- Visitor: ContinueStmt -------------------------------------------
 
     def _emit_ContinueStmt(self, node: ContinueStmt) -> None:
         if node.label:
@@ -807,12 +807,12 @@ class JavaScriptTranspiler:
         else:
             self._buf.write("continue;")
 
-    # ── Visitor: ExprStmt ───────────────────────────────────────────────
+    # -- Visitor: ExprStmt -----------------------------------------------
 
     def _emit_ExprStmt(self, node: ExprStmt) -> None:
         self._buf.write(f"{self._expr(node.expr)};")
 
-    # ── Visitor: BlockStmt ──────────────────────────────────────────────
+    # -- Visitor: BlockStmt ----------------------------------------------
 
     def _emit_BlockStmt(self, node: BlockStmt) -> None:
         self._buf.write("{")
@@ -822,7 +822,7 @@ class JavaScriptTranspiler:
         self._buf.dedent()
         self._buf.write("}")
 
-    # ── Visitor: IfStmt ─────────────────────────────────────────────────
+    # -- Visitor: IfStmt -------------------------------------------------
 
     def _emit_IfStmt(self, node: IfStmt) -> None:
         cond = self._expr(node.condition)
@@ -845,7 +845,7 @@ class JavaScriptTranspiler:
             self._buf.dedent()
         self._buf.write("}")
 
-    # ── Visitor: WhileStmt ──────────────────────────────────────────────
+    # -- Visitor: WhileStmt ----------------------------------------------
 
     def _emit_WhileStmt(self, node: WhileStmt) -> None:
         cond = self._expr(node.condition)
@@ -855,7 +855,7 @@ class JavaScriptTranspiler:
         self._buf.dedent()
         self._buf.write("}")
 
-    # ── Visitor: LoopStmt ───────────────────────────────────────────────
+    # -- Visitor: LoopStmt -----------------------------------------------
 
     def _emit_LoopStmt(self, node: LoopStmt) -> None:
         self._buf.write("while (true) {")
@@ -864,7 +864,7 @@ class JavaScriptTranspiler:
         self._buf.dedent()
         self._buf.write("}")
 
-    # ── Visitor: ForStmt ────────────────────────────────────────────────
+    # -- Visitor: ForStmt ------------------------------------------------
 
     def _emit_ForStmt(self, node: ForStmt) -> None:
         var = node.var if isinstance(node.var, str) else node.var.name if hasattr(node.var, 'name') else str(node.var)
@@ -875,7 +875,7 @@ class JavaScriptTranspiler:
         self._buf.dedent()
         self._buf.write("}")
 
-    # ── Visitor: AsyncForStmt ───────────────────────────────────────────
+    # -- Visitor: AsyncForStmt -------------------------------------------
 
     def _emit_AsyncForStmt(self, node: AsyncForStmt) -> None:
         var = node.var if isinstance(node.var, str) else str(node.var)
@@ -886,7 +886,7 @@ class JavaScriptTranspiler:
         self._buf.dedent()
         self._buf.write("}")
 
-    # ── Visitor: MatchStmt ──────────────────────────────────────────────
+    # -- Visitor: MatchStmt ----------------------------------------------
 
     def _emit_MatchStmt(self, node: MatchStmt) -> None:
         subj = self._expr(node.subject)
@@ -950,7 +950,7 @@ class JavaScriptTranspiler:
         val = self._expr(pattern) if hasattr(pattern, 'accept') else str(pattern)
         return f"{subject} === {val}"
 
-    # ── Visitor: TryStmt ────────────────────────────────────────────────
+    # -- Visitor: TryStmt ------------------------------------------------
 
     def _emit_TryStmt(self, node: TryStmt) -> None:
         self._buf.write("try {")
@@ -981,19 +981,19 @@ class JavaScriptTranspiler:
             self._buf.dedent()
         self._buf.write("}")
 
-    # ── Visitor: ThrowStmt ──────────────────────────────────────────────
+    # -- Visitor: ThrowStmt ----------------------------------------------
 
     def _emit_ThrowStmt(self, node: ThrowStmt) -> None:
         val = self._expr(node.value)
         self._buf.write(f"throw new Error({val});")
 
-    # ── Visitor: EmitStmt ───────────────────────────────────────────────
+    # -- Visitor: EmitStmt -----------------------------------------------
 
     def _emit_EmitStmt(self, node: EmitStmt) -> None:
         args = ", ".join(self._expr(a) for a in (node.args or []))
         self._buf.write(f"__ltl.emit(\"{node.event}\", {{ {args} }});")
 
-    # ── Visitor: MeasureBlock ───────────────────────────────────────────
+    # -- Visitor: MeasureBlock -------------------------------------------
 
     def _emit_MeasureBlock(self, node: MeasureBlock) -> None:
         label = node.label if isinstance(node.label, str) else self._expr(node.label)
@@ -1001,7 +1001,7 @@ class JavaScriptTranspiler:
         self._emit_body_stmts(node.body)
         self._buf.write(f"console.log(`[measure:{label}] ${{(performance.now() - __t0_{label.replace(' ', '_')}).toFixed(3)}}ms`);")
 
-    # ── Visitor: GuardExpr ──────────────────────────────────────────────
+    # -- Visitor: GuardExpr ----------------------------------------------
 
     def _emit_GuardExpr(self, node: GuardExpr) -> None:
         cond = self._expr(node.condition)
@@ -1011,14 +1011,14 @@ class JavaScriptTranspiler:
         self._buf.dedent()
         self._buf.write("}")
 
-    # ── Visitor: PipelineAssign ─────────────────────────────────────────
+    # -- Visitor: PipelineAssign -----------------------------------------
 
     def _emit_PipelineAssign(self, node: PipelineAssign) -> None:
         target = self._expr(node.target)
         val = self._expr(node.value)
         self._buf.write(f"{target} = {val};")
 
-    # ── Visitor: StructDecl ─────────────────────────────────────────────
+    # -- Visitor: StructDecl ---------------------------------------------
 
     def _emit_StructDecl(self, node: StructDecl) -> None:
         self._struct_names.add(node.name)
@@ -1059,7 +1059,7 @@ class JavaScriptTranspiler:
         self._buf.write("}")
         self._buf.blank()
 
-    # ── Visitor: EnumDecl ───────────────────────────────────────────────
+    # -- Visitor: EnumDecl -----------------------------------------------
 
     def _emit_EnumDecl(self, node: EnumDecl) -> None:
         self._enum_names.add(node.name)
@@ -1094,14 +1094,14 @@ class JavaScriptTranspiler:
         self._buf.write("});")
         self._buf.blank()
 
-    # ── Visitor: TypeAlias ──────────────────────────────────────────────
+    # -- Visitor: TypeAlias ----------------------------------------------
 
     def _emit_TypeAlias(self, node: TypeAlias) -> None:
         # JS has no type aliases; emit as a comment + documentation
         target = node.target if isinstance(node.target, str) else str(node.target)
         self._buf.write(f"/** @typedef {{{target}}} {node.name} */")
 
-    # ── Visitor: ImplBlock ──────────────────────────────────────────────
+    # -- Visitor: ImplBlock ----------------------------------------------
 
     def _emit_ImplBlock(self, node: ImplBlock) -> None:
         type_name = node.type_name
@@ -1126,7 +1126,7 @@ class JavaScriptTranspiler:
                 self._buf.write("};")
                 self._buf.blank()
 
-    # ── Visitor: InterfaceDecl ──────────────────────────────────────────
+    # -- Visitor: InterfaceDecl ------------------------------------------
 
     def _emit_InterfaceDecl(self, node: InterfaceDecl) -> None:
         exp = "export " if node.is_pub and self.module_format == "esm" else ""
@@ -1141,7 +1141,7 @@ class JavaScriptTranspiler:
         self._buf.write("}")
         self._buf.blank()
 
-    # ── Visitor: ForeignBlock ───────────────────────────────────────────
+    # -- Visitor: ForeignBlock -------------------------------------------
 
     def _emit_ForeignBlock(self, node: ForeignBlock) -> None:
         lang = node.lang or "unknown"
@@ -1150,7 +1150,7 @@ class JavaScriptTranspiler:
             for line in str(node.source).splitlines():
                 self._buf.write(f"// {line}")
 
-    # ── Visitor: SelectStmt (v1.6) ──────────────────────────────────────
+    # -- Visitor: SelectStmt (v1.6) --------------------------------------
 
     def _emit_SelectStmt(self, node: SelectStmt) -> None:
         self._buf.write("// select {")
@@ -1164,7 +1164,7 @@ class JavaScriptTranspiler:
         self._buf.dedent()
         self._buf.write("})();")
 
-    # ── Visitor: NurseryBlock (v1.6) ────────────────────────────────────
+    # -- Visitor: NurseryBlock (v1.6) ------------------------------------
 
     def _emit_NurseryBlock(self, node: NurseryBlock) -> None:
         name = node.name or "nursery"
@@ -1176,31 +1176,31 @@ class JavaScriptTranspiler:
         self._buf.dedent()
         self._buf.write("})();")
 
-    # ── Visitor: MacroDecl (v1.8) ───────────────────────────────────────
+    # -- Visitor: MacroDecl (v1.8) ---------------------------------------
 
     def _emit_MacroDecl(self, node: MacroDecl) -> None:
         params = self._render_params(node.params) if node.params else ""
         self._buf.write(f"/* macro {node.name}!({params}) — compile-time only */")
 
-    # ── Visitor: MacroInvocation (v1.8) ─────────────────────────────────
+    # -- Visitor: MacroInvocation (v1.8) ---------------------------------
 
     def _emit_MacroInvocation(self, node: MacroInvocation) -> None:
         args = ", ".join(self._expr(a) for a in (node.args or []))
         self._buf.write(f"/* {node.name}!({args}) */")
 
-    # ── Visitor: CompTimeBlock (v1.8) ───────────────────────────────────
+    # -- Visitor: CompTimeBlock (v1.8) -----------------------------------
 
     def _emit_CompTimeBlock(self, node: CompTimeBlock) -> None:
         self._buf.write("/* comptime { */")
         self._emit_body_stmts(node.body)
         self._buf.write("/* } */")
 
-    # ── Visitor: TypeMatchExpr ──────────────────────────────────────────
+    # -- Visitor: TypeMatchExpr ------------------------------------------
 
     def _emit_TypeMatchExpr(self, node: TypeMatchExpr) -> None:
         self._buf.write(f"{self._expr(node)};")
 
-    # ── Visitor: StaticDecl ─────────────────────────────────────────────
+    # -- Visitor: StaticDecl ---------------------------------------------
 
     def _emit_StaticDecl(self, node: Any) -> None:
         name = node.name if hasattr(node, 'name') else "unknown"

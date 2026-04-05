@@ -1,29 +1,29 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — RAM Filesystem (ramfs)
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * In-memory inode-based filesystem with directories and files.
  * Provides ls, cat, touch, mkdir, rm, write operations.
  *
  * Copyright (c) 2025 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #ifndef LATERALUS_RAMFS_H
 #define LATERALUS_RAMFS_H
 
 #include "../gui/types.h"
 
-/* ── Limits ───────────────────────────────────────────────────────────── */
+/* -- Limits ------------------------------------------------------------- */
 
 #define RAMFS_MAX_NODES     64
 #define RAMFS_MAX_NAME      32
 #define RAMFS_MAX_CONTENT 2048
 #define RAMFS_MAX_CHILDREN  16
 
-/* ── Node types ───────────────────────────────────────────────────────── */
+/* -- Node types --------------------------------------------------------- */
 
 typedef enum { RAMFS_FILE = 0, RAMFS_DIR = 1 } RamfsType;
 
-/* ── Filesystem node (inode) ──────────────────────────────────────────── */
+/* -- Filesystem node (inode) -------------------------------------------- */
 
 typedef struct {
     char       name[RAMFS_MAX_NAME];
@@ -42,7 +42,7 @@ typedef struct {
     int        parent;
 } RamfsNode;
 
-/* ── Public API ───────────────────────────────────────────────────────── */
+/* -- Public API --------------------------------------------------------- */
 
 /* Initialize the filesystem with root /, /home, /etc, default files */
 void ramfs_init(void);

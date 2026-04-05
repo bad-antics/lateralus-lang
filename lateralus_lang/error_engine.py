@@ -1,6 +1,6 @@
 """
-lateralus_lang/error_engine.py  ─  LATERALUS Advanced Error Handling System
-═══════════════════════════════════════════════════════════════════════════════
+lateralus_lang/error_engine.py  -  LATERALUS Advanced Error Handling System
+===============================================================================
 World-class error handling with:
   · Rich error messages with source context (surrounding lines)
   · Error codes for every error category
@@ -15,7 +15,7 @@ Design: errors should HELP you fix the problem, not just tell you
 something is wrong.
 
 v1.5.0
-═══════════════════════════════════════════════════════════════════════════════
+===============================================================================
 """
 from __future__ import annotations
 
@@ -28,9 +28,9 @@ from enum import Enum, auto
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Error codes
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class ErrorCode(Enum):
     # Lexer errors (E1xxx)
@@ -98,9 +98,9 @@ class Severity(Enum):
     HINT    = "hint"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # ANSI color codes
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class _Color:
     RESET     = "\033[0m"
@@ -133,9 +133,9 @@ C = _Color if _supports_color() else type("NoColor", (), {
 })()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Source location
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class SourceLocation:
@@ -152,9 +152,9 @@ class SourceLocation:
         return f"{self.file}:{self.line}"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # LateralusError — the core error type
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 @dataclass
 class LateralusError:
@@ -204,7 +204,7 @@ class LateralusError:
 
         # Location
         if self.location:
-            loc_str = f"  {c.CYAN}──▸{c.RESET} {self.location}"
+            loc_str = f"  {c.CYAN}--▸{c.RESET} {self.location}"
             parts.append(loc_str)
 
             # Source context with underline
@@ -242,16 +242,16 @@ class LateralusError:
             is_error_line = line_num == target_line
 
             if is_error_line:
-                prefix = f"  {c.RED}{line_num:>{gutter_width}} │{c.RESET} "
+                prefix = f"  {c.RED}{line_num:>{gutter_width}} |{c.RESET} "
                 lines.append(prefix + line_text)
                 # Underline
                 col = max(0, self.location.column - 1)
                 end_col = self.location.end_column or (col + 1)
                 underline_len = max(1, end_col - col)
                 padding = " " * (gutter_width + 5 + col)
-                lines.append(f"{padding}{c.RED}{'─' * underline_len}{c.RESET}")
+                lines.append(f"{padding}{c.RED}{'-' * underline_len}{c.RESET}")
             else:
-                prefix = f"  {c.GRAY}{line_num:>{gutter_width}} │{c.RESET} "
+                prefix = f"  {c.GRAY}{line_num:>{gutter_width}} |{c.RESET} "
                 lines.append(prefix + f"{c.DIM}{line_text}{c.RESET}")
 
         return "\n".join(lines)
@@ -279,9 +279,9 @@ class LateralusError:
         return result
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Suggestion engine
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def suggest_similar(name: str, candidates: Sequence[str],
                     max_results: int = 3, cutoff: float = 0.5) -> List[str]:
@@ -351,9 +351,9 @@ def suggest_fix_for_type_mismatch(expected: str, actual: str) -> List[str]:
     return suggestions
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Error collector (for multi-error reporting)
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class ErrorCollector:
     """Collects multiple errors for batch reporting."""
@@ -447,9 +447,9 @@ class ErrorCollector:
                 self.format_all(color=False), errors=self.errors)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Exception classes
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class LateralusCompileError(Exception):
     """Raised when compilation fails with collected errors."""
@@ -471,9 +471,9 @@ class LateralusRuntimeError(Exception):
         super().__init__(message)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Stack trace enhancer
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def enhance_traceback(exc: Exception, source: str = "",
                       file: str = "<input>") -> Optional[LateralusError]:

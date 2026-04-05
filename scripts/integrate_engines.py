@@ -40,7 +40,7 @@ def patch_codegen():
 
     # Find the PREAMBLE string and append engine imports
     engine_preamble = '''
-# ─── LATERALUS Engine Extensions ────────────────────────────────────
+# --- LATERALUS Engine Extensions ------------------------------------
 try:
     from lateralus_lang.math_engine import (
         LTLNumber, Matrix, Vector, Interval, Dual,

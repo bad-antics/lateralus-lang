@@ -19,7 +19,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Optional
 
-# ─── Compiler integration (real diagnostics) ──────────────────────────
+# --- Compiler integration (real diagnostics) --------------------------
 try:
     from .compiler import Compiler, Target, CompileResult
     from .errors   import Severity as LTLSeverity
@@ -30,7 +30,7 @@ except Exception:          # pragma: no cover – graceful degradation
 log = logging.getLogger("lateralus-lsp")
 
 
-# ─── JSON-RPC Protocol ────────────────────────────────────────────────
+# --- JSON-RPC Protocol ------------------------------------------------
 
 @dataclass
 class RPCMessage:
@@ -89,7 +89,7 @@ def send_notification(method: str, params: dict):
     })
 
 
-# ─── Document Manager ─────────────────────────────────────────────────
+# --- Document Manager -------------------------------------------------
 
 @dataclass
 class TextDocument:
@@ -151,7 +151,7 @@ class DocumentManager:
         return self.documents.get(uri)
 
 
-# ─── LATERALUS Language Intelligence ──────────────────────────────────
+# --- LATERALUS Language Intelligence ----------------------------------
 
 # Keywords for completion
 LATERALUS_KEYWORDS = [
@@ -277,7 +277,7 @@ def collect_diagnostics(doc: TextDocument) -> list[dict]:
     """
     diagnostics: list[dict] = []
 
-    # ── Compiler-powered diagnostics ──────────────────────────────────────
+    # -- Compiler-powered diagnostics --------------------------------------
     if _HAS_COMPILER:
         try:
             cc = Compiler()
@@ -318,7 +318,7 @@ def collect_diagnostics(doc: TextDocument) -> list[dict]:
             log.debug("Compiler diagnostic pass failed: %s", exc)
             # Fall through to lightweight checks below
 
-    # ── Lightweight / supplementary heuristics ────────────────────────────
+    # -- Lightweight / supplementary heuristics ----------------------------
     for i, line in enumerate(doc.lines):
         stripped = line.strip()
 
@@ -445,7 +445,7 @@ def get_hover(doc: TextDocument, line: int, character: int) -> Optional[dict]:
     return None
 
 
-# ─── Document Symbols ─────────────────────────────────────────────────
+# --- Document Symbols -------------------------------------------------
 
 # LSP SymbolKind constants
 _SK_FUNCTION   = 12
@@ -569,7 +569,7 @@ def _make_symbol(name: str, kind: int, start_line: int, start_char: int,
     }
 
 
-# ─── Go-to-Definition ─────────────────────────────────────────────────
+# --- Go-to-Definition -------------------------------------------------
 
 def get_definition(doc: TextDocument, line: int, character: int) -> Optional[dict]:
     """Find the definition of the symbol at the given position."""
@@ -608,7 +608,7 @@ def get_definition(doc: TextDocument, line: int, character: int) -> Optional[dic
     return None
 
 
-# ─── Find References ──────────────────────────────────────────────────
+# --- Find References --------------------------------------------------
 
 def get_references(doc: TextDocument, line: int, character: int,
                    include_decl: bool = True) -> list[dict]:
@@ -635,7 +635,7 @@ def get_references(doc: TextDocument, line: int, character: int,
     return refs
 
 
-# ─── Signature Help ───────────────────────────────────────────────────
+# --- Signature Help ---------------------------------------------------
 
 def get_signature_help(doc: TextDocument, line: int, character: int) -> Optional[dict]:
     """Provide signature help when inside function call parens."""
@@ -712,7 +712,7 @@ def get_signature_help(doc: TextDocument, line: int, character: int) -> Optional
     return None
 
 
-# ─── LSP Server ────────────────────────────────────────────────────────
+# --- LSP Server --------------------------------------------------------
 
 class LateralusLSP:
     """The LATERALUS Language Server."""

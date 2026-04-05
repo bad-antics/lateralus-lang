@@ -19,7 +19,7 @@ import traceback
 from typing import Any, Dict, List, Optional, Set
 
 
-# ─── ANSI Colors ───────────────────────────────────────────────────────
+# --- ANSI Colors -------------------------------------------------------
 
 class _C:
     """ANSI color codes."""
@@ -43,7 +43,7 @@ class _C:
                 setattr(cls, attr, "")
 
 
-# ─── REPL Keywords & Builtins ─────────────────────────────────────────
+# --- REPL Keywords & Builtins -----------------------------------------
 
 KEYWORDS = {
     "fn", "let", "const", "if", "else", "for", "while", "return",
@@ -94,7 +94,7 @@ SPECIAL_COMMANDS = {
 }
 
 
-# ─── Syntax Highlighter ───────────────────────────────────────────────
+# --- Syntax Highlighter -----------------------------------------------
 
 def highlight_line(line: str) -> str:
     """Apply syntax highlighting to a line of LATERALUS code."""
@@ -174,7 +174,7 @@ def highlight_line(line: str) -> str:
     return "".join(result)
 
 
-# ─── REPL Session ─────────────────────────────────────────────────────
+# --- REPL Session -----------------------------------------------------
 
 class REPLSession:
     """An interactive REPL session for LATERALUS."""
@@ -201,10 +201,10 @@ class REPLSession:
 
         return (
             f"{_C.CYAN}{_C.BOLD}"
-            f"\n╔═══════════════════════════════════════════════════╗"
-            f"\n║  L·A·T·E·R·A·L·U·S   v{version}  [ INTERACTIVE ]  ║"
-            f"\n║  ───────────────────────────────────────────────  ║"
-            f"\n╚═══════════════════════════════════════════════════╝"
+            f"\n+===================================================+"
+            f"\n|  L·A·T·E·R·A·L·U·S   v{version}  [ INTERACTIVE ]  |"
+            f"\n|  -----------------------------------------------  |"
+            f"\n+===================================================+"
             f"{_C.RESET}"
             f"\n{_C.DIM}  :help · :quit · :clear · :env · :time{_C.RESET}\n"
         )
@@ -385,7 +385,7 @@ class REPLSession:
         from lateralus_lang.parser import Parser
         from lateralus_lang.compiler import Compiler, Target
 
-        print(f"{_C.DIM}── Profile ──{_C.RESET}")
+        print(f"{_C.DIM}-- Profile --{_C.RESET}")
 
         # Lex
         t0 = time.perf_counter_ns()
@@ -407,7 +407,7 @@ class REPLSession:
         print(f"  {_C.CYAN}Parse:{_C.RESET}   {t_parse:8.3f} ms  ({len(ast.body)} top-level nodes)")
         print(f"  {_C.CYAN}Compile:{_C.RESET} {t_compile:8.3f} ms  ({'OK' if result.ok else 'errors'})")
         print(f"  {_C.CYAN}Total:{_C.RESET}   {t_lex + t_parse + t_compile:8.3f} ms")
-        print(f"{_C.DIM}─────────────{_C.RESET}")
+        print(f"{_C.DIM}-------------{_C.RESET}")
 
     def run(self):
         """Run the interactive REPL loop."""
@@ -481,7 +481,7 @@ class REPLSession:
                 break
 
 
-# ─── Helper methods ────────────────────────────────────────────────────
+# --- Helper methods ----------------------------------------------------
 
 _BUILTIN_DOCS: Dict[str, str] = {
     "println":   "println(value) — Print value with trailing newline.",
@@ -537,7 +537,7 @@ _BUILTIN_DOCS: Dict[str, str] = {
     "simpson_integrate": "simpson_integrate(fn, a, b, n) — Numerical integration.",
 }
 
-# ─── Entry point ───────────────────────────────────────────────────────
+# --- Entry point -------------------------------------------------------
 
 def start_repl(color: bool = True, timing: bool = False):
     """Start the enhanced LATERALUS REPL."""

@@ -99,7 +99,7 @@ class LateralusDebugger:
         self._source_cache: dict[str, list[str]] = {}
         self.source_lines: list[str] = []
 
-    # ─── Breakpoint Management ─────────────────────────────────────
+    # --- Breakpoint Management -------------------------------------
 
     def add_breakpoint(self, file: str, line: int,
                        condition: Optional[str] = None) -> Breakpoint:
@@ -131,7 +131,7 @@ class LateralusDebugger:
         """Remove all breakpoints."""
         self.breakpoints.clear()
 
-    # ─── Watch Expressions ─────────────────────────────────────────
+    # --- Watch Expressions -----------------------------------------
 
     def add_watch(self, expression: str) -> WatchExpression:
         """Add a watch expression."""
@@ -146,7 +146,7 @@ class LateralusDebugger:
             return True
         return False
 
-    # ─── Execution Control ─────────────────────────────────────────
+    # --- Execution Control -----------------------------------------
 
     def continue_execution(self):
         self.current_action = DebugAction.CONTINUE
@@ -174,7 +174,7 @@ class LateralusDebugger:
         self.current_action = DebugAction.PAUSE
         self.paused = True
 
-    # ─── Stack Management ──────────────────────────────────────────
+    # --- Stack Management ------------------------------------------
 
     def push_frame(self, function_name: str, file: str, line: int,
                    args: Optional[dict] = None):
@@ -197,7 +197,7 @@ class LateralusDebugger:
         """Get the current (top) stack frame."""
         return self.call_stack[-1] if self.call_stack else None
 
-    # ─── Debug Hook ────────────────────────────────────────────────
+    # --- Debug Hook ------------------------------------------------
 
     def on_line(self, file: str, line: int, locals_dict: dict) -> DebugAction:
         """
@@ -241,7 +241,7 @@ class LateralusDebugger:
 
         return self.current_action
 
-    # ─── Source Viewing ────────────────────────────────────────────
+    # --- Source Viewing --------------------------------------------
 
     def get_source_line(self, file: str, line: int) -> Optional[str]:
         """Get a source line from a file."""
@@ -277,7 +277,7 @@ class LateralusDebugger:
                     result.append((i, text, i == line))
             return result
 
-    # ─── State Inspection ──────────────────────────────────────────
+    # --- State Inspection ------------------------------------------
 
     def get_variables(self) -> dict[str, Any]:
         """Get all variables in the current scope."""
@@ -304,7 +304,7 @@ class LateralusDebugger:
             lines.append(f"  {marker}{frame}")
         return "\n".join(lines)
 
-    # ─── REPL Integration ──────────────────────────────────────────
+    # --- REPL Integration ------------------------------------------
 
     def interactive_break(self, file: str, line: int):
         """Enter interactive debug mode at a breakpoint."""

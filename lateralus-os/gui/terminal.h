@@ -1,18 +1,18 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — Functional GUI Terminal
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Full interactive terminal emulator within a GUI window.
  * Supports command input, output scrollback, and VFS integration.
  *
  * Copyright (c) 2025 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #ifndef LATERALUS_TERMINAL_H
 #define LATERALUS_TERMINAL_H
 
 #include "gui.h"
 
-/* ── Limits ───────────────────────────────────────────────────────────── */
+/* -- Limits ------------------------------------------------------------- */
 
 #define TERM_MAX_LINES   200
 #define TERM_COLS         80
@@ -21,7 +21,7 @@
 #define TERM_MAX_TERMS     4
 #define TERM_HIST_SIZE    16
 
-/* ── Terminal state ───────────────────────────────────────────────────── */
+/* -- Terminal state ----------------------------------------------------- */
 
 typedef struct {
     /* Scrollback buffer — circular line buffer */
@@ -54,12 +54,12 @@ typedef struct {
     uint8_t dirty;
 } GuiTerminal;
 
-/* ── Kernel info access (defined in kernel_stub.c / heap.c) ───────────── */
+/* -- Kernel info access (defined in kernel_stub.c / heap.c) ------------- */
 
 extern volatile uint64_t tick_count;
 extern uint64_t total_system_memory;
 
-/* ── Public API ───────────────────────────────────────────────────────── */
+/* -- Public API --------------------------------------------------------- */
 
 /* Initialize the terminal subsystem */
 void term_init(void);

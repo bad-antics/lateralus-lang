@@ -1,18 +1,18 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — Kernel Heap Allocator
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Free-list + bump allocator with split/coalesce, double-free detection,
  * and allocation statistics. All allocations are 16-byte aligned.
  *
  * Copyright (c) 2025-2026 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #ifndef LATERALUS_HEAP_H
 #define LATERALUS_HEAP_H
 
 #include "../gui/types.h"
 
-/* ── Allocation header (placed before every returned pointer) ──────── */
+/* -- Allocation header (placed before every returned pointer) -------- */
 
 typedef struct {
     uint64_t size;     /* total allocation size (includes header) */
@@ -22,7 +22,7 @@ typedef struct {
 #define ALLOC_MAGIC  0xDEADBEEFULL
 #define MIN_SPLIT    64  /* don't split free blocks smaller than this */
 
-/* ── Heap statistics (read-only access) ───────────────────────────── */
+/* -- Heap statistics (read-only access) ----------------------------- */
 
 typedef struct {
     uint64_t start;        /* heap start address                    */
@@ -33,7 +33,7 @@ typedef struct {
     uint64_t free_count;   /* lifetime free count                   */
 } HeapStats;
 
-/* ── Public API ──────────────────────────────────────────────────── */
+/* -- Public API ---------------------------------------------------- */
 
 /* Initialise the heap. Called once at boot.
    `total_mem` = end of identity-mapped memory (typically RAM size). */

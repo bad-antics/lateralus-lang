@@ -1,13 +1,13 @@
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 // Lateralus Language — VS Code Extension Entry Point
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 // Activates the Lateralus Language Server (LSP) for diagnostics,
 // completions, hover info, go-to-definition, references, formatting,
 // code actions, signature help, symbols, and rename in .ltl files.
 //
 // The LSP server is a Python process running lateralus_lang.lsp_server
 // communicating over stdin/stdout JSON-RPC.
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 
 const vscode = require("vscode");
 const { spawn } = require("child_process");
@@ -261,7 +261,7 @@ async function initializeServer() {
     }
 }
 
-// ─── Diagnostics ──────────────────────────────────────────────────────────
+// --- Diagnostics ----------------------------------------------------------
 
 /** @type {vscode.DiagnosticCollection} */
 let diagnosticCollection;
@@ -291,7 +291,7 @@ function severityMap(sev) {
     }
 }
 
-// ─── Document Sync ────────────────────────────────────────────────────────
+// --- Document Sync --------------------------------------------------------
 
 function isLateralusDocument(doc) {
     return ["lateralus", "lateralus-asm", "lateralus-markup", "lateralus-cfg", "lateralus-notebook"]
@@ -332,7 +332,7 @@ function notifyDidSave(doc) {
     });
 }
 
-// ─── Completions ──────────────────────────────────────────────────────────
+// --- Completions ----------------------------------------------------------
 
 class LateralusCompletionProvider {
     async provideCompletionItems(document, position, token) {
@@ -371,7 +371,7 @@ class LateralusCompletionProvider {
     }
 }
 
-// ─── Hover ────────────────────────────────────────────────────────────────
+// --- Hover ----------------------------------------------------------------
 
 class LateralusHoverProvider {
     async provideHover(document, position, token) {
@@ -419,7 +419,7 @@ class LateralusHoverProvider {
     }
 }
 
-// ─── Go to Definition ─────────────────────────────────────────────────────
+// --- Go to Definition -----------------------------------------------------
 
 class LateralusDefinitionProvider {
     async provideDefinition(document, position, token) {
@@ -452,7 +452,7 @@ class LateralusDefinitionProvider {
     }
 }
 
-// ─── Find References ──────────────────────────────────────────────────────
+// --- Find References ------------------------------------------------------
 
 class LateralusReferenceProvider {
     async provideReferences(document, position, context, token) {
@@ -482,7 +482,7 @@ class LateralusReferenceProvider {
     }
 }
 
-// ─── Document Formatting ──────────────────────────────────────────────────
+// --- Document Formatting --------------------------------------------------
 
 class LateralusDocumentFormattingProvider {
     async provideDocumentFormattingEdits(document, options, token) {
@@ -516,7 +516,7 @@ class LateralusDocumentFormattingProvider {
     }
 }
 
-// ─── Document Range Formatting ────────────────────────────────────────────
+// --- Document Range Formatting --------------------------------------------
 
 class LateralusDocumentRangeFormattingProvider {
     async provideDocumentRangeFormattingEdits(document, range, options, token) {
@@ -552,7 +552,7 @@ class LateralusDocumentRangeFormattingProvider {
     }
 }
 
-// ─── Code Actions ─────────────────────────────────────────────────────────
+// --- Code Actions ---------------------------------------------------------
 
 class LateralusCodeActionProvider {
     async provideCodeActions(document, range, context, token) {
@@ -654,7 +654,7 @@ function codeActionKindMap(kind) {
     }
 }
 
-// ─── Signature Help ───────────────────────────────────────────────────────
+// --- Signature Help -------------------------------------------------------
 
 class LateralusSignatureHelpProvider {
     async provideSignatureHelp(document, position, token, context) {
@@ -700,7 +700,7 @@ class LateralusSignatureHelpProvider {
     }
 }
 
-// ─── Document Symbols ─────────────────────────────────────────────────────
+// --- Document Symbols -----------------------------------------------------
 
 class LateralusDocumentSymbolProvider {
     async provideDocumentSymbols(document, token) {
@@ -767,7 +767,7 @@ function convertDocumentSymbol(sym) {
     return docSym;
 }
 
-// ─── Workspace Symbols ────────────────────────────────────────────────────
+// --- Workspace Symbols ----------------------------------------------------
 
 class LateralusWorkspaceSymbolProvider {
     async provideWorkspaceSymbols(query, token) {
@@ -832,7 +832,7 @@ function symbolKindMap(kind) {
     return map[kind] || vscode.SymbolKind.Variable;
 }
 
-// ─── Rename ───────────────────────────────────────────────────────────────
+// --- Rename ---------------------------------------------------------------
 
 class LateralusRenameProvider {
     async prepareRename(document, position, token) {
@@ -927,7 +927,7 @@ class LateralusRenameProvider {
     }
 }
 
-// ─── Folding Range ────────────────────────────────────────────────────────
+// --- Folding Range --------------------------------------------------------
 
 class LateralusFoldingRangeProvider {
     async provideFoldingRanges(document, context, token) {
@@ -952,7 +952,7 @@ class LateralusFoldingRangeProvider {
     }
 }
 
-// ─── Selection Range ──────────────────────────────────────────────────────
+// --- Selection Range ------------------------------------------------------
 
 class LateralusSelectionRangeProvider {
     async provideSelectionRanges(document, positions, token) {
@@ -982,7 +982,7 @@ function convertSelectionRange(sr) {
     return selRange;
 }
 
-// ─── Status Bar ───────────────────────────────────────────────────────────
+// --- Status Bar -----------------------------------------------------------
 
 function updateStatus(state) {
     switch (state) {
@@ -1005,7 +1005,7 @@ function updateStatus(state) {
     statusBarItem.show();
 }
 
-// ─── Extension Lifecycle ──────────────────────────────────────────────────
+// --- Extension Lifecycle --------------------------------------------------
 
 function activate(context) {
     outputChannel = vscode.window.createOutputChannel("Lateralus");

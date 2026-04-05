@@ -1,16 +1,16 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — HTTP/1.1 Client Implementation
  * Minimal HTTP client built on top of the TCP transport layer.
  *
  * Part of LateralusOS v0.3.0
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #include "http.h"
 #include "tcp.h"
 #include "ip.h"
 #include "dns.h"
 
-/* ── Local helpers ────────────────────────────────────────────────────── */
+/* -- Local helpers ------------------------------------------------------ */
 
 static void http_memset(void *dst, uint8_t val, int len) {
     uint8_t *d = (uint8_t *)dst;
@@ -104,11 +104,11 @@ extern void sched_sleep(uint32_t ms);
 /* Tick counter for timeouts */
 extern volatile uint64_t tick_count;
 
-/* ── Static response buffer ───────────────────────────────────────────── */
+/* -- Static response buffer --------------------------------------------- */
 
 static HttpResponse http_resp;
 
-/* ── Next ephemeral source port ───────────────────────────────────────── */
+/* -- Next ephemeral source port ----------------------------------------- */
 
 static uint16_t http_next_port = 49152;
 
@@ -118,18 +118,18 @@ static uint16_t http_alloc_port(void) {
     return p;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * http_init()
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 void http_init(void) {
     http_next_port = 49152;
     serial_puts("[http] HTTP/1.1 client initialized\n");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * http_parse_url()  —  Parse "http://host[:port][/path]"
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 int http_parse_url(const char *url, HttpUrl *out) {
     http_memset(out, 0, sizeof(HttpUrl));
@@ -175,10 +175,10 @@ int http_parse_url(const char *url, HttpUrl *out) {
     return 0;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Build HTTP/1.1 GET request into buffer
  * Returns length of request string
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 static int http_build_get(const char *host, const char *path, char *buf, int buf_size) {
     /* GET /path HTTP/1.1\r\nHost: host\r\nConnection: close\r\nUser-Agent: LateralusOS/0.3\r\n\r\n */
@@ -207,9 +207,9 @@ static int http_build_get(const char *host, const char *path, char *buf, int buf
     return pos;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Parse HTTP response headers from buffer
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 static void http_parse_response(HttpResponse *resp) {
     resp->status_code = 0;
@@ -278,9 +278,9 @@ static void http_parse_response(HttpResponse *resp) {
     }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * http_get()  —  Perform HTTP GET request (blocking)
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 HttpResponse *http_get(const char *host, uint16_t port, const char *path) {
     /* Clear response */
@@ -438,9 +438,9 @@ HttpResponse *http_get(const char *host, uint16_t port, const char *path) {
     return &http_resp;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * http_get_url()  —  Convenience wrapper: GET by URL string
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 HttpResponse *http_get_url(const char *url) {
     HttpUrl parsed;
@@ -453,9 +453,9 @@ HttpResponse *http_get_url(const char *url) {
     return http_get(parsed.host, parsed.port, parsed.path);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * http_body() / http_body_len()  —  Access response body
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 const char *http_body(const HttpResponse *resp) {
     if (!resp || resp->header_end < 0 || resp->header_end >= resp->buf_len)

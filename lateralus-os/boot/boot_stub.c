@@ -1,6 +1,6 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — C Bootstrap Stub (Enhanced v0.2.0)
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Copyright (c) 2025-2026 bad-antics. All rights reserved.
  *
  * This thin C layer bridges the ASM bootloader and the Lateralus kernel.
@@ -11,11 +11,11 @@
  *   3. Clear screen
  *   4. Validate framebuffer parameters before kernel handoff
  *   5. Call kernel_main() (generated from kernel/main.ltl)
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #include "../gui/types.h"
 
-/* ── Port I/O ─────────────────────────────────────────────────────────── */
+/* -- Port I/O ----------------------------------------------------------- */
 
 static inline void outb(uint16_t port, uint8_t val) {
     __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
@@ -27,7 +27,7 @@ static inline uint8_t inb(uint16_t port) {
     return ret;
 }
 
-/* ── Serial Port (COM1 = 0x3F8) ──────────────────────────────────────── */
+/* -- Serial Port (COM1 = 0x3F8) ---------------------------------------- */
 
 #define COM1 0x3F8
 
@@ -50,7 +50,7 @@ static void serial_puts(const char *s) {
     while (*s) serial_putc(*s++);
 }
 
-/* ── VGA Text Mode ────────────────────────────────────────────────────── */
+/* -- VGA Text Mode ------------------------------------------------------ */
 
 static volatile uint16_t *const VGA = (volatile uint16_t*)0xB8000;
 #define VGA_WIDTH  80
@@ -97,7 +97,7 @@ static void vga_puts(const char *s) {
     while (*s) vga_putc(*s++);
 }
 
-/* ── Boot banner ──────────────────────────────────────────────────────── */
+/* -- Boot banner -------------------------------------------------------- */
 
 static void print_banner(void) {
     vga_color = 0x0D;  /* light magenta */
@@ -109,11 +109,11 @@ static void print_banner(void) {
     vga_puts("\n");
     vga_puts(" LateralusOS v0.2.0 — Created by bad-antics\n");
     vga_puts(" Built with the Lateralus programming language\n");
-    vga_puts(" ────────────────────────────────────────────────────\n\n");
+    vga_puts(" ----------------------------------------------------\n\n");
     vga_color = 0x0F;  /* white */
 }
 
-/* ── Multiboot2 info parsing ─────────────────────────────────────────── */
+/* -- Multiboot2 info parsing ------------------------------------------- */
 
 #include "../gui/bootinfo.h"
 
@@ -218,11 +218,11 @@ static void parse_multiboot(uint32_t magic, uint32_t mb_info_addr) {
     }
 }
 
-/* ── External: Lateralus kernel entry ─────────────────────────────────── */
+/* -- External: Lateralus kernel entry ----------------------------------- */
 
 extern void kernel_main(void);
 
-/* ── Boot init — called from boot.asm ─────────────────────────────────── */
+/* -- Boot init — called from boot.asm ----------------------------------- */
 
 void boot_init(uint32_t magic, uint32_t mb_info_addr) {
     /* 1. Serial output for debug */

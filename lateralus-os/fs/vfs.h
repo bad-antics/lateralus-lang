@@ -1,24 +1,24 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — Virtual File System Layer
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Per-task file descriptor table, connecting syscalls to the ramfs
  * backend. Provides POSIX-like open/read/write/close/dup/pipe semantics.
  *
  * Copyright (c) 2025-2026 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #ifndef LATERALUS_VFS_H
 #define LATERALUS_VFS_H
 
 #include "../gui/types.h"
 
-/* ── Limits ───────────────────────────────────────────────────────────── */
+/* -- Limits ------------------------------------------------------------- */
 
 #define VFS_MAX_FD       32    /* max open fds per task               */
 #define VFS_MAX_TASKS    32    /* max tasks with fd tables            */
 #define VFS_PIPE_BUF    512    /* pipe buffer size                    */
 
-/* ── Open flags (compatible subset of POSIX) ──────────────────────── */
+/* -- Open flags (compatible subset of POSIX) ------------------------ */
 
 #define O_RDONLY    0x0000
 #define O_WRONLY    0x0001
@@ -27,7 +27,7 @@
 #define O_TRUNC     0x0200
 #define O_APPEND    0x0400
 
-/* ── File descriptor types ────────────────────────────────────────── */
+/* -- File descriptor types ------------------------------------------ */
 
 typedef enum {
     FD_NONE = 0,      /* unused slot                              */
@@ -38,7 +38,7 @@ typedef enum {
     FD_NULL,           /* /dev/null                                */
 } FdType;
 
-/* ── Pipe state ───────────────────────────────────────────────────── */
+/* -- Pipe state ----------------------------------------------------- */
 
 typedef struct {
     uint8_t  buf[VFS_PIPE_BUF];
@@ -51,7 +51,7 @@ typedef struct {
 
 #define VFS_MAX_PIPES    16
 
-/* ── File descriptor entry ────────────────────────────────────────── */
+/* -- File descriptor entry ------------------------------------------ */
 
 typedef struct {
     FdType   type;
@@ -61,7 +61,7 @@ typedef struct {
     int      pipe_idx;     /* index into pipe table (for FD_PIPE)   */
 } FdEntry;
 
-/* ── Per-task fd table ────────────────────────────────────────────── */
+/* -- Per-task fd table ---------------------------------------------- */
 
 typedef struct {
     FdEntry  fds[VFS_MAX_FD];
@@ -69,9 +69,9 @@ typedef struct {
     uint8_t  in_use;       /* table in use?                        */
 } FdTable;
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Public API
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 /* Initialize the VFS subsystem. Called once at boot. */
 void     vfs_init(void);
@@ -82,7 +82,7 @@ int      vfs_alloc_task(void);
 /* Free a task's fd table, closing all open fds. */
 void     vfs_free_task(int task_id);
 
-/* ── File operations (all take task_id to identify the fd table) ──── */
+/* -- File operations (all take task_id to identify the fd table) ---- */
 
 /* Open a file by path. Returns fd (>= 0) or -1 on error. */
 int      vfs_open(int task_id, const char *path, uint32_t flags);
@@ -105,12 +105,12 @@ int      vfs_dup(int task_id, int fd);
 /* Duplicate fd to a specific target fd. Returns new_fd or -1. */
 int      vfs_dup2(int task_id, int old_fd, int new_fd);
 
-/* ── Pipe ─────────────────────────────────────────────────────────── */
+/* -- Pipe ----------------------------------------------------------- */
 
 /* Create a pipe. read_fd and write_fd are filled on success. Returns 0 or -1. */
 int      vfs_pipe(int task_id, int *read_fd, int *write_fd);
 
-/* ── Directory ────────────────────────────────────────────────────── */
+/* -- Directory ------------------------------------------------------ */
 
 /* Get the current working directory node index for a task. */
 int      vfs_getcwd(int task_id);
@@ -118,7 +118,7 @@ int      vfs_getcwd(int task_id);
 /* Set the current working directory for a task. Returns 0 or -1. */
 int      vfs_chdir(int task_id, const char *path);
 
-/* ── Seek whence constants ────────────────────────────────────────── */
+/* -- Seek whence constants ------------------------------------------ */
 
 #define SEEK_SET  0
 #define SEEK_CUR  1

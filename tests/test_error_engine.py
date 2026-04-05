@@ -11,7 +11,7 @@ from lateralus_lang.error_engine import (
 )
 
 
-# ─── SourceLocation ───
+# --- SourceLocation ---
 
 class TestSourceLocation:
     def test_creation(self):
@@ -32,7 +32,7 @@ class TestSourceLocation:
         assert loc.end_column == 10
 
 
-# ─── LateralusError ───
+# --- LateralusError ---
 
 class TestLateralusError:
     def test_creation(self):
@@ -110,7 +110,7 @@ class TestLateralusError:
         assert err.severity == Severity.WARNING
 
 
-# ─── Suggestion Engine ───
+# --- Suggestion Engine ---
 
 class TestSuggestionEngine:
     def test_suggest_similar_exact(self):
@@ -147,7 +147,7 @@ class TestSuggestionEngine:
         assert any("float(" in s for s in suggestions)
 
 
-# ─── ErrorCollector ───
+# --- ErrorCollector ---
 
 class TestErrorCollector:
     def test_empty_collector(self):
@@ -201,7 +201,7 @@ class TestErrorCollector:
         ec.raise_if_errors()  # Should not raise
 
 
-# ─── Exception Classes ───
+# --- Exception Classes ---
 
 class TestExceptionClasses:
     def test_compile_error(self):
@@ -215,7 +215,7 @@ class TestExceptionClasses:
         assert hasattr(err, "error")
 
 
-# ─── enhance_traceback ───
+# --- enhance_traceback ---
 
 class TestEnhanceTraceback:
     def test_zero_division(self):
@@ -273,7 +273,7 @@ class TestEnhanceTraceback:
             assert result.code == ErrorCode.E5005
 
 
-# ─── ErrorCode Coverage ───
+# --- ErrorCode Coverage ---
 
 class TestErrorCodes:
     def test_all_codes_have_descriptions(self):

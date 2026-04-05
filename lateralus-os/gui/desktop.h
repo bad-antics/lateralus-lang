@@ -1,17 +1,17 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — Desktop Environment
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * High-level desktop manager: launches default windows, handles the
  * main GUI event loop, and bridges the kernel's IRQ-driven input to
  * the GUI widget system.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #ifndef LATERALUS_DESKTOP_H
 #define LATERALUS_DESKTOP_H
 
 #include "gui.h"
 
-/* ── Desktop state ────────────────────────────────────────────────────── */
+/* -- Desktop state ------------------------------------------------------ */
 
 typedef struct {
     GuiContext  gui;
@@ -23,7 +23,7 @@ typedef struct {
     uint8_t     ctrl_held;   /* 1 = Ctrl key currently held */
 } Desktop;
 
-/* ── Public API ───────────────────────────────────────────────────────── */
+/* -- Public API --------------------------------------------------------- */
 
 /* Initialize the desktop (sets up default windows + wallpaper) */
 void desktop_init(Desktop *dt);

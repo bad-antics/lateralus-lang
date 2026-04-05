@@ -1,6 +1,6 @@
 .PHONY: test test-all test-core test-engines test-tools test-c-backend lint format check bench health clean install release release-dry-run package
 
-# ─── Installation ──────────────────────────────────────────────────────
+# --- Installation ------------------------------------------------------
 
 install:
 	pip install -e .
@@ -8,7 +8,7 @@ install:
 install-dev:
 	pip install -e ".[dev]"
 
-# ─── Testing ───────────────────────────────────────────────────────────
+# --- Testing -----------------------------------------------------------
 
 test:
 	pytest tests/ -v --tb=short
@@ -37,7 +37,7 @@ test-types:
 test-c-backend:
 	pytest tests/test_c_backend.py -v --tb=short
 
-# ─── Code Quality ─────────────────────────────────────────────────────
+# --- Code Quality -----------------------------------------------------
 
 lint:
 	python -m lateralus_lang.linter stdlib/ --strict
@@ -48,7 +48,7 @@ format:
 check:
 	python -m lateralus_lang check examples/*.ltl
 
-# ─── Benchmarks ────────────────────────────────────────────────────────
+# --- Benchmarks --------------------------------------------------------
 
 bench:
 	python -m lateralus_lang.bench --suite math --iterations 100
@@ -61,12 +61,12 @@ bench-all:
 bench-json:
 	python -m lateralus_lang.bench --suite math --iterations 100 --json > benchmark_results.json
 
-# ─── Health ────────────────────────────────────────────────────────────
+# --- Health ------------------------------------------------------------
 
 health:
 	python scripts/health_check.py
 
-# ─── Examples ──────────────────────────────────────────────────────────
+# --- Examples ----------------------------------------------------------
 
 run-examples:
 	@echo "Running LATERALUS examples..."
@@ -74,7 +74,7 @@ run-examples:
 	python -m lateralus_lang run examples/graph_demo.ltl
 	python -m lateralus_lang run examples/statistics_demo.ltl
 
-# ─── Documentation ────────────────────────────────────────────────────
+# --- Documentation ----------------------------------------------------
 
 docs:
 	@echo "Building documentation..."
@@ -82,12 +82,12 @@ docs:
 		import glob; \
 		[compile_ltlml_file(f) for f in glob.glob('docs/**/*.ltlml', recursive=True)]"
 
-# ─── Package Management ───────────────────────────────────────────────
+# --- Package Management -----------------------------------------------
 
 pkg-init:
 	python -m lateralus_lang.package_manager init $(name)
 
-# ─── VS Code Extension ────────────────────────────────────────────────
+# --- VS Code Extension ------------------------------------------------
 
 vscode-install:
 	@echo "Installing Lateralus VS Code extension..."
@@ -105,7 +105,7 @@ vscode-uninstall:
 	@rm -rf ~/.vscode/extensions/lateralus-lang.lateralus-1.5.0
 	@echo "Extension removed."
 
-# ─── Clean ─────────────────────────────────────────────────────────────
+# --- Clean -------------------------------------------------------------
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
@@ -114,17 +114,17 @@ clean:
 	rm -rf .pytest_cache build dist *.egg-info
 	rm -f benchmark_results.json
 
-# ─── Version ───────────────────────────────────────────────────────────
+# --- Version -----------------------------------------------------------
 
 version:
 	python -m lateralus_lang --version
 
-# ─── REPL ──────────────────────────────────────────────────────────────
+# --- REPL --------------------------------------------------------------
 
 repl:
 	python -m lateralus_lang repl
 
-# ─── Release ───────────────────────────────────────────────────────────
+# --- Release -----------------------------------------------------------
 
 release:
 	bash scripts/release.sh
@@ -132,7 +132,7 @@ release:
 release-dry-run:
 	bash scripts/release.sh --dry-run
 
-# ─── Package (for testers) ────────────────────────────────────────────
+# --- Package (for testers) --------------------------------------------
 
 package:
 	bash scripts/build_package.sh

@@ -1,6 +1,6 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — Preemptive Round-Robin Scheduler
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Kernel-mode context switching via software stack-swap.  Each task gets
  * a 16 KB kernel stack.  The PIT fires at 1 kHz; sched_tick() counts
  * down the running task's timeslice and triggers a switch when expired.
@@ -11,18 +11,18 @@
  * which would require naked-asm trampolines.
  *
  * Copyright (c) 2025-2026 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #include "sched.h"
 
-/* ── External symbols ─────────────────────────────────────────────────── */
+/* -- External symbols --------------------------------------------------- */
 
 extern void  serial_puts(const char *s);
 extern void *kmalloc(uint64_t size);
 extern void  kfree(void *ptr);
 extern volatile uint64_t tick_count;
 
-/* ── Task pool ────────────────────────────────────────────────────────── */
+/* -- Task pool ---------------------------------------------------------- */
 
 static SchedTask tasks[SCHED_MAX_TASKS];
 static int       current_tid  = -1;  /* currently running task */
@@ -35,7 +35,7 @@ static int load_avg_5  = 0;
 static int load_avg_15 = 0;
 static uint64_t load_last_sample_tick = 0;
 
-/* ── Helpers ──────────────────────────────────────────────────────────── */
+/* -- Helpers ------------------------------------------------------------ */
 
 static void _scpy(char *dst, const char *src, int max) {
     int i = 0;
@@ -63,7 +63,7 @@ static int _slen(const char *s) {
     return n;
 }
 
-/* ── Context switch (inline asm) ──────────────────────────────────────── */
+/* -- Context switch (inline asm) ---------------------------------------- */
 /*
  * Save callee-saved registers + RFLAGS + return address on current stack,
  * store RSP, load new RSP, pop saved state, ret to new task's RIP.
@@ -103,7 +103,7 @@ static inline void _context_switch(uint64_t *old_rsp, uint64_t new_rsp) {
     );
 }
 
-/* ── Task entry wrapper ───────────────────────────────────────────────── */
+/* -- Task entry wrapper ------------------------------------------------- */
 /*
  * When a new task is first scheduled, execution lands here.
  * The entry function and argument were placed on the initial stack.
@@ -156,7 +156,7 @@ static void _task_bootstrap(void) {
     sched_exit(0);
 }
 
-/* ── Find next task to run (round-robin with priority) ────────────────── */
+/* -- Find next task to run (round-robin with priority) ------------------ */
 
 static int _pick_next(void) {
     /* Scan from highest priority to lowest.
@@ -176,7 +176,7 @@ static int _pick_next(void) {
     return current_tid;  /* keep running current */
 }
 
-/* ── Internal switch ──────────────────────────────────────────────────── */
+/* -- Internal switch ---------------------------------------------------- */
 
 static void _switch_to(int next_tid) {
     if (next_tid == current_tid) return;
@@ -200,11 +200,11 @@ static void _switch_to(int next_tid) {
     _context_switch(&old_task->rsp, new_task->rsp);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Public API
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
-/* ── Idle task — just halts until next interrupt ──────────────────────── */
+/* -- Idle task — just halts until next interrupt ------------------------ */
 
 static void _idle_task(void *arg) {
     (void)arg;
@@ -486,7 +486,7 @@ void sched_unblock(int tid) {
 void sched_list(void) {
     serial_puts("[sched] Task list:\n");
     serial_puts("  TID  Name                    State     Prio  Switches\n");
-    serial_puts("  ───  ──────────────────────  ────────  ────  ────────\n");
+    serial_puts("  ---  ----------------------  --------  ----  --------\n");
 
     const char *state_names[] = {"FREE", "READY", "RUNNING", "BLOCKED", "SLEEPING", "DEAD"};
 
@@ -563,7 +563,7 @@ int sched_kill(int tid) {
     return 0;
 }
 
-/* ── Wait for child task to exit ──────────────────────────────────────── */
+/* -- Wait for child task to exit ---------------------------------------- */
 
 int sched_wait(int child_tid) {
     if (!sched_ready || current_tid < 0) return -1;
@@ -605,7 +605,7 @@ int sched_wait(int child_tid) {
     return code;
 }
 
-/* ── Reap dead tasks whose parent is not waiting ──────────────────────── */
+/* -- Reap dead tasks whose parent is not waiting ------------------------ */
 
 void sched_reap(void) {
     for (int i = 1; i < SCHED_MAX_TASKS; i++) {
@@ -630,7 +630,7 @@ void sched_reap(void) {
     }
 }
 
-/* ── Get task info ────────────────────────────────────────────────────── */
+/* -- Get task info ------------------------------------------------------ */
 
 const SchedTask *sched_get_task(int tid) {
     if (tid < 0 || tid >= SCHED_MAX_TASKS) return 0;
@@ -638,9 +638,9 @@ const SchedTask *sched_get_task(int tid) {
     return &tasks[tid];
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Signal delivery
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 /* Names for debug output */
 static const char *sig_names[] = {
@@ -786,7 +786,7 @@ void sched_deliver_signals(int tid) {
     }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Load Average Tracking
  *
  * We sample the runnable task count every 5 seconds and compute
@@ -797,7 +797,7 @@ void sched_deliver_signals(int tid) {
  * alpha_1m  ≈ 1 - e^(-5/60)   ≈ 0.08 → 8/100
  * alpha_5m  ≈ 1 - e^(-5/300)  ≈ 0.017 → 2/100
  * alpha_15m ≈ 1 - e^(-5/900)  ≈ 0.006 → 1/100
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 void sched_load_sample(void) {
     /* Count runnable tasks (READY + RUNNING, excluding idle) */

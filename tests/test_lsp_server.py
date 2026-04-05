@@ -221,7 +221,7 @@ class TestLSPServer:
         assert response is not None
 
 
-# ─── Document Symbols ─────────────────────────────────────────────────
+# --- Document Symbols -------------------------------------------------
 
 class TestDocumentSymbols:
     """Tests for textDocument/documentSymbol (outline / breadcrumbs)."""
@@ -304,7 +304,7 @@ class TestDocumentSymbols:
         assert syms == []
 
 
-# ─── Go-to-Definition ─────────────────────────────────────────────────
+# --- Go-to-Definition -------------------------------------------------
 
 class TestDefinition:
     """Tests for textDocument/definition."""
@@ -353,7 +353,7 @@ class TestDefinition:
         assert defn["range"]["start"]["line"] == 0
 
 
-# ─── Find References ──────────────────────────────────────────────────
+# --- Find References --------------------------------------------------
 
 class TestReferences:
     """Tests for textDocument/references."""
@@ -383,7 +383,7 @@ class TestReferences:
         assert len(refs) == 2
 
 
-# ─── Signature Help ───────────────────────────────────────────────────
+# --- Signature Help ---------------------------------------------------
 
 class TestSignatureHelp:
     """Tests for textDocument/signatureHelp."""
@@ -422,7 +422,7 @@ class TestSignatureHelp:
         assert "len" in sig["signatures"][0]["label"]
 
 
-# ─── LSP Server Protocol (new capabilities) ───────────────────────────
+# --- LSP Server Protocol (new capabilities) ---------------------------
 
 class TestLSPServerV2:
     """Tests for the new LSP v2 message handlers."""

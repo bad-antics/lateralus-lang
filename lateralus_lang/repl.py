@@ -1,11 +1,11 @@
 """
-lateralus_lang/repl.py  ─  LATERALUS Interactive REPL
-═══════════════════════════════════════════════════════════════════════════
+lateralus_lang/repl.py  -  LATERALUS Interactive REPL
+===========================================================================
 Provides an interactive Read-Eval-Print Loop for both Lateralus Script
 (.ltl) and Lateralus Assembly (.ltasm) modes.
 
 Features
-────────
+--------
   · Multiline block detection (unbalanced { } opens a continuation)
   · Command history via readline (when available)
   · Magic commands:
@@ -19,7 +19,7 @@ Features
       :quit / :q  — exit
   · Colour output (auto-detected)
   · Integrates with Lateralus error_engine when available
-═══════════════════════════════════════════════════════════════════════════
+===========================================================================
 """
 from __future__ import annotations
 
@@ -35,9 +35,9 @@ except ImportError:
 from .compiler import Compiler, Target, CompileResult
 from .errors   import ErrorReporter, Severity
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Colours
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 _USE_COLOUR = sys.stdout.isatty()
 
@@ -52,22 +52,22 @@ def _yellow(t): return _c(t, "33")
 def _dim(t):   return _c(t, "2")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # REPL
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 _BANNER = """\
-╔═══════════════════════════════════════════════════╗
-║  L·A·T·E·R·A·L·U·S          v2.4.0  [JUL-2026]  ║
-║  ─────────────────────────────────────────────  ║
-║  [ SYSTEM_READY ]  [ PIPELINE_FIRST ]           ║
-╚═══════════════════════════════════════════════════╝
++===================================================+
+|  L·A·T·E·R·A·L·U·S          v2.4.0  [JUL-2026]  |
+|  ---------------------------------------------  |
+|  [ SYSTEM_READY ]  [ PIPELINE_FIRST ]           |
++===================================================+
    :help · :quit · :mode · :target · :ver
 """
 
 _HELP = """
 REPL Commands
-─────────────
+-------------
   :help            Show this help
   :clear           Clear the screen
   :mode ltl        Switch to Lateralus Script (.ltl) mode  [default]
@@ -84,7 +84,7 @@ REPL Commands
   :quit | :q       Exit the REPL
 
 Keyboard shortcuts (readline)
-─────────────────────────────
+-----------------------------
   ↑ / ↓           Navigate history
   Ctrl-C           Abort current input
   Ctrl-D           Exit REPL
@@ -101,7 +101,7 @@ class REPL:
         self._last_source: str = ""   # used by :ast / :ir
         self._setup_readline()
 
-    # ── readline setup ────────────────────────────────────────────────────────
+    # -- readline setup --------------------------------------------------------
 
     def _setup_readline(self) -> None:
         if not _HAS_READLINE:
@@ -116,7 +116,7 @@ class REPL:
         atexit.register(readline.write_history_file, hist_file)
         readline.set_history_length(2000)
 
-    # ── public entry ──────────────────────────────────────────────────────────
+    # -- public entry ----------------------------------------------------------
 
     def run(self) -> None:
         print(_bold(_cyan(_BANNER)))
@@ -136,7 +136,7 @@ class REPL:
 
             self._eval(source)
 
-    # ── input collection ──────────────────────────────────────────────────────
+    # -- input collection ------------------------------------------------------
 
     def _read_input(self) -> str:
         mode_str = _cyan(f"[{self._mode}]")
@@ -166,7 +166,7 @@ class REPL:
 
         return "\n".join(lines)
 
-    # ── command handler ───────────────────────────────────────────────────────
+    # -- command handler -------------------------------------------------------
 
     def _handle_command(self, cmd: str) -> None:
         parts = cmd.split()
@@ -250,7 +250,7 @@ class REPL:
         else:
             print(_red(f"Unknown command: {c}  (type :help for commands)"))
 
-    # ── eval ────────────────────────────────────────────────────
+    # -- eval ----------------------------------------------------
 
     def _eval(self, source: str) -> None:
         self._last_source = source   # remember for :ast / :ir
@@ -276,9 +276,9 @@ class REPL:
         try:
             import pprint
             tree = parse(src, "<repl>")
-            print(_dim("── AST ──────────────────────────────────────────────"))
+            print(_dim("-- AST ----------------------------------------------"))
             pprint.pprint(tree, indent=2, width=100)
-            print(_dim("─" * 50))
+            print(_dim("-" * 50))
         except (LexError, ParseError) as exc:
             print(_red(str(exc)))
 
@@ -289,25 +289,25 @@ class REPL:
         try:
             tree = parse(src, "<repl>")
             ir_module, errors = analyze(tree, "<repl>")
-            print(_dim("── IR ──────────────────────────────────────────────"))
+            print(_dim("-- IR ----------------------------------------------"))
             for fn in ir_module.functions:
                 print(_cyan(f"fn {fn.name}({', '.join(fn.params)}):"))
                 for bb in fn.blocks:
                     print(_yellow(f"  [{bb.label}]"))
                     for instr in bb.instrs:
                         print(f"    {instr}")
-            print(_dim("─" * 50))
+            print(_dim("-" * 50))
         except (LexError, ParseError) as exc:
             print(_red(str(exc)))
 
-    # ── output ────────────────────────────────────────────────────────────────
+    # -- output ----------------------------------------------------------------
 
     def _print_result(self, result: CompileResult) -> None:
         if result.ok:
             if result.python_src:
-                print(_dim("── Python output ──────────────────────────"))
+                print(_dim("-- Python output --------------------------"))
                 print(result.python_src)
-                print(_dim("───────────────────────────────────────────"))
+                print(_dim("-------------------------------------------"))
             elif result.exit_code != 0:
                 print(_yellow(f"[exit {result.exit_code}]"))
             if result.elapsed_ms > 0:
@@ -319,9 +319,9 @@ class REPL:
             reporter.render()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Convenience entry
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def start_repl() -> None:
     """Start the interactive REPL."""

@@ -1,14 +1,14 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — Framebuffer Driver API (Enhanced v0.2.0)
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Copyright (c) 2025-2026 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 #ifndef LTL_FRAMEBUFFER_H
 #define LTL_FRAMEBUFFER_H
 
 #include "types.h"
 
-/* ── Color helpers ────────────────────────────────────────────────────── */
+/* -- Color helpers ------------------------------------------------------ */
 
 #define FB_RGB(r, g, b) ((uint32_t)((r) << 16 | (g) << 8 | (b)))
 
@@ -39,7 +39,7 @@
 #define COL_MIN_YEL     FB_RGB(0xF9, 0xE2, 0xAF)
 #define COL_MAX_GRN     FB_RGB(0xA6, 0xE3, 0xA1)
 
-/* ── Framebuffer state ────────────────────────────────────────────────── */
+/* -- Framebuffer state -------------------------------------------------- */
 
 typedef struct {
     uint32_t *addr;         /* Render target (backbuf or hw)    */
@@ -56,11 +56,11 @@ typedef struct {
 
 extern Framebuffer fb;
 
-/* ── Core drawing ─────────────────────────────────────────────────────── */
+/* -- Core drawing ------------------------------------------------------- */
 
 void fb_init(uint32_t *addr, uint32_t w, uint32_t h, uint32_t pitch, uint8_t bpp);
 
-/* ── Double buffering ─────────────────────────────────────────────────── */
+/* -- Double buffering --------------------------------------------------- */
 
 void fb_enable_double_buffer(void *backbuf_mem);
 void fb_swap(void);   /* Copy back buffer → hardware framebuffer */
@@ -72,12 +72,12 @@ void fb_draw_circle(int32_t cx, int32_t cy, int32_t r, uint32_t color);
 void fb_fill_circle(int32_t cx, int32_t cy, int32_t r, uint32_t color);
 void fb_clear(uint32_t color);
 
-/* ── Rounded rectangles ───────────────────────────────────────────────── */
+/* -- Rounded rectangles ------------------------------------------------- */
 
 void fb_fill_rounded_rect(int32_t x, int32_t y, int32_t w, int32_t h,
                            int32_t radius, uint32_t color);
 
-/* ── Text rendering (8x16 bitmap font) ────────────────────────────────── */
+/* -- Text rendering (8x16 bitmap font) ---------------------------------- */
 
 void fb_putchar(int32_t x, int32_t y, char c, uint32_t fg, uint32_t bg);
 void fb_putchar_nobg(int32_t x, int32_t y, char c, uint32_t fg);
@@ -89,21 +89,21 @@ int  fb_text_width(const char *s);
 #define FONT_W 8
 #define FONT_H 16
 
-/* ── Blending ─────────────────────────────────────────────────────────── */
+/* -- Blending ----------------------------------------------------------- */
 
 uint32_t fb_blend(uint32_t bg, uint32_t fg, uint8_t alpha);
 
-/* ── Gradient ─────────────────────────────────────────────────────────── */
+/* -- Gradient ----------------------------------------------------------- */
 
 void fb_fill_gradient_v(int32_t x, int32_t y, int32_t w, int32_t h,
                          uint32_t top_color, uint32_t bot_color);
 
-/* ── Hardware cursor helpers (bypass double buffer for instant cursor) ── */
+/* -- Hardware cursor helpers (bypass double buffer for instant cursor) -- */
 
 void     fb_putpixel_hw(int32_t x, int32_t y, uint32_t color);
 uint32_t fb_getpixel_hw(int32_t x, int32_t y);
 
-/* ── Diagnostics ──────────────────────────────────────────────────────── */
+/* -- Diagnostics -------------------------------------------------------- */
 
 void fb_dump_diagnostics(void);
 

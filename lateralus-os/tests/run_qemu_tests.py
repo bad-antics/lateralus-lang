@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-═══════════════════════════════════════════════════════════════════════════
+===========================================================================
 LateralusOS — QEMU Test Harness
-═══════════════════════════════════════════════════════════════════════════
+===========================================================================
 Copyright (c) 2025 bad-antics. All rights reserved.
 
 Automated testing of LateralusOS kernel in QEMU with serial output
@@ -54,7 +54,7 @@ class TestSuite:
         return len(self.results)
 
 
-# ── QEMU Configuration ──────────────────────────────────────────────────
+# -- QEMU Configuration --------------------------------------------------
 
 QEMU_CONFIGS = {
     "x86_64": {
@@ -93,7 +93,7 @@ QEMU_CONFIGS = {
 }
 
 
-# ── Test Checks ──────────────────────────────────────────────────────────
+# -- Test Checks ----------------------------------------------------------
 
 BOOT_CHECKS = [
     ("Boot banner",        r"LateralusOS|LATERALUS"),
@@ -189,9 +189,9 @@ def run_qemu(kernel_path: str, arch: str, timeout: int,
 def print_results(suite: TestSuite, verbose: bool = False):
     """Print test results in a formatted table."""
     print()
-    print("═" * 60)
+    print("=" * 60)
     print("  LateralusOS Test Results")
-    print("═" * 60)
+    print("=" * 60)
 
     for r in suite.results:
         icon = "✓" if r.passed else "✗"
@@ -199,18 +199,18 @@ def print_results(suite: TestSuite, verbose: bool = False):
         reset = "\033[0m"
         print(f"  {color}{icon}{reset} {r.name}")
 
-    print("─" * 60)
+    print("-" * 60)
     print(f"  Passed: {suite.passed}/{suite.total}", end="")
     if suite.failed > 0:
         print(f"  |  \033[31mFailed: {suite.failed}\033[0m", end="")
     if suite.timed_out:
         print(f"  |  \033[33mTimed out\033[0m", end="")
     print()
-    print("═" * 60)
+    print("=" * 60)
 
     if verbose and suite.serial_log:
         print()
-        print("── Serial Log ──────────────────────────────────────────")
+        print("-- Serial Log ------------------------------------------")
         for line in suite.serial_log.split("\n")[:100]:
             print(f"  {line}")
         if suite.serial_log.count("\n") > 100:

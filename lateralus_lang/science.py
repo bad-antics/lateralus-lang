@@ -19,7 +19,7 @@ from typing import Callable, Optional
 from fractions import Fraction
 
 
-# ─── Physical Constants (CODATA 2018) ─────────────────────────────────
+# --- Physical Constants (CODATA 2018) ---------------------------------
 
 CONSTANTS = {
     # Fundamental
@@ -53,7 +53,7 @@ CONSTANTS = {
 }
 
 
-# ─── Unit System ───────────────────────────────────────────────────────
+# --- Unit System -------------------------------------------------------
 
 @dataclass(frozen=True)
 class Dimension:
@@ -169,7 +169,7 @@ def watts(v: float) -> Quantity: return Quantity(v, WATT, "W")
 def kelvin(v: float) -> Quantity: return Quantity(v, KELVIN, "K")
 
 
-# ─── ODE Solvers ───────────────────────────────────────────────────────
+# --- ODE Solvers -------------------------------------------------------
 
 def euler_step(f: Callable, t: float, y: float, h: float) -> float:
     """Single Euler step: y_{n+1} = y_n + h * f(t_n, y_n)"""
@@ -250,7 +250,7 @@ def solve_ode_system(f: Callable, y0: list[float], t_span: tuple[float, float],
     return ts, ys
 
 
-# ─── FFT (Cooley-Tukey) ───────────────────────────────────────────────
+# --- FFT (Cooley-Tukey) -----------------------------------------------
 
 def fft(x: list[complex]) -> list[complex]:
     """Fast Fourier Transform (radix-2 Cooley-Tukey)."""
@@ -295,7 +295,7 @@ def power_spectrum(x: list[float]) -> list[float]:
     return [abs(v) ** 2 for v in X[:len(X) // 2]]
 
 
-# ─── Signal Processing ────────────────────────────────────────────────
+# --- Signal Processing ------------------------------------------------
 
 def moving_average(data: list[float], window: int) -> list[float]:
     """Simple moving average filter."""
@@ -338,7 +338,7 @@ def upsample(data: list[float], factor: int) -> list[float]:
     return result
 
 
-# ─── Statistical Distributions ────────────────────────────────────────
+# --- Statistical Distributions ----------------------------------------
 
 def normal_pdf(x: float, mu: float = 0, sigma: float = 1) -> float:
     """Normal (Gaussian) probability density function."""
@@ -376,7 +376,7 @@ def chi_squared_pdf(x: float, k: int) -> float:
     return (x ** (half_k - 1) * math.exp(-x / 2)) / (2 ** half_k * math.gamma(half_k))
 
 
-# ─── Interpolation ────────────────────────────────────────────────────
+# --- Interpolation ----------------------------------------------------
 
 def lagrange_interpolate(points: list[tuple[float, float]], x: float) -> float:
     """Lagrange polynomial interpolation."""
@@ -414,7 +414,7 @@ def cubic_spline(points: list[tuple[float, float]], x: float) -> float:
     return ys[-1]
 
 
-# ─── LATERALUS Integration ────────────────────────────────────────────
+# --- LATERALUS Integration --------------------------------------------
 
 SCIENCE_BUILTINS = {
     # Constants

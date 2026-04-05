@@ -1,6 +1,6 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — /dev Virtual Device Filesystem
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Provides pseudo-devices under /dev/:
  *   /dev/null    — discards all writes, reads return empty
  *   /dev/zero    — infinite stream of zero bytes
@@ -9,7 +9,7 @@
  *   /dev/fb0     — framebuffer info (read-only)
  *
  * Copyright (c) 2025-2026 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #ifndef LATERALUS_DEVFS_H
 #define LATERALUS_DEVFS_H

@@ -69,7 +69,7 @@ class LintResult:
         return self.error_count > 0
 
 
-# ─── Lint Rules ────────────────────────────────────────────────────────
+# --- Lint Rules --------------------------------------------------------
 
 LATERALUS_BUILTINS = {
     "println", "print", "len", "str", "int", "float", "type", "range",
@@ -518,7 +518,7 @@ class LateralusLinter:
                 suggestion="Consider splitting into smaller functions",
             ))
 
-    # ── v2.3 rules ──────────────────────────────────────────────────────
+    # -- v2.3 rules ------------------------------------------------------
 
     def _check_constant_condition(self, line: str, lineno: int, filename: str):
         """Detect constant boolean conditions in if/while statements."""

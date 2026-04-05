@@ -1,16 +1,16 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — GUI Widget System
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Window, Button, Label, Panel, Taskbar — all rendered via framebuffer.
  * Catppuccin-inspired dark theme.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #ifndef LATERALUS_GUI_H
 #define LATERALUS_GUI_H
 
 #include "framebuffer.h"
 
-/* ── Constants ────────────────────────────────────────────────────────── */
+/* -- Constants ---------------------------------------------------------- */
 
 #define MAX_WINDOWS      16
 #define MAX_BUTTONS      32
@@ -29,7 +29,7 @@
 #define MENU_W          180
 #define RESIZE_HANDLE    12
 
-/* ── Widget types ─────────────────────────────────────────────────────── */
+/* -- Widget types ------------------------------------------------------- */
 
 typedef enum {
     WIDGET_LABEL,
@@ -38,7 +38,7 @@ typedef enum {
     WIDGET_TEXTBOX,
 } WidgetType;
 
-/* ── Label ────────────────────────────────────────────────────────────── */
+/* -- Label -------------------------------------------------------------- */
 
 typedef struct {
     int32_t   x, y;
@@ -48,7 +48,7 @@ typedef struct {
     uint8_t   visible;
 } Label;
 
-/* ── Button ───────────────────────────────────────────────────────────── */
+/* -- Button ------------------------------------------------------------- */
 
 typedef void (*ButtonCallback)(void *ctx);
 
@@ -66,7 +66,7 @@ typedef struct {
     void          *ctx;
 } Button;
 
-/* ── Panel ────────────────────────────────────────────────────────────── */
+/* -- Panel -------------------------------------------------------------- */
 
 typedef struct {
     int32_t  x, y, w, h;
@@ -75,7 +75,7 @@ typedef struct {
     uint8_t  visible;
 } Panel;
 
-/* ── Window ───────────────────────────────────────────────────────────── */
+/* -- Window ------------------------------------------------------------- */
 
 typedef struct {
     int32_t   x, y, w, h;
@@ -111,7 +111,7 @@ typedef struct {
     uint8_t   is_terminal;               /* 1 if this window hosts a GUI terminal */
 } Window;
 
-/* ── Taskbar ──────────────────────────────────────────────────────────── */
+/* -- Taskbar ------------------------------------------------------------ */
 
 typedef struct {
     int32_t  y;                          /* top of taskbar (screen_h - TASKBAR_H) */
@@ -120,7 +120,7 @@ typedef struct {
     uint8_t  start_hovered;
 } Taskbar;
 
-/* ── Mouse cursor state ───────────────────────────────────────────────── */
+/* -- Mouse cursor state ------------------------------------------------- */
 
 typedef struct {
     int32_t  x, y;
@@ -131,7 +131,7 @@ typedef struct {
     uint32_t saved_pixels[16 * 16];      /* pixels under cursor */
 } Mouse;
 
-/* ── Menu (start menu & context menu) ─────────────────────────────────── */
+/* -- Menu (start menu & context menu) ----------------------------------- */
 
 typedef void (*MenuAction)(void *ctx);
 
@@ -149,7 +149,7 @@ typedef struct {
     int       hover_idx;                 /* -1 = none */
 } Menu;
 
-/* ── Desktop icon ─────────────────────────────────────────────────────── */
+/* -- Desktop icon ------------------------------------------------------- */
 
 typedef void (*IconAction)(void *ctx);
 
@@ -164,14 +164,14 @@ typedef struct {
     uint8_t    hovered;
 } DesktopIcon;
 
-/* ── Notification tray ────────────────────────────────────────────────── */
+/* -- Notification tray -------------------------------------------------- */
 
 typedef struct {
     char     status[64];                 /* e.g. "MEM: 2%  UP: 0:05" */
     uint32_t fg;
 } NotifTray;
 
-/* ── GUI context (entire GUI state) ───────────────────────────────────── */
+/* -- GUI context (entire GUI state) ------------------------------------- */
 
 typedef struct {
     Window   windows[MAX_WINDOWS];
@@ -204,7 +204,7 @@ typedef struct {
     uint32_t wallpaper_phase;
 } GuiContext;
 
-/* ── Public API ───────────────────────────────────────────────────────── */
+/* -- Public API --------------------------------------------------------- */
 
 void gui_init(GuiContext *ctx);
 

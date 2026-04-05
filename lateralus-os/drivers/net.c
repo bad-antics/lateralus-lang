@@ -1,6 +1,6 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — Network Driver (RTL8139)
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * RTL8139 Ethernet NIC driver via PCI I/O.  The RTL8139 is the default
  * network card emulated by QEMU (`-net nic,model=rtl8139`).
  *
@@ -10,16 +10,16 @@
  *   - Polled send/receive (interrupt support stubbed for later)
  *
  * Copyright (c) 2025-2026 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #include "net.h"
 
-/* ── External symbols (from kernel_stub.c) ────────────────────────────── */
+/* -- External symbols (from kernel_stub.c) ------------------------------ */
 
 extern void serial_puts(const char *s);
 extern void *kmalloc(uint64_t size);
 
-/* ── Port I/O helpers ─────────────────────────────────────────────────── */
+/* -- Port I/O helpers --------------------------------------------------- */
 
 static inline void outb(uint16_t port, uint8_t val) {
     __asm__ volatile ("outb %0, %1" :: "a"(val), "Nd"(port));
@@ -51,7 +51,7 @@ static inline uint32_t inl(uint16_t port) {
     return val;
 }
 
-/* ── PCI configuration space ──────────────────────────────────────────── */
+/* -- PCI configuration space -------------------------------------------- */
 
 #define PCI_CONFIG_ADDR  0x0CF8
 #define PCI_CONFIG_DATA  0x0CFC
@@ -76,7 +76,7 @@ static void pci_write32(uint8_t bus, uint8_t dev, uint8_t func, uint8_t off, uin
     outl(PCI_CONFIG_DATA, val);
 }
 
-/* ── RTL8139 register offsets ─────────────────────────────────────────── */
+/* -- RTL8139 register offsets ------------------------------------------- */
 
 #define RTL_IDR0       0x00  /* MAC address bytes 0-3             */
 #define RTL_IDR4       0x04  /* MAC address bytes 4-5             */
@@ -112,7 +112,7 @@ static void pci_write32(uint8_t bus, uint8_t dev, uint8_t func, uint8_t off, uin
 /* TSD bits */
 #define RTL_TSD_OWN    (1 << 13)
 
-/* ── Global state ─────────────────────────────────────────────────────── */
+/* -- Global state ------------------------------------------------------- */
 
 static NetDeviceInfo nic;
 static uint8_t *rx_buffer;                      /* RX ring buffer       */
@@ -120,7 +120,7 @@ static uint8_t *tx_buffers[NET_TX_BUF_COUNT];   /* TX descriptor bufs   */
 static int      tx_cur;                         /* Next TX descriptor   */
 static uint16_t rx_offset;                      /* Current RX offset    */
 
-/* ── Hex helpers ──────────────────────────────────────────────────────── */
+/* -- Hex helpers -------------------------------------------------------- */
 
 static const char hex_chars[] = "0123456789ABCDEF";
 
@@ -129,7 +129,7 @@ static void hex8(char *out, uint8_t v) {
     out[1] = hex_chars[v & 0xF];
 }
 
-/* ── memcpy (freestanding — no libc) ──────────────────────────────────── */
+/* -- memcpy (freestanding — no libc) ------------------------------------ */
 
 static void net_memcpy(void *dst, const void *src, uint64_t n) {
     uint8_t *d = (uint8_t *)dst;
@@ -142,13 +142,13 @@ static void net_memset(void *dst, uint8_t val, uint64_t n) {
     while (n--) *d++ = val;
 }
 
-/* ── I/O wait (400ns) ─────────────────────────────────────────────────── */
+/* -- I/O wait (400ns) --------------------------------------------------- */
 
 static void io_wait(void) {
     inb(0x80); inb(0x80); inb(0x80); inb(0x80);
 }
 
-/* ── PCI scan for RTL8139 ─────────────────────────────────────────────── */
+/* -- PCI scan for RTL8139 ----------------------------------------------- */
 
 /* Scan the PCI bus for vendor:device.
    Returns 1 and fills *out_bus, *out_dev, *out_func if found. */
@@ -172,7 +172,7 @@ static int pci_find(uint16_t vendor, uint16_t device,
     return 0;
 }
 
-/* ── RTL8139 initialisation ───────────────────────────────────────────── */
+/* -- RTL8139 initialisation --------------------------------------------- */
 
 static int rtl8139_init(uint8_t bus, uint8_t dev, uint8_t func) {
     /* Read BAR0 (I/O base address) */
@@ -269,9 +269,9 @@ static int rtl8139_init(uint8_t bus, uint8_t dev, uint8_t func) {
     return 1;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Public API
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 int net_init(void) {
     uint8_t bus, dev, func;

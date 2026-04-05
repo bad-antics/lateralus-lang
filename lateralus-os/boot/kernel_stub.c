@@ -1,6 +1,6 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — Minimal Kernel Stub (first boot)
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Copyright (c) 2025 bad-antics. All rights reserved.
  *
  * This is the C stand-in for the full Lateralus kernel. Once the
@@ -9,7 +9,7 @@
  *
  * For now it proves the boot chain works:
  *   GRUB → boot.asm → boot_stub.c → kernel_main()
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #include "../gui/types.h"
 #include "../drivers/ata.h"
@@ -24,7 +24,7 @@
 #include "../net/http.h"
 #include "../apps/apps.h"
 
-/* ── Port I/O (non-static so gui/mouse.c can link to them) ────────────── */
+/* -- Port I/O (non-static so gui/mouse.c can link to them) -------------- */
 
 void outb(uint16_t port, uint8_t val) {
     __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
@@ -36,7 +36,7 @@ uint8_t inb(uint16_t port) {
     return ret;
 }
 
-/* ── MSR (Model-Specific Register) access ─────────────────────────────── */
+/* -- MSR (Model-Specific Register) access ------------------------------- */
 
 static inline uint64_t rdmsr(uint32_t msr) {
     uint32_t lo, hi;
@@ -49,7 +49,7 @@ static inline void wrmsr(uint32_t msr, uint64_t val) {
                       "d"((uint32_t)(val >> 32)), "c"(msr));
 }
 
-/* ── Serial ───────────────────────────────────────────────────────────── */
+/* -- Serial ------------------------------------------------------------- */
 
 #define COM1 0x3F8
 
@@ -63,7 +63,7 @@ void serial_puts(const char *s) {
     while (*s) serial_putc(*s++);
 }
 
-/* ── VGA ──────────────────────────────────────────────────────────────── */
+/* -- VGA ---------------------------------------------------------------- */
 
 volatile uint16_t *const VGA_BUF = (volatile uint16_t*)0xB8000;
 #define VGA_W 80
@@ -114,11 +114,11 @@ static void k_print_hex(uint64_t val) {
     k_print(buf);
 }
 
-/* ── PIT Timer ────────────────────────────────────────────────────────── */
+/* -- PIT Timer ---------------------------------------------------------- */
 
 volatile uint64_t tick_count = 0;
 
-/* ── IDT (enhanced — proper exception handlers + hardware IRQs) ───────── */
+/* -- IDT (enhanced — proper exception handlers + hardware IRQs) --------- */
 
 struct idt_entry {
     uint16_t offset_low;
@@ -138,7 +138,7 @@ struct idt_ptr {
 static struct idt_entry idt[256];
 static struct idt_ptr   idtr;
 
-/* ── Exception names for readable diagnostics ─────────────────────────── */
+/* -- Exception names for readable diagnostics --------------------------- */
 
 static const char *exception_names[] = {
     "Divide-by-Zero (#DE)",      /* 0  */
@@ -186,7 +186,7 @@ static void serial_put_dec(uint64_t val) {
     serial_puts(buf);
 }
 
-/* ── Exception handler: logs details and halts (no recovery for CPU faults) */
+/* -- Exception handler: logs details and halts (no recovery for CPU faults) */
 
 __attribute__((interrupt))
 static void exc_divide_error(void *frame) {
@@ -267,7 +267,7 @@ static void irq1_handler(void *frame) {
     outb(0x20, 0x20);  /* EOI */
 }
 
-/* ── GUI includes (from gui/) ─────────────────────────────────────────── */
+/* -- GUI includes (from gui/) ------------------------------------------- */
 
 #include "../gui/framebuffer.h"
 #include "../gui/gui.h"
@@ -280,18 +280,18 @@ static void irq1_handler(void *frame) {
 #include "../drivers/speaker.h"
 #include "../kernel/tasks.h"
 
-/* ── BootInfo from boot_stub.c ─────────────────────────────────────────── */
+/* -- BootInfo from boot_stub.c ------------------------------------------- */
 
 #include "../gui/bootinfo.h"
 
 extern BootInfo boot_info;
 
-/* ── Desktop (global for IRQ handlers) ─────────────────────────────────── */
+/* -- Desktop (global for IRQ handlers) ----------------------------------- */
 
 static Desktop desktop;
 static volatile uint8_t gui_active = 0;
 
-/* ── Mouse IRQ handler (IRQ12 = INT 44) ───────────────────────────────── */
+/* -- Mouse IRQ handler (IRQ12 = INT 44) --------------------------------- */
 
 __attribute__((interrupt))
 static void irq12_handler(void *frame) {
@@ -369,7 +369,7 @@ static void init_idt(void) {
     serial_puts("[IDT] Initialized with exception handlers + IRQ 0/1/12\n");
 }
 
-/* ── PIT setup (1000 Hz) ──────────────────────────────────────────────── */
+/* -- PIT setup (1000 Hz) ------------------------------------------------ */
 
 static void init_pit(void) {
     uint16_t divisor = 1193;  /* ~1000 Hz */
@@ -378,7 +378,7 @@ static void init_pit(void) {
     outb(0x40, (divisor >> 8) & 0xFF);
 }
 
-/* ── Keyboard (simple scancode → ASCII) ───────────────────────────────── */
+/* -- Keyboard (simple scancode → ASCII) --------------------------------- */
 
 const char scancode_ascii[128] = {
     0,27,'1','2','3','4','5','6','7','8','9','0','-','=','\b',
@@ -388,7 +388,7 @@ const char scancode_ascii[128] = {
     '*',0,' ',0
 };
 
-/* ── Simple memory stats ─────────────────────────────────────────────── */
+/* -- Simple memory stats ----------------------------------------------- */
 
 uint64_t total_system_memory = 1024ULL * 1024 * 1024;  /* default 1 GB */
 
@@ -396,7 +396,7 @@ static uint64_t detect_memory(void) {
     return total_system_memory;
 }
 
-/* ── Utility: int-to-string ────────────────────────────────────────────── */
+/* -- Utility: int-to-string ---------------------------------------------- */
 
 static void uint_to_str(uint64_t val, char *buf, int buflen) {
     int pos = 0;
@@ -407,7 +407,7 @@ static void uint_to_str(uint64_t val, char *buf, int buflen) {
     buf[pos] = '\0';
 }
 
-/* ── Utility: strcmp ──────────────────────────────────────────────────── */
+/* -- Utility: strcmp ---------------------------------------------------- */
 
 int k_strcmp(const char *a, const char *b) {
     while (*a && *b && *a == *b) { a++; b++; }
@@ -437,9 +437,9 @@ static int k_strstr(const char *haystack, const char *needle) {
     return 0;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * ltlsh — The Lateralus Interactive Shell
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #define CMD_BUF_SIZE 256
 #define MAX_HISTORY  16
@@ -574,7 +574,7 @@ static void env_expand(const char *src, char *out, int outlen) {
     out[di] = '\0';
 }
 
-/* ── Alias table ─────────────────────────────────────────────────────── */
+/* -- Alias table ------------------------------------------------------- */
 #define MAX_ALIASES 16
 #define ALIAS_NAMELEN 32
 #define ALIAS_CMDLEN 128
@@ -630,7 +630,7 @@ static void hist_push(const char *cmd) {
     hist_count++;
 }
 
-/* ── Shell Prompt ─────────────────────────────────────────────────────── */
+/* -- Shell Prompt ------------------------------------------------------- */
 
 static void shell_prompt(void) {
     k_set_color(0x0B, 0x00);  /* cyan */
@@ -646,7 +646,7 @@ static void shell_prompt(void) {
     serial_puts("$ ");
 }
 
-/* ── Shell Commands ───────────────────────────────────────────────────── */
+/* -- Shell Commands ----------------------------------------------------- */
 
 static void cmd_help(void) {
     k_set_color(0x0E, 0x00);  /* yellow */
@@ -867,11 +867,11 @@ static void cmd_echo(const char *args) {
 
 static void cmd_version(void) {
     k_set_color(0x0E, 0x00);
-    k_print("╔══════════════════════════════════════════════╗\n");
-    k_print("║  LateralusOS v0.3.0                         ║\n");
-    k_print("║  Lateralus Language v2.0.0                   ║\n");
-    k_print("║  Copyright (c) 2025 bad-antics               ║\n");
-    k_print("╚══════════════════════════════════════════════╝\n");
+    k_print("+==============================================+\n");
+    k_print("|  LateralusOS v0.3.0                         |\n");
+    k_print("|  Lateralus Language v2.0.0                   |\n");
+    k_print("|  Copyright (c) 2025 bad-antics               |\n");
+    k_print("+==============================================+\n");
     k_set_color(0x0F, 0x00);
 }
 
@@ -988,7 +988,7 @@ static void cmd_halt(void) {
     while (1) __asm__ volatile ("hlt");
 }
 
-/* ── GUI launcher ─────────────────────────────────────────────────────── */
+/* -- GUI launcher ------------------------------------------------------- */
 
 static void cmd_gui(void) {
     if (!boot_info.fb_available) {
@@ -1003,7 +1003,7 @@ static void cmd_gui(void) {
     k_print("Launching LateralusOS Desktop...\n");
     k_set_color(0x0F, 0x00);
 
-    /* ── Phase 1: Initialize framebuffer ─────────────────────────────── */
+    /* -- Phase 1: Initialize framebuffer ------------------------------- */
     serial_puts("[gui] Phase 1: Framebuffer init\n");
 
     /* Validate framebuffer address before touching it */
@@ -1031,7 +1031,7 @@ static void cmd_gui(void) {
         return;
     }
 
-    /* ── Phase 2: Double buffer allocation ───────────────────────────── */
+    /* -- Phase 2: Double buffer allocation ----------------------------- */
     serial_puts("[gui] Phase 2: Double buffer allocation\n");
     uint32_t fb_buf_size = boot_info.fb_pitch * boot_info.fb_height;
     serial_puts("[gui] Requesting ");
@@ -1054,29 +1054,29 @@ static void cmd_gui(void) {
     /* Dump full framebuffer diagnostics */
     fb_dump_diagnostics();
 
-    /* ── Phase 3: Task scheduler ─────────────────────────────────────── */
+    /* -- Phase 3: Task scheduler --------------------------------------- */
     serial_puts("[gui] Phase 3: Task scheduler init\n");
     tasks_init();
 
-    /* ── Phase 4: Mouse driver ───────────────────────────────────────── */
+    /* -- Phase 4: Mouse driver ----------------------------------------- */
     serial_puts("[gui] Phase 4: Mouse init\n");
     mouse_init();
 
-    /* ── Phase 5: Desktop environment ────────────────────────────────── */
+    /* -- Phase 5: Desktop environment ---------------------------------- */
     serial_puts("[gui] Phase 5: Desktop init\n");
     desktop_init(&desktop);
     gui_active = 1;
 
-    /* ── Phase 6: Boot chime ─────────────────────────────────────────── */
+    /* -- Phase 6: Boot chime ------------------------------------------- */
     serial_puts("[gui] Phase 6: Boot chime\n");
     speaker_boot_chime(tick_count);
 
-    /* ── Phase 7: Initial render ─────────────────────────────────────── */
+    /* -- Phase 7: Initial render --------------------------------------- */
     serial_puts("[gui] Phase 7: Initial render\n");
     desktop_render(&desktop);
     serial_puts("[gui] Initial render complete\n");
 
-    serial_puts("[gui] ═══ Desktop running. GUI event loop active. ═══\n");
+    serial_puts("[gui] === Desktop running. GUI event loop active. ===\n");
 
     /* GUI event loop — runs until ESC is pressed */
     uint8_t prev_sc_gui = 0;
@@ -1150,9 +1150,9 @@ static void cmd_gui(void) {
     k_set_color(0x0F, 0x00);
 }
 
-/* ── Shell: command dispatcher ────────────────────────────────────────── */
+/* -- Shell: command dispatcher ------------------------------------------ */
 
-/* ── Network Shell Commands ───────────────────────────────────────────── */
+/* -- Network Shell Commands --------------------------------------------- */
 
 static void cmd_ifconfig(void) {
     const NetDeviceInfo *ni = net_get_info();
@@ -1456,7 +1456,7 @@ static void cmd_dhcp(void) {
     }
 }
 
-/* ── DNS commands (v0.3.0) ────────────────────────────────────────────── */
+/* -- DNS commands (v0.3.0) ---------------------------------------------- */
 
 static void cmd_nslookup(const char *hostname) {
     if (!hostname || hostname[0] == '\0') {
@@ -1520,7 +1520,7 @@ static void cmd_tcp(const char *arg) {
     char buf[16];
 
     k_set_color(0x0B, 0x00);
-    k_print("═══ TCP Connections ");
+    k_print("=== TCP Connections ");
     k_set_color(0x0F, 0x00);
     k_print("(");
     uint_to_str(active, buf, sizeof(buf));
@@ -1541,7 +1541,7 @@ static void cmd_tcp(const char *arg) {
     k_set_color(0x0E, 0x00);
     k_print("  ID  STATE        LOCAL PORT  REMOTE IP         REMOTE PORT\n");
     k_set_color(0x07, 0x00);
-    k_print("  ──  ───────────  ──────────  ────────────────  ───────────\n");
+    k_print("  --  -----------  ----------  ----------------  -----------\n");
 
     /* Iterate connection slots — use tcp_get_state() to check each */
     for (int i = 0; i < TCP_MAX_CONNECTIONS; i++) {
@@ -1674,7 +1674,7 @@ static void cmd_wget(const char *url) {
     }
 }
 
-/* ── New commands (v0.2.0+) ───────────────────────────────────────────── */
+/* -- New commands (v0.2.0+) --------------------------------------------- */
 
 static void cmd_whoami(void) {
     k_set_color(0x0A, 0x00);
@@ -1796,15 +1796,15 @@ static void cmd_ps(void) {
 
 static void cmd_sysinfo(void) {
     k_set_color(0x0E, 0x00);
-    k_print("╔══════════════════════════════════════════════╗\n");
-    k_print("║            System Information                ║\n");
-    k_print("╠══════════════════════════════════════════════╣\n");
+    k_print("+==============================================+\n");
+    k_print("|            System Information                |\n");
+    k_print("+==============================================+\n");
     k_set_color(0x0F, 0x00);
 
-    k_print("║  OS:       LateralusOS v0.3.0               ║\n");
-    k_print("║  Lang:     Lateralus v2.2.0                 ║\n");
-    k_print("║  Arch:     x86_64 (long mode)               ║\n");
-    k_print("║  Shell:    ltlsh 0.3.0                      ║\n");
+    k_print("|  OS:       LateralusOS v0.3.0               |\n");
+    k_print("|  Lang:     Lateralus v2.2.0                 |\n");
+    k_print("|  Arch:     x86_64 (long mode)               |\n");
+    k_print("|  Shell:    ltlsh 0.3.0                      |\n");
 
     /* CPU vendor */
     uint32_t eax, ebx, ecx, edx;
@@ -1814,12 +1814,12 @@ static void cmd_sysinfo(void) {
     *(uint32_t*)&vendor[4] = edx;
     *(uint32_t*)&vendor[8] = ecx;
     vendor[12] = '\0';
-    k_print("║  CPU:      ");
+    k_print("|  CPU:      ");
     k_print(vendor);
-    k_print("                   ║\n");
+    k_print("                   |\n");
 
     /* Memory */
-    k_print("║  Memory:   ");
+    k_print("|  Memory:   ");
     if (boot_info.total_memory_kb > 0) {
         char mbuf[16];
         uint_to_str((uint32_t)(boot_info.total_memory_kb / 1024), mbuf, sizeof(mbuf));
@@ -1828,10 +1828,10 @@ static void cmd_sysinfo(void) {
     } else {
         k_print("unknown");
     }
-    k_print("                    ║\n");
+    k_print("                    |\n");
 
     k_set_color(0x0E, 0x00);
-    k_print("╚══════════════════════════════════════════════╝\n");
+    k_print("+==============================================+\n");
     k_set_color(0x0F, 0x00);
     serial_puts("[shell] sysinfo\n");
 }
@@ -1953,7 +1953,7 @@ static void cmd_write(const char *args) {
     }
 }
 
-/* ── New commands (v0.2.1) — rm, cd, pwd, env, sleep, dmesg, export, head, wc ── */
+/* -- New commands (v0.2.1) — rm, cd, pwd, env, sleep, dmesg, export, head, wc -- */
 
 static void cmd_rm(const char *args) {
     while (*args == ' ') args++;
@@ -2298,7 +2298,7 @@ static void cmd_wc(const char *args) {
     k_print(" "); k_print(args); k_putc('\n');
 }
 
-/* ── tail: show last N lines of a file ─────────────────────────────── */
+/* -- tail: show last N lines of a file ------------------------------- */
 
 static void cmd_tail(const char *args) {
     while (*args == ' ') args++;
@@ -2351,7 +2351,7 @@ static void cmd_tail(const char *args) {
     if (n > 0 && buf[n - 1] != '\n') k_putc('\n');
 }
 
-/* ── stat: show file/directory info ────────────────────────────────── */
+/* -- stat: show file/directory info ---------------------------------- */
 
 static void cmd_stat(const char *args) {
     while (*args == ' ') args++;
@@ -2400,7 +2400,7 @@ static void cmd_stat(const char *args) {
     }
 }
 
-/* ── xxd: hex dump of a file ───────────────────────────────────────── */
+/* -- xxd: hex dump of a file ----------------------------------------- */
 
 static void cmd_xxd(const char *args) {
     while (*args == ' ') args++;
@@ -2470,7 +2470,7 @@ static void cmd_xxd(const char *args) {
     }
 }
 
-/* ── spawn: create background tasks ────────────────────────────────── */
+/* -- spawn: create background tasks ---------------------------------- */
 
 /* Demo task: heartbeat — prints a tick every N seconds to serial */
 static void task_heartbeat(void *arg) {
@@ -2584,7 +2584,7 @@ static void cmd_spawn(const char *args) {
     }
 }
 
-/* ── kill: terminate a task by TID ─────────────────────────────────── */
+/* -- kill: terminate a task by TID ----------------------------------- */
 
 static void cmd_kill(const char *args) {
     while (*args == ' ') args++;
@@ -2675,7 +2675,7 @@ static void cmd_kill(const char *args) {
     }
 }
 
-/* ── v2.3: New shell commands ─────────────────────────────────────────── */
+/* -- v2.3: New shell commands ------------------------------------------- */
 
 static void cmd_top(void) {
     /* Display running tasks with resource info (simplified top) */
@@ -2884,7 +2884,7 @@ static void cmd_factor(const char *args) {
     k_putc('\n');
 }
 
-/* ── Output capture buffer for pipe/redirect ──────────────────────────── */
+/* -- Output capture buffer for pipe/redirect ---------------------------- */
 
 static char capture_buf[4096];
 static int  capture_pos  = 0;
@@ -2908,7 +2908,7 @@ static void capture_stop(void) {
     capturing = 0;
 }
 
-/* ── String search helper ─────────────────────────────────────────────── */
+/* -- String search helper ----------------------------------------------- */
 
 /* Find first unquoted occurrence of ch in s. Returns pointer or NULL. */
 static char *find_unquoted(char *s, char ch) {
@@ -2921,7 +2921,7 @@ static char *find_unquoted(char *s, char ch) {
     return (char*)0;
 }
 
-/* ── Core command dispatch (no pipe/redirect handling) ────────────────── */
+/* -- Core command dispatch (no pipe/redirect handling) ------------------ */
 
 static void shell_exec_simple(char *line) {
     /* Trim leading spaces */
@@ -3047,7 +3047,7 @@ static void shell_exec_simple(char *line) {
         int home = ramfs_resolve_path("/home");
         if (home >= 0) ramfs_mkdir(home, dname);
     }
-    /* ── Development tools ─────────────────────────────────────────── */
+    /* -- Development tools ------------------------------------------- */
     else if (k_strncmp(line, "ltlc ", 5) == 0) { cmd_ltlc(line + 5); }
     else if (k_strcmp(line, "ltlc") == 0)       { cmd_ltlc(""); }
     else if (k_strncmp(line, "chat ", 5) == 0)  { cmd_chat(line + 5); }
@@ -3056,7 +3056,7 @@ static void shell_exec_simple(char *line) {
     else if (k_strcmp(line, "edit") == 0)        { cmd_edit(""); }
     else if (k_strncmp(line, "pkg ", 4) == 0)   { cmd_pkg(line + 4); }
     else if (k_strcmp(line, "pkg") == 0)         { cmd_pkg(""); }
-    /* ── v2.3 utilities ──────────────────────────────────────────── */
+    /* -- v2.3 utilities -------------------------------------------- */
     else if (k_strcmp(line, "top") == 0)          { cmd_top(); }
     else if (k_strcmp(line, "df") == 0)           { cmd_df(); }
     else if (k_strcmp(line, "id") == 0)           { cmd_id(); }
@@ -3076,7 +3076,7 @@ static void shell_exec_simple(char *line) {
     }
 }
 
-/* ── shell_exec: pipe (|) and redirect (>, >>) wrapper ────────────────── */
+/* -- shell_exec: pipe (|) and redirect (>, >>) wrapper ------------------ */
 
 /* Helper: trim leading/trailing spaces in-place, return trimmed pointer */
 static char *trim_inplace(char *s) {
@@ -3103,7 +3103,7 @@ static void shell_exec(char *line) {
     while (*line == ' ') line++;
     if (*line == '\0') return;
 
-    /* ── Environment variable expansion ($VAR, ${VAR}) ──── */
+    /* -- Environment variable expansion ($VAR, ${VAR}) ---- */
     static char expanded_buf[CMD_BUF_SIZE];
     int has_dollar = 0;
     for (int i = 0; line[i]; i++) { if (line[i] == '$') { has_dollar = 1; break; } }
@@ -3112,7 +3112,7 @@ static void shell_exec(char *line) {
         line = expanded_buf;
     }
 
-    /* ── Alias expansion (first word only) ─────────────── */
+    /* -- Alias expansion (first word only) --------------- */
     const char *aliased = alias_expand(line);
     if (aliased != line) {
         /* Copy back into a mutable buffer — alias_expand returns static buf */
@@ -3123,7 +3123,7 @@ static void shell_exec(char *line) {
         line = alias_copy;
     }
 
-    /* ── Bang expansion: !N recalls history entry N ─────── */
+    /* -- Bang expansion: !N recalls history entry N ------- */
     if (line[0] == '!' && line[1] >= '0' && line[1] <= '9') {
         int n = 0;
         const char *p = line + 1;
@@ -3145,7 +3145,7 @@ static void shell_exec(char *line) {
         }
     }
 
-    /* ── Check for pipe: cmd1 | cmd2 ────────────────────── */
+    /* -- Check for pipe: cmd1 | cmd2 ---------------------- */
     char *pipe_pos = find_unquoted(line, '|');
     if (pipe_pos) {
         *pipe_pos = '\0';
@@ -3262,7 +3262,7 @@ static void shell_exec(char *line) {
         return;
     }
 
-    /* ── Check for redirect append: cmd >> file ──────── */
+    /* -- Check for redirect append: cmd >> file -------- */
     char *redir_append = find_unquoted(line, '>');
     if (redir_append && *(redir_append + 1) == '>') {
         *redir_append = '\0';
@@ -3293,7 +3293,7 @@ static void shell_exec(char *line) {
         return;
     }
 
-    /* ── Check for redirect overwrite: cmd > file ────── */
+    /* -- Check for redirect overwrite: cmd > file ------ */
     char *redir_pos = find_unquoted(line, '>');
     if (redir_pos) {
         *redir_pos = '\0';
@@ -3324,11 +3324,11 @@ static void shell_exec(char *line) {
         return;
     }
 
-    /* ── No pipe/redirect — plain command ────────────── */
+    /* -- No pipe/redirect — plain command -------------- */
     shell_exec_simple(line);
 }
 
-/* ── Shell: VGA cursor ────────────────────────────────────────────────── */
+/* -- Shell: VGA cursor -------------------------------------------------- */
 
 static void vga_update_cursor(void) {
     uint16_t pos = cur_y * VGA_W + cur_x;
@@ -3345,7 +3345,7 @@ static void vga_enable_cursor(void) {
     outb(0x3D5, (inb(0x3D5) & 0xE0) | 15);  /* cursor end line   */
 }
 
-/* ── Shell: backspace ─────────────────────────────────────────────────── */
+/* -- Shell: backspace --------------------------------------------------- */
 
 static void k_backspace(void) {
     if (cur_x > 0) {
@@ -3357,7 +3357,7 @@ static void k_backspace(void) {
     VGA_BUF[cur_y * VGA_W + cur_x] = (uint16_t)' ' | ((uint16_t)cur_color << 8);
 }
 
-/* ── Shell: cursor-aware line redraw ──────────────────────────────────── */
+/* -- Shell: cursor-aware line redraw ------------------------------------ */
 
 /* Redraw the command line from the cursor position onward */
 static void redraw_from_cursor(int prompt_x, int prompt_y) {
@@ -3384,7 +3384,7 @@ static void redraw_from_cursor(int prompt_x, int prompt_y) {
     while (cur_x >= VGA_W) { cur_x -= VGA_W; cur_y++; }
 }
 
-/* ── Shell: tab completion ────────────────────────────────────────────── */
+/* -- Shell: tab completion ---------------------------------------------- */
 
 static const char *all_commands[] = {
     "alias", "alloc", "arp", "cal", "cat", "cd", "clear", "cpuid", "date", "dhcp",
@@ -3440,7 +3440,7 @@ static void shell_tab_complete(void) {
     }
 }
 
-/* ── Shell: main loop ─────────────────────────────────────────────────── */
+/* -- Shell: main loop --------------------------------------------------- */
 
 static void shell_main(void) {
     serial_puts("[shell] ltlsh 0.3.0 interactive shell ready\n");
@@ -3863,13 +3863,13 @@ void kernel_main(void) {
 
     k_print("\n");
 
-    /* ── Boot complete ───────────────────────────────────────────────── */
+    /* -- Boot complete ------------------------------------------------- */
     k_set_color(0x0E, 0x00);  /* yellow */
-    k_print("════════════════════════════════════════════════════\n");
+    k_print("====================================================\n");
     k_set_color(0x0A, 0x00);  /* green */
     k_print("  LateralusOS v0.3.0 boot complete!\n");
     k_set_color(0x0E, 0x00);
-    k_print("════════════════════════════════════════════════════\n");
+    k_print("====================================================\n");
     k_set_color(0x0F, 0x00);
     if (boot_info.fb_available) {
         k_set_color(0x0B, 0x00);
@@ -3880,7 +3880,7 @@ void kernel_main(void) {
     serial_puts("[init] Boot sequence complete\n");
     dmesg_add("[init] Boot sequence complete — entering shell");
 
-    /* ── Auto-GUI boot: check for "gui=auto" in GRUB command line ─────── */
+    /* -- Auto-GUI boot: check for "gui=auto" in GRUB command line ------- */
     if (boot_info.fb_available && k_strstr(boot_info.boot_cmd, "gui=auto")) {
         serial_puts("[init] gui=auto detected — launching desktop\n");
         k_set_color(0x0B, 0x00);
@@ -3895,6 +3895,6 @@ void kernel_main(void) {
         cmd_gui();
     }
 
-    /* ── Interactive Shell (ltlsh) ──────────────────────────────────────── */
+    /* -- Interactive Shell (ltlsh) ---------------------------------------- */
     shell_main();
 }

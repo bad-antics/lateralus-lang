@@ -22,7 +22,7 @@ from enum import Enum, auto
 import itertools
 
 
-# ─── Type Kind ─────────────────────────────────────────────────────────
+# --- Type Kind ---------------------------------------------------------
 
 class TypeKind(Enum):
     """Categories of types in LATERALUS."""
@@ -43,7 +43,7 @@ class TypeKind(Enum):
     GRADUAL = auto()     # v1.5: gradual typing boundary
 
 
-# ─── Core Type Classes ─────────────────────────────────────────────────
+# --- Core Type Classes -------------------------------------------------
 
 @dataclass(frozen=True)
 class LTLType:
@@ -334,7 +334,7 @@ class GradualType(LTLType):
                 other.is_assignable_from(self.inner))
 
 
-# ─── v1.6: Pointer type ───────────────────────────────────────────────
+# --- v1.6: Pointer type -----------------------------------------------
 
 @dataclass(frozen=True)
 class PtrType(LTLType):
@@ -359,7 +359,7 @@ class PtrType(LTLType):
         return super().is_assignable_from(other)
 
 
-# ─── Built-in Type Constants ───────────────────────────────────────────
+# --- Built-in Type Constants -------------------------------------------
 
 INT = PrimitiveType("int")
 FLOAT = PrimitiveType("float")
@@ -393,7 +393,7 @@ FIXED_WIDTH_TYPES: Dict[str, LTLType] = {
 }
 
 
-# ─── Type Environment ──────────────────────────────────────────────────
+# --- Type Environment --------------------------------------------------
 
 class TypeEnvironment:
     """
@@ -443,7 +443,7 @@ class TypeEnvironment:
         return result
 
 
-# ─── Type Narrowing ────────────────────────────────────────────────────
+# --- Type Narrowing ----------------------------------------------------
 
 class TypeNarrower:
     """
@@ -592,7 +592,7 @@ _TYPE_MAP_NARROW = {
 }
 
 
-# ─── Type Inference Engine ─────────────────────────────────────────────
+# --- Type Inference Engine ---------------------------------------------
 
 class TypeInferencer:
     """
@@ -694,7 +694,7 @@ class TypeInferencer:
             return self.resolve(self._substitutions[typ.name])
         return typ
 
-    # ── v1.5 Hindley-Milner unification ───────────────────────────────
+    # -- v1.5 Hindley-Milner unification -------------------------------
 
     def occurs_check(self, var: "TypeVar", typ: LTLType) -> bool:
         """Return True if TypeVar *var* appears free in *typ*.
@@ -917,7 +917,7 @@ class TypeInferencer:
         return bindings
 
 
-# ─── Type Checker ──────────────────────────────────────────────────────
+# --- Type Checker ------------------------------------------------------
 
 @dataclass
 class TypeError_:
@@ -1070,7 +1070,7 @@ class TypeChecker:
         return "\n".join(lines)
 
 
-# ─── Helper: Parse type annotation string ──────────────────────────────
+# --- Helper: Parse type annotation string ------------------------------
 
 _TYPE_MAP = {
     "int": INT,

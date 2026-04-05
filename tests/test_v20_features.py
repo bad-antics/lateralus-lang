@@ -1,6 +1,6 @@
 """
-tests/test_v20_features.py  ─  v2.0 Self-Hosting Feature Test Suite
-═══════════════════════════════════════════════════════════════════════════
+tests/test_v20_features.py  -  v2.0 Self-Hosting Feature Test Suite
+===========================================================================
 Tests for LATERALUS v2.0 features:
   · Bootstrap: All 5 bootstrap files compile with production compiler
   · Grammar: EBNF spec updated for v1.6–v1.9 constructs
@@ -25,7 +25,7 @@ from lateralus_lang.ast_nodes import (
 )
 
 
-# ─── Helpers ─────────────────────────────────────────────────────────────────
+# --- Helpers -----------------------------------------------------------------
 
 ROOT = pathlib.Path(__file__).parent.parent
 
@@ -47,9 +47,9 @@ def compile_file(path, target=Target.PYTHON):
     return Compiler().compile_source(src, target=target, filename=full.name)
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 # 1. Bootstrap Compilation Tests
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 
 class TestBootstrapCompilation:
     """All 5 bootstrap .ltl files must compile with the production compiler."""
@@ -84,9 +84,9 @@ class TestBootstrapCompilation:
             assert (bootstrap_dir / name).exists(), f"Missing bootstrap file: {name}"
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 # 2. v1.6 Concurrency Parsing Tests
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 
 class TestV16Parsing:
     """v1.6 structured concurrency constructs parse correctly."""
@@ -147,9 +147,9 @@ select {
         assert sel.arms[0].kind == "send"
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 # 3. v1.8 Metaprogramming Parsing Tests
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 
 class TestV18Parsing:
     """v1.8 metaprogramming constructs parse correctly."""
@@ -186,9 +186,9 @@ macro assert_eq!(a, b) {
         assert len(m.params) == 2
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 # 4. v1.9 FFI Parsing Tests
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 
 class TestV19Parsing:
     """v1.9 FFI constructs parse correctly."""
@@ -219,9 +219,9 @@ foreign "javascript" (x: 42, name: "test") {
         assert any(isinstance(n, ExternDecl) for n in p.body)
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 # 5. Grammar Spec Tests
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 
 class TestGrammarSpec:
     """Verify grammar.ebnf is up-to-date for v2.0."""
@@ -275,9 +275,9 @@ class TestGrammarSpec:
         assert "macro_invocation" in grammar
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 # 6. Showcase Compilation Tests
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 
 class TestShowcaseCompilation:
     """All showcase examples must compile."""
@@ -307,9 +307,9 @@ class TestShowcaseCompilation:
         assert r.ok, f"v15_showcase.ltl failed: {r.errors[0].message if r.errors else '?'}"
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 # 7. Multi-Target Compilation Tests
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 
 class TestMultiTarget:
     """Basic programs compile to Python, C, and JavaScript targets."""
@@ -329,9 +329,9 @@ class TestMultiTarget:
         assert r.ok, f"JS: {r.errors[0].message if r.errors else '?'}"
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 # 8. Bootstrap Parser Node Type Coverage
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 
 class TestBootstrapParserCoverage:
     """Verify the bootstrap parser handles key constructs."""
@@ -391,9 +391,9 @@ impl Point {
         assert compile_ok(src)
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 # 9. Lexer Keyword Coverage
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 
 class TestLexerKeywords:
     """Verify all v1.6–v2.0 keywords are recognized by the lexer."""

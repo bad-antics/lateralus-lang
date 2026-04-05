@@ -206,7 +206,7 @@ def cmd_bench(args) -> int:
     return 0
 
 
-# ─── Argparse registration ─────────────────────────────────────────────
+# --- Argparse registration ---------------------------------------------
 
 def register_subcommands(subparsers):
     """

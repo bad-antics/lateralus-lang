@@ -1,16 +1,16 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — PC Speaker Driver Implementation
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Copyright (c) 2025 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #include "speaker.h"
 
-/* ── PIT frequency ────────────────────────────────────────────────────── */
+/* -- PIT frequency ------------------------------------------------------ */
 
 #define PIT_FREQ 1193180   /* PIT base frequency in Hz */
 
-/* ── Note queue for melodies ──────────────────────────────────────────── */
+/* -- Note queue for melodies -------------------------------------------- */
 
 #define MAX_NOTES 8
 
@@ -25,7 +25,7 @@ static int     melody_idx   = 0;
 static uint64_t note_end_tick = 0;
 static uint8_t playing = 0;
 
-/* ── Play tone ────────────────────────────────────────────────────────── */
+/* -- Play tone ---------------------------------------------------------- */
 
 void speaker_play_tone(uint32_t freq) {
     if (freq == 0) { speaker_stop(); return; }
@@ -46,7 +46,7 @@ void speaker_play_tone(uint32_t freq) {
     playing = 1;
 }
 
-/* ── Stop tone ────────────────────────────────────────────────────────── */
+/* -- Stop tone ---------------------------------------------------------- */
 
 void speaker_stop(void) {
     uint8_t tmp = inb(0x61);
@@ -54,7 +54,7 @@ void speaker_stop(void) {
     playing = 0;
 }
 
-/* ── Start timed tone ─────────────────────────────────────────────────── */
+/* -- Start timed tone --------------------------------------------------- */
 
 void speaker_start_timed(uint32_t freq, uint32_t duration_ms,
                           uint64_t current_tick) {
@@ -66,7 +66,7 @@ void speaker_start_timed(uint32_t freq, uint32_t duration_ms,
     note_end_tick = current_tick + duration_ms;
 }
 
-/* ── Schedule melody ──────────────────────────────────────────────────── */
+/* -- Schedule melody ---------------------------------------------------- */
 
 static void _queue_melody(const Note *notes, int count, uint64_t current_tick) {
     melody_count = (count > MAX_NOTES) ? MAX_NOTES : count;
@@ -82,7 +82,7 @@ static void _queue_melody(const Note *notes, int count, uint64_t current_tick) {
     }
 }
 
-/* ── Tick (call at 1kHz) ──────────────────────────────────────────────── */
+/* -- Tick (call at 1kHz) ------------------------------------------------ */
 
 void speaker_tick(uint64_t current_tick) {
     if (!playing && melody_idx >= melody_count) return;
@@ -102,7 +102,7 @@ void speaker_tick(uint64_t current_tick) {
     }
 }
 
-/* ── Boot chime — ascending C-E-G-C ──────────────────────────────────── */
+/* -- Boot chime — ascending C-E-G-C ------------------------------------ */
 
 void speaker_boot_chime(uint64_t current_tick) {
     static const Note chime[] = {
@@ -114,7 +114,7 @@ void speaker_boot_chime(uint64_t current_tick) {
     _queue_melody(chime, 4, current_tick);
 }
 
-/* ── Error beep — low tone ────────────────────────────────────────────── */
+/* -- Error beep — low tone ---------------------------------------------- */
 
 void speaker_error_beep(uint64_t current_tick) {
     static const Note beep[] = {
@@ -123,13 +123,13 @@ void speaker_error_beep(uint64_t current_tick) {
     _queue_melody(beep, 1, current_tick);
 }
 
-/* ── Keyclick — very short high tone ──────────────────────────────────── */
+/* -- Keyclick — very short high tone ------------------------------------ */
 
 void speaker_keyclick(uint64_t current_tick) {
     speaker_start_timed(1200, 3, current_tick);
 }
 
-/* ── Window open — pleasant two-note ──────────────────────────────────── */
+/* -- Window open — pleasant two-note ------------------------------------ */
 
 void speaker_window_open(uint64_t current_tick) {
     static const Note wopen[] = {
@@ -139,7 +139,7 @@ void speaker_window_open(uint64_t current_tick) {
     _queue_melody(wopen, 2, current_tick);
 }
 
-/* ── Notification — gentle ding ───────────────────────────────────────── */
+/* -- Notification — gentle ding ----------------------------------------- */
 
 void speaker_notify(uint64_t current_tick) {
     static const Note ding[] = {
@@ -148,7 +148,7 @@ void speaker_notify(uint64_t current_tick) {
     _queue_melody(ding, 1, current_tick);
 }
 
-/* ── Query state ──────────────────────────────────────────────────────── */
+/* -- Query state -------------------------------------------------------- */
 
 uint8_t speaker_is_playing(void) {
     return playing || (melody_idx < melody_count);

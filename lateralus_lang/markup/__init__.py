@@ -1,13 +1,13 @@
 """
-lateralus_lang/markup/__init__.py  ─  LTLM (Lateralus Markup Language)
-═══════════════════════════════════════════════════════════════════════════
+lateralus_lang/markup/__init__.py  -  LTLM (Lateralus Markup Language)
+===========================================================================
 A hybrid Markdown + semantic-block format with executable .ltl code blocks,
 math support, admonitions, theorems, cross-references, and citations.
 
 File extension: .ltlm
 
 Structure
-─────────
+---------
   ---
   title: My Document
   author: LATERALUS
@@ -28,7 +28,7 @@ Structure
   :::
 
 Exports
-───────
+-------
   NodeKind          — enum of AST node types
   Node              — AST node with kind/text/attrs/children
   LTLMLParser       — parser class
@@ -36,7 +36,7 @@ Exports
   parse_ltlml(src)  → Node (document)
   render_ltlml(src) → str  (HTML)
   compile_ltlml_file(input, output) → str (path)
-═══════════════════════════════════════════════════════════════════════════
+===========================================================================
 """
 from __future__ import annotations
 
@@ -48,9 +48,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # AST — Node Kinds
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class NodeKind(Enum):
     """All possible node types in an LTLM document AST."""
@@ -80,9 +80,9 @@ class NodeKind(Enum):
     CITATION       = auto()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # AST — Node
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 @dataclass
 class Node:
@@ -93,9 +93,9 @@ class Node:
     children: List["Node"] = field(default_factory=list)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Inline Parser  (bold, italic, code, math, links, images, refs, cites)
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 # Ordered by specificity — longer / more specific patterns first.
 _INLINE_PATTERNS: List[tuple] = [
@@ -171,9 +171,9 @@ def _parse_inline(text: str) -> List[Node]:
     return nodes
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Block-level regex helpers
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 _RE_FM_FENCE      = re.compile(r'^---\s*$')
 _RE_HEADING       = re.compile(r'^(#{1,6})\s+(.+)$')
@@ -195,9 +195,9 @@ _THEOREM_TYPES = frozenset({
 })
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Parser
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class LTLMLParser:
     """Parse LTLM source text into a ``Node`` tree."""
@@ -416,7 +416,7 @@ class LTLMLParser:
         n = len(lines)
         i = 0
 
-        # ── front-matter (--- fences, YAML-style key: value) ─────────
+        # -- front-matter (--- fences, YAML-style key: value) ---------
         if i < n and _RE_FM_FENCE.match(lines[i]):
             i += 1
             attrs: Dict[str, str] = {}
@@ -432,7 +432,7 @@ class LTLMLParser:
                 i += 1                       # skip closing ---
             doc.children.append(Node(kind=NodeKind.FRONTMATTER, attrs=attrs))
 
-        # ── body blocks ──────────────────────────────────────────────
+        # -- body blocks ----------------------------------------------
         text_buf: List[str] = []
 
         def flush_text():
@@ -450,7 +450,7 @@ class LTLMLParser:
         while i < n:
             line = lines[i]
 
-            # ── fenced code block ```lang … ``` ──────────────────────
+            # -- fenced code block ```lang … ``` ----------------------
             m = _RE_CODE_FENCE.match(line)
             if m:
                 flush_text()
@@ -469,7 +469,7 @@ class LTLMLParser:
                 ))
                 continue
 
-            # ── math block $$ … $$ ───────────────────────────────────
+            # -- math block $$ … $$ -----------------------------------
             if _RE_MATH_FENCE.match(line):
                 flush_text()
                 math_lines: List[str] = []
@@ -485,7 +485,7 @@ class LTLMLParser:
                 ))
                 continue
 
-            # ── admonition / theorem  ::: type [title] … ::: ────────
+            # -- admonition / theorem  ::: type [title] … ::: --------
             m = _RE_ADM_START.match(line)
             if m:
                 flush_text()
@@ -505,7 +505,7 @@ class LTLMLParser:
                 doc.children.append(Node(kind=kind, text='\n'.join(body_lines), attrs=a))
                 continue
 
-            # ── heading  # … ###### ─────────────────────────────────
+            # -- heading  # … ###### ---------------------------------
             m = _RE_HEADING.match(line)
             if m:
                 flush_text()
@@ -519,14 +519,14 @@ class LTLMLParser:
                 i += 1
                 continue
 
-            # ── horizontal rule  ---  ***  ___ ──────────────────────
+            # -- horizontal rule  ---  ***  ___ ----------------------
             if _RE_HR.match(line):
                 flush_text()
                 doc.children.append(Node(kind=NodeKind.HR))
                 i += 1
                 continue
 
-            # ── table  | … | ────────────────────────────────────────
+            # -- table  | … | ----------------------------------------
             if _RE_TABLE_ROW.match(line):
                 flush_text()
                 headers = [c.strip() for c in line.strip().strip('|').split('|')]
@@ -552,7 +552,7 @@ class LTLMLParser:
                 doc.children.append(table)
                 continue
 
-            # ── blockquote  > … ─────────────────────────────────────
+            # -- blockquote  > … -------------------------------------
             m = _RE_BLOCKQUOTE.match(line)
             if m:
                 flush_text()
@@ -573,7 +573,7 @@ class LTLMLParser:
                 ))
                 continue
 
-            # ── ordered list  1. … ──────────────────────────────────
+            # -- ordered list  1. … ----------------------------------
             m = _RE_OL_ITEM.match(line)
             if m:
                 flush_text()
@@ -590,7 +590,7 @@ class LTLMLParser:
                 doc.children.append(ol)
                 continue
 
-            # ── unordered list  - / * / + … ─────────────────────────
+            # -- unordered list  - / * / + … -------------------------
             m = _RE_UL_ITEM.match(line)
             if m:
                 flush_text()
@@ -607,7 +607,7 @@ class LTLMLParser:
                 doc.children.append(ul)
                 continue
 
-            # ── regular text (accumulate) ────────────────────────────
+            # -- regular text (accumulate) ----------------------------
             text_buf.append(line)
             i += 1
 
@@ -615,9 +615,9 @@ class LTLMLParser:
         return doc
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Inline Markdown → HTML  (used by the renderer)
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def _inline_to_html(text: str) -> str:
     """Convert inline Markdown/LTLM formatting to HTML."""
@@ -637,9 +637,9 @@ def _inline_to_html(text: str) -> str:
     return t
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # HTML Renderer
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 _LTLML_CSS = """\
 <style>
@@ -862,9 +862,9 @@ class LTLMLRenderer:
         return ''
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # ANSI Terminal Renderer  (for `ltlc doc` without --html)
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 _RST  = '\033[0m'
 _BOLD = '\033[1m'
@@ -906,12 +906,12 @@ def _to_ansi(doc: Node) -> str:
                 meta.append(f'v{version}')
             if meta:
                 parts.append(f'{_DIM}  {" · ".join(meta)}{_RST}')
-            parts.append(f'{_DIM}  {"─" * 60}{_RST}\n')
+            parts.append(f'{_DIM}  {"-" * 60}{_RST}\n')
 
         elif child.kind == NodeKind.HEADING:
             level = child.attrs.get("level", 1)
             text = child.children[0].text if child.children else ""
-            prefix = '━' * level
+            prefix = '=' * level
             parts.append(f'\n{_BOLD}{_YEL}  {prefix} {_inline_to_ansi(text)}{_RST}\n')
 
         elif child.kind == NodeKind.PARAGRAPH:
@@ -920,10 +920,10 @@ def _to_ansi(doc: Node) -> str:
         elif child.kind == NodeKind.CODE_BLOCK:
             lang = child.attrs.get("language", "")
             tag = f'{_DIM}[{lang}]{_RST}' if lang else ''
-            parts.append(f'\n  {_BGCD}{_GRN}  ┌{"─" * 56}┐{_RST} {tag}')
+            parts.append(f'\n  {_BGCD}{_GRN}  +{"-" * 56}+{_RST} {tag}')
             for ln in child.text.split('\n'):
-                parts.append(f'  {_BGCD}{_GRN}  │ {ln:<54} │{_RST}')
-            parts.append(f'  {_BGCD}{_GRN}  └{"─" * 56}┘{_RST}\n')
+                parts.append(f'  {_BGCD}{_GRN}  | {ln:<54} |{_RST}')
+            parts.append(f'  {_BGCD}{_GRN}  +{"-" * 56}+{_RST}\n')
 
         elif child.kind == NodeKind.MATH_BLOCK:
             parts.append(f'\n  {_MAG}$$  {child.text}  $${_RST}\n')
@@ -936,7 +936,7 @@ def _to_ansi(doc: Node) -> str:
 
         elif child.kind == NodeKind.BLOCKQUOTE:
             for ln in child.text.split('\n'):
-                parts.append(f'  {_DIM}│{_RST} {_ITAL}{_inline_to_ansi(ln)}{_RST}')
+                parts.append(f'  {_DIM}|{_RST} {_ITAL}{_inline_to_ansi(ln)}{_RST}')
             parts.append('')
 
         elif child.kind == NodeKind.TABLE:
@@ -947,19 +947,19 @@ def _to_ansi(doc: Node) -> str:
                         widths.append(0)
                     widths[j] = max(widths[j], len(cell.text))
             for idx, row in enumerate(child.children):
-                cells = ' │ '.join(
+                cells = ' | '.join(
                     (row.children[j].text if j < len(row.children) else '').ljust(widths[j])
                     for j in range(len(widths))
                 )
                 if idx == 0:
                     parts.append(f'  {_BOLD}{cells}{_RST}')
-                    parts.append(f'  {_DIM}{"─┼─".join("─" * w for w in widths)}{_RST}')
+                    parts.append(f'  {_DIM}{"-+-".join("-" * w for w in widths)}{_RST}')
                 else:
                     parts.append(f'  {cells}')
             parts.append('')
 
         elif child.kind == NodeKind.HR:
-            parts.append(f'  {_DIM}{"─" * 60}{_RST}\n')
+            parts.append(f'  {_DIM}{"-" * 60}{_RST}\n')
 
         elif child.kind in (NodeKind.ADMONITION, NodeKind.THEOREM):
             atype = child.attrs.get("type", "note")
@@ -974,9 +974,9 @@ def _to_ansi(doc: Node) -> str:
     return '\n'.join(parts)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Public API
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 _default_parser   = LTLMLParser()
 _default_renderer = LTLMLRenderer()
@@ -1005,9 +1005,9 @@ def compile_ltlml_file(input_path: str, output_path: str) -> str:
     return str(out)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Backward-compat aliases used by older internal callers
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def parse(source: str) -> Node:
     """Alias for ``parse_ltlml``."""

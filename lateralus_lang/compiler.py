@@ -1,37 +1,37 @@
 """
-lateralus_lang/compiler.py  ─  LATERALUS Compiler Pipeline
-═══════════════════════════════════════════════════════════════════════════
+lateralus_lang/compiler.py  -  LATERALUS Compiler Pipeline
+===========================================================================
 Orchestrates the full compilation pipeline:
 
   .ltl source
-       │
+       |
        ▼  lexer.py
   Token stream
-       │
+       |
        ▼  parser.py
   AST (Program)
-       │
+       |
        ▼  ir.py  (SemanticAnalyzer)
   IRModule  +  semantic errors
-       │
-       ┌────────────────────────┐
+       |
+       +------------------------+
        ▼ codegen/bytecode.py    ▼ codegen/python.py
   LTasm Bytecode          Python 3 source
-       │
+       |
        ▼ vm/vm.py
   Execution result
 
   .ltasm source
-       │
+       |
        ▼  vm/assembler.py
   LTasm Bytecode
-       │
+       |
        ▼  vm/vm.py
   Execution result
 
 All errors are collected by ErrorReporter and forwarded to the
 ErrorBridge for integration with the Lateralus error_engine.
-═══════════════════════════════════════════════════════════════════════════
+===========================================================================
 """
 from __future__ import annotations
 
@@ -58,9 +58,9 @@ from .errors           import (
 )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Compilation target
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class Target(Enum):
     BYTECODE   = auto()   # LTasm Bytecode → VM execution
@@ -74,9 +74,9 @@ class Target(Enum):
     X86_64     = auto()   # Native x86_64 NASM assembly (.asm)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # CompileResult
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 @dataclass
 class CompileResult:
@@ -106,9 +106,9 @@ class CompileResult:
                 f"{len(self.errors)} error(s)  {len(self.warnings)} warning(s))")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Compiler
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class Compiler:
     """
@@ -125,7 +125,7 @@ class Compiler:
         self.verbose = verbose
         self.freestanding = freestanding
 
-    # ── public API ────────────────────────────────────────────────────────────
+    # -- public API ------------------------------------------------------------
 
     def compile_file(self, path: str,
                      target: Target = Target.BYTECODE) -> CompileResult:
@@ -158,7 +158,7 @@ class Compiler:
             result = self._run_bytecode(result)
         return result
 
-    # ── .ltl pipeline ─────────────────────────────────────────────────────────
+    # -- .ltl pipeline ---------------------------------------------------------
 
     def _compile_ltl(self, source: str, filename: str,
                      target: Target) -> CompileResult:
@@ -166,7 +166,7 @@ class Compiler:
         reporter = ErrorReporter(source_lines=source.splitlines())
         bridge   = get_bridge(reporter)
 
-        # ── 1. Lex ────────────────────────────────────────────────────────────
+        # -- 1. Lex ------------------------------------------------------------
         try:
             tokens = lex(source, filename)
         except LexError as exc:
@@ -182,7 +182,7 @@ class Compiler:
             bridge.submit(ctx)
             return self._failed(reporter, filename, target, t0)
 
-        # ── 2. Parse ──────────────────────────────────────────────────────────
+        # -- 2. Parse ----------------------------------------------------------
         try:
             ast = parse(source, filename)
         except ParseError as exc:
@@ -202,7 +202,7 @@ class Compiler:
         if target == Target.CHECK:
             return self._success(reporter, filename, target, t0)
 
-        # ── 3. Semantic analysis + IR ──────────────────────────────────────────
+        # -- 3. Semantic analysis + IR ------------------------------------------
         ir_module, sem_errors = analyze(ast, filename)
         for se in sem_errors:
             sev = Severity.ERROR if se.level == "error" else Severity.WARNING
@@ -298,7 +298,7 @@ class Compiler:
                                  elapsed_ms=elapsed,
                                  errors=[], warnings=reporter.all())
 
-        # ── 4. Bytecode generation ─────────────────────────────────────────────
+        # -- 4. Bytecode generation ---------------------------------------------
         try:
             bc = generate_bytecode(ir_module)
         except BytecodeGenError as exc:
@@ -314,7 +314,7 @@ class Compiler:
                              elapsed_ms=elapsed,
                              errors=[], warnings=reporter.all())
 
-    # ── .ltasm pipeline ───────────────────────────────────────────────────────
+    # -- .ltasm pipeline -------------------------------------------------------
 
     def _compile_asm(self, source: str, filename: str) -> CompileResult:
         t0       = time.monotonic()
@@ -334,7 +334,7 @@ class Compiler:
                              source_file=filename, bytecode=bc,
                              elapsed_ms=elapsed)
 
-    # ── Python execution (transpile → exec) ───────────────────────────────────
+    # -- Python execution (transpile → exec) -----------------------------------
 
     def _run_python(self, result: CompileResult) -> CompileResult:
         """Transpile to Python source and exec it in-process."""
@@ -382,7 +382,7 @@ class Compiler:
                 pass
         return result
 
-    # ── VM execution ──────────────────────────────────────────────────────────
+    # -- VM execution ----------------------------------------------------------
 
     def _run_bytecode(self, result: CompileResult) -> CompileResult:
         reporter = ErrorReporter()
@@ -413,7 +413,7 @@ class Compiler:
             result.exit_code = int(exc.code or 0)
         return result
 
-    # ── helpers ───────────────────────────────────────────────────────────────
+    # -- helpers ---------------------------------------------------------------
 
     @staticmethod
     def _failed(reporter: ErrorReporter, filename: str, target: Target,
@@ -435,9 +435,9 @@ class Compiler:
                              elapsed_ms=elapsed, warnings=warns)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Module-level convenience
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 _default_compiler: Optional[Compiler] = None
 

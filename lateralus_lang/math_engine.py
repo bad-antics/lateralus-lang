@@ -1,6 +1,6 @@
 """
-lateralus_lang/math_engine.py  ─  LATERALUS High-Precision Math Engine
-═══════════════════════════════════════════════════════════════════════════
+lateralus_lang/math_engine.py  -  LATERALUS High-Precision Math Engine
+===========================================================================
 Julia-inspired mathematical computation core with:
   · Arbitrary-precision integers (no overflow)
   · IEEE 754 doubles + optional Decimal mode for financial/scientific work
@@ -16,7 +16,7 @@ fast second.  Python's int is already arbitrary-precision; we add
 Decimal for controlled-precision floats and matrix algebra.
 
 v1.5.0
-═══════════════════════════════════════════════════════════════════════════
+===========================================================================
 """
 from __future__ import annotations
 
@@ -29,9 +29,9 @@ from typing import (
     Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple, Union,
 )
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Precision control
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 # Default 50 significant digits — can be raised at runtime
 getcontext().prec = 50
@@ -52,9 +52,9 @@ def set_precision(digits: int) -> None:
     getcontext().prec = digits
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # LTLNumber — the core numeric type
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class LTLNumber:
     """Wrapper that auto-promotes between int → Fraction → Decimal → Complex.
@@ -81,7 +81,7 @@ class LTLNumber:
     def value(self):
         return self._val
 
-    # ── arithmetic ────────────────────────────────────────────────────────────
+    # -- arithmetic ------------------------------------------------------------
 
     def __add__(self, other):
         return LTLNumber(_coerce_op(self._val, _unwrap(other), operator.add))
@@ -116,7 +116,7 @@ class LTLNumber:
     def __abs__(self):
         return LTLNumber(abs(self._val))
 
-    # ── comparison ────────────────────────────────────────────────────────────
+    # -- comparison ------------------------------------------------------------
 
     def __eq__(self, other):
         return self._val == _unwrap(other)
@@ -133,7 +133,7 @@ class LTLNumber:
     def __ge__(self, other):
         return self._val >= _unwrap(other)
 
-    # ── display ───────────────────────────────────────────────────────────────
+    # -- display ---------------------------------------------------------------
 
     def __repr__(self):
         return f"LTLNumber({self._val!r})"
@@ -172,9 +172,9 @@ def _coerce_op(a, b, op):
     return op(a, b)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Matrix — pure-Python dense matrix for linear algebra
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class Matrix:
     """Dense matrix with exact arithmetic (uses LTLNumber internally).
@@ -242,7 +242,7 @@ class Matrix:
             raise ValueError("trace requires a square matrix")
         return sum(self._data[i][i] for i in range(self.rows))
 
-    # ── arithmetic ────────────────────────────────────────────────────────────
+    # -- arithmetic ------------------------------------------------------------
 
     def __add__(self, other: "Matrix") -> "Matrix":
         _assert_same_shape(self, other, "+")
@@ -279,7 +279,7 @@ class Matrix:
                   for r in range(self.rows)]
         return Matrix(result)
 
-    # ── determinant (Laplace expansion for small, LU for larger) ──────────
+    # -- determinant (Laplace expansion for small, LU for larger) ----------
 
     def det(self) -> float:
         if self.rows != self.cols:
@@ -314,7 +314,7 @@ class Matrix:
             d *= lu[i][i]
         return d
 
-    # ── inverse (Gauss-Jordan) ────────────────────────────────────────────
+    # -- inverse (Gauss-Jordan) --------------------------------------------
 
     def inverse(self) -> "Matrix":
         if self.rows != self.cols:
@@ -338,7 +338,7 @@ class Matrix:
                         aug[row][j] -= factor * aug[col][j]
         return Matrix([[aug[r][n + c] for c in range(n)] for r in range(n)])
 
-    # ── display ───────────────────────────────────────────────────────────────
+    # -- display ---------------------------------------------------------------
 
     def __repr__(self):
         rows_str = ",\n ".join(str(row) for row in self._data)
@@ -353,7 +353,7 @@ class Matrix:
         lines = []
         for r in range(self.rows):
             cells = [strs[r][c].rjust(col_widths[c]) for c in range(self.cols)]
-            lines.append("│ " + "  ".join(cells) + " │")
+            lines.append("| " + "  ".join(cells) + " |")
         return "\n".join(lines)
 
     def __eq__(self, other):
@@ -375,9 +375,9 @@ def _assert_same_shape(a: Matrix, b: Matrix, op: str):
         raise ValueError(f"Matrix {op}: shape mismatch {a.shape} vs {b.shape}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Vector — convenience wrapper for 1D operations
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class Vector:
     """1D numeric vector with dot product, norm, cross product (3D)."""
@@ -431,9 +431,9 @@ class Vector:
         return f"⟨{', '.join(str(x) for x in self._data)}⟩"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Interval arithmetic — for error-bounded computation
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class Interval:
@@ -503,9 +503,9 @@ class Interval:
         return f"{self.mid:.6g} ± {self.radius:.2g}"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Forward-mode automatic differentiation
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class Dual:
     """Dual number for forward-mode automatic differentiation.
@@ -642,9 +642,9 @@ def gradient(fn: Callable, point: List[float]) -> List[float]:
     return grad
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Statistical functions
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def mean(data: List[float]) -> float:
     if not data:
@@ -704,9 +704,9 @@ def linear_regression(x: List[float], y: List[float]) -> Tuple[float, float]:
     return (slope, intercept)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Numerical methods
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def newton_raphson(
     f: Callable[[float], float],
@@ -799,9 +799,9 @@ def simpson_integrate(
     return s * h / 3
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Convenience registry — maps names to functions for the transpiler preamble
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 MATH_BUILTINS: Dict[str, Any] = {
     # Types

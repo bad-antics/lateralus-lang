@@ -24,17 +24,17 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # MIME Types — register .ltlml so it's served as text/html
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 mimetypes.add_type("text/html", ".ltlml")
 mimetypes.add_type("text/html", ".ltlm")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Live-reload script injected into every served page
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 _LIVE_RELOAD_SCRIPT = """
 <script>
@@ -65,7 +65,7 @@ class LTLMLHandler(SimpleHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = urllib.parse.unquote(parsed.path)
 
-        # ── Live-reload check endpoint ────────────────────────────
+        # -- Live-reload check endpoint ----------------------------
         if path == "/__ltlml_check":
             changed = self._check_changes()
             self.send_response(200)
@@ -75,7 +75,7 @@ class LTLMLHandler(SimpleHTTPRequestHandler):
             self.wfile.write(b"reload" if changed else b"ok")
             return
 
-        # ── Resolve the file path ─────────────────────────────────
+        # -- Resolve the file path ---------------------------------
         # Strip leading /
         rel = path.lstrip("/")
         if not rel:
@@ -105,7 +105,7 @@ class LTLMLHandler(SimpleHTTPRequestHandler):
             self.send_error(404, f"Not found: {path}")
             return
 
-        # ── Serve .ltlml by compiling to HTML ─────────────────────
+        # -- Serve .ltlml by compiling to HTML ---------------------
         if resolved.suffix in (".ltlml", ".ltlm"):
             self._serve_ltlml(resolved)
         else:

@@ -1,11 +1,11 @@
 """
-lateralus_lang/binary.py  ─  LTLC Binary Format (Proprietary)
-═══════════════════════════════════════════════════════════════════════════
+lateralus_lang/binary.py  -  LTLC Binary Format (Proprietary)
+===========================================================================
 Serializes / deserializes compiled Lateralus programs to/from the
 proprietary .ltlc binary format.
 
 Format Structure
-────────────────
+----------------
   HEADER  (32 bytes)
     Magic:       b"LTLC"                 (4 bytes)
     Version:     u16 major, u16 minor    (4 bytes)
@@ -27,10 +27,10 @@ The decompiler reads this format back and reconstructs readable .ltl
 source from the AST.
 
 Usage
-─────
+-----
   ltlc compile hello.ltl -o hello.ltlc   # compile
   ltlc decompile hello.ltlc              # decompile back to .ltl
-═══════════════════════════════════════════════════════════════════════════
+===========================================================================
 """
 from __future__ import annotations
 
@@ -56,9 +56,9 @@ from .ast_nodes import (
 )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Constants
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 MAGIC = b"LTLC"
 FORMAT_VERSION_MAJOR = 1
@@ -68,9 +68,9 @@ FLAG_HAS_SOURCE = 0x02
 HEADER_SIZE = 32
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Compiler  (AST → .ltlc binary)
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 @dataclass
 class LTLCHeader:
@@ -163,9 +163,9 @@ def decompile_from_ltlc(data: bytes) -> tuple:
     return program, source_file, module_name
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Decompiler  (.ltlc → .ltl readable source)
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class Decompiler:
     """Reconstruct readable .ltl source code from an AST Program."""
@@ -194,7 +194,7 @@ class Decompiler:
 
         return "\n".join(self._lines)
 
-    # ── helpers ───────────────────────────────────────────────────────────
+    # -- helpers -----------------------------------------------------------
 
     def _line(self, text: str = ""):
         if text:
@@ -205,7 +205,7 @@ class Decompiler:
     def _push(self): self._indent += 1
     def _pop(self): self._indent -= 1
 
-    # ── statements ────────────────────────────────────────────────────────
+    # -- statements --------------------------------------------------------
 
     def _decompile_import(self, node: ImportStmt):
         if node.items:
@@ -399,7 +399,7 @@ class Decompiler:
             parts.append(s)
         return ", ".join(parts)
 
-    # ── expressions ───────────────────────────────────────────────────────
+    # -- expressions -------------------------------------------------------
 
     def _expr(self, node) -> str:
         if node is None:
@@ -464,9 +464,9 @@ class Decompiler:
         return str(node)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # File I/O helpers
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def compile_file_to_ltlc(ltl_path: str, output_path: Optional[str] = None) -> str:
     """Parse a .ltl file and compile it to .ltlc binary. Returns output path."""

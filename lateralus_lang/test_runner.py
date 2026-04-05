@@ -59,7 +59,7 @@ class TestSuiteResult:
         return self.failed == 0
 
 
-# ─── ANSI Colors ───────────────────────────────────────────────────────
+# --- ANSI Colors -------------------------------------------------------
 
 class _C:
     GREEN = "\033[32m"
@@ -80,7 +80,7 @@ if not sys.stdout.isatty():
     _C.disable()
 
 
-# ─── LTL Test Discovery ───────────────────────────────────────────────
+# --- LTL Test Discovery -----------------------------------------------
 
 def find_ltl_tests(path: Path) -> list[tuple[Path, str]]:
     """Find all @test functions in .ltl files."""
@@ -151,7 +151,7 @@ def run_ltl_test(file: Path, test_name: str, verbose: bool = False) -> TestResul
         )
 
 
-# ─── Python Test Discovery ────────────────────────────────────────────
+# --- Python Test Discovery --------------------------------------------
 
 def find_python_tests(path: Path) -> list[tuple[Path, str]]:
     """Find all test_* functions in test_*.py files."""
@@ -177,7 +177,7 @@ def find_python_tests(path: Path) -> list[tuple[Path, str]]:
     return tests
 
 
-# ─── Test Runner ───────────────────────────────────────────────────────
+# --- Test Runner -------------------------------------------------------
 
 def run_tests(
     path: str = ".",
@@ -258,7 +258,7 @@ def run_tests(
     return suite
 
 
-# ─── CLI ───────────────────────────────────────────────────────────────
+# --- CLI ---------------------------------------------------------------
 
 def main():
     import argparse

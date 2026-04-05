@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from enum import Enum, auto
 
 
-# ─── Optimization Level ────────────────────────────────────────────────
+# --- Optimization Level ------------------------------------------------
 
 class OptLevel(Enum):
     O0 = 0  # No optimization
@@ -30,7 +30,7 @@ class OptLevel(Enum):
     O3 = 3  # Aggressive: + pipeline fusion, TCO
 
 
-# ─── Constant Folding ──────────────────────────────────────────────────
+# --- Constant Folding --------------------------------------------------
 
 # Operators that can be folded at compile time
 FOLDABLE_OPS = {
@@ -141,7 +141,7 @@ def try_fold_call(fn_name: str, args: List[Any]) -> FoldResult:
         return FoldResult(folded=False)
 
 
-# ─── Dead Code Elimination ─────────────────────────────────────────────
+# --- Dead Code Elimination ---------------------------------------------
 
 @dataclass
 class DCEResult:
@@ -194,7 +194,7 @@ def find_unreachable_after_return(statements: List[Any]) -> List[int]:
     return unreachable
 
 
-# ─── Dead Branch Elimination ───────────────────────────────────────────
+# --- Dead Branch Elimination -------------------------------------------
 
 @dataclass
 class DeadBranchResult:
@@ -264,7 +264,7 @@ def simplify_branch(condition_value: bool,
         return else_body if else_body else []
 
 
-# ─── Algebraic Simplification ──────────────────────────────────────────
+# --- Algebraic Simplification ------------------------------------------
 
 @dataclass
 class AlgebraicSimplification:
@@ -377,7 +377,7 @@ def apply_algebraic_simplification(
     return None
 
 
-# ─── Function Inlining Analysis ────────────────────────────────────────
+# --- Function Inlining Analysis ----------------------------------------
 
 @dataclass
 class InlineCandidate:
@@ -474,7 +474,7 @@ def analyze_inline_candidate(
     )
 
 
-# ─── Strength Reduction ────────────────────────────────────────────────
+# --- Strength Reduction ------------------------------------------------
 
 @dataclass
 class StrengthReduction:
@@ -555,7 +555,7 @@ def apply_strength_reduction(op: str, left: Any, right: Any) -> Optional[Tuple[s
     return None
 
 
-# ─── Common Subexpression Elimination ──────────────────────────────────
+# --- Common Subexpression Elimination ----------------------------------
 
 @dataclass
 class CSEEntry:
@@ -599,7 +599,7 @@ class CSETracker:
         return [e for e in self._expressions.values() if e.uses > 1]
 
 
-# ─── Tail Call Optimization Detection ──────────────────────────────────
+# --- Tail Call Optimization Detection ----------------------------------
 
 @dataclass
 class TCOCandidate:
@@ -664,7 +664,7 @@ def detect_tail_recursion(fn_name: str, body_stmts: List[Any]) -> TCOCandidate:
     )
 
 
-# ─── Pipeline Fusion ───────────────────────────────────────────────────
+# --- Pipeline Fusion ---------------------------------------------------
 
 def can_fuse_pipeline(stages: List[str]) -> bool:
     """
@@ -705,7 +705,7 @@ def describe_fusion(stages: List[str]) -> str:
         return f"Fuse {len(stages)} stages into single loop with transform+predicate"
 
 
-# ─── Optimization Report ───────────────────────────────────────────────
+# --- Optimization Report -----------------------------------------------
 
 @dataclass
 class OptimizationReport:
@@ -759,7 +759,7 @@ class OptimizationReport:
         return "\n".join(lines)
 
 
-# ─── Main Optimizer ─────────────────────────────────────────────────────
+# --- Main Optimizer -----------------------------------------------------
 
 class Optimizer:
     """

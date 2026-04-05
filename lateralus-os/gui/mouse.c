@@ -1,30 +1,30 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — PS/2 Mouse Driver Implementation
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Standard PS/2 mouse: 3-byte packets.
  * Byte 0: [Y-overflow | X-overflow | Y-sign | X-sign | 1 | Mid | Right | Left]
  * Byte 1: X movement
  * Byte 2: Y movement
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #include "mouse.h"
 
-/* ── Port I/O (defined in kernel_stub.c, declared here) ───────────────── */
+/* -- Port I/O (defined in kernel_stub.c, declared here) ----------------- */
 
 extern void outb(uint16_t port, uint8_t val);
 extern uint8_t inb(uint16_t port);
 
-/* ── PS/2 Controller ports ────────────────────────────────────────────── */
+/* -- PS/2 Controller ports ---------------------------------------------- */
 
 #define PS2_DATA    0x60
 #define PS2_STATUS  0x64
 #define PS2_CMD     0x64
 
-/* ── Global mouse state ──────────────────────────────────────────────── */
+/* -- Global mouse state ------------------------------------------------ */
 
 static MouseState ms = { 0, 0, 0, 0, 0, {0,0,0}, 0, 0 };
 
-/* ── Wait helpers ─────────────────────────────────────────────────────── */
+/* -- Wait helpers ------------------------------------------------------- */
 
 static void mouse_wait_write(void) {
     int timeout = 100000;
@@ -40,7 +40,7 @@ static void mouse_wait_read(void) {
     }
 }
 
-/* ── Send command to mouse (via PS/2 controller) ──────────────────────── */
+/* -- Send command to mouse (via PS/2 controller) ------------------------ */
 
 static void mouse_write(uint8_t byte) {
     mouse_wait_write();
@@ -54,7 +54,7 @@ static uint8_t mouse_read(void) {
     return inb(PS2_DATA);
 }
 
-/* ── Initialize PS/2 mouse ────────────────────────────────────────────── */
+/* -- Initialize PS/2 mouse ---------------------------------------------- */
 
 void mouse_init(void) {
     /* Enable auxiliary device (mouse) */
@@ -91,7 +91,7 @@ void mouse_init(void) {
     ms.ready = 0;
 }
 
-/* ── Handle one byte from IRQ12 ───────────────────────────────────────── */
+/* -- Handle one byte from IRQ12 ----------------------------------------- */
 
 void mouse_handle_byte(uint8_t byte) {
     ms.packet[ms.cycle] = byte;

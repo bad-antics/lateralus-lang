@@ -1,6 +1,6 @@
 """
-lateralus_lang/crypto_engine.py  ─  LATERALUS Cryptography & Encoding Engine
-═══════════════════════════════════════════════════════════════════════════════
+lateralus_lang/crypto_engine.py  -  LATERALUS Cryptography & Encoding Engine
+===============================================================================
 Proprietary encryption and encoding system for LATERALUS:
   · SHA-256, SHA-512, BLAKE2 hashing (stdlib wrappers)
   · HMAC message authentication
@@ -16,7 +16,7 @@ All operations use Python's `hashlib`, `hmac`, `secrets`, and
 `cryptography` (if available) — no hand-rolled crypto.
 
 v1.5.0
-═══════════════════════════════════════════════════════════════════════════════
+===============================================================================
 """
 from __future__ import annotations
 
@@ -32,9 +32,9 @@ import zlib
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Hashing
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def sha256(data: Union[str, bytes]) -> str:
     """SHA-256 hex digest."""
@@ -74,9 +74,9 @@ def hash_data(data: Union[str, bytes], algorithm: str = "sha256") -> str:
     return fn(data)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # HMAC
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def hmac_sign(key: Union[str, bytes], message: Union[str, bytes],
               algorithm: str = "sha256") -> str:
@@ -95,9 +95,9 @@ def hmac_verify(key: Union[str, bytes], message: Union[str, bytes],
     return hmac.compare_digest(expected, signature)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Password hashing
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def hash_password(password: str, salt: Optional[bytes] = None,
                   iterations: int = 600_000) -> Dict[str, str]:
@@ -126,9 +126,9 @@ def verify_password(password: str, stored: Dict[str, str]) -> bool:
     return hmac.compare_digest(dk.hex(), stored["hash"])
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Secure random
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def random_token(nbytes: int = 32) -> str:
     """Generate a cryptographically secure random hex token."""
@@ -145,9 +145,9 @@ def random_bytes(n: int) -> bytes:
     return os.urandom(n)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Encoding / Decoding
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def to_base64(data: Union[str, bytes]) -> str:
     if isinstance(data, str):
@@ -177,9 +177,9 @@ def from_hex(encoded: str) -> Union[str, bytes]:
         return raw
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # XOR cipher — lightweight obfuscation (NOT cryptographic security)
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def xor_encrypt(data: bytes, key: bytes) -> bytes:
     """XOR-based encryption/decryption (symmetric)."""
@@ -190,9 +190,9 @@ def xor_encrypt(data: bytes, key: bytes) -> bytes:
 xor_decrypt = xor_encrypt  # XOR is its own inverse
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # AES-256-GCM (requires `cryptography` package)
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def _check_cryptography():
     try:
@@ -235,9 +235,9 @@ def aes_decrypt(ciphertext: bytes, key: bytes,
     return aesgcm.decrypt(nonce, ct, associated_data)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # LATERALUS Binary Encoding (LBE) — proprietary serialization
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 #
 # Format:
 #   HEADER (8 bytes):
@@ -259,7 +259,7 @@ def aes_decrypt(ciphertext: bytes, key: bytes,
 #     0x07  Map (uint32 count + key-value pairs)
 #     0x08  BigInt (uint32 length + sign byte + magnitude bytes)
 #     0x09  Timestamp (uint64 nanoseconds since epoch)
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 LBE_MAGIC = b"LTLB"
 LBE_VERSION = 1
@@ -442,9 +442,9 @@ def lbe_load(path: str) -> Any:
         return lbe_decode(f.read())
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Digital signatures (HMAC-based for now, RSA when cryptography available)
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 @dataclass
 class SignedPayload:
@@ -492,9 +492,9 @@ def sign_data(data: Union[str, bytes], key: Union[str, bytes],
     return SignedPayload(data=data, signature=sig, algorithm=algorithm)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Checksums for file integrity
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def checksum_file(path: str, algorithm: str = "sha256",
                   chunk_size: int = 8192) -> str:
@@ -515,9 +515,9 @@ def verify_file(path: str, expected_hash: str,
     return hmac.compare_digest(checksum_file(path, algorithm), expected_hash)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Export registry for transpiler preamble
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 CRYPTO_BUILTINS: Dict[str, Any] = {
     "sha256": sha256,

@@ -1,21 +1,21 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — TCP Transport Layer Implementation
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Implements the TCP state machine per RFC 793 (simplified).
  * Built on top of the IPv4 stack in net/ip.c.
  *
  * Copyright (c) 2025-2026 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #include "tcp.h"
 #include "ip.h"
 
-/* ── External symbols ─────────────────────────────────────────────────── */
+/* -- External symbols --------------------------------------------------- */
 
 extern void  serial_puts(const char *s);
 extern volatile uint64_t tick_count;
 
-/* ── Local helpers ────────────────────────────────────────────────────── */
+/* -- Local helpers ------------------------------------------------------ */
 
 static void tcp_memcpy(void *dst, const void *src, uint32_t n) {
     uint8_t *d = (uint8_t *)dst;
@@ -62,7 +62,7 @@ static void tcp_serial_hex16(uint16_t val) {
     serial_puts(buf);
 }
 
-/* ── Connection pool ──────────────────────────────────────────────────── */
+/* -- Connection pool ---------------------------------------------------- */
 
 static TcpConnection conns[TCP_MAX_CONNECTIONS];
 static uint32_t tcp_seq_seed = 0;  /* simple ISN generator */
@@ -104,7 +104,7 @@ static int tcp_alloc_conn(void) {
     return -1;
 }
 
-/* ── TCP checksum ─────────────────────────────────────────────────────── */
+/* -- TCP checksum ------------------------------------------------------- */
 
 /* TCP checksum over pseudo-header + TCP header + data */
 static uint16_t tcp_checksum(uint32_t src_ip, uint32_t dst_ip,
@@ -140,7 +140,7 @@ static uint16_t tcp_checksum(uint32_t src_ip, uint32_t dst_ip,
     return (uint16_t)~sum;
 }
 
-/* ── Send a TCP segment ───────────────────────────────────────────────── */
+/* -- Send a TCP segment ------------------------------------------------- */
 
 static int tcp_send_segment(int conn_id, uint8_t flags,
                             const void *data, uint16_t data_len) {
@@ -184,7 +184,7 @@ static int tcp_send_segment(int conn_id, uint8_t flags,
     return ip_send(c->remote_ip, 6, seg_buf, seg_len);
 }
 
-/* ── Receive buffer helpers ───────────────────────────────────────────── */
+/* -- Receive buffer helpers --------------------------------------------- */
 
 static int recv_buf_write(TcpConnection *c, const uint8_t *data, uint16_t len) {
     uint16_t written = 0;
@@ -206,7 +206,7 @@ static int recv_buf_read(TcpConnection *c, uint8_t *buf, uint16_t buf_size) {
     return read;
 }
 
-/* ── State name for debugging ─────────────────────────────────────────── */
+/* -- State name for debugging ------------------------------------------- */
 
 static const char *tcp_state_name(int state) {
     switch (state) {
@@ -225,9 +225,9 @@ static const char *tcp_state_name(int state) {
     }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Public API
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 void tcp_init(void) {
     tcp_memset(conns, 0, sizeof(conns));
@@ -242,7 +242,7 @@ void tcp_init(void) {
     serial_puts("B rx buffer)\n");
 }
 
-/* ── tcp_recv: process incoming TCP segment ───────────────────────────── */
+/* -- tcp_recv: process incoming TCP segment ----------------------------- */
 
 void tcp_recv(uint32_t src_ip, const void *segment, uint16_t seg_len) {
     if (seg_len < sizeof(TcpHeader)) return;
@@ -265,7 +265,7 @@ void tcp_recv(uint32_t src_ip, const void *segment, uint16_t seg_len) {
 
     int ci = tcp_find_conn(local_ip, dst_port, src_ip, src_port);
 
-    /* ── RST handling ──────────────────────────────────────────── */
+    /* -- RST handling -------------------------------------------- */
     if (flags & TCP_RST) {
         if (ci >= 0 && conns[ci].state != TCP_STATE_CLOSED) {
             serial_puts("[tcp] RST received, conn ");
@@ -276,7 +276,7 @@ void tcp_recv(uint32_t src_ip, const void *segment, uint16_t seg_len) {
         return;
     }
 
-    /* ── No matching connection ────────────────────────────────── */
+    /* -- No matching connection ---------------------------------- */
     if (ci < 0) {
         /* Send RST for unexpected segments (unless it's already a RST) */
         /* We'd need a temp connection to send RST — skip for now */
@@ -285,7 +285,7 @@ void tcp_recv(uint32_t src_ip, const void *segment, uint16_t seg_len) {
 
     TcpConnection *c = &conns[ci];
 
-    /* ── State machine ─────────────────────────────────────────── */
+    /* -- State machine ------------------------------------------- */
     switch (c->state) {
 
     case TCP_STATE_LISTEN:
@@ -455,7 +455,7 @@ void tcp_recv(uint32_t src_ip, const void *segment, uint16_t seg_len) {
     }
 }
 
-/* ── tcp_tick: periodic housekeeping ──────────────────────────────────── */
+/* -- tcp_tick: periodic housekeeping ------------------------------------ */
 
 void tcp_tick(void) {
     for (int i = 0; i < TCP_MAX_CONNECTIONS; i++) {
@@ -525,7 +525,7 @@ void tcp_tick(void) {
     }
 }
 
-/* ── tcp_connect: active open ─────────────────────────────────────────── */
+/* -- tcp_connect: active open ------------------------------------------- */
 
 int tcp_connect(uint32_t dst_ip, uint16_t dst_port, uint16_t src_port) {
     int ci = tcp_alloc_conn();
@@ -564,7 +564,7 @@ int tcp_connect(uint32_t dst_ip, uint16_t dst_port, uint16_t src_port) {
     return ci;
 }
 
-/* ── tcp_listen: passive open ─────────────────────────────────────────── */
+/* -- tcp_listen: passive open ------------------------------------------- */
 
 int tcp_listen(uint16_t port) {
     int ci = tcp_alloc_conn();
@@ -590,7 +590,7 @@ int tcp_listen(uint16_t port) {
     return ci;
 }
 
-/* ── tcp_send: send data on established connection ────────────────────── */
+/* -- tcp_send: send data on established connection ---------------------- */
 
 int tcp_send(int conn_id, const void *data, uint16_t len) {
     if (conn_id < 0 || conn_id >= TCP_MAX_CONNECTIONS) return -1;
@@ -604,7 +604,7 @@ int tcp_send(int conn_id, const void *data, uint16_t len) {
     return tcp_send_segment(conn_id, TCP_ACK | TCP_PSH, data, send_len);
 }
 
-/* ── tcp_read: read from receive buffer ───────────────────────────────── */
+/* -- tcp_read: read from receive buffer --------------------------------- */
 
 int tcp_read(int conn_id, void *buf, uint16_t buf_size) {
     if (conn_id < 0 || conn_id >= TCP_MAX_CONNECTIONS) return -1;
@@ -623,7 +623,7 @@ int tcp_read(int conn_id, void *buf, uint16_t buf_size) {
     return recv_buf_read(c, (uint8_t *)buf, buf_size);
 }
 
-/* ── tcp_close: initiate graceful close ───────────────────────────────── */
+/* -- tcp_close: initiate graceful close --------------------------------- */
 
 int tcp_close(int conn_id) {
     if (conn_id < 0 || conn_id >= TCP_MAX_CONNECTIONS) return -1;
@@ -660,14 +660,14 @@ int tcp_close(int conn_id) {
     }
 }
 
-/* ── tcp_get_state ────────────────────────────────────────────────────── */
+/* -- tcp_get_state ------------------------------------------------------ */
 
 int tcp_get_state(int conn_id) {
     if (conn_id < 0 || conn_id >= TCP_MAX_CONNECTIONS) return TCP_STATE_CLOSED;
     return conns[conn_id].state;
 }
 
-/* ── tcp_dump: debug connection table ─────────────────────────────────── */
+/* -- tcp_dump: debug connection table ----------------------------------- */
 
 void tcp_dump(void) {
     serial_puts("[tcp] Connection table:\n");
@@ -711,7 +711,7 @@ void tcp_dump(void) {
     }
 }
 
-/* ── tcp_active_count ─────────────────────────────────────────────────── */
+/* -- tcp_active_count --------------------------------------------------- */
 
 int tcp_active_count(void) {
     int n = 0;

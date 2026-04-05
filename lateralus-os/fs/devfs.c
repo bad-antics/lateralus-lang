@@ -1,23 +1,23 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — /dev Virtual Device Filesystem Implementation
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Creates device files under /dev/ in ramfs.  Each device "file" is
  * regenerated on read to simulate device behaviour.
  *
  * Copyright (c) 2025-2026 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #include "devfs.h"
 #include "ramfs.h"
 
-/* ── Externals ────────────────────────────────────────────────────────── */
+/* -- Externals ---------------------------------------------------------- */
 extern volatile uint64_t tick_count;
 
 /* We need boot_info for framebuffer details */
 #include "../gui/bootinfo.h"
 extern BootInfo boot_info;
 
-/* ── Simple helpers (local) ───────────────────────────────────────────── */
+/* -- Simple helpers (local) --------------------------------------------- */
 
 static int df_strlen(const char *s) {
     int n = 0;
@@ -49,7 +49,7 @@ static void df_uint_to_str(uint64_t val, char *buf, int buflen) {
     buf[j] = '\0';
 }
 
-/* ── LFSR Pseudo-Random Number Generator ─────────────────────────────── */
+/* -- LFSR Pseudo-Random Number Generator ------------------------------- */
 
 static uint64_t lfsr_state = 0;
 
@@ -68,7 +68,7 @@ static uint32_t lfsr_next(void) {
     return (uint32_t)(s & 0xFFFFFFFF);
 }
 
-/* ── Device ramfs indices ─────────────────────────────────────────────── */
+/* -- Device ramfs indices ----------------------------------------------- */
 
 static int dev_dir_idx    = -1;
 static int dev_null_idx   = -1;
@@ -77,9 +77,9 @@ static int dev_random_idx = -1;
 static int dev_serial_idx = -1;
 static int dev_fb0_idx    = -1;
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Device Content Generators
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 static void gen_null(void) {
     /* /dev/null is always empty */
@@ -177,9 +177,9 @@ static void gen_fb0(void) {
     ramfs_write(dev_fb0_idx, buf, df_strlen(buf));
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Public API
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 void devfs_init(void) {
     /* Create /dev directory under root (ramfs index 0) */

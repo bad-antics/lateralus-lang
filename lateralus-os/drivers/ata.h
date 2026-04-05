@@ -1,18 +1,18 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — ATA PIO Disk Driver
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * PIO-mode ATA disk I/O for the primary IDE controller.
  * Supports 28-bit LBA read/write, identify, and flush.
  *
  * Copyright (c) 2025-2026 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #ifndef LATERALUS_ATA_H
 #define LATERALUS_ATA_H
 
 #include "../gui/types.h"
 
-/* ── Constants ────────────────────────────────────────────────────────── */
+/* -- Constants ---------------------------------------------------------- */
 
 #define ATA_SECTOR_SIZE   512
 
@@ -20,7 +20,7 @@
 #define ATA_DRIVE_MASTER  0xE0
 #define ATA_DRIVE_SLAVE   0xF0
 
-/* ── Drive info ───────────────────────────────────────────────────────── */
+/* -- Drive info --------------------------------------------------------- */
 
 typedef struct {
     uint8_t  present;         /* 1 if drive detected */
@@ -31,7 +31,7 @@ typedef struct {
     uint32_t size_mb;         /* Size in megabytes */
 } AtaDriveInfo;
 
-/* ── API ──────────────────────────────────────────────────────────────── */
+/* -- API ---------------------------------------------------------------- */
 
 /* Initialize the ATA controller, detect drives on primary bus.
    Returns number of drives found (0, 1, or 2). */

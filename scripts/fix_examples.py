@@ -10,18 +10,18 @@ def write(name, content):
         f.write(content)
     print(f"Wrote {name}: {content.count(chr(10))+1} lines")
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # 1. graph_demo.ltl
-# ═══════════════════════════════════════════════════════════════════════
-write("graph_demo.ltl", r"""// ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
+write("graph_demo.ltl", r"""// =======================================================================
 // LATERALUS — Graph Theory & Network Analysis
 // Demonstrates data structures, algorithms, and pipeline composition
-// ═══════════════════════════════════════════════════════════════════════
+// =======================================================================
 
 import algorithms
 import data
 
-// ─── Graph representation using adjacency list ────────────────────────
+// --- Graph representation using adjacency list ------------------------
 
 fn graph_new() -> map {
     let g = {}
@@ -67,7 +67,7 @@ fn graph_add_edge(g: map, from: str, to: str, weight: float) -> map {
     return g
 }
 
-// ─── Breadth-First Search ─────────────────────────────────────────────
+// --- Breadth-First Search ---------------------------------------------
 
 fn bfs(g: map, start: str) -> list {
     let visited = {}
@@ -94,7 +94,7 @@ fn bfs(g: map, start: str) -> list {
     return order
 }
 
-// ─── Depth-First Search ───────────────────────────────────────────────
+// --- Depth-First Search -----------------------------------------------
 
 fn dfs_helper(g: map, vertex: str, visited: map, order: list) -> list {
     visited[vertex] = true
@@ -116,7 +116,7 @@ fn dfs(g: map, start: str) -> list {
     return dfs_helper(g, start, visited, [])
 }
 
-// ─── Shortest Path (Dijkstra's Algorithm) ─────────────────────────────
+// --- Shortest Path (Dijkstra's Algorithm) -----------------------------
 
 fn dijkstra(g: map, start: str) -> map {
     let distances = {}
@@ -186,7 +186,7 @@ fn shortest_path(g: map, start: str, end: str) -> map {
     return sp
 }
 
-// ─── Network Analysis ─────────────────────────────────────────────────
+// --- Network Analysis -------------------------------------------------
 
 fn degree(g: map, vertex_id: str) -> int {
     return len(g["vertices"][vertex_id]["neighbors"])
@@ -210,7 +210,7 @@ fn density(g: map) -> float {
     return g["edge_count"] / max_edges
 }
 
-// ─── Main: Build and analyze a network ────────────────────────────────
+// --- Main: Build and analyze a network --------------------------------
 
 fn main() {
     println("LATERALUS Graph Theory Demo")
@@ -280,18 +280,18 @@ fn main() {
 }
 """)
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # 2. physics_sim.ltl
-# ═══════════════════════════════════════════════════════════════════════
-write("physics_sim.ltl", r"""// ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
+write("physics_sim.ltl", r"""// =======================================================================
 // LATERALUS — Physics Simulation
 // N-body gravitational simulation using the science and math libraries
-// ═══════════════════════════════════════════════════════════════════════
+// =======================================================================
 
 import math
 import science
 
-// ─── Constants ────────────────────────────────────────────────────────
+// --- Constants --------------------------------------------------------
 
 let G = 6.67430e-11
 let AU = 1.496e11
@@ -299,7 +299,7 @@ let DAY = 86400.0
 let YEAR = 365.25 * DAY
 let SOLAR_MASS = 1.989e30
 
-// ─── Vector operations ───────────────────────────────────────────────
+// --- Vector operations -----------------------------------------------
 
 fn vec3(x: float, y: float, z: float) -> map {
     let v = {}
@@ -337,7 +337,7 @@ fn vec3_str(v: map) -> str {
                  str(round(v["z"], 2)) + ")"
 }
 
-// ─── Body ─────────────────────────────────────────────────────────────
+// --- Body -------------------------------------------------------------
 
 fn body_new(name: str, mass: float, pos: map, vel: map) -> map {
     let b = {}
@@ -349,7 +349,7 @@ fn body_new(name: str, mass: float, pos: map, vel: map) -> map {
     return b
 }
 
-// ─── Gravitational force between two bodies ───────────────────────────
+// --- Gravitational force between two bodies ---------------------------
 
 fn gravitational_force(b1: map, b2: map) -> map {
     let r = vec3_sub(b2["position"], b1["position"])
@@ -363,7 +363,7 @@ fn gravitational_force(b1: map, b2: map) -> map {
     return vec3_scale(direction, force_mag)
 }
 
-// ─── Compute total acceleration on each body ──────────────────────────
+// --- Compute total acceleration on each body --------------------------
 
 fn compute_accelerations(bodies: list) -> list {
     let n = len(bodies)
@@ -388,7 +388,7 @@ fn compute_accelerations(bodies: list) -> list {
     return updated
 }
 
-// ─── Leapfrog integrator (symplectic, energy-conserving) ──────────────
+// --- Leapfrog integrator (symplectic, energy-conserving) --------------
 
 fn leapfrog_step(bodies: list, dt: float) -> list {
     let n = len(bodies)
@@ -426,7 +426,7 @@ fn leapfrog_step(bodies: list, dt: float) -> list {
     return bodies
 }
 
-// ─── Energy calculations ──────────────────────────────────────────────
+// --- Energy calculations ----------------------------------------------
 
 fn kinetic_energy(bodies: list) -> float {
     let ke = 0.0
@@ -456,7 +456,7 @@ fn total_energy(bodies: list) -> float {
     return kinetic_energy(bodies) + potential_energy(bodies)
 }
 
-// ─── Solar system setup (simplified inner planets) ────────────────────
+// --- Solar system setup (simplified inner planets) --------------------
 
 fn create_solar_system() -> list {
     let bodies = []
@@ -498,7 +498,7 @@ fn create_solar_system() -> list {
     return bodies
 }
 
-// ─── Main simulation ─────────────────────────────────────────────────
+// --- Main simulation -------------------------------------------------
 
 fn main() {
     println("LATERALUS N-Body Gravitational Simulation")
@@ -560,19 +560,19 @@ fn main() {
 }
 """)
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # 3. statistics_demo.ltl
-# ═══════════════════════════════════════════════════════════════════════
-write("statistics_demo.ltl", r"""// ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
+write("statistics_demo.ltl", r"""// =======================================================================
 // LATERALUS — Statistical Analysis Pipeline
 // Real-world data analysis demonstrating pipeline composition
-// ═══════════════════════════════════════════════════════════════════════
+// =======================================================================
 
 import math
 import collections
 import functional
 
-// ─── Data generation (simulated dataset) ──────────────────────────────
+// --- Data generation (simulated dataset) ------------------------------
 
 fn generate_dataset(n: int) -> list {
     let data = []
@@ -597,7 +597,7 @@ fn generate_dataset(n: int) -> list {
     return data
 }
 
-// ─── Statistical functions ────────────────────────────────────────────
+// --- Statistical functions --------------------------------------------
 
 fn extract_field(data: list, field: str) -> list {
     return data |> map(fn(row) { row[field] })
@@ -691,7 +691,7 @@ fn linear_regression(xs: list, ys: list) -> map {
     return result
 }
 
-// ─── Group-by analysis ────────────────────────────────────────────────
+// --- Group-by analysis ------------------------------------------------
 
 fn group_by_field(data: list, field: str) -> map {
     let groups = {}
@@ -717,7 +717,7 @@ fn summarize_group(group: list, field: str) -> map {
     return result
 }
 
-// ─── Outlier detection ────────────────────────────────────────────────
+// --- Outlier detection ------------------------------------------------
 
 fn detect_outliers_iqr(values: list) -> map {
     let q1 = compute_percentile(values, 25.0)
@@ -739,7 +739,7 @@ fn detect_outliers_iqr(values: list) -> map {
     return result
 }
 
-// ─── Moving average ───────────────────────────────────────────────────
+// --- Moving average ---------------------------------------------------
 
 fn moving_average(values: list, window: int) -> list {
     let result = []
@@ -750,7 +750,7 @@ fn moving_average(values: list, window: int) -> list {
     return result
 }
 
-// ─── Main analysis pipeline ──────────────────────────────────────────
+// --- Main analysis pipeline ------------------------------------------
 
 fn main() {
     println("LATERALUS Statistical Analysis Pipeline")
@@ -836,19 +836,19 @@ fn main() {
 }
 """)
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # 4. neural_network.ltl
-# ═══════════════════════════════════════════════════════════════════════
-write("neural_network.ltl", r"""// ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
+write("neural_network.ltl", r"""// =======================================================================
 // LATERALUS — Machine Learning Example
 // A simple neural network implementation from scratch
 // Demonstrates LATERALUS's mathematical computing capabilities
-// ═══════════════════════════════════════════════════════════════════════
+// =======================================================================
 
 import math
 import matrix
 
-// ─── Activation Functions ─────────────────────────────────────────────
+// --- Activation Functions ---------------------------------------------
 
 fn sigmoid(x: float) -> float {
     return 1.0 / (1.0 + exp(-x))
@@ -875,7 +875,7 @@ fn tanh_activation(x: float) -> float {
     return (ep - en) / (ep + en)
 }
 
-// ─── Apply activation to matrix ───────────────────────────────────────
+// --- Apply activation to matrix ---------------------------------------
 
 fn apply_activation(m: list, activation) -> list {
     let result = []
@@ -886,7 +886,7 @@ fn apply_activation(m: list, activation) -> list {
     return result
 }
 
-// ─── Loss Functions ───────────────────────────────────────────────────
+// --- Loss Functions ---------------------------------------------------
 
 fn mse_loss(predicted: list, actual: list) -> float {
     let total = 0.0
@@ -915,7 +915,7 @@ fn binary_cross_entropy(predicted: list, actual: list) -> float {
     return total / count
 }
 
-// ─── Dense Layer ──────────────────────────────────────────────────────
+// --- Dense Layer ------------------------------------------------------
 
 fn layer_new(input_size: int, output_size: int) -> map {
     // Xavier initialization
@@ -965,7 +965,7 @@ fn layer_forward(layer: map, input: list, activation) -> map {
     return layer
 }
 
-// ─── Simple Neural Network ───────────────────────────────────────────
+// --- Simple Neural Network -------------------------------------------
 
 fn network_new(layer_sizes: list) -> map {
     let layers = []
@@ -991,7 +991,7 @@ fn network_forward(net: map, input: list) -> list {
     return current
 }
 
-// ─── Training (simplified gradient descent) ───────────────────────────
+// --- Training (simplified gradient descent) ---------------------------
 
 fn train_step(net: map, input: list, target: list, lr: float) -> map {
     // Forward pass
@@ -1038,7 +1038,7 @@ fn train_step(net: map, input: list, target: list, lr: float) -> map {
     return net
 }
 
-// ─── Main: XOR Problem ───────────────────────────────────────────────
+// --- Main: XOR Problem -----------------------------------------------
 
 fn main() {
     println("LATERALUS Neural Network — XOR Problem")
@@ -1090,18 +1090,18 @@ fn main() {
 }
 """)
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # 5. signal_processing.ltl
-# ═══════════════════════════════════════════════════════════════════════
-write("signal_processing.ltl", r"""// ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
+write("signal_processing.ltl", r"""// =======================================================================
 // LATERALUS v1.5 — Signal Processing
 // Demonstrates FFT, filtering, and spectral analysis pipelines
-// ═══════════════════════════════════════════════════════════════════════
+// =======================================================================
 
 import math
 import science
 
-// ── Signal Generation ─────────────────────────────────────────────
+// -- Signal Generation ---------------------------------------------
 
 fn generate_sine(freq: float, amplitude: float, samples: int, sample_rate: float) -> list {
     let result = []
@@ -1126,7 +1126,7 @@ fn generate_composite_signal(sample_rate: float, duration: float) -> list {
     return result
 }
 
-// ── Spectral Analysis ─────────────────────────────────────────────
+// -- Spectral Analysis ---------------------------------------------
 
 fn analyze_spectrum(signal: list, sample_rate: float) -> list {
     let spectrum = signal |> fft()
@@ -1151,7 +1151,7 @@ fn find_peaks(spectrum: list, threshold_db: float) -> list {
     return sorted_bins |> reverse()
 }
 
-// ── Digital Filters ───────────────────────────────────────────────
+// -- Digital Filters -----------------------------------------------
 
 fn moving_avg_filter(signal: list, window: int) -> list {
     let n = len(signal)
@@ -1180,7 +1180,7 @@ fn low_pass_filter(signal: list, cutoff: float, sample_rate: float) -> list {
     return filtered
 }
 
-// ── Signal Statistics ─────────────────────────────────────────────
+// -- Signal Statistics ---------------------------------------------
 
 fn signal_stats(signal: list) -> map {
     let n = len(signal)
@@ -1202,7 +1202,7 @@ fn signal_stats(signal: list) -> map {
     return result
 }
 
-// ── Main Analysis Pipeline ────────────────────────────────────────
+// -- Main Analysis Pipeline ----------------------------------------
 
 fn main() {
     println("LATERALUS v1.5 — Signal Processing")
@@ -1292,19 +1292,19 @@ fn main() {
 main()
 """)
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # 6. testing_demo.ltl
-# ═══════════════════════════════════════════════════════════════════════
-write("testing_demo.ltl", r"""// ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
+write("testing_demo.ltl", r"""// =======================================================================
 // LATERALUS v1.5 — Testing Framework Demo
 // Shows the built-in testing system with @test, assertions, and
 // structured test suites
-// ═══════════════════════════════════════════════════════════════════════
+// =======================================================================
 
 import testing
 import math
 
-// ── Basic Assertions ──────────────────────────────────────────────
+// -- Basic Assertions ----------------------------------------------
 
 @test
 fn test_equality() {
@@ -1342,7 +1342,7 @@ fn test_approximate() {
     assert_approx(sin(PI / 2), 1.0, 0.0001, "sin(pi/2) = 1")
 }
 
-// ── Testing Mathematical Functions ────────────────────────────────
+// -- Testing Mathematical Functions --------------------------------
 
 fn factorial(n: int) -> int {
     if n <= 1 { return 1 }
@@ -1392,7 +1392,7 @@ fn test_primes() {
     }
 }
 
-// ── Testing Pipelines ─────────────────────────────────────────────
+// -- Testing Pipelines ---------------------------------------------
 
 @test
 fn test_pipeline_operations() {
@@ -1418,7 +1418,7 @@ fn test_string_pipeline() {
     assert_eq(words, "THE-QUICK-BROWN-FOX", "string pipeline")
 }
 
-// ── Testing Result Types (v1.5) ───────────────────────────────────
+// -- Testing Result Types (v1.5) -----------------------------------
 
 fn safe_sqrt(x: float) -> Result {
     if x < 0.0 { return Result::Err("negative input") }
@@ -1454,7 +1454,7 @@ fn test_result_chaining() {
     assert_eq(value, 25.0, "100 / 4 = 25")
 }
 
-// ── Testing Option Types (v1.5) ───────────────────────────────────
+// -- Testing Option Types (v1.5) -----------------------------------
 
 fn find_element(items: list, target: int) -> Option {
     for i in range(len(items)) {
@@ -1478,7 +1478,7 @@ fn test_option_none() {
     assert_true(is_none(idx), "element not found")
 }
 
-// ── Testing Pattern Matching (v1.5) ───────────────────────────────
+// -- Testing Pattern Matching (v1.5) -------------------------------
 
 fn classify(n: int) -> str {
     return match n {
@@ -1509,7 +1509,7 @@ fn test_or_patterns() {
     assert_false(is_weekend("Monday"), "Monday is not weekend")
 }
 
-// ── Structured Test Suite ─────────────────────────────────────────
+// -- Structured Test Suite -----------------------------------------
 
 @test
 fn test_math_abs() {
@@ -1547,15 +1547,15 @@ fn test_chunk() {
 }
 """)
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # 7. full_showcase.ltl
-# ═══════════════════════════════════════════════════════════════════════
-write("full_showcase.ltl", r"""// ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
+write("full_showcase.ltl", r"""// =======================================================================
 // LATERALUS v1.3 — Full Ecosystem Showcase
 // Demonstrates every major subsystem in a single program
-// ═══════════════════════════════════════════════════════════════════════
+// =======================================================================
 
-// ─── 1. Core Language ──────────────────────────────────────────────────
+// --- 1. Core Language --------------------------------------------------
 
 fn fibonacci(n: int) -> int {
     match n {
@@ -1571,7 +1571,7 @@ fn fib_fast(n: int) -> int {
     return fib_fast(n - 1) + fib_fast(n - 2)
 }
 
-// ─── 2. Pipeline Mastery ───────────────────────────────────────────────
+// --- 2. Pipeline Mastery -----------------------------------------------
 
 fn analyze_sequence() {
     println("")
@@ -1591,7 +1591,7 @@ fn analyze_sequence() {
     println("Safe pipeline result: " + str(maybe_val))
 }
 
-// ─── 3. Error Handling ─────────────────────────────────────────────────
+// --- 3. Error Handling -------------------------------------------------
 
 fn safe_divide(a: float, b: float) -> float {
     if b == 0 {
@@ -1612,7 +1612,7 @@ fn demonstrate_errors() {
     println("5 / 0 = " + str(guarded))
 }
 
-// ─── 4. Event System ──────────────────────────────────────────────────
+// --- 4. Event System --------------------------------------------------
 
 fn demonstrate_events() {
     println("")
@@ -1626,7 +1626,7 @@ fn demonstrate_events() {
     emit "data_ready" { "values": [1, 2, 3, 4, 5] }
 }
 
-// ─── 5. Structs & Interfaces ──────────────────────────────────────────
+// --- 5. Structs & Interfaces ------------------------------------------
 
 struct Point {
     x: float,
@@ -1649,7 +1649,7 @@ fn demonstrate_structs() {
     println("Distance: " + str(dist))
 }
 
-// ─── 6. Mathematical Computing ────────────────────────────────────────
+// --- 6. Mathematical Computing ----------------------------------------
 
 fn demonstrate_math() {
     println("")
@@ -1677,7 +1677,7 @@ fn demonstrate_math() {
     }
 }
 
-// ─── 7. Cryptographic Operations ──────────────────────────────────────
+// --- 7. Cryptographic Operations --------------------------------------
 
 fn demonstrate_crypto() {
     println("")
@@ -1702,7 +1702,7 @@ fn demonstrate_crypto() {
     println("Base64 roundtrip: " + str(message == decoded))
 }
 
-// ─── 8. Scientific Computing ──────────────────────────────────────────
+// --- 8. Scientific Computing ------------------------------------------
 
 fn demonstrate_science() {
     println("")
@@ -1727,7 +1727,7 @@ fn demonstrate_science() {
     println("Body temp: " + str(body_temp_c) + " C = " + str(body_temp_f) + " F")
 }
 
-// ─── 9. Decorators ────────────────────────────────────────────────────
+// --- 9. Decorators ----------------------------------------------------
 
 @test
 fn test_addition() {
@@ -1746,7 +1746,7 @@ fn typed_multiply(a: int, b: int) -> int {
     return a * b
 }
 
-// ─── Main ──────────────────────────────────────────────────────────────
+// --- Main --------------------------------------------------------------
 
 fn main() {
     println("LATERALUS v1.3 — Full Ecosystem Showcase")
@@ -1771,9 +1771,9 @@ fn main() {
 }
 """)
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # 8. polyglot_demo.ltl
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 write("polyglot_demo.ltl", r"""// examples/polyglot_demo.ltl  — Lateralus v1.2.0
 // Demonstrates the polyglot foreign block + @foreign decorator features.
 
@@ -1782,9 +1782,9 @@ module polyglot_demo
 import stdlib.io
 import stdlib.math
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // 1.  @foreign decorator — entire function body runs in another language
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 /// Compute the first `limit` prime numbers using Julia's Primes package.
 @foreign("julia")
@@ -1812,9 +1812,9 @@ fn c_dot_product(a: list, b: list) -> float {
     "
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // 2.  Inline foreign block — ad-hoc polyglot evaluation
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 pub fn run_inline_julia_demo() {
     println("=== Inline Julia foreign block ===")
@@ -1832,9 +1832,9 @@ pub fn run_inline_julia_demo() {
     println("Foreign call dispatched (runtime needed to execute)")
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // 3.  Mixing native Lateralus + polyglot
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 struct Matrix {
     rows: int
@@ -1865,9 +1865,9 @@ pub fn demo_matrix() {
     println("Matrix data: " + m.to_string())
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // 4.  Pipeline + foreign combination
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 fn double(x: float) -> float { return x * 2.0 }
 fn square(x: float) -> float { return x * x }
@@ -1883,9 +1883,9 @@ pub fn pipeline_demo() {
     println("sin(45) = " + str(sin_45))
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // 5.  Entry point
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 fn main() {
     println("LATERALUS v1.2.0 Polyglot Demo")
@@ -1906,9 +1906,9 @@ fn main() {
 }
 """)
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # 9. v14_showcase.ltl
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 write("v14_showcase.ltl", r"""// LATERALUS v1.4 Feature Showcase
 // Demonstrates all new language features
 
@@ -1916,7 +1916,7 @@ module examples.v14_showcase
 
 import io
 
-// ── Ternary Expressions (replaced with if/else) ──────────────────────
+// -- Ternary Expressions (replaced with if/else) ----------------------
 
 fn abs_val(x) {
     if x < 0 {
@@ -1926,7 +1926,7 @@ fn abs_val(x) {
     }
 }
 
-// ── List Comprehensions ──────────────────────────────────────────────────────
+// -- List Comprehensions ------------------------------------------------------
 
 fn demo_comprehensions() {
     let nums = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
@@ -1939,7 +1939,7 @@ fn demo_comprehensions() {
     io.println("Big squares: " + big_sq as str)
 }
 
-// ── Spread Operator ──────────────────────────────────────────────────────────
+// -- Spread Operator ----------------------------------------------------------
 
 fn demo_spread() {
     let first  = [1, 2, 3]
@@ -1948,14 +1948,14 @@ fn demo_spread() {
     io.println("Merged: " + merged as str)
 }
 
-// ── Guard Clauses ────────────────────────────────────────────────────────────
+// -- Guard Clauses ------------------------------------------------------------
 
 fn safe_divide(a, b) {
     guard b != 0 else { return "Error: division by zero" }
     return a / b
 }
 
-// ── Pipeline Assignment ──────────────────────────────────────────────────────
+// -- Pipeline Assignment ------------------------------------------------------
 
 fn demo_pipeline_assign() {
     let mut data = [5, 3, 8, 1, 9, 2, 7]
@@ -1963,13 +1963,13 @@ fn demo_pipeline_assign() {
     io.println("Filtered (>3): " + data as str)
 }
 
-// ── Where Clauses ────────────────────────────────────────────────────────────
+// -- Where Clauses ------------------------------------------------------------
 
 fn circle_area(r) {
     return PI * r * r where { let PI = 3.141592653589793 }
 }
 
-// ── Classify with if/else ────────────────────────────────────────────────────
+// -- Classify with if/else ----------------------------------------------------
 
 fn classify(n) {
     if n > 0 {
@@ -1983,7 +1983,7 @@ fn classify(n) {
     }
 }
 
-// ── Math Engine Demo ─────────────────────────────────────────────────────────
+// -- Math Engine Demo ---------------------------------------------------------
 
 fn demo_math() {
     // Matrix operations (via preamble)
@@ -2001,7 +2001,7 @@ fn demo_math() {
     io.println("SHA256 of LATERALUS: " + hash)
 }
 
-// ── Main ─────────────────────────────────────────────────────────────────────
+// -- Main ---------------------------------------------------------------------
 
 fn main() {
     io.println("=== LATERALUS v1.4 Showcase ===")
@@ -2044,15 +2044,15 @@ fn main() {
 main()
 """)
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # 10. concurrent_demo.ltl — check/fix compilation
-# ═══════════════════════════════════════════════════════════════════════
-write("concurrent_demo.ltl", r"""// ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
+write("concurrent_demo.ltl", r"""// =======================================================================
 // LATERALUS v1.3 — Concurrent Pipeline Demo
 // Demonstrates channels, task groups, and parallel execution
-// ═══════════════════════════════════════════════════════════════════════
+// =======================================================================
 
-// ─── Parallel Computation ──────────────────────────────────────────────
+// --- Parallel Computation ----------------------------------------------
 
 @memo
 fn fib(n: int) -> int {
@@ -2074,7 +2074,7 @@ fn demo_parallel() {
     }
 }
 
-// ─── Data Pipeline ────────────────────────────────────────────────────
+// --- Data Pipeline ----------------------------------------------------
 
 fn demo_pipeline() {
     println("")
@@ -2092,7 +2092,7 @@ fn demo_pipeline() {
     println("  StdDev: " + str(round(dev, 2)))
 }
 
-// ─── Crypto Pipeline ──────────────────────────────────────────────────
+// --- Crypto Pipeline --------------------------------------------------
 
 fn demo_crypto_pipeline() {
     println("")
@@ -2109,7 +2109,7 @@ fn demo_crypto_pipeline() {
     }
 }
 
-// ─── Main ──────────────────────────────────────────────────────────────
+// --- Main --------------------------------------------------------------
 
 fn main() {
     println("LATERALUS v1.3 — Concurrent Pipeline Demo")

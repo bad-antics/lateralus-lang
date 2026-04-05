@@ -305,29 +305,29 @@ _start:
 
 ```
 Source (.ltl)
-    │
+    |
     ▼ Lexer           → Token stream
-    │
+    |
     ▼ Parser          → AST (ast_nodes.py)
-    │
+    |
     ▼ SemanticAnalyzer → IR Module (three-address code)
-    │
-    ├──▶ BytecodeGenerator → Bytecode (.ltbc)
-    │         └──▶ VM  → execute
-    │
-    ├──▶ PythonTranspiler  → .py (Python 3.10+)
-    │
-    └──▶ CTranspiler       → .c  (hosted or freestanding)
+    |
+    +--▶ BytecodeGenerator → Bytecode (.ltbc)
+    |         +--▶ VM  → execute
+    |
+    +--▶ PythonTranspiler  → .py (Python 3.10+)
+    |
+    +--▶ CTranspiler       → .c  (hosted or freestanding)
 ```
 
 Assembly pipeline:
 
 ```
 Source (.ltasm)
-    │
+    |
     ▼ Assembler (two-pass)
-    │
-    └──▶ Bytecode (.ltbc) → VM
+    |
+    +--▶ Bytecode (.ltbc) → VM
 ```
 
 ---
@@ -336,43 +336,43 @@ Source (.ltasm)
 
 ```
 lateralus-lang/
-├── lateralus_lang/         Python implementation
-│   ├── ast_nodes.py        AST node hierarchy (106 node types)
-│   ├── lexer.py            Tokenizer (.ltl + .ltasm)
-│   ├── parser.py           Recursive-descent parser
-│   ├── type_system.py      HM type inference engine
-│   ├── ir.py               Three-address IR + semantic analysis
-│   ├── compiler.py         Master pipeline orchestrator
-│   ├── math_engine.py      Arbitrary-precision math
-│   ├── science.py          Scientific computing
-│   ├── crypto_engine.py    Cryptographic primitives
-│   ├── codegen/
-│   │   ├── bytecode.py     IR → LTasm bytecode
-│   │   ├── python.py       AST → Python 3 transpiler
-│   │   └── c.py            AST → C99 transpiler (hosted + freestanding)
-│   ├── vm/
-│   │   ├── opcodes.py      Full ISA (102 opcodes)
-│   │   ├── assembler.py    .ltasm → Bytecode (two-pass)
-│   │   └── vm.py           Stack VM executor
-│   └── errors/
-│       ├── handler.py      Error types, DNA fingerprinting
-│       └── bridge.py       Integration bridge
-├── stdlib/                 59 standard library modules (.ltl)
-├── examples/               38 example programs (.ltl + .ltasm)
-├── tests/                  1,976 tests (pytest)
-├── docs/                   Documentation + website
-├── bootstrap/              Self-hosting compiler sources
-├── vscode-lateralus/       VS Code / VSCodium extension
-├── lateralus-os/           LateralusOS — bare-metal OS (Multiboot2, x86_64)
-│                           1.8MB kernel, double-buffered GUI desktop,
-│                           animated wallpaper (Fibonacci spirals, stars),
-│                           functional terminal (55+ commands), RAM filesystem,
-│                           /proc + /dev virtual filesystems, PC speaker audio,
-│                           cooperative scheduler, Alt+Tab, window animations,
-│                           start menu, context menu, desktop icons, system
-│                           monitor, PS/2 mouse, IPv4/ARP/UDP/ICMP/DHCP
-│                           network stack, built-in apps (ltlc, chat, edit, pkg)
-└── pyproject.toml
++-- lateralus_lang/         Python implementation
+|   +-- ast_nodes.py        AST node hierarchy (106 node types)
+|   +-- lexer.py            Tokenizer (.ltl + .ltasm)
+|   +-- parser.py           Recursive-descent parser
+|   +-- type_system.py      HM type inference engine
+|   +-- ir.py               Three-address IR + semantic analysis
+|   +-- compiler.py         Master pipeline orchestrator
+|   +-- math_engine.py      Arbitrary-precision math
+|   +-- science.py          Scientific computing
+|   +-- crypto_engine.py    Cryptographic primitives
+|   +-- codegen/
+|   |   +-- bytecode.py     IR → LTasm bytecode
+|   |   +-- python.py       AST → Python 3 transpiler
+|   |   +-- c.py            AST → C99 transpiler (hosted + freestanding)
+|   +-- vm/
+|   |   +-- opcodes.py      Full ISA (102 opcodes)
+|   |   +-- assembler.py    .ltasm → Bytecode (two-pass)
+|   |   +-- vm.py           Stack VM executor
+|   +-- errors/
+|       +-- handler.py      Error types, DNA fingerprinting
+|       +-- bridge.py       Integration bridge
++-- stdlib/                 59 standard library modules (.ltl)
++-- examples/               38 example programs (.ltl + .ltasm)
++-- tests/                  1,976 tests (pytest)
++-- docs/                   Documentation + website
++-- bootstrap/              Self-hosting compiler sources
++-- vscode-lateralus/       VS Code / VSCodium extension
++-- lateralus-os/           LateralusOS — bare-metal OS (Multiboot2, x86_64)
+|                           1.8MB kernel, double-buffered GUI desktop,
+|                           animated wallpaper (Fibonacci spirals, stars),
+|                           functional terminal (55+ commands), RAM filesystem,
+|                           /proc + /dev virtual filesystems, PC speaker audio,
+|                           cooperative scheduler, Alt+Tab, window animations,
+|                           start menu, context menu, desktop icons, system
+|                           monitor, PS/2 mouse, IPv4/ARP/UDP/ICMP/DHCP
+|                           network stack, built-in apps (ltlc, chat, edit, pkg)
++-- pyproject.toml
 ```
 
 ---

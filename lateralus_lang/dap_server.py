@@ -78,7 +78,7 @@ class DAPServer:
         self.seq += 1
         return self.seq
 
-    # ─── Wire Protocol ─────────────────────────────────────────────
+    # --- Wire Protocol ---------------------------------------------
 
     def read_message(self) -> dict | None:
         """Read a DAP message from stdin."""
@@ -134,7 +134,7 @@ class DAPServer:
         }
         self.send_message(msg)
 
-    # ─── Request Handlers ──────────────────────────────────────────
+    # --- Request Handlers ------------------------------------------
 
     def handle_initialize(self, request: dict):
         """Handle initialize request — declare capabilities."""
@@ -381,7 +381,7 @@ class DAPServer:
         ]
         self.send_response(request, {"sources": sources})
 
-    # ─── Dispatch ──────────────────────────────────────────────────
+    # --- Dispatch --------------------------------------------------
 
     HANDLERS = {
         "initialize": "handle_initialize",
@@ -422,13 +422,13 @@ class DAPServer:
             self.send_response(message, success=False,
                              message=f"Unknown command: {command}")
 
-    # ─── Helpers ───────────────────────────────────────────────────
+    # --- Helpers ---------------------------------------------------
 
     def _new_var_ref(self) -> int:
         self._var_ref_counter += 1
         return self._var_ref_counter
 
-    # ─── Main Loop ─────────────────────────────────────────────────
+    # --- Main Loop -------------------------------------------------
 
     def run(self):
         """Main message loop."""

@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 
-# ─── Project Manifest ──────────────────────────────────────────────────
+# --- Project Manifest --------------------------------------------------
 
 MANIFEST_FILE = "lateralus.toml"
 MANIFEST_FILE_JSON = "lateralus.json"       # legacy compat
@@ -37,7 +37,7 @@ DEFAULT_MAIN = "src/main.ltl"
 DEFAULT_TEST = "tests/"
 
 
-# ─── Lightweight TOML Parser ──────────────────────────────────────────
+# --- Lightweight TOML Parser ------------------------------------------
 
 class TOMLError(Exception):
     """TOML parse error."""
@@ -310,7 +310,7 @@ def _toml_value(v: Any) -> str:
     return str(v)
 
 
-# ─── Dependency ────────────────────────────────────────────────────────
+# --- Dependency --------------------------------------------------------
 
 @dataclass
 class Dependency:
@@ -330,7 +330,7 @@ class Dependency:
         return d
 
 
-# ─── Build Profiles ───────────────────────────────────────────────────
+# --- Build Profiles ---------------------------------------------------
 
 @dataclass
 class BuildProfile:
@@ -360,7 +360,7 @@ DEFAULT_PROFILES = {
 }
 
 
-# ─── Workspace ─────────────────────────────────────────────────────────
+# --- Workspace ---------------------------------------------------------
 
 @dataclass
 class Workspace:
@@ -386,7 +386,7 @@ class Workspace:
         return result
 
 
-# ─── Cfg (Conditional Compilation) ────────────────────────────────────
+# --- Cfg (Conditional Compilation) ------------------------------------
 
 @dataclass
 class CfgContext:
@@ -446,7 +446,7 @@ def _detect_os() -> str:
     return name
 
 
-# ─── Project Manifest ─────────────────────────────────────────────────
+# --- Project Manifest -------------------------------------------------
 
 @dataclass
 class ProjectManifest:
@@ -689,7 +689,7 @@ class ProjectManifest:
             path.write_text(json.dumps(self.to_dict(), indent=2) + "\n")
 
 
-# ─── Lock File ─────────────────────────────────────────────────────────
+# --- Lock File ---------------------------------------------------------
 
 @dataclass
 class LockEntry:
@@ -739,7 +739,7 @@ class LockFile:
         path.write_text(json.dumps(data, indent=2) + "\n")
 
 
-# ─── Semver ────────────────────────────────────────────────────────────
+# --- Semver ------------------------------------------------------------
 
 @dataclass
 class SemVer:
@@ -841,7 +841,7 @@ class SemVer:
         return SemVer(self.major, self.minor, self.patch + 1)
 
 
-# ─── Dependency Graph & Resolution ────────────────────────────────────
+# --- Dependency Graph & Resolution ------------------------------------
 
 class DependencyCycle(Exception):
     """Raised when a circular dependency is detected."""
@@ -1022,7 +1022,7 @@ class DependencyResolver:
         return f"sha256-{h.hexdigest()}"
 
 
-# ─── Project Scaffolding ──────────────────────────────────────────────
+# --- Project Scaffolding ----------------------------------------------
 
 def scaffold_project(name: str, path: Path, template: str = "default") -> Path:
     """Create a new LATERALUS project structure with lateralus.toml."""
@@ -1141,7 +1141,7 @@ __pycache__/
     return project_dir
 
 
-# ─── Package Publishing ──────────────────────────────────────────────
+# --- Package Publishing ----------------------------------------------
 
 @dataclass
 class PackageBundle:
@@ -1193,7 +1193,7 @@ class PackageBundle:
         }
 
 
-# ─── CLI Entry Point ──────────────────────────────────────────────────
+# --- CLI Entry Point --------------------------------------------------
 
 def main():
     """ltlpkg CLI entry point."""

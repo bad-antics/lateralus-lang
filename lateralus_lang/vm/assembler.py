@@ -1,10 +1,10 @@
 """
-lateralus_lang/vm/assembler.py  ─  LATERALUS Assembly (.ltasm) Assembler
-═══════════════════════════════════════════════════════════════════════════
+lateralus_lang/vm/assembler.py  -  LATERALUS Assembly (.ltasm) Assembler
+===========================================================================
 Converts .ltasm source text into a LTasm bytecode object (Bytecode).
 
 .ltasm syntax
-─────────────
+-------------
   ; comment
   .section  code | data | bss
   .global   label           — mark label as entry / export
@@ -17,7 +17,7 @@ Converts .ltasm source text into a LTasm bytecode object (Bytecode).
   MNEMONIC  [operand, ...]  — instruction
 
 Operand types
-─────────────
+-------------
   42          — integer immediate
   0xFF        — hex immediate
   3.14        — float immediate
@@ -27,10 +27,10 @@ Operand types
   #label      — same as .label but commonly used for jumps
 
 Passes
-──────
+------
   1  Scan source, collect labels, string table, build instruction list
   2  Resolve forward references, emit final bytecode
-═══════════════════════════════════════════════════════════════════════════
+===========================================================================
 """
 from __future__ import annotations
 
@@ -42,9 +42,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from .opcodes import Op, MNEMONIC_MAP
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Bytecode object
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 @dataclass
 class Bytecode:
@@ -88,9 +88,9 @@ class Bytecode:
         struct.pack_into(">I", self.code, offset, v & 0xFFFF_FFFF)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Assembler error
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class AssemblerError(Exception):
     def __init__(self, msg: str, file: str = "<asm>", line: int = 0):
@@ -98,9 +98,9 @@ class AssemblerError(Exception):
         self.file, self.line = file, line
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Tokenizer (simple line-oriented)
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 _RE_LINE    = re.compile(r"""
     (?:;[^\n]*)          |    # comment
@@ -125,9 +125,9 @@ def _tokenize_line(line: str) -> List[str]:
     return tokens
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Assembler
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 @dataclass
 class _Instr:
@@ -233,7 +233,7 @@ class Assembler:
         bc.labels = labels
         return bc
 
-    # ── operand emitter ───────────────────────────────────────────────────────
+    # -- operand emitter -------------------------------------------------------
 
     def _emit_operands(self, bc: Bytecode, op: Op,
                        operands: List[str], lineno: int,
@@ -312,9 +312,9 @@ class Assembler:
         return raw.encode("raw_unicode_escape").decode("unicode_escape")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Convenience
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def assemble(source: str, filename: str = "<asm>") -> Bytecode:
     """Assemble .ltasm *source* and return Bytecode object."""

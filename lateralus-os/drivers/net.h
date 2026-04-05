@@ -1,18 +1,18 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — Network Driver (RTL8139 / NE2000)
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * PCI-based Ethernet NIC driver supporting RTL8139 (common in QEMU).
  * Provides basic send/receive for raw Ethernet frames.
  *
  * Copyright (c) 2025-2026 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #ifndef LATERALUS_NET_H
 #define LATERALUS_NET_H
 
 #include "../gui/types.h"
 
-/* ── Constants ────────────────────────────────────────────────────────── */
+/* -- Constants ---------------------------------------------------------- */
 
 #define NET_MAX_PACKET    1536
 #define NET_RX_BUF_SIZE   (8192 + 16 + 1536)
@@ -23,7 +23,7 @@
 #define NET_TYPE_RTL8139  1
 #define NET_TYPE_NE2000   2
 
-/* ── NIC info ─────────────────────────────────────────────────────────── */
+/* -- NIC info ----------------------------------------------------------- */
 
 typedef struct {
     uint8_t  present;            /* 1 if NIC detected              */
@@ -37,7 +37,7 @@ typedef struct {
     uint64_t bytes_rx;           /* Bytes received                 */
 } NetDeviceInfo;
 
-/* ── API ──────────────────────────────────────────────────────────────── */
+/* -- API ---------------------------------------------------------------- */
 
 /* Probe PCI bus for a supported NIC, initialise if found.
    Returns 1 if a NIC was found and initialised, 0 otherwise. */

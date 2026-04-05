@@ -1,6 +1,6 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — Inter-Process Communication (IPC)
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Kernel message queues for task-to-task communication.  Each queue is
  * a bounded ring buffer of fixed-size messages.
  *
@@ -11,20 +11,20 @@
  *   - Task wakeup on send/recv via scheduler block/unblock
  *
  * Copyright (c) 2025-2026 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #ifndef LATERALUS_IPC_H
 #define LATERALUS_IPC_H
 
 #include "../gui/types.h"
 
-/* ── Limits ───────────────────────────────────────────────────────────── */
+/* -- Limits ------------------------------------------------------------- */
 
 #define IPC_MAX_QUEUES     16
 #define IPC_QUEUE_CAPACITY 32
 #define IPC_MSG_MAX_SIZE   256     /* max payload bytes per message */
 
-/* ── Message ──────────────────────────────────────────────────────────── */
+/* -- Message ------------------------------------------------------------ */
 
 typedef struct {
     uint16_t sender_tid;          /* sender task ID */
@@ -33,13 +33,13 @@ typedef struct {
     uint8_t  payload[IPC_MSG_MAX_SIZE];
 } IpcMessage;
 
-/* ── Queue handle ─────────────────────────────────────────────────────── */
+/* -- Queue handle ------------------------------------------------------- */
 
 typedef int IpcQueue;             /* opaque handle (index into pool) */
 
 #define IPC_INVALID  (-1)
 
-/* ── Public API ───────────────────────────────────────────────────────── */
+/* -- Public API --------------------------------------------------------- */
 
 /* Initialize the IPC subsystem */
 void ipc_init(void);

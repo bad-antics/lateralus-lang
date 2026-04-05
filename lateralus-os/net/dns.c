@@ -1,6 +1,6 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — DNS Resolver Implementation
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Minimal stub resolver:
  *   - Encodes A-record queries per RFC 1035
  *   - Parses responses with pointer compression
@@ -8,19 +8,19 @@
  *   - Blocking resolve with 3-second timeout
  *
  * Copyright (c) 2025-2026 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #include "dns.h"
 #include "ip.h"
 #include "../drivers/net.h"
 
-/* ── Externs ──────────────────────────────────────────────────────────── */
+/* -- Externs ------------------------------------------------------------ */
 extern void serial_puts(const char *s);
 extern void serial_putc(char c);
 extern void k_print(const char *s);
 extern volatile uint64_t tick_count;
 
-/* ── Local helpers ────────────────────────────────────────────────────── */
+/* -- Local helpers ------------------------------------------------------ */
 
 static void dns_memcpy(void *dst, const void *src, uint64_t n) {
     uint8_t *d = (uint8_t *)dst;
@@ -62,7 +62,7 @@ static int dns_strcasecmp(const char *a, const char *b) {
     return dns_tolower(*a) - dns_tolower(*b);
 }
 
-/* ── Byte-order (duplicated from ip.c for compilation independence) ──── */
+/* -- Byte-order (duplicated from ip.c for compilation independence) ---- */
 
 static inline uint16_t dns_htons(uint16_t h) {
     return (h >> 8) | (h << 8);
@@ -77,7 +77,7 @@ static inline uint32_t dns_htonl(uint32_t h) {
 }
 static inline uint32_t dns_ntohl(uint32_t n) { return dns_htonl(n); }
 
-/* ── Serial logging helpers ───────────────────────────────────────────── */
+/* -- Serial logging helpers --------------------------------------------- */
 
 static void dns_serial_hex16(uint16_t v) {
     const char *hex = "0123456789abcdef";
@@ -95,7 +95,7 @@ static void dns_serial_u32(uint32_t v) {
     for (int i = pos - 1; i >= 0; i--) serial_putc(buf[i]);
 }
 
-/* ── State ────────────────────────────────────────────────────────────── */
+/* -- State -------------------------------------------------------------- */
 
 static DnsCacheEntry dns_cache[DNS_CACHE_SIZE];
 static uint16_t      dns_query_id = 0x4C54;  /* "LT" */
@@ -103,7 +103,7 @@ static volatile uint32_t dns_reply_ip;        /* result from callback */
 static volatile uint32_t dns_reply_ttl;
 static volatile int      dns_reply_ready;     /* 1 when answer received */
 
-/* ── DNS name encoding ────────────────────────────────────────────────── */
+/* -- DNS name encoding -------------------------------------------------- */
 
 /* Encode "example.com" → "\x07example\x03com\x00"
  * Returns bytes written, or 0 on error. */
@@ -132,7 +132,7 @@ static int dns_encode_name(const char *name, uint8_t *buf, int bufsize) {
     return pos;
 }
 
-/* ── DNS name decoding (with pointer compression) ─────────────────────── */
+/* -- DNS name decoding (with pointer compression) ----------------------- */
 
 /* Decode a DNS name from a response packet.
  * pkt/pkt_len: full packet data
@@ -186,7 +186,7 @@ static int dns_decode_name(const uint8_t *pkt, int pkt_len,
     return consumed ? consumed : (offset - orig_offset + 1);
 }
 
-/* ── DNS cache ────────────────────────────────────────────────────────── */
+/* -- DNS cache ---------------------------------------------------------- */
 
 static DnsCacheEntry *dns_cache_lookup(const char *name) {
     for (int i = 0; i < DNS_CACHE_SIZE; i++) {
@@ -223,7 +223,7 @@ static void dns_cache_add(const char *name, uint32_t ip, uint32_t ttl) {
     dns_cache[0].valid     = 1;
 }
 
-/* ── DNS response callback (registered with udp_bind) ─────────────────── */
+/* -- DNS response callback (registered with udp_bind) ------------------- */
 
 static void dns_recv(uint32_t src_ip, uint16_t src_port,
                      const void *payload, uint16_t len) {
@@ -322,7 +322,7 @@ static void dns_recv(uint32_t src_ip, uint16_t src_port,
     dns_reply_ready = 1;
 }
 
-/* ── Build and send a DNS query ───────────────────────────────────────── */
+/* -- Build and send a DNS query ----------------------------------------- */
 
 static int dns_send_query(const char *hostname) {
     const NetConfig *cfg = ip_get_config();
@@ -371,7 +371,7 @@ static int dns_send_query(const char *hostname) {
                     pkt, (uint16_t)offset);
 }
 
-/* ── Public API ───────────────────────────────────────────────────────── */
+/* -- Public API --------------------------------------------------------- */
 
 void dns_init(void) {
     dns_memset(dns_cache, 0, sizeof(dns_cache));

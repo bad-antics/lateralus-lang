@@ -1,22 +1,22 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — Functional GUI Terminal Implementation
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Full interactive terminal emulator with VFS integration.
  *
  * Copyright (c) 2025 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #include "terminal.h"
 #include "../fs/ramfs.h"
 #include "../kernel/tasks.h"
 #include "../kernel/heap.h"
 
-/* ── Terminal pool ────────────────────────────────────────────────────── */
+/* -- Terminal pool ------------------------------------------------------ */
 
 static GuiTerminal terminals[TERM_MAX_TERMS];
 static int term_total = 0;
 
-/* ── String helpers ───────────────────────────────────────────────────── */
+/* -- String helpers ----------------------------------------------------- */
 
 static int _tlen(const char *s) { int n = 0; while (s[n]) n++; return n; }
 
@@ -62,7 +62,7 @@ static void _thex(uint64_t val, char *buf, int buflen) {
     _tcpy(buf, tmp, buflen);
 }
 
-/* ── Initialize terminal subsystem ────────────────────────────────────── */
+/* -- Initialize terminal subsystem -------------------------------------- */
 
 void term_init(void) {
     for (int i = 0; i < TERM_MAX_TERMS; i++) {
@@ -71,7 +71,7 @@ void term_init(void) {
     term_total = 0;
 }
 
-/* ── Add a new line to the terminal buffer ────────────────────────────── */
+/* -- Add a new line to the terminal buffer ------------------------------ */
 
 static void term_new_line(GuiTerminal *t) {
     if (t->line_count < TERM_MAX_LINES) {
@@ -87,7 +87,7 @@ static void term_new_line(GuiTerminal *t) {
     t->dirty = 1;
 }
 
-/* ── Output a character ───────────────────────────────────────────────── */
+/* -- Output a character ------------------------------------------------- */
 
 void term_putc(GuiTerminal *t, char c) {
     if (c == '\n') {
@@ -113,7 +113,7 @@ void term_putc(GuiTerminal *t, char c) {
     t->dirty = 1;
 }
 
-/* ── Output a string ──────────────────────────────────────────────────── */
+/* -- Output a string ---------------------------------------------------- */
 
 void term_puts(GuiTerminal *t, const char *s) {
     while (*s) {
@@ -122,7 +122,7 @@ void term_puts(GuiTerminal *t, const char *s) {
     }
 }
 
-/* ── Output a number ──────────────────────────────────────────────────── */
+/* -- Output a number ---------------------------------------------------- */
 
 void term_put_uint(GuiTerminal *t, uint64_t val) {
     char buf[24];
@@ -130,7 +130,7 @@ void term_put_uint(GuiTerminal *t, uint64_t val) {
     term_puts(t, buf);
 }
 
-/* ── Output hex ───────────────────────────────────────────────────────── */
+/* -- Output hex --------------------------------------------------------- */
 
 void term_put_hex(GuiTerminal *t, uint64_t val) {
     char buf[24];
@@ -138,7 +138,7 @@ void term_put_hex(GuiTerminal *t, uint64_t val) {
     term_puts(t, buf);
 }
 
-/* ── Print prompt ─────────────────────────────────────────────────────── */
+/* -- Print prompt ------------------------------------------------------- */
 
 static void term_prompt(GuiTerminal *t) {
     term_puts(t, "lateralus:");
@@ -146,7 +146,7 @@ static void term_prompt(GuiTerminal *t) {
     term_puts(t, "$ ");
 }
 
-/* ── History push ─────────────────────────────────────────────────────── */
+/* -- History push ------------------------------------------------------- */
 
 static void hist_push(GuiTerminal *t, const char *cmd) {
     if (cmd[0] == '\0') return;
@@ -155,9 +155,9 @@ static void hist_push(GuiTerminal *t, const char *cmd) {
     t->hist_count++;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Terminal Commands
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 /* Helper: resolve path relative to cwd */
 static int resolve_rel(GuiTerminal *t, const char *path) {
@@ -454,7 +454,7 @@ static void cmd_neofetch(GuiTerminal *t) {
 
     term_puts(t, "\n");
     term_puts(t, "    *         lateralus@lateralus\n");
-    term_puts(t, "   * *        ───────────────────\n");
+    term_puts(t, "   * *        -------------------\n");
     term_puts(t, "  *   *       OS:     LateralusOS v0.2.0\n");
     term_puts(t, " *     *      Kernel: lateralus-kernel 0.1.0\n");
     term_puts(t, "  *   *       Arch:   x86_64 (long mode)\n");
@@ -472,9 +472,9 @@ static void cmd_neofetch(GuiTerminal *t) {
     term_puts(t, "\n");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Command Dispatcher
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 void term_exec(GuiTerminal *t, const char *cmd) {
     /* Trim leading spaces */
@@ -530,9 +530,9 @@ void term_exec(GuiTerminal *t, const char *cmd) {
     }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Key Input
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 void term_key(GuiTerminal *t, char c) {
     if (c == '\n') {
@@ -569,9 +569,9 @@ void term_key(GuiTerminal *t, char c) {
     }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Create Terminal
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 int term_create(GuiContext *gui) {
     /* Find free terminal slot */
@@ -625,9 +625,9 @@ int term_create(GuiContext *gui) {
     return tidx;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Get Terminal by Window
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 GuiTerminal *term_get_by_window(int win_idx) {
     for (int i = 0; i < TERM_MAX_TERMS; i++) {
@@ -637,9 +637,9 @@ GuiTerminal *term_get_by_window(int win_idx) {
     return NULL;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Refresh — Copy visible lines to window content
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 void term_refresh(GuiTerminal *t, GuiContext *gui) {
     if (!t->active || !t->dirty) return;
@@ -679,9 +679,9 @@ void term_refresh(GuiTerminal *t, GuiContext *gui) {
     t->dirty = 0;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Tick — cursor blink
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 void term_tick(GuiTerminal *t, uint32_t tick) {
     if (!t->active) return;
@@ -692,15 +692,15 @@ void term_tick(GuiTerminal *t, uint32_t tick) {
     }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Term count
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 int term_count(void) {
     return term_total;
 }
 
-/* ── Initialize subsystem (placeholder for static init) ───────────────── */
+/* -- Initialize subsystem (placeholder for static init) ----------------- */
 
 void term_subsystem_init(void) {
     term_init();

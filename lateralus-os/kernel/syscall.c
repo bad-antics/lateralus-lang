@@ -1,11 +1,11 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — System Call Dispatch Table
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Provides kernel services through a numbered dispatch table.
  * Currently all calls execute in ring 0 (kernel mode).
  *
  * Copyright (c) 2025-2026 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #include "syscall.h"
 #include "../drivers/ata.h"
@@ -18,16 +18,16 @@ extern void    serial_puts(const char *s);
 extern void   *kmalloc(uint64_t size);
 extern uint64_t tick_count;   /* PIT tick counter from kernel_stub.c */
 
-/* ── Global kernel task id for the shell/initial process ──────────── */
+/* -- Global kernel task id for the shell/initial process ------------ */
 
 static int kernel_task_id = -1;
 
-/* ── Syscall table ───────────────────────────────────────────────────── */
+/* -- Syscall table ----------------------------------------------------- */
 
 static SyscallFn syscall_table[MAX_SYSCALLS];
 static int       registered_count = 0;
 
-/* ── Helpers ─────────────────────────────────────────────────────────── */
+/* -- Helpers ----------------------------------------------------------- */
 
 static void _itoa(int64_t val, char *buf, int max) {
     if (val < 0) { buf[0] = '-'; _itoa(-val, buf + 1, max - 1); return; }
@@ -40,9 +40,9 @@ static void _itoa(int64_t val, char *buf, int max) {
     buf[pos] = '\0';
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Syscall implementations
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 /* SYS_EXIT (0): exit current process */
 static int64_t sys_exit(uint64_t code, uint64_t a2, uint64_t a3) {
@@ -253,9 +253,9 @@ static int64_t sys_kill_task(uint64_t tid, uint64_t a2, uint64_t a3) {
     return (int64_t)sched_signal((int)tid, signum);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Public API
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 int syscall_init(void) {
     /* Initialize VFS and allocate kernel task fd table */

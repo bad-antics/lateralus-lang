@@ -1,26 +1,26 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — Cooperative Task Scheduler
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Simple periodic task scheduler — tasks are callback-based and run
  * cooperatively (no preemption, no context switching).
  *
  * Copyright (c) 2025 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #ifndef LATERALUS_TASKS_H
 #define LATERALUS_TASKS_H
 
 #include "../gui/types.h"
 
-/* ── Limits ───────────────────────────────────────────────────────────── */
+/* -- Limits ------------------------------------------------------------- */
 
 #define MAX_TASKS 16
 
-/* ── Task callback ────────────────────────────────────────────────────── */
+/* -- Task callback ------------------------------------------------------ */
 
 typedef void (*TaskFn)(void *data);
 
-/* ── Task descriptor ──────────────────────────────────────────────────── */
+/* -- Task descriptor ---------------------------------------------------- */
 
 typedef struct {
     char     name[32];
@@ -34,7 +34,7 @@ typedef struct {
     uint64_t last_run;    /* tick of last execution */
 } Task;
 
-/* ── Public API ───────────────────────────────────────────────────────── */
+/* -- Public API --------------------------------------------------------- */
 
 /* Initialize the task scheduler */
 void tasks_init(void);

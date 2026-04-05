@@ -1,6 +1,6 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — Desktop Environment Implementation
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #include "desktop.h"
 #include "terminal.h"
@@ -8,7 +8,7 @@
 #include "../drivers/speaker.h"
 #include "../kernel/tasks.h"
 
-/* ── Tiny helpers ─────────────────────────────────────────────────────── */
+/* -- Tiny helpers ------------------------------------------------------- */
 
 static void _dscpy(char *dst, const char *src, int max) {
     int i = 0;
@@ -39,11 +39,11 @@ static void _ditoa(uint64_t val, char *buf, int buflen) {
     buf[pos] = '\0';
 }
 
-/* ── Global desktop pointer (for menu callbacks) ──────────────────────── */
+/* -- Global desktop pointer (for menu callbacks) ------------------------ */
 
 static Desktop *g_desktop = 0;
 
-/* ── Menu action callbacks ────────────────────────────────────────────── */
+/* -- Menu action callbacks ---------------------------------------------- */
 
 static void action_open_terminal(void *ctx) {
     (void)ctx;
@@ -65,7 +65,7 @@ static void action_open_readme(void *ctx) {
     if (g_desktop) {
         desktop_open_file_viewer(g_desktop, "README",
             "LateralusOS v0.2.0\n"
-            "══════════════════\n"
+            "==================\n"
             "\n"
             "A bare-metal operating system built\n"
             "with the Lateralus language.\n"
@@ -86,7 +86,7 @@ static void action_open_readme(void *ctx) {
     }
 }
 
-/* ── Setup start menu ─────────────────────────────────────────────────── */
+/* -- Setup start menu --------------------------------------------------- */
 
 void desktop_setup_menus(Desktop *dt) {
     Menu *sm = &dt->gui.start_menu;
@@ -104,7 +104,7 @@ void desktop_setup_menus(Desktop *dt) {
     gui_add_menu_item(cm, "README",          COL_ACCENT3, action_open_readme);
 }
 
-/* ── Desktop icon callbacks ───────────────────────────────────────────── */
+/* -- Desktop icon callbacks --------------------------------------------- */
 
 static void icon_terminal(void *ctx) { (void)ctx; action_open_terminal(0); }
 static void icon_sysmon(void *ctx)   { (void)ctx; action_open_sysmon(0); }
@@ -125,7 +125,7 @@ void desktop_setup_icons(Desktop *dt) {
                  icon_readme, 0);
 }
 
-/* ── Initialize desktop ──────────────────────────────────────────────── */
+/* -- Initialize desktop ------------------------------------------------ */
 
 void desktop_init(Desktop *dt) {
     if (!dt) return;
@@ -150,7 +150,7 @@ void desktop_init(Desktop *dt) {
     desktop_open_about(dt);
 }
 
-/* ── Find existing window by title and focus it ───────────────────────── */
+/* -- Find existing window by title and focus it ------------------------- */
 
 static int _focus_existing(GuiContext *gui, const char *title) {
     for (int i = 0; i < gui->window_count; i++) {
@@ -171,7 +171,7 @@ static int _focus_existing(GuiContext *gui, const char *title) {
     return 0;
 }
 
-/* ── Open "About LateralusOS" ─────────────────────────────────────────── */
+/* -- Open "About LateralusOS" ------------------------------------------- */
 
 void desktop_open_about(Desktop *dt) {
     /* Reuse existing window if open */
@@ -209,7 +209,7 @@ void desktop_open_about(Desktop *dt) {
     );
 }
 
-/* ── Open terminal window — functional terminal ───────────────────────── */
+/* -- Open terminal window — functional terminal ------------------------- */
 
 void desktop_open_terminal(Desktop *dt) {
     int tidx = term_create(&dt->gui);
@@ -230,7 +230,7 @@ void desktop_open_terminal(Desktop *dt) {
     speaker_window_open(tick_count);
 }
 
-/* ── Open system monitor ──────────────────────────────────────────────── */
+/* -- Open system monitor ------------------------------------------------ */
 
 void desktop_open_sysmon(Desktop *dt) {
     /* Reuse existing window if open */
@@ -245,7 +245,7 @@ void desktop_open_sysmon(Desktop *dt) {
 
     gui_set_content(&dt->gui, idx,
         "System Monitor\n"
-        "══════════════════════════════\n"
+        "==============================\n"
         "\n"
         "CPU:      x86_64 (long mode)\n"
         "Memory:   256 MB (4 GB identity-mapped)\n"
@@ -265,7 +265,7 @@ void desktop_open_sysmon(Desktop *dt) {
     );
 }
 
-/* ── Open file viewer ─────────────────────────────────────────────────── */
+/* -- Open file viewer --------------------------------------------------- */
 
 void desktop_open_file_viewer(Desktop *dt, const char *name, const char *content) {
     /* Reuse existing window if same name is open */
@@ -277,7 +277,7 @@ void desktop_open_file_viewer(Desktop *dt, const char *name, const char *content
     gui_set_content(&dt->gui, idx, content);
 }
 
-/* ── Update system monitor content ────────────────────────────────────── */
+/* -- Update system monitor content -------------------------------------- */
 
 static void desktop_update_sysmon(Desktop *dt) {
     if (dt->sysmon_idx < 0 || dt->sysmon_idx >= dt->gui.window_count) {
@@ -328,7 +328,7 @@ static void desktop_update_sysmon(Desktop *dt) {
     _dscpy(win->content, buf, 2048);
 }
 
-/* ── Update notification tray ─────────────────────────────────────────── */
+/* -- Update notification tray ------------------------------------------- */
 
 static void desktop_update_notif(Desktop *dt) {
     char status[64];
@@ -350,7 +350,7 @@ static void desktop_update_notif(Desktop *dt) {
     gui_set_notif(&dt->gui, status);
 }
 
-/* ── Desktop tick (called from timer) ─────────────────────────────────── */
+/* -- Desktop tick (called from timer) ----------------------------------- */
 
 void desktop_tick(Desktop *dt) {
     if (!dt) return;
@@ -402,7 +402,7 @@ void desktop_tick(Desktop *dt) {
     }
 }
 
-/* ── Mouse event ──────────────────────────────────────────────────────── */
+/* -- Mouse event -------------------------------------------------------- */
 
 void desktop_mouse_event(Desktop *dt, int8_t dx, int8_t dy,
                           uint8_t left, uint8_t right) {
@@ -411,7 +411,7 @@ void desktop_mouse_event(Desktop *dt, int8_t dx, int8_t dy,
     gui_handle_mouse_click(&dt->gui, left, right);
 }
 
-/* ── Keyboard event ───────────────────────────────────────────────────── */
+/* -- Keyboard event ----------------------------------------------------- */
 
 void desktop_key_event(Desktop *dt, char ascii) {
     if (!dt) return;
@@ -447,7 +447,7 @@ void desktop_key_event(Desktop *dt, char ascii) {
     gui_handle_key(&dt->gui, ascii);
 }
 
-/* ── Full render ──────────────────────────────────────────────────────── */
+/* -- Full render -------------------------------------------------------- */
 
 void desktop_render(Desktop *dt) {
     if (!dt || !fb.available) return;

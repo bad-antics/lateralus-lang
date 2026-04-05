@@ -1,10 +1,10 @@
 """
-lateralus_lang/parser.py  ─  LATERALUS Language Recursive-Descent Parser
-═══════════════════════════════════════════════════════════════════════════
+lateralus_lang/parser.py  -  LATERALUS Language Recursive-Descent Parser
+===========================================================================
 Converts the token stream produced by lexer.py into a full AST.
 
 Grammar overview (simplified EBNF)
-────────────────────────────────────
+------------------------------------
   program        = module_decl? import* stmt*
   stmt           = fn_decl | let_decl | if_stmt | match_stmt
                  | while_stmt | loop_stmt | for_stmt
@@ -31,7 +31,7 @@ Grammar overview (simplified EBNF)
   primary        = INT | FLOAT | STRING | BOOL | NIL | IDENT
                  | "(" expr ")" | "[" (expr ",")* "]" | "{" map_pairs "}"
                  | fn_lambda | "await" expr | "(" expr "as" type ")"
-═══════════════════════════════════════════════════════════════════════════
+===========================================================================
 """
 from __future__ import annotations
 
@@ -72,9 +72,9 @@ from .ast_nodes import (
 from .lexer import TK, Lexer, Token, LexError
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # ParseError
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class ParseError(Exception):
     def __init__(self, message: str, token: Token):
@@ -83,9 +83,9 @@ class ParseError(Exception):
         self.token = token
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Parser
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 _ASSIGN_OPS = {TK.ASSIGN, TK.PLUS_EQ, TK.MINUS_EQ,
                TK.STAR_EQ, TK.SLASH_EQ, TK.PERCENT_EQ, TK.STAR2_EQ,
@@ -111,7 +111,7 @@ class Parser:
                                  Token(TK.EOF, None, "<unknown>", 0, 0)))
         self._pos = 0
 
-    # ── token navigation ──────────────────────────────────────────────────────
+    # -- token navigation ------------------------------------------------------
 
     def _cur(self) -> Token:
         return self._tokens[self._pos]
@@ -146,7 +146,7 @@ class Parser:
     def _span(self, tok: Token) -> SourceSpan:
         return SourceSpan(tok.file, tok.line, tok.col)
 
-    # ── top-level ─────────────────────────────────────────────────────────────
+    # -- top-level -------------------------------------------------------------
 
     def parse(self) -> Program:
         t0 = self._cur()
@@ -189,7 +189,7 @@ class Parser:
         self._match(TK.SEMICOLON)
         return ImportStmt(span=span, path=path, alias=alias)
 
-    # ── statements ───────────────────────────────────────────────────────────
+    # -- statements -----------------------------------------------------------
 
     def _parse_stmt(self):
         t = self._cur()
@@ -420,7 +420,7 @@ class Parser:
         self._expect(TK.RBRACE)
         return MatchStmt(span=span, subject=subject, arms=arms)
 
-    # ── v1.5 pattern parsing ──────────────────────────────────────────────────
+    # -- v1.5 pattern parsing --------------------------------------------------
 
     def _parse_pattern(self) -> "Node":
         """Parse a single match-arm pattern (v1.5).
@@ -600,7 +600,7 @@ class Parser:
         return TryStmt(span=self._span(t), body=body,
                        recoveries=recoveries, ensure=ensure)
 
-    # ── v1.3 statement parsers ────────────────────────────────────────────────
+    # -- v1.3 statement parsers ------------------------------------------------
 
     def _parse_throw(self) -> ThrowStmt:
         """throw <expr> ;"""
@@ -659,7 +659,7 @@ class Parser:
         self._expect(TK.RBRACE, "expected '}'")
         return BlockStmt(span=self._span(t), stmts=stmts)
 
-    # ── types ─────────────────────────────────────────────────────────────────
+    # -- types -----------------------------------------------------------------
 
     def _parse_type(self) -> TypeRef:
         t = self._cur()
@@ -685,7 +685,7 @@ class Parser:
         return TypeRef(name=str(name), params=params, nullable=nullable,
                        span=self._span(t))
 
-    # ── expressions (Pratt-style precedence climbing) ─────────────────────────
+    # -- expressions (Pratt-style precedence climbing) -------------------------
 
     def _parse_expr(self):
         return self._parse_ternary()
@@ -1151,7 +1151,7 @@ class Parser:
 
         raise ParseError("unexpected token in expression", t)
 
-    # ── v1.1 – pub prefix ─────────────────────────────────────────────────────
+    # -- v1.1 – pub prefix -----------------------------------------------------
 
     def _parse_pub(self) -> "Stmt":
         """Consume 'pub' then delegate to the appropriate declaration parser."""
@@ -1193,7 +1193,7 @@ class Parser:
             return node
         raise ParseError("expected declaration after 'pub'", self._cur())
 
-    # ── v1.1 – @decorator ─────────────────────────────────────────────────────
+    # -- v1.1 – @decorator -----------------------------------------------------
 
     def _parse_decorated(self) -> "Stmt":
         """Parse one or more @decorator lines then the statement they annotate."""
@@ -1220,7 +1220,7 @@ class Parser:
             stmt.decorators = decorators + stmt.decorators
         return stmt
 
-    # ── v1.1 – from-import ────────────────────────────────────────────────────
+    # -- v1.1 – from-import ----------------------------------------------------
 
     def _parse_from_import(self) -> ImportStmt:
         """from stdlib.math import sqrt, PI"""
@@ -1250,7 +1250,7 @@ class Parser:
         self._match(TK.SEMICOLON)
         return ImportStmt(span=span, path=path, alias=alias, items=items)
 
-    # ── v1.1 – struct ─────────────────────────────────────────────────────────
+    # -- v1.1 – struct ---------------------------------------------------------
 
     def _parse_struct(self) -> StructDecl:
         """struct Point { x: int, y: int = 0 }"""
@@ -1286,7 +1286,7 @@ class Parser:
         return StructDecl(span=span, name=name, fields=fields,
                           generics=generics, interfaces=interfaces)
 
-    # ── v1.1 – enum ───────────────────────────────────────────────────────────
+    # -- v1.1 – enum -----------------------------------------------------------
 
     def _parse_enum(self) -> EnumDecl:
         """enum Color { Red, Green, Blue(r: int, g: int, b: int) }"""
@@ -1333,7 +1333,7 @@ class Parser:
         return EnumDecl(span=span, name=name, variants=variants,
                         generics=generics)
 
-    # ── v1.1 – type alias ─────────────────────────────────────────────────────
+    # -- v1.1 – type alias -----------------------------------------------------
 
     def _parse_type_alias(self) -> TypeAlias:
         """type Callback = fn(int) -> str"""
@@ -1346,7 +1346,7 @@ class Parser:
         self._match(TK.SEMICOLON)
         return TypeAlias(span=span, name=name, target=target, generics=generics)
 
-    # ── v1.1 – impl ───────────────────────────────────────────────────────────
+    # -- v1.1 – impl -----------------------------------------------------------
 
     def _parse_impl(self) -> ImplBlock:
         """impl Point { … }  or  impl Drawable for Shape { … }"""
@@ -1370,7 +1370,7 @@ class Parser:
         return ImplBlock(span=span, type_name=type_name, interface=interface,
                          methods=methods, generics=generics)
 
-    # ── v1.1 – interface ──────────────────────────────────────────────────────
+    # -- v1.1 – interface ------------------------------------------------------
 
     def _parse_interface(self) -> InterfaceDecl:
         """interface Drawable { fn draw(self) }"""
@@ -1422,7 +1422,7 @@ class Parser:
                       ret_type=ret_type, body=body, generics=generics,
                       is_async=is_async, is_pub=is_pub)
 
-    # ── generic param helpers ─────────────────────────────────────────────────
+    # -- generic param helpers -------------------------------------------------
 
     def _parse_generic_params(self) -> list:
         """Parse optional <T, U, V> or <T: Bound, N: int> generic type parameters.
@@ -1498,7 +1498,7 @@ class Parser:
         return LambdaExpr(span=span, params=params, ret_type=ret_type,
                           body=body, is_async=is_async)
 
-    # ── v1.2: foreign polyglot block ─────────────────────────────────────────
+    # -- v1.2: foreign polyglot block -----------------------------------------
 
     def _parse_foreign(self) -> ForeignBlock:
         """
@@ -1549,7 +1549,7 @@ class Parser:
         return ForeignBlock(span=span, lang=lang, source=source, params=params)
 
 
-    # ── v1.4 – guard ──────────────────────────────────────────────────────────
+    # -- v1.4 – guard ----------------------------------------------------------
 
     def _parse_guard(self) -> GuardExpr:
         """guard <condition> else { <body> }"""
@@ -1618,7 +1618,7 @@ class Parser:
         template = "\n".join(str(p) for p in parts)
         return InlineAsm(span=self._span(t), template=template)
 
-    # ── v1.6 concurrency parsers ──────────────────────────────────────────────
+    # -- v1.6 concurrency parsers ----------------------------------------------
 
     def _parse_select(self) -> SelectStmt:
         """
@@ -1698,7 +1698,7 @@ class Parser:
         body = self._parse_block()
         return AsyncForStmt(span=self._span(t), var=var, iter=iter_expr, body=body)
 
-    # ── v1.8 — Metaprogramming ──────────────────────────────────────────
+    # -- v1.8 — Metaprogramming ------------------------------------------
 
     def _parse_const_fn(self) -> ConstFnDecl:
         """const fn name(params) -> T { body }"""
@@ -1745,9 +1745,9 @@ class Parser:
         return CompTimeBlock(span=self._span(t), body=body)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Convenience
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def parse(source: str, filename: str = "<source>") -> Program:
     """Lex and parse *source*, returning the root Program AST node."""

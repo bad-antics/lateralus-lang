@@ -1,6 +1,6 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — IP / ARP / UDP Network Stack
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Minimal network stack providing:
  *   - ARP request/reply (IPv4-over-Ethernet)
  *   - IPv4 send/receive with checksum
@@ -9,14 +9,14 @@
  *   - DHCP client (basic: DISCOVER → OFFER → REQUEST → ACK)
  *
  * Copyright (c) 2025-2026 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #ifndef LATERALUS_IP_H
 #define LATERALUS_IP_H
 
 #include "../gui/types.h"
 
-/* ── Ethernet ─────────────────────────────────────────────────────────── */
+/* -- Ethernet ----------------------------------------------------------- */
 
 #define ETH_ALEN        6
 #define ETH_HLEN        14
@@ -29,7 +29,7 @@ typedef struct __attribute__((packed)) {
     uint16_t type;        /* big-endian */
 } EthHeader;
 
-/* ── ARP ──────────────────────────────────────────────────────────────── */
+/* -- ARP ---------------------------------------------------------------- */
 
 #define ARP_OP_REQUEST  1
 #define ARP_OP_REPLY    2
@@ -54,7 +54,7 @@ typedef struct {
     uint8_t  valid;
 } ArpEntry;
 
-/* ── IPv4 ─────────────────────────────────────────────────────────────── */
+/* -- IPv4 --------------------------------------------------------------- */
 
 #define IP_PROTO_ICMP   1
 #define IP_PROTO_TCP    6
@@ -73,7 +73,7 @@ typedef struct __attribute__((packed)) {
     uint8_t  dst[4];
 } Ipv4Header;
 
-/* ── ICMP ─────────────────────────────────────────────────────────────── */
+/* -- ICMP --------------------------------------------------------------- */
 
 #define ICMP_ECHO_REPLY   0
 #define ICMP_ECHO_REQUEST 8
@@ -86,7 +86,7 @@ typedef struct __attribute__((packed)) {
     uint16_t seq;
 } IcmpHeader;
 
-/* ── UDP ──────────────────────────────────────────────────────────────── */
+/* -- UDP ---------------------------------------------------------------- */
 
 typedef struct __attribute__((packed)) {
     uint16_t src_port;    /* big-endian */
@@ -95,7 +95,7 @@ typedef struct __attribute__((packed)) {
     uint16_t checksum;    /* big-endian, 0 = not computed */
 } UdpHeader;
 
-/* ── UDP receive callback ─────────────────────────────────────────────── */
+/* -- UDP receive callback ----------------------------------------------- */
 
 /* Callback: (src_ip, src_port, payload, payload_len) */
 typedef void (*udp_recv_fn)(uint32_t src_ip, uint16_t src_port,
@@ -108,7 +108,7 @@ typedef struct {
     udp_recv_fn callback;
 } UdpBinding;
 
-/* ── Network config ───────────────────────────────────────────────────── */
+/* -- Network config ----------------------------------------------------- */
 
 typedef struct {
     uint32_t ip;          /* our IPv4 address (host order) */
@@ -118,7 +118,7 @@ typedef struct {
     uint8_t  configured;  /* 1 if we have a valid IP */
 } NetConfig;
 
-/* ── Public API ───────────────────────────────────────────────────────── */
+/* -- Public API --------------------------------------------------------- */
 
 /* Initialise the IP stack (call after net_init) */
 void ip_init(void);
@@ -132,7 +132,7 @@ const NetConfig *ip_get_config(void);
 /* Manually set a static IP configuration */
 void ip_set_static(uint32_t ip, uint32_t netmask, uint32_t gateway);
 
-/* ── ARP ──────── */
+/* -- ARP -------- */
 
 /* Look up MAC for an IP address. Returns 1 if found, 0 if not cached.
    If not cached, sends an ARP request. */
@@ -141,14 +141,14 @@ int arp_resolve(uint32_t ip, uint8_t *mac_out);
 /* Print the ARP cache to the console */
 void arp_dump(void);
 
-/* ── IP ───────── */
+/* -- IP --------- */
 
 /* Send an IPv4 packet. Handles ARP resolution for next-hop.
    Returns 0 on success, -1 on error. */
 int ip_send(uint32_t dst_ip, uint8_t protocol,
             const void *payload, uint16_t payload_len);
 
-/* ── UDP ──────── */
+/* -- UDP -------- */
 
 /* Bind a UDP port to a callback function.
    Returns 0 on success, -1 if table full. */
@@ -159,7 +159,7 @@ int udp_bind(uint16_t port, udp_recv_fn callback);
 int udp_send(uint32_t dst_ip, uint16_t dst_port, uint16_t src_port,
              const void *payload, uint16_t payload_len);
 
-/* ── ICMP ─────── */
+/* -- ICMP ------- */
 
 /* Send an ICMP echo request (ping).
    Returns 0 on success, -1 on error. */
@@ -172,13 +172,13 @@ void icmp_ping_reset(void);
    Returns 1 if reply received since last reset, 0 otherwise. */
 int icmp_ping_received(void);
 
-/* ── DHCP ─────── */
+/* -- DHCP ------- */
 
 /* Start a DHCP discover/request cycle (blocking, with timeout).
    Returns 1 on success, 0 on timeout. */
 int dhcp_discover(void);
 
-/* ── Utilities ─── */
+/* -- Utilities --- */
 
 /* Convert 4-byte IP to dotted string (out must be >= 16 bytes) */
 void ip_to_str(uint32_t ip, char *out);

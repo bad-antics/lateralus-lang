@@ -1,21 +1,21 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — Kernel Heap Allocator
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Free-list + bump allocator with split/coalesce, double-free detection,
  * and allocation statistics. Extracted from the monolithic kernel_stub.c
  * into its own module for maintainability.
  *
  * Copyright (c) 2025-2026 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #include "heap.h"
 
-/* ── External symbols ─────────────────────────────────────────────────── */
+/* -- External symbols --------------------------------------------------- */
 
 extern char _end;              /* defined by linker script — end of kernel image */
 extern void serial_puts(const char *s);
 
-/* ── Internal state ───────────────────────────────────────────────────── */
+/* -- Internal state ----------------------------------------------------- */
 
 static uint64_t heap_start;
 static uint64_t heap_end;
@@ -32,7 +32,7 @@ typedef struct FreeBlock {
 
 static FreeBlock *free_list = (FreeBlock*)0;
 
-/* ── Helpers ──────────────────────────────────────────────────────────── */
+/* -- Helpers ------------------------------------------------------------ */
 
 static void _heap_serial_hex(uint64_t val) {
     const char *hex = "0123456789ABCDEF";
@@ -59,9 +59,9 @@ static void _heap_serial_dec(uint64_t val) {
     }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Public API
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 void heap_init(uint64_t total_mem) {
     /* Place heap right after the kernel image, aligned to 4096 */

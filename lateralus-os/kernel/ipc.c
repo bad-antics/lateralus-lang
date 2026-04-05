@@ -1,17 +1,17 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — IPC Message Queue Implementation
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Copyright (c) 2025-2026 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #include "ipc.h"
 #include "sched.h"
 
-/* ── External symbols ─────────────────────────────────────────────────── */
+/* -- External symbols --------------------------------------------------- */
 
 extern void serial_puts(const char *s);
 
-/* ── Internal queue structure ─────────────────────────────────────────── */
+/* -- Internal queue structure ------------------------------------------- */
 
 typedef struct {
     char        name[32];
@@ -35,7 +35,7 @@ typedef struct {
 static IpcQueueInternal queues[IPC_MAX_QUEUES];
 static int ipc_initialized = 0;
 
-/* ── Helpers ──────────────────────────────────────────────────────────── */
+/* -- Helpers ------------------------------------------------------------ */
 
 static int _streq(const char *a, const char *b) {
     while (*a && *b) { if (*a != *b) return 0; a++; b++; }
@@ -74,9 +74,9 @@ static int _ilen(const char *s) {
     return n;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Public API
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 void ipc_init(void) {
     for (int i = 0; i < IPC_MAX_QUEUES; i++) {
@@ -157,7 +157,7 @@ void ipc_destroy(IpcQueue q) {
     serial_puts("'\n");
 }
 
-/* ── Internal enqueue/dequeue ─────────────────────────────────────────── */
+/* -- Internal enqueue/dequeue ------------------------------------------- */
 
 static int _enqueue(IpcQueue q, uint16_t type, const void *data, uint16_t len) {
     IpcQueueInternal *queue = &queues[q];
@@ -205,7 +205,7 @@ static int _dequeue(IpcQueue q, IpcMessage *out) {
     return 0;
 }
 
-/* ── Blocking send ────────────────────────────────────────────────────── */
+/* -- Blocking send ------------------------------------------------------ */
 
 int ipc_send(IpcQueue q, uint16_t type, const void *data, uint16_t len) {
     if (q < 0 || q >= IPC_MAX_QUEUES || !queues[q].active) return -1;
@@ -225,7 +225,7 @@ int ipc_send(IpcQueue q, uint16_t type, const void *data, uint16_t len) {
     return _enqueue(q, type, data, len);
 }
 
-/* ── Non-blocking send ────────────────────────────────────────────────── */
+/* -- Non-blocking send -------------------------------------------------- */
 
 int ipc_try_send(IpcQueue q, uint16_t type, const void *data, uint16_t len) {
     if (q < 0 || q >= IPC_MAX_QUEUES || !queues[q].active) return -1;
@@ -233,7 +233,7 @@ int ipc_try_send(IpcQueue q, uint16_t type, const void *data, uint16_t len) {
     return _enqueue(q, type, data, len);
 }
 
-/* ── Blocking receive ─────────────────────────────────────────────────── */
+/* -- Blocking receive --------------------------------------------------- */
 
 int ipc_recv(IpcQueue q, IpcMessage *out) {
     if (q < 0 || q >= IPC_MAX_QUEUES || !queues[q].active) return -1;
@@ -253,7 +253,7 @@ int ipc_recv(IpcQueue q, IpcMessage *out) {
     return _dequeue(q, out);
 }
 
-/* ── Non-blocking receive ─────────────────────────────────────────────── */
+/* -- Non-blocking receive ----------------------------------------------- */
 
 int ipc_try_recv(IpcQueue q, IpcMessage *out) {
     if (q < 0 || q >= IPC_MAX_QUEUES || !queues[q].active) return -1;
@@ -261,7 +261,7 @@ int ipc_try_recv(IpcQueue q, IpcMessage *out) {
     return _dequeue(q, out);
 }
 
-/* ── Peek ─────────────────────────────────────────────────────────────── */
+/* -- Peek --------------------------------------------------------------- */
 
 int ipc_peek(IpcQueue q, IpcMessage *out) {
     if (q < 0 || q >= IPC_MAX_QUEUES || !queues[q].active) return -1;
@@ -270,19 +270,19 @@ int ipc_peek(IpcQueue q, IpcMessage *out) {
     return 0;
 }
 
-/* ── Pending count ────────────────────────────────────────────────────── */
+/* -- Pending count ------------------------------------------------------ */
 
 int ipc_pending(IpcQueue q) {
     if (q < 0 || q >= IPC_MAX_QUEUES || !queues[q].active) return 0;
     return queues[q].count;
 }
 
-/* ── List queues ──────────────────────────────────────────────────────── */
+/* -- List queues -------------------------------------------------------- */
 
 void ipc_list(void) {
     serial_puts("[ipc] Queue list:\n");
     serial_puts("  ID  Name                    Pending  Sent      Received\n");
-    serial_puts("  ──  ──────────────────────  ───────  ────────  ────────\n");
+    serial_puts("  --  ----------------------  -------  --------  --------\n");
 
     for (int i = 0; i < IPC_MAX_QUEUES; i++) {
         if (!queues[i].active) continue;

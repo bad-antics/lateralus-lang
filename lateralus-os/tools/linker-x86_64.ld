@@ -1,11 +1,11 @@
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * LateralusOS — Linker Script (x86_64)
- * ═══════════════════════════════════════════════════════════════════════════
+ * ===========================================================================
  * Copyright (c) 2025 bad-antics. All rights reserved.
  *
  * Kernel linked at virtual address 0xFFFFFFFF80000000 (higher-half)
  * Physical load address 0x100000 (1 MB mark, above real-mode memory)
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 ENTRY(_start)
 
@@ -16,23 +16,23 @@ SECTIONS
 {
     . = KERNEL_LMA;
 
-    /* ── Multiboot2 header (must be in first 32 KB) ────────────────────── */
+    /* -- Multiboot2 header (must be in first 32 KB) ---------------------- */
     .multiboot2 ALIGN(8) : {
         KEEP(*(.multiboot2))
     }
 
-    /* ── Boot code (runs before paging is set up) ──────────────────────── */
+    /* -- Boot code (runs before paging is set up) ------------------------ */
     .boot ALIGN(4096) : {
         *(.boot)
         *(.boot.*)
     }
 
-    /* ── Page tables (16 KB aligned, identity-mapped) ──────────────────── */
+    /* -- Page tables (16 KB aligned, identity-mapped) -------------------- */
     .page_tables ALIGN(4096) : {
         *(.page_tables)
     }
 
-    /* ── Higher-half kernel ────────────────────────────────────────────── */
+    /* -- Higher-half kernel ---------------------------------------------- */
     . = KERNEL_VMA + ALIGN(. - KERNEL_LMA, 4096);
 
     .text ALIGN(4096) : AT(ADDR(.text) - KERNEL_VMA + KERNEL_LMA) {
@@ -67,7 +67,7 @@ SECTIONS
     _kernel_end = .;
     _kernel_phys_end = _kernel_end - KERNEL_VMA + KERNEL_LMA;
 
-    /* ── Debug info (stripped in release) ───────────────────────────────── */
+    /* -- Debug info (stripped in release) --------------------------------- */
     .debug_info     0 : { *(.debug_info)     }
     .debug_abbrev   0 : { *(.debug_abbrev)   }
     .debug_line     0 : { *(.debug_line)     }

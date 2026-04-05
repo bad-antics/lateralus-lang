@@ -1,13 +1,13 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — GUI Widget System Implementation
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Renders windows with macOS-style title bars, a bottom taskbar with
  * clock, desktop wallpaper gradient, and mouse cursor.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #include "gui.h"
 
-/* ── Tiny string helpers (no libc) ────────────────────────────────────── */
+/* -- Tiny string helpers (no libc) -------------------------------------- */
 
 static int _slen(const char *s) { int n = 0; while (s[n]) n++; return n; }
 
@@ -24,7 +24,7 @@ static void _scat(char *dst, const char *src, int max) {
     dst[n + i] = 0;
 }
 
-/* ── Number → string (for clock) ──────────────────────────────────────── */
+/* -- Number → string (for clock) ---------------------------------------- */
 
 static void _itoa2(int val, char *buf) {
     buf[0] = '0' + (val / 10) % 10;
@@ -32,7 +32,7 @@ static void _itoa2(int val, char *buf) {
     buf[2] = 0;
 }
 
-/* ── Initialization ───────────────────────────────────────────────────── */
+/* -- Initialization ----------------------------------------------------- */
 
 void gui_init(GuiContext *ctx) {
     if (!ctx) return;
@@ -90,9 +90,9 @@ void gui_init(GuiContext *ctx) {
     ctx->wallpaper_phase = 0;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Window Management
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 int gui_create_window(GuiContext *ctx, const char *title,
                       int32_t x, int32_t y, int32_t w, int32_t h) {
@@ -181,9 +181,9 @@ void gui_set_content(GuiContext *ctx, int idx, const char *text) {
     _scpy(ctx->windows[idx].content, text, 2048);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Buttons & Labels
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 int gui_create_button(GuiContext *ctx, int32_t x, int32_t y,
                       int32_t w, int32_t h, const char *label,
@@ -218,9 +218,9 @@ int gui_create_label(GuiContext *ctx, int32_t x, int32_t y,
     return idx;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Desktop Icons
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 int gui_add_icon(GuiContext *ctx, int32_t x, int32_t y,
                  const char *label, char glyph, uint32_t color,
@@ -240,9 +240,9 @@ int gui_add_icon(GuiContext *ctx, int32_t x, int32_t y,
     return idx;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Menus (Start menu & context menu)
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 void gui_add_menu_item(Menu *menu, const char *label, uint32_t icon_color,
                        MenuAction action) {
@@ -266,19 +266,19 @@ void gui_show_context_menu(GuiContext *ctx, int32_t x, int32_t y) {
         ctx->context_menu.y = (int32_t)fb.height - TASKBAR_H - ctx->context_menu.h;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Notification tray
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 void gui_set_notif(GuiContext *ctx, const char *status) {
     _scpy(ctx->notif.status, status, 64);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Rendering — Wallpaper
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
-/* ── Integer sine table (0-255 → -127 to 127) ────────────────────────── */
+/* -- Integer sine table (0-255 → -127 to 127) -------------------------- */
 
 static const int8_t _sin_tab[64] = {
       0,  12,  25,  37,  49,  60,  71,  81,
@@ -298,14 +298,14 @@ void gui_render_wallpaper(GuiContext *ctx) {
     uint32_t phase = ctx->wallpaper_phase;
     int32_t desk_h = (int32_t)fb.height - TASKBAR_H;
 
-    /* ── Background: vertical gradient (deep purple → dark navy) ─────── */
+    /* -- Background: vertical gradient (deep purple → dark navy) ------- */
     /* Slowly shift hue over time for subtle life */
     int shift = _isin((int)(phase / 8)) / 16;
     uint32_t top_color = FB_RGB(0x14 + shift, 0x10, 0x28 + shift);
     uint32_t bot_color = FB_RGB(0x1E, 0x1E + shift/2, 0x2E);
     fb_fill_gradient_v(0, 0, (int32_t)fb.width, desk_h, top_color, bot_color);
 
-    /* ── Twinkling stars — 4-point sparkle pattern ───────────────────── */
+    /* -- Twinkling stars — 4-point sparkle pattern --------------------- */
     for (int i = 0; i < 18; i++) {
         int32_t sx = (97 * i + 41) % ((int32_t)fb.width - 20) + 10;
         int32_t sy = (163 * i + 73) % (desk_h - 100) + 30;
@@ -328,7 +328,7 @@ void gui_render_wallpaper(GuiContext *ctx) {
         }
     }
 
-    /* ── Fibonacci spiral dots — larger filled circles ───────────────── */
+    /* -- Fibonacci spiral dots — larger filled circles ----------------- */
     int32_t cx = (int32_t)fb.width / 2;
     int32_t cy = desk_h / 2 + 30;
     uint32_t spiral_colors[5] = { COL_ACCENT, COL_ACCENT2, COL_ACCENT3,
@@ -351,7 +351,7 @@ void gui_render_wallpaper(GuiContext *ctx) {
         }
     }
 
-    /* ── Centered logo text ──────────────────────────────────────────── */
+    /* -- Centered logo text -------------------------------------------- */
     const char *logo = "LateralusOS";
     int tw = fb_text_width(logo);
     int lx = ((int32_t)fb.width - tw) / 2;
@@ -373,9 +373,9 @@ void gui_render_wallpaper(GuiContext *ctx) {
     fb_puts_nobg(((int32_t)fb.width - sw) / 2, ly + FONT_H + 6, sub, COL_SUBTEXT);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Rendering — Desktop Icons
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 void gui_render_icons(GuiContext *ctx) {
     for (int i = 0; i < ctx->icon_count; i++) {
@@ -405,9 +405,9 @@ void gui_render_icons(GuiContext *ctx) {
     }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Rendering — Menu (popup)
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 void gui_render_menu(GuiContext *ctx, Menu *menu) {
     if (!menu->visible || menu->item_count == 0) return;
@@ -443,9 +443,9 @@ void gui_render_menu(GuiContext *ctx, Menu *menu) {
     }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Rendering — Taskbar
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 void gui_render_taskbar(GuiContext *ctx) {
     int32_t ty = ctx->taskbar.y;
@@ -492,15 +492,15 @@ void gui_render_taskbar(GuiContext *ctx) {
     }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Rendering — Window
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 void gui_render_window(GuiContext *ctx, int idx) {
     Window *win = &ctx->windows[idx];
     if (!win->visible || win->minimized) return;
 
-    /* ── Snapshot geometry ─────────────────────────────────────────────
+    /* -- Snapshot geometry ---------------------------------------------
      * Copy x/y/w/h into locals ONCE.  IRQ12 can mutate win->x/y at
      * any moment during a drag, so if we read win->x multiple times
      * throughout this function some drawing calls would use the old
@@ -512,7 +512,7 @@ void gui_render_window(GuiContext *ctx, int idx) {
     uint32_t title_fg  = win->title_fg;
     uint8_t  focused   = win->focused;
 
-    /* ── Animation handling ───────────────────────────────────────────── */
+    /* -- Animation handling --------------------------------------------- */
     if (win->anim_state == 1) {
         /* Opening animation — scale from center */
         win->anim_frame++;
@@ -663,9 +663,9 @@ void gui_render_window(GuiContext *ctx, int idx) {
     }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Rendering — Mouse Cursor
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 /* A simple 12x16 arrow cursor bitmap */
 static const uint8_t cursor_data[16] = {
@@ -759,9 +759,9 @@ void gui_render_cursor(GuiContext *ctx) {
     }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Rendering — Full Scene
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 /* Guard flag: prevents IRQ12 hw-cursor draw from racing with fb_swap.
  * When set, the IRQ12 handler skips gui_render_cursor_hw() so that stale
@@ -817,7 +817,7 @@ void gui_render_all(GuiContext *ctx) {
     /* Alt+Tab switcher overlay */
     gui_render_tab_switcher(ctx);
 
-    /* ── Critical section: swap + cursor must be atomic w.r.t. IRQ12 ─── *
+    /* -- Critical section: swap + cursor must be atomic w.r.t. IRQ12 --- *
      * If IRQ12 fires between gui_reset_hw_cursor() and fb_swap(), it     *
      * would save stale old-frame pixels; then gui_render_cursor_hw()     *
      * after the swap would restore those stale pixels onto the fresh     *
@@ -831,9 +831,9 @@ void gui_render_all(GuiContext *ctx) {
     _render_active = 0;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Event Handling
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 static int _point_in_rect(int32_t px, int32_t py,
                            int32_t rx, int32_t ry, int32_t rw, int32_t rh) {
@@ -1022,7 +1022,7 @@ void gui_handle_mouse_click(GuiContext *ctx, uint8_t left, uint8_t right) {
         }
     }
 
-    /* ── Right-click: show context menu ─────────────────────────────── */
+    /* -- Right-click: show context menu ------------------------------- */
     if (right_pressed) {
         ctx->start_menu.visible = 0;
         /* Only on desktop area (not on windows or taskbar) */
@@ -1043,7 +1043,7 @@ void gui_handle_mouse_click(GuiContext *ctx, uint8_t left, uint8_t right) {
 
     if (!just_pressed) return;
 
-    /* ── Start menu click ───────────────────────────────────────────── */
+    /* -- Start menu click --------------------------------------------- */
     if (ctx->start_menu.visible) {
         Menu *sm = &ctx->start_menu;
         if (_point_in_rect(mx, my, sm->x, sm->y, sm->w, sm->h)) {
@@ -1057,7 +1057,7 @@ void gui_handle_mouse_click(GuiContext *ctx, uint8_t left, uint8_t right) {
         sm->visible = 0;
     }
 
-    /* ── Context menu click ─────────────────────────────────────────── */
+    /* -- Context menu click ------------------------------------------- */
     if (ctx->context_menu.visible) {
         Menu *cm = &ctx->context_menu;
         if (_point_in_rect(mx, my, cm->x, cm->y, cm->w, cm->h)) {
@@ -1071,7 +1071,7 @@ void gui_handle_mouse_click(GuiContext *ctx, uint8_t left, uint8_t right) {
         cm->visible = 0;
     }
 
-    /* ── Desktop icon double-click (simulate with single click) ─────── */
+    /* -- Desktop icon double-click (simulate with single click) ------- */
     for (int i = 0; i < ctx->icon_count; i++) {
         DesktopIcon *ic = &ctx->icons[i];
         if (_point_in_rect(mx, my, ic->x - 4, ic->y - 4,
@@ -1097,7 +1097,7 @@ void gui_handle_mouse_click(GuiContext *ctx, uint8_t left, uint8_t right) {
         if (_try_window_click(ctx, i, mx, my)) return;
     }
 
-    /* ── Start button click — toggle start menu ─────────────────────── */
+    /* -- Start button click — toggle start menu ----------------------- */
     if (_point_in_rect(mx, my, 4, ctx->taskbar.y + 4, 80, TASKBAR_H - 8)) {
         ctx->start_menu.visible = !ctx->start_menu.visible;
         ctx->start_menu.y = ctx->taskbar.y - ctx->start_menu.h;
@@ -1169,9 +1169,9 @@ void gui_tick(GuiContext *ctx) {
     }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Alt+Tab Window Switcher
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 void gui_show_tab_switcher(GuiContext *ctx) {
     ctx->tab_visible = 1;

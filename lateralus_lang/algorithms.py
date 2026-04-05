@@ -7,7 +7,7 @@ import math
 from typing import Any, List, Optional, Callable
 
 
-# ─── Sorting ──────────────────────────────────────────────────────────
+# --- Sorting ----------------------------------------------------------
 
 def bubble_sort(arr: list) -> list:
     result = list(arr)
@@ -61,7 +61,7 @@ def quick_sort(arr: list) -> list:
     return quick_sort(left) + mid + quick_sort(right)
 
 
-# ─── Searching ────────────────────────────────────────────────────────
+# --- Searching --------------------------------------------------------
 
 def binary_search(arr: list, target) -> int:
     low, high = 0, len(arr) - 1
@@ -91,7 +91,7 @@ def find_max_index(arr: list) -> int:
     return arr.index(max(arr)) if arr else -1
 
 
-# ─── List utilities ───────────────────────────────────────────────────
+# --- List utilities ---------------------------------------------------
 
 def unique(arr: list) -> list:
     seen = set()
@@ -130,7 +130,7 @@ def sliding_window(arr: list, size: int) -> list:
     return [arr[i:i + size] for i in range(len(arr) - size + 1)]
 
 
-# ─── String algorithms ────────────────────────────────────────────────
+# --- String algorithms ------------------------------------------------
 
 def is_palindrome(s: str) -> bool:
     return s == s[::-1]
@@ -151,7 +151,7 @@ def caesar_cipher(text: str, shift: int) -> str:
     return ''.join(result)
 
 
-# ─── Math algorithms ──────────────────────────────────────────────────
+# --- Math algorithms --------------------------------------------------
 
 def gcd(a: int, b: int) -> int:
     while b:

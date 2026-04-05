@@ -1,6 +1,6 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — /proc Virtual Filesystem
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Read-only virtual filesystem exposing kernel state as text files.
  * Content is generated dynamically from live kernel data structures.
  *
@@ -16,7 +16,7 @@
  *   /proc/cmdline   — Kernel command line (boot params)
  *
  * Copyright (c) 2025-2026 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #ifndef LATERALUS_PROCFS_H
 #define LATERALUS_PROCFS_H
@@ -29,7 +29,7 @@
 /* Number of known /proc entries */
 #define PROCFS_NUM_FILES  9
 
-/* ── Public API ───────────────────────────────────────────────────────── */
+/* -- Public API --------------------------------------------------------- */
 
 /* Initialize procfs — creates /proc directory and virtual entries in ramfs */
 void procfs_init(void);

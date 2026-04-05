@@ -1,11 +1,11 @@
 """
-lateralus_lang/errors/bridge.py  ─  Bridge to Lateralus Error Intelligence
-═══════════════════════════════════════════════════════════════════════════
+lateralus_lang/errors/bridge.py  -  Bridge to Lateralus Error Intelligence
+===========================================================================
 Connects the LTL compiler error system to the Lateralus project's
 error_engine (nine pioneering error subsystems).
 
 Behaviour
-─────────
+---------
   · Tries to import `lateralus.error_engine.ErrorIntelligence` at runtime.
   · If available, routes every LTL error through:
       - Error DNA registration
@@ -17,7 +17,7 @@ Behaviour
     silently no-op so the compiler works without the full Lateralus stack.
 
 This bridge is the integration seam — it NEVER blocks compilation.
-═══════════════════════════════════════════════════════════════════════════
+===========================================================================
 """
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ from .handler import ErrorContext, ErrorReporter, LTLError, Severity
 
 _log = logging.getLogger("lateralus_lang.errors.bridge")
 
-# ── Optional import of the Lateralus error engine ────────────────────────────
+# -- Optional import of the Lateralus error engine ----------------------------
 
 _engine: Any = None
 _engine_module_name = "lateralus.error_engine"
@@ -59,9 +59,9 @@ def _load_engine() -> Any:
     return _engine
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Bridge class
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class ErrorBridge:
     """
@@ -82,7 +82,7 @@ class ErrorBridge:
         self._engine   = _load_engine()
         self._dna_cache: Dict[str, Any] = {}
 
-    # ── submit ────────────────────────────────────────────────────────────────
+    # -- submit ----------------------------------------------------------------
 
     def submit(self, ctx: ErrorContext) -> None:
         """Forward *ctx* to the error engine if available."""
@@ -103,7 +103,7 @@ class ErrorBridge:
         for ctx in self._reporter.all():
             self.submit(ctx)
 
-    # ── healing ───────────────────────────────────────────────────────────────
+    # -- healing ---------------------------------------------------------------
 
     def check_heal(self, error_code: str,
                    ctx: Optional[ErrorContext] = None) -> Optional[str]:
@@ -125,7 +125,7 @@ class ErrorBridge:
             _log.debug("Healing check failed: %s", exc)
         return None
 
-    # ── private helpers ───────────────────────────────────────────────────────
+    # -- private helpers -------------------------------------------------------
 
     def _record_dna(self, ctx: ErrorContext) -> None:
         dna_fn = getattr(self._engine, "record_dna", None)
@@ -164,9 +164,9 @@ class ErrorBridge:
                 )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Module-level singleton
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 _default_bridge: Optional[ErrorBridge] = None
 

@@ -1,6 +1,6 @@
 """
-tests/test_v22_features.py  ─  v2.2 Feature Test Suite
-═══════════════════════════════════════════════════════════════════════════
+tests/test_v22_features.py  -  v2.2 Feature Test Suite
+===========================================================================
 Tests for LATERALUS v2.2 features:
   · New linter rules: unreachable-code, duplicate-import, shadowed-variable, todo-comment
   · New stdlib modules: fmt, encoding, csv, logging, filepath
@@ -15,7 +15,7 @@ import pytest
 from lateralus_lang.compiler import Compiler, Target
 from lateralus_lang.linter import LateralusLinter, Severity
 
-# ─── Helpers ─────────────────────────────────────────────────────────────────
+# --- Helpers -----------------------------------------------------------------
 
 ROOT = pathlib.Path(__file__).parent.parent
 
@@ -48,9 +48,9 @@ def run_ltl(src):
     return buf.getvalue()
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # LINTER: Unreachable Code Detection
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 
 class TestUnreachableCode:
     def setup_method(self):
@@ -101,9 +101,9 @@ class TestUnreachableCode:
         assert issues[0].severity == Severity.WARNING
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # LINTER: Duplicate Import Detection
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 
 class TestDuplicateImport:
     def setup_method(self):
@@ -149,9 +149,9 @@ class TestDuplicateImport:
         assert "Remove" in issues[0].suggestion
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # LINTER: Shadowed Variable Detection
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 
 class TestShadowedVariable:
     def setup_method(self):
@@ -188,9 +188,9 @@ class TestShadowedVariable:
         assert issues[0].severity == Severity.INFO
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # LINTER: TODO/FIXME Comment Detection
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 
 class TestTodoComment:
     def setup_method(self):
@@ -256,9 +256,9 @@ class TestTodoComment:
         assert len(issues) == 3
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # STDLIB: Module Compilation Tests
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 
 class TestStdlibCompilation:
     """Verify that all new stdlib modules compile cleanly."""
@@ -310,9 +310,9 @@ class TestStdlibCompilation:
         assert "fn dirname(" in src
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # STDLIB: Functional Tests (via Python transpilation)
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 
 class TestStdlibFunctionality:
     """Test stdlib module behavior via compiled execution."""
@@ -338,9 +338,9 @@ class TestStdlibFunctionality:
         assert compile_ok("import filepath")
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # LINTER: Integration with existing rules
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 
 class TestLinterIntegration:
     """Ensure new rules integrate well with existing ones."""
@@ -420,9 +420,9 @@ class TestLinterIntegration:
         assert any(i.rule == "use-let" for i in r3.issues)
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # SHOWCASE: v22 showcase file compilation
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 
 class TestV22Showcase:
     def test_v22_showcase_exists_and_compiles(self):
@@ -436,9 +436,9 @@ class TestV22Showcase:
             pytest.skip("v22_showcase.ltl not yet created")
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # STDLIB: New stdlib module compilation tests
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 
 class TestStdlibUUID:
     """Tests for stdlib/uuid.ltl."""

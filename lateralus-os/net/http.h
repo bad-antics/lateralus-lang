@@ -1,17 +1,17 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — HTTP/1.1 Client
  * Minimal HTTP client built on the TCP transport layer.
  * Supports GET requests with response parsing.
  *
  * Part of LateralusOS v0.3.0
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #ifndef LATERALUS_HTTP_H
 #define LATERALUS_HTTP_H
 
 #include "../gui/types.h"
 
-/* ── Constants ────────────────────────────────────────────────────────── */
+/* -- Constants ---------------------------------------------------------- */
 
 #define HTTP_MAX_URL_LEN      256
 #define HTTP_MAX_HOST_LEN     128
@@ -23,13 +23,13 @@
 #define HTTP_READ_TIMEOUT     10000  /* 10 seconds read timeout (ms) */
 #define HTTP_DEFAULT_PORT     80
 
-/* ── HTTP methods ─────────────────────────────────────────────────────── */
+/* -- HTTP methods ------------------------------------------------------- */
 
 #define HTTP_METHOD_GET   0
 #define HTTP_METHOD_HEAD  1
 #define HTTP_METHOD_POST  2
 
-/* ── HTTP response ────────────────────────────────────────────────────── */
+/* -- HTTP response ------------------------------------------------------ */
 
 typedef struct {
     int      status_code;                        /* 200, 404, etc. */
@@ -44,7 +44,7 @@ typedef struct {
                                                     -3=timeout, -4=send fail, -5=recv fail */
 } HttpResponse;
 
-/* ── URL components ───────────────────────────────────────────────────── */
+/* -- URL components ----------------------------------------------------- */
 
 typedef struct {
     char     host[HTTP_MAX_HOST_LEN];
@@ -52,7 +52,7 @@ typedef struct {
     uint16_t port;
 } HttpUrl;
 
-/* ── Public API ───────────────────────────────────────────────────────── */
+/* -- Public API --------------------------------------------------------- */
 
 /* Initialize HTTP subsystem. Call after tcp_init(). */
 void http_init(void);

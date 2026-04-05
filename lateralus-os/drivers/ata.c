@@ -1,6 +1,6 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — ATA PIO Disk Driver
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * PIO-mode ATA disk I/O for the primary IDE controller.
  * Supports 28-bit LBA read/write, identify, and flush.
  *
@@ -8,7 +8,7 @@
  * simpler and works on all ATA controllers without PRDT setup.
  *
  * Copyright (c) 2025-2026 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #include "ata.h"
 
@@ -17,7 +17,7 @@ extern void    outb(uint16_t port, uint8_t val);
 extern uint8_t inb(uint16_t port);
 extern void serial_puts(const char *s);
 
-/* ── I/O Ports (Primary ATA Controller) ──────────────────────────────── */
+/* -- I/O Ports (Primary ATA Controller) -------------------------------- */
 
 #define ATA_DATA        0x1F0
 #define ATA_ERROR       0x1F1
@@ -31,14 +31,14 @@ extern void serial_puts(const char *s);
 #define ATA_ALT_STATUS  0x3F6
 #define ATA_DEV_CTRL    0x3F6
 
-/* ── ATA Commands ────────────────────────────────────────────────────── */
+/* -- ATA Commands ------------------------------------------------------ */
 
 #define ATA_CMD_READ_PIO     0x20
 #define ATA_CMD_WRITE_PIO    0x30
 #define ATA_CMD_IDENTIFY     0xEC
 #define ATA_CMD_CACHE_FLUSH  0xE7
 
-/* ── Status bits ─────────────────────────────────────────────────────── */
+/* -- Status bits ------------------------------------------------------- */
 
 #define ATA_SR_BSY   0x80  /* Busy */
 #define ATA_SR_DRDY  0x40  /* Drive ready */
@@ -49,12 +49,12 @@ extern void serial_puts(const char *s);
 #define ATA_SR_IDX   0x02  /* Index */
 #define ATA_SR_ERR   0x01  /* Error */
 
-/* ── Internal state ──────────────────────────────────────────────────── */
+/* -- Internal state ---------------------------------------------------- */
 
 static AtaDriveInfo drives[2];
 static int num_drives = 0;
 
-/* ── Utility ─────────────────────────────────────────────────────────── */
+/* -- Utility ----------------------------------------------------------- */
 
 static void ata_400ns_delay(void) {
     /* Read alternate status 4 times (~400ns on ISA bus) */
@@ -85,7 +85,7 @@ static int ata_wait_drq(void) {
     return -1;  /* Timeout */
 }
 
-/* ── Read a 16-bit word from the data port ───────────────────────────── */
+/* -- Read a 16-bit word from the data port ----------------------------- */
 
 static inline uint16_t ata_read_word(void) {
     uint16_t val;
@@ -93,13 +93,13 @@ static inline uint16_t ata_read_word(void) {
     return val;
 }
 
-/* ── Write a 16-bit word to the data port ────────────────────────────── */
+/* -- Write a 16-bit word to the data port ------------------------------ */
 
 static inline void ata_write_word(uint16_t val) {
     __asm__ volatile ("outw %0, %1" : : "a"(val), "Nd"((uint16_t)ATA_DATA));
 }
 
-/* ── Copy ATA identify string (byte-swapped pairs) ───────────────────── */
+/* -- Copy ATA identify string (byte-swapped pairs) --------------------- */
 
 static void ata_copy_string(char *dst, const uint16_t *src, int words) {
     for (int i = 0; i < words; i++) {
@@ -114,7 +114,7 @@ static void ata_copy_string(char *dst, const uint16_t *src, int words) {
         dst[--len] = '\0';
 }
 
-/* ── Software reset ──────────────────────────────────────────────────── */
+/* -- Software reset ---------------------------------------------------- */
 
 static void ata_soft_reset(void) {
     outb(ATA_DEV_CTRL, 0x04);  /* Set SRST */
@@ -124,7 +124,7 @@ static void ata_soft_reset(void) {
     ata_wait_bsy();
 }
 
-/* ── Identify a drive ────────────────────────────────────────────────── */
+/* -- Identify a drive -------------------------------------------------- */
 
 static int ata_identify_drive(int drive_idx) {
     uint8_t drive_sel = (drive_idx == 0) ? ATA_DRIVE_MASTER : ATA_DRIVE_SLAVE;
@@ -178,9 +178,9 @@ static int ata_identify_drive(int drive_idx) {
     return 1;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * Public API
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 int ata_init(void) {
     serial_puts("[ata] Initializing ATA PIO driver...\n");

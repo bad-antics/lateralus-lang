@@ -1,6 +1,6 @@
 """
-lateralus_lang/codegen/bytecode.py  ─  IR → LTasm Bytecode Code Generator
-═══════════════════════════════════════════════════════════════════════════
+lateralus_lang/codegen/bytecode.py  -  IR → LTasm Bytecode Code Generator
+===========================================================================
 Walks the IRModule produced by the semantic analyser and emits a
 Bytecode object ready for the VM.
 
@@ -9,7 +9,7 @@ The generated code uses the full LTasm opcode set including:
   · try/recover/ensure via TRY_BEGIN / TRY_END / THROW
   · Pipeline operator optimisation
   · Tail-call detection
-═══════════════════════════════════════════════════════════════════════════
+===========================================================================
 """
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ class BytecodeGenerator:
         self._fixups:    List[Tuple[int, str]] = [] # (patch_offset, fn/label_name)
         self._label_map: Dict[str, int]     = {}   # IR label → code offset
 
-    # ── public ────────────────────────────────────────────────────────────────
+    # -- public ----------------------------------------------------------------
 
     def generate(self, module: IRModule) -> Bytecode:
         # Emit global initialisation
@@ -67,7 +67,7 @@ class BytecodeGenerator:
         self._resolve_fixups()
         return self._bc
 
-    # ── function emit ─────────────────────────────────────────────────────────
+    # -- function emit ---------------------------------------------------------
 
     def _emit_function(self, fn: IRFunction) -> None:
         addr = len(self._bc.code)
@@ -89,7 +89,7 @@ class BytecodeGenerator:
         for instr in bb.instrs:
             self._emit_instr(instr)
 
-    # ── instruction emit ──────────────────────────────────────────────────────
+    # -- instruction emit ------------------------------------------------------
 
     def _emit_instr(self, instr: IRInstr) -> None:  # noqa: C901
         op = instr.op
@@ -256,7 +256,7 @@ class BytecodeGenerator:
         else:
             self._bc.emit_u8(int(Op.NOP))
 
-    # ── helpers ───────────────────────────────────────────────────────────────
+    # -- helpers ---------------------------------------------------------------
 
     def _push_operand(self, src) -> None:
         """Push *src* (a temporary name string or a literal value) onto the stack."""
@@ -306,9 +306,9 @@ class BytecodeGenerator:
             self._bc.patch_u32(patch_off, addr)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Convenience
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def generate_bytecode(module: IRModule) -> Bytecode:
     """Generate LTasm Bytecode from an IRModule."""

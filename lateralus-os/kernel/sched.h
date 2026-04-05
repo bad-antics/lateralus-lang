@@ -1,6 +1,6 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — Preemptive Task Scheduler
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Round-robin preemptive scheduler with 4 priority levels.  Each task
  * gets its own kernel stack and a saved register context.  The PIT timer
  * (IRQ0, 1 kHz) drives preemption via sched_tick().
@@ -12,21 +12,21 @@
  *   3 = REALTIME   — interrupt-level work, never starved
  *
  * Copyright (c) 2025-2026 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #ifndef LATERALUS_SCHED_H
 #define LATERALUS_SCHED_H
 
 #include "../gui/types.h"
 
-/* ── Limits ───────────────────────────────────────────────────────────── */
+/* -- Limits ------------------------------------------------------------- */
 
 #define SCHED_MAX_TASKS    32
 #define SCHED_STACK_SIZE   16384   /* 16 KB per task stack */
 #define SCHED_NUM_PRIOS    4
 #define SCHED_TIMESLICE    10      /* ticks per time slice (10 ms @ 1 kHz) */
 
-/* ── Task states ──────────────────────────────────────────────────────── */
+/* -- Task states -------------------------------------------------------- */
 
 #define TASK_FREE       0
 #define TASK_READY      1
@@ -35,14 +35,14 @@
 #define TASK_SLEEPING   4
 #define TASK_DEAD       5
 
-/* ── Priority levels ──────────────────────────────────────────────────── */
+/* -- Priority levels ---------------------------------------------------- */
 
 #define PRIO_IDLE       0
 #define PRIO_NORMAL     1
 #define PRIO_HIGH       2
 #define PRIO_REALTIME   3
 
-/* ── Signals ──────────────────────────────────────────────────────────── */
+/* -- Signals ------------------------------------------------------------ */
 
 #define SIG_NONE     0   /* no signal */
 #define SIG_TERM     1   /* graceful termination */
@@ -64,7 +64,7 @@ typedef void (*SignalHandler)(int signum);
 #define SIG_DFL  ((SignalHandler)0)   /* default action (term/ignore) */
 #define SIG_IGN  ((SignalHandler)1)   /* ignore signal */
 
-/* ── Saved CPU context (pushed/popped on switch) ──────────────────────── */
+/* -- Saved CPU context (pushed/popped on switch) ------------------------ */
 
 typedef struct {
     uint64_t r15, r14, r13, r12;
@@ -73,11 +73,11 @@ typedef struct {
     uint64_t rip;                 /* return address for switch */
 } TaskContext;
 
-/* ── Task entry function ──────────────────────────────────────────────── */
+/* -- Task entry function ------------------------------------------------ */
 
 typedef void (*TaskEntry)(void *arg);
 
-/* ── Task Control Block ───────────────────────────────────────────────── */
+/* -- Task Control Block ------------------------------------------------- */
 
 typedef struct {
     /* Identification */
@@ -114,7 +114,7 @@ typedef struct {
     uint64_t    switches;         /* number of times scheduled in */
 } SchedTask;
 
-/* ── Public API ───────────────────────────────────────────────────────── */
+/* -- Public API --------------------------------------------------------- */
 
 /* Initialize the scheduler and create the idle task.
    Must be called before any task_create(). */
@@ -166,7 +166,7 @@ void sched_reap(void);
 /* Get pointer to task struct by tid (NULL if out of range or FREE). */
 const SchedTask *sched_get_task(int tid);
 
-/* ── Signals ─── */
+/* -- Signals --- */
 
 /* Send a signal to a task. Returns 0 on success, -1 if task not found.
    SIG_KILL cannot be blocked or caught — always terminates. */
@@ -183,7 +183,7 @@ void sched_sigmask_unblock(uint16_t mask);
 /* Deliver pending signals. Called from sched_tick() or after unblock. */
 void sched_deliver_signals(int tid);
 
-/* ── Load Average ─── */
+/* -- Load Average --- */
 
 /* Sample the runnable task count (called every 5s from sched_tick). */
 void sched_load_sample(void);

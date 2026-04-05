@@ -1,17 +1,17 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — RAM Filesystem Implementation
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Copyright (c) 2025 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #include "ramfs.h"
 
-/* ── Static node pool ─────────────────────────────────────────────────── */
+/* -- Static node pool --------------------------------------------------- */
 
 static RamfsNode nodes[RAMFS_MAX_NODES];
 static int node_count = 0;
 
-/* ── Tiny string helpers ──────────────────────────────────────────────── */
+/* -- Tiny string helpers ------------------------------------------------ */
 
 static int _rlen(const char *s) { int n = 0; while (s[n]) n++; return n; }
 
@@ -33,7 +33,7 @@ static int _rcmp(const char *a, const char *b) {
     return (int)(unsigned char)*a - (int)(unsigned char)*b;
 }
 
-/* ── Allocate a new node ──────────────────────────────────────────────── */
+/* -- Allocate a new node ------------------------------------------------ */
 
 static int alloc_node(void) {
     for (int i = 0; i < RAMFS_MAX_NODES; i++) {
@@ -51,7 +51,7 @@ static int alloc_node(void) {
     return -1;  /* pool exhausted */
 }
 
-/* ── Initialize filesystem ────────────────────────────────────────────── */
+/* -- Initialize filesystem ---------------------------------------------- */
 
 void ramfs_init(void) {
     /* Clear all nodes */
@@ -94,7 +94,7 @@ void ramfs_init(void) {
     if (readme >= 0) {
         const char *txt =
             "LateralusOS — README\n"
-            "════════════════════\n"
+            "====================\n"
             "\n"
             "A bare-metal operating system built\n"
             "with the Lateralus language.\n"
@@ -143,7 +143,7 @@ void ramfs_init(void) {
     }
 }
 
-/* ── Create a file ────────────────────────────────────────────────────── */
+/* -- Create a file ------------------------------------------------------ */
 
 int ramfs_create(int parent_idx, const char *name) {
     if (parent_idx < 0 || parent_idx >= RAMFS_MAX_NODES) return -1;
@@ -166,7 +166,7 @@ int ramfs_create(int parent_idx, const char *name) {
     return idx;
 }
 
-/* ── Create a directory ───────────────────────────────────────────────── */
+/* -- Create a directory ------------------------------------------------- */
 
 int ramfs_mkdir(int parent_idx, const char *name) {
     if (parent_idx < 0 || parent_idx >= RAMFS_MAX_NODES) return -1;
@@ -189,7 +189,7 @@ int ramfs_mkdir(int parent_idx, const char *name) {
     return idx;
 }
 
-/* ── Write to file ────────────────────────────────────────────────────── */
+/* -- Write to file ------------------------------------------------------ */
 
 int ramfs_write(int node_idx, const char *data, uint32_t len) {
     if (node_idx < 0 || node_idx >= RAMFS_MAX_NODES) return -1;
@@ -204,7 +204,7 @@ int ramfs_write(int node_idx, const char *data, uint32_t len) {
     return (int)len;
 }
 
-/* ── Append to file ───────────────────────────────────────────────────── */
+/* -- Append to file ----------------------------------------------------- */
 
 int ramfs_append(int node_idx, const char *data, uint32_t len) {
     if (node_idx < 0 || node_idx >= RAMFS_MAX_NODES) return -1;
@@ -222,7 +222,7 @@ int ramfs_append(int node_idx, const char *data, uint32_t len) {
     return (int)len;
 }
 
-/* ── Read from file ───────────────────────────────────────────────────── */
+/* -- Read from file ----------------------------------------------------- */
 
 int ramfs_read(int node_idx, char *buf, uint32_t buflen) {
     if (node_idx < 0 || node_idx >= RAMFS_MAX_NODES) return -1;
@@ -238,7 +238,7 @@ int ramfs_read(int node_idx, char *buf, uint32_t buflen) {
     return (int)len;
 }
 
-/* ── Find child by name ──────────────────────────────────────────────── */
+/* -- Find child by name ------------------------------------------------ */
 
 int ramfs_find(int parent_idx, const char *name) {
     if (parent_idx < 0 || parent_idx >= RAMFS_MAX_NODES) return -1;
@@ -252,7 +252,7 @@ int ramfs_find(int parent_idx, const char *name) {
     return -1;
 }
 
-/* ── List directory ───────────────────────────────────────────────────── */
+/* -- List directory ----------------------------------------------------- */
 
 int ramfs_list(int dir_idx, char *buf, uint32_t buflen) {
     if (dir_idx < 0 || dir_idx >= RAMFS_MAX_NODES) return -1;
@@ -274,7 +274,7 @@ int ramfs_list(int dir_idx, char *buf, uint32_t buflen) {
     return 0;
 }
 
-/* ── Remove node ──────────────────────────────────────────────────────── */
+/* -- Remove node -------------------------------------------------------- */
 
 int ramfs_remove(int node_idx) {
     if (node_idx <= 0 || node_idx >= RAMFS_MAX_NODES) return -1;  /* can't remove root */
@@ -303,7 +303,7 @@ int ramfs_remove(int node_idx) {
     return 0;
 }
 
-/* ── Resolve absolute path ────────────────────────────────────────────── */
+/* -- Resolve absolute path ---------------------------------------------- */
 
 int ramfs_resolve_path(const char *path) {
     if (!path || path[0] != '/') return -1;
@@ -342,7 +342,7 @@ int ramfs_resolve_path(const char *path) {
     return current;
 }
 
-/* ── Node info accessors ──────────────────────────────────────────────── */
+/* -- Node info accessors ------------------------------------------------ */
 
 const char *ramfs_node_name(int idx) {
     if (idx < 0 || idx >= RAMFS_MAX_NODES || !nodes[idx].in_use) return "";
@@ -373,7 +373,7 @@ int ramfs_root(void) {
     return 0;
 }
 
-/* ── Build absolute path ──────────────────────────────────────────────── */
+/* -- Build absolute path ------------------------------------------------ */
 
 void ramfs_get_path(int idx, char *buf, uint32_t buflen) {
     if (idx < 0 || idx >= RAMFS_MAX_NODES || !nodes[idx].in_use) {

@@ -1,6 +1,6 @@
 """
-lateralus_lang  ─  LATERALUS Proprietary Language Toolkit
-══════════════════════════════════════════════════════════════
+lateralus_lang  -  LATERALUS Proprietary Language Toolkit
+==============================================================
 Exports the primary public API.
 """
 from .compiler import (

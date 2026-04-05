@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# ──────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
 # scripts/release.sh — Prepare and publish a LATERALUS GitHub release
 # Usage:
 #   ./scripts/release.sh              # full release (init, test, tag, push)
 #   ./scripts/release.sh --dry-run    # preview what would happen
 #   ./scripts/release.sh --tag-only   # just create the tag (skip tests)
-# ──────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
 set -euo pipefail
 
 VERSION="1.5.0"
@@ -15,7 +15,7 @@ RELEASE_TITLE="LATERALUS v${VERSION} — ADT Edition"
 DRY_RUN=false
 TAG_ONLY=false
 
-# ── Parse flags ──────────────────────────────────────────────────────
+# -- Parse flags ------------------------------------------------------
 for arg in "$@"; do
   case "$arg" in
     --dry-run)  DRY_RUN=true ;;
@@ -27,12 +27,12 @@ done
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 
-echo "╔══════════════════════════════════════════════════════════╗"
-echo "║  LATERALUS Release Script — v${VERSION}                   ║"
-echo "╚══════════════════════════════════════════════════════════╝"
+echo "+==========================================================+"
+echo "|  LATERALUS Release Script — v${VERSION}                   |"
+echo "+==========================================================+"
 echo ""
 
-# ── 1. Version consistency check ────────────────────────────────────
+# -- 1. Version consistency check ------------------------------------
 echo "▸ [1/7] Checking version consistency..."
 PY_VER=$(python3 -c "import lateralus_lang; print(lateralus_lang.__version__)" 2>/dev/null || echo "UNKNOWN")
 TOML_VER=$(grep '^version' pyproject.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
@@ -47,7 +47,7 @@ if [[ "$TOML_VER" != "$VERSION" ]]; then
 fi
 echo "  ✓ Version $VERSION consistent across pyproject.toml and __init__.py"
 
-# ── 2. Run tests ────────────────────────────────────────────────────
+# -- 2. Run tests ----------------------------------------------------
 if [[ "$TAG_ONLY" == false ]]; then
   echo ""
   echo "▸ [2/7] Running full test suite..."
@@ -67,7 +67,7 @@ else
   echo "▸ [2/7] Skipping tests (--tag-only)"
 fi
 
-# ── 3. Health check ─────────────────────────────────────────────────
+# -- 3. Health check -------------------------------------------------
 if [[ "$TAG_ONLY" == false ]]; then
   echo ""
   echo "▸ [3/7] Running health check..."
@@ -82,7 +82,7 @@ else
   echo "▸ [3/7] Skipping health check (--tag-only)"
 fi
 
-# ── 4. Initialize git (if needed) ───────────────────────────────────
+# -- 4. Initialize git (if needed) -----------------------------------
 echo ""
 echo "▸ [4/7] Checking git repository..."
 if [[ ! -d .git ]]; then
@@ -99,7 +99,7 @@ else
   echo "  ✓ Git repository already exists"
 fi
 
-# ── 5. Stage and commit ─────────────────────────────────────────────
+# -- 5. Stage and commit ---------------------------------------------
 echo ""
 echo "▸ [5/7] Staging files..."
 if [[ "$DRY_RUN" == true ]]; then
@@ -127,7 +127,7 @@ Highlights:
   fi
 fi
 
-# ── 6. Create tag ───────────────────────────────────────────────────
+# -- 6. Create tag ---------------------------------------------------
 echo ""
 echo "▸ [6/7] Creating release tag ${TAG}..."
 if [[ "$DRY_RUN" == true ]]; then
@@ -143,7 +143,7 @@ $(cat RELEASE_NOTES.md)"
   fi
 fi
 
-# ── 7. Push instructions ────────────────────────────────────────────
+# -- 7. Push instructions --------------------------------------------
 echo ""
 echo "▸ [7/7] Push to GitHub..."
 if [[ "$DRY_RUN" == true ]]; then
@@ -174,8 +174,8 @@ else
   echo ""
 fi
 
-# ── Summary ──────────────────────────────────────────────────────────
-echo "══════════════════════════════════════════════════════════════"
+# -- Summary ----------------------------------------------------------
+echo "=============================================================="
 echo "  Release preparation complete!"
 echo ""
 echo "  Version:  ${VERSION}"
@@ -184,4 +184,4 @@ echo "  Title:    ${RELEASE_TITLE}"
 echo "  Tests:    1,158 passing"
 echo "  Stdlib:   28 modules"
 echo "  Kernel:   375 KB (LateralusOS)"
-echo "══════════════════════════════════════════════════════════════"
+echo "=============================================================="

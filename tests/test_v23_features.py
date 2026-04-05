@@ -1,6 +1,6 @@
 """
-tests/test_v23_features.py  ─  v2.3 Feature Test Suite
-═══════════════════════════════════════════════════════════════════════════
+tests/test_v23_features.py  -  v2.3 Feature Test Suite
+===========================================================================
 Tests for LATERALUS v2.3 features:
   · New linter rules: constant-condition, unused-import, deep-nesting,
     string-concat-in-loop, mutable-default
@@ -19,7 +19,7 @@ from lateralus_lang.compiler import Compiler, Target
 from lateralus_lang.linter import LateralusLinter, Severity
 from lateralus_lang.formatter import LateralusFormatter, FormatConfig
 
-# ─── Helpers ─────────────────────────────────────────────────────────────────
+# --- Helpers -----------------------------------------------------------------
 
 ROOT = pathlib.Path(__file__).parent.parent
 
@@ -52,9 +52,9 @@ def run_ltl(src):
     return buf.getvalue()
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # LINTER: Constant Condition Detection
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 
 class TestConstantCondition:
     def setup_method(self):
@@ -104,9 +104,9 @@ class TestConstantCondition:
         assert issues[0].severity == Severity.WARNING
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # LINTER: Unused Import Detection
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 
 class TestUnusedImport:
     def setup_method(self):
@@ -136,9 +136,9 @@ class TestUnusedImport:
         assert issues[0].severity == Severity.WARNING
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # LINTER: Deep Nesting Detection
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 
 class TestDeepNesting:
     def setup_method(self):
@@ -172,9 +172,9 @@ class TestDeepNesting:
         assert len(issues) == 0
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # LINTER: Mutable Default Parameter
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 
 class TestMutableDefault:
     def setup_method(self):
@@ -195,9 +195,9 @@ class TestMutableDefault:
         assert len(issues) == 0
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # FORMATTER: Trailing Comma Normalization
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 
 class TestFormatterTrailingComma:
     def setup_method(self):
@@ -222,9 +222,9 @@ class TestFormatterTrailingComma:
         assert ",," not in result
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # FORMATTER: Blank Line Collapse
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 
 class TestFormatterBlankLines:
     def setup_method(self):
@@ -246,9 +246,9 @@ class TestFormatterBlankLines:
         assert max_consecutive <= 2, f"Found {max_consecutive} consecutive blanks"
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # FORMATTER: Import Sorting
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 
 class TestFormatterImportSort:
     def setup_method(self):
@@ -264,9 +264,9 @@ class TestFormatterImportSort:
             f"Imports not sorted: {import_lines}"
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # LSP: Code Actions
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 
 class TestLSPCodeActions:
     def _make_server(self):
@@ -323,9 +323,9 @@ class TestLSPCodeActions:
         assert "semicolon" in actions[0]["title"].lower()
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # LSP: Rename Symbol
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 
 class TestLSPRename:
     def _make_server(self):
@@ -365,9 +365,9 @@ class TestLSPRename:
         assert result["result"]["placeholder"] == "counter"
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # STDLIB: New Modules Compile
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 
 class TestStdlibCompilation:
     """Verify all new v2.3 stdlib modules compile cleanly."""
@@ -383,9 +383,9 @@ class TestStdlibCompilation:
         assert r.ok, f"stdlib/{module}.ltl failed: {r.errors[0].message if r.errors else '?'}"
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # EXAMPLES: New v2.3 Examples Compile
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 
 class TestExampleCompilation:
     """Verify all new v2.3 examples compile cleanly."""
@@ -401,9 +401,9 @@ class TestExampleCompilation:
         assert r.ok, f"examples/{example}.ltl failed: {r.errors[0].message if r.errors else '?'}"
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # Integration: End-to-End Pipeline Tests
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 
 class TestIntegrationPipeline:
     """End-to-end tests for pipelines and functional patterns."""
@@ -466,9 +466,9 @@ class TestIntegrationPipeline:
         assert compile_ok(src)
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # Regression: All Examples Still Compile
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 
 class TestRegressionExamples:
     """Ensure all examples compile after v2.3 changes."""
@@ -489,9 +489,9 @@ class TestRegressionExamples:
         assert count >= 35, f"Expected 35+ examples, found {count}"
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # Regression: All Stdlib Modules Compile
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 
 class TestRegressionStdlib:
     """Ensure all stdlib modules compile after v2.3 changes."""

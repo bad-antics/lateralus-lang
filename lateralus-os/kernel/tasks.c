@@ -1,17 +1,17 @@
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * LateralusOS — Cooperative Task Scheduler Implementation
- * ═══════════════════════════════════════════════════════════════════════
+ * =======================================================================
  * Copyright (c) 2025 bad-antics. All rights reserved.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 #include "tasks.h"
 
-/* ── Static task pool ─────────────────────────────────────────────────── */
+/* -- Static task pool --------------------------------------------------- */
 
 static Task task_pool[MAX_TASKS];
 static int  task_count = 0;
 
-/* ── Tiny helpers ─────────────────────────────────────────────────────── */
+/* -- Tiny helpers ------------------------------------------------------- */
 
 static int _tlen(const char *s) { int n = 0; while (s[n]) n++; return n; }
 
@@ -37,7 +37,7 @@ static void _titoa(uint64_t val, char *buf, int buflen) {
     buf[pos] = '\0';
 }
 
-/* ── Initialize ───────────────────────────────────────────────────────── */
+/* -- Initialize --------------------------------------------------------- */
 
 void tasks_init(void) {
     for (int i = 0; i < MAX_TASKS; i++) {
@@ -46,7 +46,7 @@ void tasks_init(void) {
     task_count = 0;
 }
 
-/* ── Create periodic task ─────────────────────────────────────────────── */
+/* -- Create periodic task ----------------------------------------------- */
 
 int task_create(const char *name, TaskFn fn, void *data,
                 uint32_t interval_ms) {
@@ -68,7 +68,7 @@ int task_create(const char *name, TaskFn fn, void *data,
     return -1;
 }
 
-/* ── Create one-shot task ─────────────────────────────────────────────── */
+/* -- Create one-shot task ----------------------------------------------- */
 
 int task_create_oneshot(const char *name, TaskFn fn, void *data,
                          uint32_t delay_ms, uint64_t current_tick) {
@@ -90,7 +90,7 @@ int task_create_oneshot(const char *name, TaskFn fn, void *data,
     return -1;
 }
 
-/* ── Remove task ──────────────────────────────────────────────────────── */
+/* -- Remove task -------------------------------------------------------- */
 
 void task_remove(int id) {
     if (id < 0 || id >= MAX_TASKS) return;
@@ -100,7 +100,7 @@ void task_remove(int id) {
     }
 }
 
-/* ── Tick — run all due tasks ─────────────────────────────────────────── */
+/* -- Tick — run all due tasks ------------------------------------------- */
 
 void tasks_tick(uint64_t current_tick) {
     for (int i = 0; i < MAX_TASKS; i++) {
@@ -124,20 +124,20 @@ void tasks_tick(uint64_t current_tick) {
     }
 }
 
-/* ── Active count ─────────────────────────────────────────────────────── */
+/* -- Active count ------------------------------------------------------- */
 
 int tasks_active_count(void) {
     return task_count;
 }
 
-/* ── List tasks ───────────────────────────────────────────────────────── */
+/* -- List tasks --------------------------------------------------------- */
 
 void tasks_list(char *buf, uint32_t buflen) {
     buf[0] = 0;
     char num[24];
 
     _tcat(buf, "ID  Name                    Interval  Runs\n", (int)buflen);
-    _tcat(buf, "──  ──────────────────────  ────────  ────\n", (int)buflen);
+    _tcat(buf, "--  ----------------------  --------  ----\n", (int)buflen);
 
     for (int i = 0; i < MAX_TASKS; i++) {
         if (!task_pool[i].active) continue;
