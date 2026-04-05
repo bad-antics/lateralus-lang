@@ -24,7 +24,7 @@ Ships two tightly-coupled languages and a full compiler / VM stack:
 
 **No install needed** — try Lateralus in your browser:
 
-👉 **[Open the Playground](https://bad-antics.github.io/lateralus/playground/)** — 8 examples, code editor, instant output.
+👉 **[Open the Playground](https://lateralus.dev/playground/)** — 8 examples, code editor, instant output.
 
 ---
 
@@ -401,7 +401,7 @@ lateralus-lang/
 
 ## Website
 
-**[bad-antics.github.io/lateralus](https://bad-antics.github.io/lateralus/)** — landing page with interactive code samples, feature comparison, and ecosystem directory.
+**[lateralus.dev](https://lateralus.dev/)** — landing page with interactive code samples, feature comparison, and ecosystem directory.
 
 ---
 
