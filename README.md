@@ -20,6 +20,14 @@ Ships two tightly-coupled languages and a full compiler / VM stack:
 
 ---
 
+## 🎮 Try It Online
+
+**No install needed** — try Lateralus in your browser:
+
+👉 **[Open the Playground](https://bad-antics.github.io/lateralus/playground/)** — 8 examples, code editor, instant output.
+
+---
+
 ## Quick Start
 
 ```bash
