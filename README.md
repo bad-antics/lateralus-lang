@@ -2,7 +2,7 @@
 
 > **A programming language that spirals outward — from simple ideas to profound compositions.**
 
-[![Version](https://img.shields.io/badge/version-2.5.0-6699ff.svg)](#)
+[![Version](https://img.shields.io/badge/version-3.0.1-6699ff.svg)](#)
 [![Tests](https://img.shields.io/badge/tests-1%2C976%20passing-00cc66.svg)](#)
 [![Python](https://img.shields.io/badge/python-3.10%2B-ffcc00.svg)](#)
 [![Zero Dependencies](https://img.shields.io/badge/deps-zero-ff6699.svg)](#)
@@ -28,10 +28,24 @@ Ships two tightly-coupled languages and a full compiler / VM stack:
 
 ---
 
+## 🚀 Get Started
+
+| Path | What you get | Link |
+|------|-------------|------|
+| **Use the template** | Full project: source, tests, CI, VS Code config | [lateralus-quickstart](https://github.com/bad-antics/lateralus-quickstart) |
+| **Follow the tutorial** | 8 chapters + exercises with solutions | [learn-lateralus](https://github.com/bad-antics/learn-lateralus) |
+| **Browse examples** | Algorithms, APIs, data pipelines, challenges | [lateralus-examples](https://github.com/bad-antics/lateralus-examples) |
+| **Add CI to your repo** | GitHub Action: lint, test, build in one step | [lateralus-action](https://github.com/bad-antics/lateralus-action) |
+
+---
+
 ## Quick Start
 
 ```bash
-# Install (editable, zero external deps)
+# Install from PyPI
+pip install lateralus-lang
+
+# Or install from source (editable, zero external deps)
 pip install -e .
 
 # Run a program
@@ -73,7 +87,7 @@ Install the Lateralus extension for syntax highlighting, snippets, and language 
 code --install-extension lateralus.lateralus-lang
 
 # Or install from .vsix
-cd vscode-lateralus && npx vsce package && code --install-extension lateralus-lang-2.5.1.vsix
+cd vscode-lateralus && npx vsce package && code --install-extension lateralus-lang-2.6.0.vsix
 ```
 
 ---
@@ -393,11 +407,15 @@ lateralus-lang/
 
 ## Ecosystem
 
-Lateralus has a growing ecosystem of 22+ repositories:
+Lateralus has a growing ecosystem of 26+ repositories:
 
 | Repository | Description |
 |-----------|-------------|
 | [lateralus-lang](https://github.com/bad-antics/lateralus-lang) | Compiler, VM, stdlib, REPL (this repo) |
+| [lateralus-quickstart](https://github.com/bad-antics/lateralus-quickstart) | 🚀 GitHub template — start a project in one click |
+| [learn-lateralus](https://github.com/bad-antics/learn-lateralus) | 📖 8-chapter tutorial with exercises & solutions |
+| [lateralus-examples](https://github.com/bad-antics/lateralus-examples) | 💡 Real-world examples: algorithms, APIs, pipelines |
+| [lateralus-action](https://github.com/bad-antics/lateralus-action) | ⚡ GitHub Action for CI (lint + test + build) |
 | [lateralus-compiler](https://github.com/bad-antics/lateralus-compiler) | Lexer, parser, AST, IR, codegen |
 | [lateralus-grammar](https://github.com/bad-antics/lateralus-grammar) | TextMate grammars + 14 code samples |
 | [lateralus-tutorials](https://github.com/bad-antics/lateralus-tutorials) | 25 chapters: basics to web servers |
@@ -422,6 +440,15 @@ Lateralus has a growing ecosystem of 22+ repositories:
 
 ---
 
+## Community
+
+- 💬 **[GitHub Discussions](https://github.com/bad-antics/lateralus-lang/discussions)** — ask questions, share projects, propose ideas
+- �� **[Issues](https://github.com/bad-antics/lateralus-lang/issues)** — bug reports and feature requests
+- 📦 **[PyPI](https://pypi.org/project/lateralus-lang/)** — `pip install lateralus-lang`
+- 🧩 **[VS Code Extension](https://marketplace.visualstudio.com/items?itemName=lateralus.lateralus-lang)** — syntax highlighting, snippets, language support
+
+---
+
 ## Running Tests
 
 ```bash
@@ -441,7 +468,7 @@ pytest tests/ --tb=short -q
 
 ## Version
 
-**LATERALUS v2.5.0**
+**LATERALUS v3.0.1**
 Created and maintained by **bad-antics**
 License: Proprietary — LATERALUS Research
 
