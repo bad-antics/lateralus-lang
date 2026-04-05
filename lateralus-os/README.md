@@ -15,34 +15,34 @@
 ## Architecture
 
 ```
-                    +---------------------------------+
-                    |         User Applications       |
-                    |  (Lateralus programs, agents)    |
-                    +---------------------------------+
-                    |      Graphical Desktop (GUI)     |
-                    |  animated wallpaper | Alt+Tab    |
-                    |  terminal | window animations    |
-                    +---------------------------------+
-                    |       System Services Layer      |
-                    |  mesh agent | crypto | monitor   |
-                    +---------------------------------+
-                    |         LateralusOS Shell        |
-                    |   ltlsh — 17 commands, VFS ops   |
-                    +---------------------------------+
-                    |     Kernel Services (Lateralus)  |
-                    |  scheduler | IPC | VFS | ramfs   |
-                    +---------------------------------+
-                    |     Memory Manager (Lateralus)   |
-                    |  page tables | bump alloc        |
-                    +---------------------------------+
-                    |  HAL + Drivers                   |
-                    |  PIT|PIC|speaker|keyboard|mouse  |
-                    +---------------------------------+
-                    |     Bootstrap (C + ASM)          |
-                    |  GDT | IDT | paging | entry      |
-                    +---------------------------------+
-                    |       Bare Metal Hardware        |
-                    +---------------------------------+
+                    +-----------------------------------+
+                    |        User Applications          |
+                    |   (Lateralus programs, agents)    |
+                    +-----------------------------------+
+                    |       Graphical Desktop (GUI)      |
+                    |   animated wallpaper | Alt+Tab     |
+                    |   terminal | window animations    |
+                    +-----------------------------------+
+                    |        System Services Layer       |
+                    |   mesh agent | crypto | monitor    |
+                    +-----------------------------------+
+                    |          LateralusOS Shell         |
+                    |    ltlsh -- 17 commands, VFS ops   |
+                    +-----------------------------------+
+                    |      Kernel Services (Lateralus)   |
+                    |   scheduler | IPC | VFS | ramfs    |
+                    +-----------------------------------+
+                    |      Memory Manager (Lateralus)    |
+                    |   page tables | bump alloc         |
+                    +-----------------------------------+
+                    |   HAL + Drivers                    |
+                    |   PIT|PIC|speaker|keyboard|mouse   |
+                    +-----------------------------------+
+                    |      Bootstrap (C + ASM)           |
+                    |   GDT | IDT | paging | entry      |
+                    +-----------------------------------+
+                    |        Bare Metal Hardware         |
+                    +-----------------------------------+
 ```
 
 ## Directory Structure
