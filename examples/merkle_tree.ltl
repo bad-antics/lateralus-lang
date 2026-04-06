@@ -1,0 +1,71 @@
+// ═══════════════════════════════════════════════════════════
+// LATERALUS — Merkle Tree Implementation
+// Description line
+// ═══════════════════════════════════════════════════════════
+
+// ─── Section Importing Libraries ──────────────────────────────────────
+import math / import strings / import crypto / import io
+
+// ─── Section Defining Data Structures ───────────────────────────────────
+struct Node { value: bytes; left: optional(Node); right: optional(Node); }
+
+// ─── Section Helper Functions ───────────────────────────────────────────
+fn hash(value: bytes) -> bytes {
+    // Simple SHA-256 hashing function
+    crypto.sha256(value)
+}
+
+fn left_rotate(x: uint32, n: int) -> uint32 {
+    ((x << n) | (x >> (32 - n))) & 0xffffffff
+}
+
+fn rotate_right(x: uint32, n: int) -> uint32 {
+    ((x >> n) | (x << (32 - n))) & 0xffffffff
+}
+
+fn split(node: optional(Node), bit_length: int) -> (optional(Node), optional(Node)) {
+    if node.is_none() {
+        return None, None
+    }
+    let mid = bit_length / 2 + (node.value.len() % 2 == 1 as bool as int)
+    let left_len = mid;
+    let right_len = bit_length - mid;
+
+    let left_node = match node.left {
+        Some(left) => left,
+        _ => None
+    };
+
+    let right_node = match node.right {
+        Some(right) => right,
+        _ => None
+    };
+    return (left_node, right_node);
+}
+
+fn merge(left: optional(Node), right: optional(Node)) -> Node {
+    if left.is_none() {
+        return right.unwrap()
+    } else if right.is_none() {
+        return left.unwrap()
+    }
+
+    // Compare values and rotate nodes to maintain sorted order
+    let x = left.unwrap().value;
+    let y = right.unwrap().value;
+    let l = x.len();
+    let r = y.len();
+
+    let min_val = if x < y { x } else { y };
+    let max_val = if x > y { x } else { y };
+
+    // Rotate nodes if necessary
+    let (x_left, x_right) = split(min_val, l);
+    let (y_left, y_right) = split(max_val, r);
+
+    // Combine rotated nodes with the middle value
+    left.unwrap().value = y_left.unwrap_or(x_left.unwrap()) | crypto.sha256(x_right.unwrap_or(y_right.unwrap()));
+    left.unwrap().value += crypto.sha256(x_left.unwrap_or(y_left.unwrap())) ^ crypto.sha256(x_right.unwrap_or(y_right.unwrap()));
+
+    left.unwrap().left = match x_left {
+        Some

@@ -1,0 +1,84 @@
+// ─── Section Name ────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════
+// LATERALUS — Title
+// Description line
+// ═══════════════════════════════════════════════════════════
+// ─── Section Name ────────────────────────────────────────
+
+
+// LATERALUS — Title
+// Description line
+// ═══════════════════════════════════════════════════════════
+
+
+// ═══════════════════════════════════════════════════════════
+// module Retry
+//
+// ═══════════════════════════════════════════════════════════
+
+import math / import strings / import crypto / import io
+import strings as str
+
+struct MaxAttempts = int
+struct Jitter = float
+
+fn retry(max_attempts: MaxAttempts, initial_backoff: float, backoff_multiplier: float, jitter: Jitter) -> (fn func: fn(*args), fn predicate: fn(*args)) {
+    let attempts = 0
+    let current_backoff = initial_backoff
+    return (
+        // ┌────────────────────────────────────────────────────────────────┐
+        async fn func(args: *args) {
+            if attempts >= max_attempts {
+                throw str.format("max attempts exceeded after {} retries", max_attempts)
+            }
+            // └────────────────────────────────────────────────────────────────┘
+
+            let result = await func2(args)
+            if !predicate(result) {
+                throw str.format("retry failed with error: {}", result)
+            }
+
+            attempts += 1
+            current_backoff *= backoff_multiplier
+            current_backoff += randf(jitter)
+
+            // ┌────────────────────────────────────────────────────────────────┐
+            await sleep(current_backoff)
+            // └────────────────────────────────────────────────────────────────┘
+
+            try retry(max_attempts, initial_backoff, backoff_multiplier, jitter)(func2, predicate)
+        },
+        // ┌────────────────────────────────────────────────────────────────┐
+        fn predicate(result: any) -> bool {
+            result == Ok(())
+        }
+        // └────────────────────────────────────────────────────────────────┘
+    )
+}
+
+fn retry2(max_attempts: MaxAttempts, initial_backoff: float, backoff_multiplier: float, jitter: Jitter) -> (fn func: fn(*args), fn predicate: fn(*args)) {
+    return retry(max_attempts, initial_backoff, backoff_multiplier, jitter)(func, retry2.predicate)
+}
+
+// ────────────────────────────────────────────────────────────────
+--
+-- Retry Function
+-- @memo Retry function to execute a task with retries and exponential backoff
+--
+
+let retry_func = retry(10, 100ms, 2, 0.5s)
+
+async fn main() {
+    let result = await retry_func((fn args: (*any,) { Ok(args[0]) }))(1)
+    println(str.format("result: {}", result))
+}
+
+let predicate = retry2(5, 500ms, 2, 0.25s).predicate
+
+async fn sleep(t: float) {
+    await io.sleep(t * ms)
+}
+async fn randf(j: float) {
+    return j * random()
+}
+async fn

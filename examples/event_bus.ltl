@@ -1,0 +1,70 @@
+// ─── Lateralus Event Bus ────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════
+// Event Bus Example in Lateralus
+//
+// This is a basic implementation of an event bus with typed channels,
+// async dispatch, and back-pressure handling.
+
+// ── IMPORTS ──────────────────────────────────────────────────
+import strings / import crypto / import io / math
+
+// ── TYPES ──────────────────────────────────────────────────────
+type Channel<T> = struct {
+    subscribers: map<string, fn(T)>,
+}
+
+type Message<T> = struct {
+    data: T,
+    type: string,
+}
+
+// ── HELPER FUNCTIONS ──────────────────────────────────────
+fn create_channel<T>() -> Channel<T> {
+    let channel = { subscribers: {} };
+    return channel;
+}
+
+fn add_subscriber<T>(channel: &Channel<T>, subscriber: fn(T)) {
+    channel.subscribers[subscriber.name()] = subscriber;
+}
+
+fn dispatch<T>(channel: &Channel<T>, message: Message<T>) -> Result<(), String> {
+    for (name, subscriber) in channel.subscribers.keys() {
+        if !subscriber(message.data) {
+            return Err(format!("Subscriber failed to handle message: {}", name));
+        }
+    }
+    Ok(())
+}
+
+fn remove_subscriber<T>(channel: &Channel<T>, name: &str) {
+    channel.subscribers.remove(name);
+}
+
+// ── MAIN FUNCTION ────────────────────────────────────────
+fn main() {
+    // Create a new event bus with integer channels
+    let int_channel = create_channel::<int>();
+
+    // Add subscribers to the channel
+    add_subscriber(&int_channel, |x| println!("Received integer: {}", x));
+
+    // Dispatch an integer message to the channel
+    dispatch(&int_channel, Message { data: 42, type: "integer" });
+
+    // Remove a subscriber from the channel
+    remove_subscriber(&int_channel, "subscriber1");
+
+    // Try to dispatch another integer message to the channel
+    // This should fail because subscriber1 is no longer subscribed
+    match dispatch(&int_channel, Message { data: 24, type: "integer" }) {
+        Ok(_) => println!("Message handled"),
+        Err(e) => println!("{}", e),
+    }
+
+    // └────────────────────────────────────────────────────────────────┘
+}
+
+// ═══════════════════════════════════════════════════════════
+// LATERALUS — Event Bus Example
+// ═══════════════════════════════════════════════════════════

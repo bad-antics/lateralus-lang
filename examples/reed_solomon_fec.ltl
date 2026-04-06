@@ -1,0 +1,84 @@
+// ═══════════════════════════════════════════════════════════
+// LATERALUS — Reed-Solomon FEC Encoder and Decoder
+// 
+// This is a simplified implementation of a Reed-Solomon forward error correction
+// encoder and decoder for noisy channels.
+
+// ─── Imports ─────────────────────────────────────────────────────
+import math
+import strings
+import crypto
+import io
+
+// ─── Helper Functions ───────────────────────────────────────────────
+fn gcd(a: int, b: int): int {
+    while b != 0 {
+        let temp = b
+        b = a % b
+        a = temp
+    }
+    return a
+}
+
+fn extended_gcd(a: int, b: int) -> (int, int, int) {
+    if b == 0 {
+        return (a, 1, 0)
+    } else {
+        let (g, x, y) = extended_gcd(b, a % b)
+        return (g, y, x - y * (a / b))
+    }
+}
+
+fn mod_inverse(a: int, m: int) -> int {
+    let (_, x, _) = extended_gcd(a, m)
+    if x < 0 { x += m } // Make sure x is non-negative
+    x
+}
+
+fn polynomial EvaluatePolynomial(polynomial: list[int], x: float) -> float {
+    let mut result = 0.0
+    for coefficient in polynomial {
+        result += coefficient * pow(x, len(polynomial) - 1 - index(coefficient))
+    }
+    return result
+}
+
+// ─── Reed-Solomon Encoder ───────────────────────────────────────────────
+fn reed_solomon_encode(data: list[str]) -> list[list[float]] {
+    let alpha = strings.alphabet('abcdefghijklmnopqrstuvwxyz')
+    let n = data.len()
+    let k = math.floor(n / 2) as int
+    
+    // Find the generator polynomials
+    let g = [gcd(1, i) for i in range(1, n + 1)]
+    
+    // Compute the syndrome
+    let syndrome = [0] * n
+    for i in range(k) {
+        let x = data[i]
+        for j in range(k) {
+            let y = (alpha.pow(j)) % alpha
+            syndrome[j] ^= y
+        }
+        for j in range(n) {
+            if j >= k && syndrome[j - k] != 0 {
+                data[i + k] = (alpha.pow((n - 1) - j) % alpha) * syndrome[(i + k) - j]
+            } else if j < k && syndrome[k + j - i] != 0 {
+                data[i - (k - j)] = (alpha.pow((n - 1) - k - j) % alpha) * syndrome[k + j - i]
+            }
+        }
+    }
+    
+    // Create the parity bits
+    let parity_bits = [[0] * n; k]
+    for i in range(k) {
+        for j in range(i, n, k) {
+            let bit_value = EvaluatePolynomial([data[i] as float], polynomials[i])
+            parity_bits[i][j / k] = bit_value
+        }
+    }
+    
+    return parity_bits
+}
+
+// ─── Reed-Solomon Decoder ─────────────────────────────────────────────

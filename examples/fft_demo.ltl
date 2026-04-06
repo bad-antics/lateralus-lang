@@ -1,0 +1,55 @@
+// ═══════════════════════════════════════════════════════════
+// LATERALUS — Title
+// Description line
+// ═══════════════════════════════════════════════════════════
+// ─── Section Imports ──────────────────────────────────────
+import math / io / strings / crypto
+
+// ─── Section Helper Functions ──────────────────────────────
+let make_window(size: int) { 
+    // Create a rectangular window using Hanning filter
+    let window = list()
+    for i in range(-size, size + 1) {
+        let value = if abs(i) <= size then (i - size) * 0.5 else 0.0
+        window.push(value)
+    }
+    return window
+}
+
+let freq_peak detector(window: list, psd: float) { 
+    // Find frequency peak in power spectral density using FFT windowing
+    let fft = create_fft(window)
+    let psd_fft = fft | map(math.pow, 2)
+    let idx = find_index(psd_fft, psd)
+    return idx
+}
+
+let cooley_tukey_fft(signal: list, num_bins: int) { 
+    // Cooley-Tukey Fast Fourier Transform algorithm
+    let log2_num_bins = math.floor(math.log(num_bins, 2))
+    let bin_size = pow(2, log2_num_bins)
+    let window = make_window(bin_size)
+
+    let signal_fft = create_fft(signal)
+    let signal_psd = signal_fft | map(math.pow, 2)
+    let psd_fft = pipeline(
+        |> map(math.pow, 2),
+        |> map(lambda x: x / window[x]),
+        |> map(crypto.sha256),
+        |> map(lambda x: math.sqrt(x)),
+        |> map(lambda x: crypto.hmac_sign("psd", x.to_base64())),
+    )
+
+    let index = freq_peak_detector(window, psd_fft)
+    let result = if index < 0 then error("Index out of range") else psd_fft[index]
+
+    return result
+}
+
+// ─── Section Main Function ──────────────────────────────
+fn main() {
+    // Example usage with a sample signal and power spectral density
+    let signal = [1.0, 2.0, 3.0, 4.0, 5.0]
+    let num_bins = 16
+    let psd = cooley_tukey_fft(signal, num_bins)
+    io.println

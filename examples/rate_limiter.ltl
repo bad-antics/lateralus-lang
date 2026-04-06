@@ -1,0 +1,78 @@
+// ─── Rate Limiter ────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════
+// LATERALUS — Title
+// Description line
+// ═══════════════════════════════════════════════════════════
+// ─────────────────────────────────────── Section 1: Imports ──────────────────────
+// import math / import strings / import crypto / import io
+import math / import io
+
+// ─────────────────────────────────────── Section 2: Constants ──────────────────────
+// Define burst and refill rates as constants
+const BURST_RATE = 10.0
+const REFILL_RATE = 1.0
+
+// ─────────────────────────────────────── Section 3: Token Bucket Helper Functions ─────────────
+fn token_bucket(burst_rate: float64) -> (float64, function(bucket: list)) {
+    let total_tokens = 0.0
+    let last_refill = 0.0
+    fn bucket() -> bool {
+        if total_tokens >= BURST_RATE {
+            total_tokens -= BURST_RATE
+            last_refill += REFILL_RATE
+            true
+        } else if total_tokens + REFILL_RATE > last_refill {
+            total_tokens += REFILL_RATE - last_refill
+            last_refill += REFILL_RATE
+            true
+        } else {
+            false
+        }
+    }
+}
+
+// ─────────────────────────────────────── Section 4: Leaky Bucket Helper Functions ─────────────
+fn leaky_bucket(refill_rate: float64) -> (list, function(bucket: map)) {
+    let tokens = []
+    let last_refill = 0.0
+    fn bucket(map: map) -> bool {
+        for key in keys(map) {
+            if contains(map, key) && map[key] == 0.0 {
+                delete map[key]
+                continue
+            }
+            if last_refill + REFILL_RATE <= get(map, key, 0.0) {
+                delete map[key]
+                continue
+            }
+            return false
+        }
+        true
+    }
+}
+
+// ─────────────────────────────────────── Section 5: Main Function ──────────────────────
+async fn main() {
+    // Create a token bucket rate limiter with the burst and refill rates defined above
+    let (tokens, bucket) = token_bucket(BURST_RATE)
+    println!("Token Bucket Rate Limiter: Burst", BURST_RATE, "Refill:", REFILL_RATE)
+
+    // Create a leaky bucket rate limiter with the refill rate defined above
+    let (leaky_tokens, leaky_bucket_map) = leaky_bucket(REFILL_RATE)
+    println!("Leaky Bucket Rate Limiter: Refill:", REFILL_RATE)
+
+    // Simulate requests to the token bucket rate limiter
+    for i in range(20) {
+        if bucket() {
+            println!("Request {} allowed", i+1)
+            tokens += 1.0
+            sleep(math.floor(1.0 / BURST_RATE))
+        } else {
+            println!("Request {} denied due to burst limit reached", i+1)
+            break
+        }
+    }
+
+    // Simulate requests to the leaky bucket rate limiter
+    for i in range(30) {
+        if leaky_bucket(leaky_bucket_map).bucket(leaky
