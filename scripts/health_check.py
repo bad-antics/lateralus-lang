@@ -227,7 +227,7 @@ def main():
     print(f"  Project files: {existing} present (of {total_files - len(stdlib_files)} required)")
     print(f"  Stdlib files:  {stdlib_existing} present (of {len(stdlib_files)} total)")
     print(f"  Modules:       {ok_count}/{len(modules)} importable")
-    print(f"  LATERALUS v2.4.0 Ecosystem Health: ", end="")
+    print("  LATERALUS v2.4.0 Ecosystem Health: ", end="")
 
     if existing >= total_files - len(stdlib_files) - 2 and ok_count >= len(modules) - 2:
         print("HEALTHY")

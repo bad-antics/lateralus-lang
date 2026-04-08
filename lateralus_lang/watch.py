@@ -20,16 +20,14 @@ Programmatic usage:
 
 from __future__ import annotations
 
-import os
-import sys
-import time
 import hashlib
-import threading
 import subprocess
+import sys
+import threading
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Union
-from dataclasses import dataclass, field
-
 
 # ---------------------------------------------------------------------------
 # Change event
@@ -129,11 +127,8 @@ class FileWatcher:
         self._use_watchdog = self._try_watchdog()
 
     def _try_watchdog(self) -> bool:
-        try:
-            import watchdog  # type: ignore
-            return True
-        except ImportError:
-            return False
+        import importlib.util
+        return importlib.util.find_spec("watchdog") is not None
 
     def on_change(self, callback: Callable[[FileChangeEvent], None]) -> "FileWatcher":
         """Register a callback for file change events."""
@@ -184,8 +179,8 @@ class FileWatcher:
 
     def _start_watchdog(self, block: bool) -> None:
         try:
+            from watchdog.events import FileSystemEventHandler  # type: ignore
             from watchdog.observers import Observer  # type: ignore
-            from watchdog.events import FileSystemEventHandler, FileModifiedEvent  # type: ignore
 
             watcher = self
 

@@ -11,12 +11,10 @@ Also provides a string-based LQL parser so `.ltl` programs can write:
 
 from __future__ import annotations
 
-import re
 import operator
-import itertools
-from copy import deepcopy
-from typing import Any, Callable, Iterable, Iterator, Optional, Union
+import re
 from dataclasses import dataclass, field
+from typing import Any, Callable, Iterable, Iterator, Optional, Union
 
 # ---------------------------------------------------------------------------
 # Type aliases
@@ -371,16 +369,16 @@ class Query:
             elif len(self._group_by_keys) > 1:
                 out["_group"] = key_vals
             # Apply aggregations
-            for alias, (fn_name, field) in self._aggregations.items():
+            for alias, (fn_name, agg_field) in self._aggregations.items():
                 fn = AGG_FUNCTIONS.get(fn_name)
                 if fn is None:
                     raise QueryError(f"Unknown aggregation function: {fn_name!r}")
-                if field == "*":
+                if agg_field == "*":
                     vals = list(range(len(group_rows)))
-                elif callable(field):
-                    vals = [field(r) for r in group_rows]
+                elif callable(agg_field):
+                    vals = [agg_field(r) for r in group_rows]
                 else:
-                    vals = [r.get(field) for r in group_rows if r.get(field) is not None]
+                    vals = [r.get(agg_field) for r in group_rows if r.get(agg_field) is not None]
                 out[alias] = fn(vals)
             result.append(out)
         return result

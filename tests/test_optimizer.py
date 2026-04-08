@@ -1,19 +1,24 @@
 """
 tests/test_optimizer.py — Tests for the LATERALUS code optimizer
 """
-import pytest
 from lateralus_lang.optimizer import (
-    OptLevel, Optimizer,
-    try_fold_binary, try_fold_unary, try_fold_call,
-    find_dead_variables, find_unreachable_after_return,
-    apply_strength_reduction,
-    can_fuse_pipeline, describe_fusion,
-    CSETracker, OptimizationReport,
-    # v2.4.0 — new passes
-    evaluate_constant_condition, analyze_dead_branches, simplify_branch,
-    apply_algebraic_simplification, ALGEBRAIC_IDENTITIES,
-    analyze_inline_candidate, InlineCandidate, SIDE_EFFECT_FUNCTIONS,
+    ALGEBRAIC_IDENTITIES,
+    SIDE_EFFECT_FUNCTIONS,
+    CSETracker,
     DeadBranchResult,
+    Optimizer,
+    OptLevel,
+    analyze_inline_candidate,
+    apply_algebraic_simplification,
+    apply_strength_reduction,
+    can_fuse_pipeline,
+    describe_fusion,
+    evaluate_constant_condition,
+    find_dead_variables,
+    simplify_branch,
+    try_fold_binary,
+    try_fold_call,
+    try_fold_unary,
 )
 
 

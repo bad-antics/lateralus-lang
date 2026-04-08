@@ -3,19 +3,26 @@ tests/test_pattern_engine.py
 Tests for lateralus_lang.pattern_engine — structural pattern matching
 """
 
-import pytest
-import sys
 import os
+import sys
 from dataclasses import dataclass
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from lateralus_lang.pattern_engine import (
-    Pattern, PatternKind, MatchResult, MatchExpr,
-    match_pattern, parse_pattern, ExhaustivenessChecker,
-    MATCH_SUCCESS, MATCH_FAILURE, get_pattern_builtins
+    MATCH_FAILURE,
+    MATCH_SUCCESS,
+    ExhaustivenessChecker,
+    MatchExpr,
+    MatchResult,
+    Pattern,
+    PatternKind,
+    get_pattern_builtins,
+    match_pattern,
+    parse_pattern,
 )
-
 
 # ---------------------------------------------------------------------------
 # MatchResult

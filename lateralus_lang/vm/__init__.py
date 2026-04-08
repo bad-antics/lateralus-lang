@@ -1,11 +1,13 @@
 """lateralus_lang/vm/__init__.py"""
-from .opcodes import Op, MNEMONIC_MAP, OPCODE_META
-from .assembler import Bytecode, Assembler, AssemblerError, assemble
-from .vm import VM, VMError, StackUnderflowError, DivisionByZeroError, ThrownError
+from .assembler import Assembler, AssemblerError, Bytecode, assemble
 from .disassembler import (
-    disassemble, disassemble_instruction, instruction_length,
     DisassemblerError,
+    disassemble,
+    disassemble_instruction,
+    instruction_length,
 )
+from .opcodes import MNEMONIC_MAP, OPCODE_META, Op
+from .vm import VM, DivisionByZeroError, StackUnderflowError, ThrownError, VMError
 
 __all__ = [
     "Op", "MNEMONIC_MAP", "OPCODE_META",

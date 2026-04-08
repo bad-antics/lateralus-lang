@@ -7,7 +7,7 @@ making it easy to import and use from the compiler pipeline, CLI, and REPL.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 # --- Lazy engine loaders ------------------------------------------------
 # We use lazy imports so that importing engines.py doesn't force loading

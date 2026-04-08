@@ -2,16 +2,12 @@
 tests/test_dap_server.py — Tests for the LATERALUS Debug Adapter Protocol server
 =================================================================================
 """
-import json
-import pytest
-import sys
-import os
 import io
-from unittest.mock import patch, MagicMock
-from pathlib import Path
+import json
 
-from lateralus_lang.dap_server import DAPServer, DAPMessage, DAPRequest, DAPResponse, DAPEvent
+import pytest
 
+from lateralus_lang.dap_server import DAPEvent, DAPMessage, DAPRequest, DAPResponse, DAPServer
 
 # -----------------------------------------------------------------------------
 # Helpers

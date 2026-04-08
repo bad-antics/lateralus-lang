@@ -377,6 +377,6 @@ class LateralusDebugger:
                 # Try to evaluate as expression
                 val, err = self.evaluate(cmd)
                 if err:
-                    print(f"    Unknown command. Type 'h' for help.")
+                    print("    Unknown command. Type 'h' for help.")
                 else:
                     print(f"    {val}")

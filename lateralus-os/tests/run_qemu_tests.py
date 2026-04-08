@@ -15,14 +15,11 @@ Usage:
 """
 
 import argparse
+import re
 import subprocess
 import sys
-import os
 import time
-import signal
-import re
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Optional
 
 
@@ -204,7 +201,7 @@ def print_results(suite: TestSuite, verbose: bool = False):
     if suite.failed > 0:
         print(f"  |  \033[31mFailed: {suite.failed}\033[0m", end="")
     if suite.timed_out:
-        print(f"  |  \033[33mTimed out\033[0m", end="")
+        print("  |  \033[33mTimed out\033[0m", end="")
     print()
     print("=" * 60)
 

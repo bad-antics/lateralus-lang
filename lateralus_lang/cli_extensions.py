@@ -15,11 +15,10 @@ These can be wired into __main__.py's argparse setup.
 
 from __future__ import annotations
 
+import os
 import sys
 import time
-import os
 from pathlib import Path
-from typing import List, Optional
 
 
 def cmd_compile(args) -> int:
@@ -45,11 +44,11 @@ def cmd_compile(args) -> int:
         size = os.path.getsize(result_path)
         print(f"Compiled: {input_path} -> {result_path} ({size:,} bytes)", file=sys.stderr)
         if args.sign_key:
-            print(f"  Signed with key", file=sys.stderr)
+            print("  Signed with key", file=sys.stderr)
         if not args.no_compress:
-            print(f"  Compressed: yes", file=sys.stderr)
+            print("  Compressed: yes", file=sys.stderr)
         if args.debug:
-            print(f"  Debug info: included", file=sys.stderr)
+            print("  Debug info: included", file=sys.stderr)
         return 0
     except Exception as e:
         print(f"Compilation error: {e}", file=sys.stderr)
@@ -133,7 +132,7 @@ def cmd_engines(args) -> int:
 
 def cmd_hash(args) -> int:
     """Hash a file or string using LATERALUS crypto engine."""
-    from lateralus_lang.crypto_engine import hash_data, checksum_file
+    from lateralus_lang.crypto_engine import checksum_file, hash_data
 
     algo = args.algorithm or "sha256"
 

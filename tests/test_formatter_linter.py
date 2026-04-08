@@ -1,8 +1,7 @@
 """
 Tests for the LATERALUS formatter and linter.
 """
-import pytest
-from lateralus_lang.formatter import LateralusFormatter, FormatConfig
+from lateralus_lang.formatter import FormatConfig, LateralusFormatter
 from lateralus_lang.linter import LateralusLinter, Severity
 
 

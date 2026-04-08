@@ -20,13 +20,10 @@ v1.5.0
 from __future__ import annotations
 
 import difflib
-import json
 import sys
-import traceback
 from dataclasses import dataclass, field
-from enum import Enum, auto
-from typing import Any, Dict, List, Optional, Sequence, Tuple
-
+from enum import Enum
+from typing import Any, Dict, List, Optional, Sequence
 
 # -----------------------------------------------------------------------------
 # Error codes

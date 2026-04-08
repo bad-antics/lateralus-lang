@@ -1,11 +1,11 @@
 """
-lateralus_lang/binary.py  -  LTLC Binary Format (Proprietary)
-===========================================================================
+lateralus_lang/binary.py  ─  LTLC Binary Format (Proprietary)
+═══════════════════════════════════════════════════════════════════════════
 Serializes / deserializes compiled Lateralus programs to/from the
 proprietary .ltlc binary format.
 
 Format Structure
-----------------
+────────────────
   HEADER  (32 bytes)
     Magic:       b"LTLC"                 (4 bytes)
     Version:     u16 major, u16 minor    (4 bytes)
@@ -27,14 +27,13 @@ The decompiler reads this format back and reconstructs readable .ltl
 source from the AST.
 
 Usage
------
+─────
   ltlc compile hello.ltl -o hello.ltlc   # compile
   ltlc decompile hello.ltlc              # decompile back to .ltl
-===========================================================================
+═══════════════════════════════════════════════════════════════════════════
 """
 from __future__ import annotations
 
-import hashlib
 import pickle
 import struct
 import time
@@ -44,21 +43,55 @@ from pathlib import Path
 from typing import Optional
 
 from .ast_nodes import (
-    AssignStmt, BinOp, BlockStmt, BreakStmt, CallExpr, CastExpr,
-    ContinueStmt, Decorator, EmitStmt, EnumDecl, ExprStmt, FieldExpr,
-    FnDecl, ForeignBlock, ForStmt, Ident, IfStmt, ImplBlock, ImportStmt,
-    IndexExpr, InterfaceDecl, InterpolatedStr, LambdaExpr, LetDecl,
-    ListExpr, Literal, LoopStmt, MapExpr, MatchArm, MatchStmt,
-    MeasureBlock, Param, ProbeExpr, Program, RangeExpr, RecoverClause,
-    ReturnStmt, SelfExpr, SpawnExpr, StructDecl, StructLiteral,
-    ThrowStmt, TryExpr, TryStmt, TupleExpr, TypeAlias, UnaryOp,
-    WhileStmt, YieldExpr,
+    AssignStmt,
+    BinOp,
+    BlockStmt,
+    BreakStmt,
+    CallExpr,
+    CastExpr,
+    ContinueStmt,
+    EmitStmt,
+    EnumDecl,
+    ExprStmt,
+    FieldExpr,
+    FnDecl,
+    ForeignBlock,
+    ForStmt,
+    Ident,
+    IfStmt,
+    ImplBlock,
+    ImportStmt,
+    IndexExpr,
+    InterfaceDecl,
+    InterpolatedStr,
+    LambdaExpr,
+    LetDecl,
+    ListExpr,
+    Literal,
+    LoopStmt,
+    MapExpr,
+    MatchStmt,
+    MeasureBlock,
+    ProbeExpr,
+    Program,
+    RangeExpr,
+    ReturnStmt,
+    SelfExpr,
+    SpawnExpr,
+    StructDecl,
+    StructLiteral,
+    ThrowStmt,
+    TryStmt,
+    TupleExpr,
+    TypeAlias,
+    UnaryOp,
+    WhileStmt,
+    YieldExpr,
 )
 
-
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # Constants
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 MAGIC = b"LTLC"
 FORMAT_VERSION_MAJOR = 1
@@ -68,9 +101,9 @@ FLAG_HAS_SOURCE = 0x02
 HEADER_SIZE = 32
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # Compiler  (AST → .ltlc binary)
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 @dataclass
 class LTLCHeader:
@@ -163,9 +196,9 @@ def decompile_from_ltlc(data: bytes) -> tuple:
     return program, source_file, module_name
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # Decompiler  (.ltlc → .ltl readable source)
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 class Decompiler:
     """Reconstruct readable .ltl source code from an AST Program."""
@@ -194,7 +227,7 @@ class Decompiler:
 
         return "\n".join(self._lines)
 
-    # -- helpers -----------------------------------------------------------
+    # ── helpers ───────────────────────────────────────────────────────────
 
     def _line(self, text: str = ""):
         if text:
@@ -205,7 +238,7 @@ class Decompiler:
     def _push(self): self._indent += 1
     def _pop(self): self._indent -= 1
 
-    # -- statements --------------------------------------------------------
+    # ── statements ────────────────────────────────────────────────────────
 
     def _decompile_import(self, node: ImportStmt):
         if node.items:
@@ -399,7 +432,7 @@ class Decompiler:
             parts.append(s)
         return ", ".join(parts)
 
-    # -- expressions -------------------------------------------------------
+    # ── expressions ───────────────────────────────────────────────────────
 
     def _expr(self, node) -> str:
         if node is None:
@@ -464,13 +497,12 @@ class Decompiler:
         return str(node)
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # File I/O helpers
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 def compile_file_to_ltlc(ltl_path: str, output_path: Optional[str] = None) -> str:
     """Parse a .ltl file and compile it to .ltlc binary. Returns output path."""
-    from .lexer import lex
     from .parser import parse
 
     source = Path(ltl_path).read_text(encoding="utf-8")

@@ -7,17 +7,17 @@ Covers both HOSTED (libc) and FREESTANDING (bare-metal) modes.
 v1.5.0
 ===========================================================================
 """
-import sys
 import pathlib
-import subprocess
 import shutil
+import subprocess
+import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
 import pytest
-from lateralus_lang.compiler import Compiler, Target, CompileResult
-from lateralus_lang.codegen.c import CTranspiler, CMode, transpile_to_c
 
+from lateralus_lang.codegen.c import CMode, CTranspiler, transpile_to_c
+from lateralus_lang.compiler import Compiler, CompileResult, Target
 
 # --- Helpers -------------------------------------------------------------------
 
@@ -506,8 +506,8 @@ class TestTranspilerAPI:
 
     def test_transpile_to_c_function(self):
         """Test the public transpile_to_c() API."""
-        from lateralus_lang.parser import Parser
         from lateralus_lang.lexer import Lexer
+        from lateralus_lang.parser import Parser
         tokens = Lexer("let x = 1").tokenize()
         ast = Parser(tokens).parse()
         c_src = transpile_to_c(ast, mode=CMode.HOSTED)
@@ -516,8 +516,8 @@ class TestTranspilerAPI:
 
     def test_transpile_freestanding_api(self):
         """Test the public transpile_to_c() API in freestanding mode."""
-        from lateralus_lang.parser import Parser
         from lateralus_lang.lexer import Lexer
+        from lateralus_lang.parser import Parser
         tokens = Lexer("fn test() { }").tokenize()
         ast = Parser(tokens).parse()
         c_src = transpile_to_c(ast, mode=CMode.FREESTANDING)
@@ -526,8 +526,8 @@ class TestTranspilerAPI:
 
     def test_target_arch_parameter(self):
         """Test the target_arch parameter is accepted."""
-        from lateralus_lang.parser import Parser
         from lateralus_lang.lexer import Lexer
+        from lateralus_lang.parser import Parser
         tokens = Lexer("fn test() { }").tokenize()
         ast = Parser(tokens).parse()
         c_src = transpile_to_c(ast, mode=CMode.HOSTED, target_arch="arm64")

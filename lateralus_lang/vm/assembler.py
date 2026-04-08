@@ -37,10 +37,9 @@ from __future__ import annotations
 import re
 import struct
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
-from .opcodes import Op, MNEMONIC_MAP
-
+from .opcodes import MNEMONIC_MAP, Op
 
 # -----------------------------------------------------------------------------
 # Bytecode object

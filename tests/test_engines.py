@@ -1,11 +1,16 @@
 """
 tests/test_engines.py — Integration tests for the unified engine interface
 """
-import pytest
 from lateralus_lang.engines import (
-    math, crypto, markup, bytecode, errors,
-    get_all_builtins, get_preamble_code,
-    engine_status, ENGINE_VERSIONS,
+    ENGINE_VERSIONS,
+    bytecode,
+    crypto,
+    engine_status,
+    errors,
+    get_all_builtins,
+    get_preamble_code,
+    markup,
+    math,
 )
 
 

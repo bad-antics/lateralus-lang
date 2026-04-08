@@ -12,13 +12,13 @@ Provides:
 from __future__ import annotations
 
 import asyncio
-import time
 import threading
+import time
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor, Future
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, TypeVar, Generic
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from enum import Enum, auto
+from typing import Any, Callable, List, Optional, TypeVar
 
 T = TypeVar("T")
 R = TypeVar("R")
@@ -226,7 +226,7 @@ class TaskGroup:
 
     def wait_first(self, timeout: Optional[float] = None) -> TaskResult:
         """Wait for the first task to complete."""
-        from concurrent.futures import wait, FIRST_COMPLETED
+        from concurrent.futures import FIRST_COMPLETED, wait
         done, pending = wait(self._futures, timeout=timeout, return_when=FIRST_COMPLETED)
 
         if not done:

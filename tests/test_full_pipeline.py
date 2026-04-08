@@ -4,9 +4,10 @@ tests/test_full_pipeline.py — End-to-end pipeline integration tests
 These tests verify that the complete LATERALUS compiler pipeline works
 correctly with the new engine subsystems integrated.
 """
-import pytest
 import sys
 from pathlib import Path
+
+import pytest
 
 # Ensure project root is importable
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -59,8 +60,9 @@ class TestMathEngineEndToEnd:
         assert abs(std_dev(data) - 2.0) < 0.2
 
     def test_numerical_integration(self):
-        from lateralus_lang.math_engine import simpson_integrate
         import math
+
+        from lateralus_lang.math_engine import simpson_integrate
         # Integral of sin(x) from 0 to pi = 2.0
         result = simpson_integrate(math.sin, 0, math.pi, 1000)
         assert abs(result - 2.0) < 1e-6
@@ -98,13 +100,13 @@ class TestCryptoEngineEndToEnd:
         assert verify_password("wrong", hashed) is False
 
     def test_encoding_roundtrip(self):
-        from lateralus_lang.crypto_engine import to_base64, from_base64, to_hex, from_hex
+        from lateralus_lang.crypto_engine import from_base64, from_hex, to_base64, to_hex
         original = "LATERALUS rocks!"
         assert from_base64(to_base64(original)) == original
         assert from_hex(to_hex(original)) == original
 
     def test_lbe_complex_data(self):
-        from lateralus_lang.crypto_engine import lbe_encode, lbe_decode
+        from lateralus_lang.crypto_engine import lbe_decode, lbe_encode
         data = {
             "name": "LATERALUS",
             "version": 1.3,
@@ -252,7 +254,10 @@ class TestErrorEngineEndToEnd:
 
     def test_error_formatting(self):
         from lateralus_lang.error_engine import (
-            ErrorCode, Severity, SourceLocation, LateralusError,
+            ErrorCode,
+            LateralusError,
+            Severity,
+            SourceLocation,
         )
 
         err = LateralusError(
@@ -278,7 +283,10 @@ class TestErrorEngineEndToEnd:
 
     def test_error_collector_workflow(self):
         from lateralus_lang.error_engine import (
-            ErrorCode, SourceLocation, ErrorCollector, LateralusCompileError,
+            ErrorCode,
+            ErrorCollector,
+            LateralusCompileError,
+            SourceLocation,
         )
 
         collector = ErrorCollector()
@@ -310,7 +318,7 @@ class TestErrorEngineEndToEnd:
             collector.raise_if_errors()
 
     def test_suggestion_engine(self):
-        from lateralus_lang.error_engine import suggest_similar, suggest_fix_for_undefined
+        from lateralus_lang.error_engine import suggest_fix_for_undefined, suggest_similar
 
         # Typo detection
         similar = suggest_similar("prntln", ["print", "println", "input", "len"])
@@ -323,7 +331,7 @@ class TestErrorEngineEndToEnd:
         assert any("print" in s for s in suggestions)
 
     def test_enhance_traceback_zero_div(self):
-        from lateralus_lang.error_engine import enhance_traceback, ErrorCode
+        from lateralus_lang.error_engine import ErrorCode, enhance_traceback
 
         source = "let result = 10 / 0"
         try:

@@ -1,38 +1,35 @@
 """
-tests/test_wasm_backend.py  -  WebAssembly Backend Tests
-===========================================================================
+tests/test_wasm_backend.py  ─  WebAssembly Backend Tests
+═══════════════════════════════════════════════════════════════════════════
 Tests for the Lateralus → WebAssembly Text Format (WAT) pipeline.
 Covers WasmModule, WasmCompiler, WAT generation, and expression compilation.
 
 v1.5.1
-===========================================================================
+═══════════════════════════════════════════════════════════════════════════
 """
-import sys
 import pathlib
+import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
-import pytest
 from lateralus_lang.codegen.wasm import (
-    WasmModule,
     WasmCompiler,
+    WasmModule,
     WasmType,
-    WasmFunction,
     compile_to_wasm,
     expression_to_wat,
-    i64_const,
     f64_const,
+    global_get,
     i32_const,
+    i64_const,
     local_get,
     local_set,
     local_tee,
-    global_get,
 )
 
-
-# ===============================================================================
+# ═══════════════════════════════════════════════════════════════════════════════
 # WasmType Tests
-# ===============================================================================
+# ═══════════════════════════════════════════════════════════════════════════════
 
 class TestWasmType:
     """Test LATERALUS → WASM type mapping."""
@@ -67,9 +64,9 @@ class TestWasmType:
         assert WasmType.NONE == ""
 
 
-# ===============================================================================
+# ═══════════════════════════════════════════════════════════════════════════════
 # WAT Instruction Builder Tests
-# ===============================================================================
+# ═══════════════════════════════════════════════════════════════════════════════
 
 class TestWatInstructions:
     """Test WAT instruction builder functions."""
@@ -99,9 +96,9 @@ class TestWatInstructions:
         assert global_get("counter") == "global.get $counter"
 
 
-# ===============================================================================
+# ═══════════════════════════════════════════════════════════════════════════════
 # WasmModule Tests
-# ===============================================================================
+# ═══════════════════════════════════════════════════════════════════════════════
 
 class TestWasmModule:
     """Test WasmModule construction and WAT serialization."""
@@ -171,9 +168,9 @@ class TestWasmModule:
         assert '"println"' in wat
 
 
-# ===============================================================================
+# ═══════════════════════════════════════════════════════════════════════════════
 # WasmCompiler Tests
-# ===============================================================================
+# ═══════════════════════════════════════════════════════════════════════════════
 
 class TestWasmCompiler:
     """Test the WasmCompiler class."""
@@ -196,9 +193,9 @@ class TestWasmCompiler:
         assert "mul" in wat.lower() or "const" in wat.lower()
 
 
-# ===============================================================================
+# ═══════════════════════════════════════════════════════════════════════════════
 # compile_to_wasm API Tests
-# ===============================================================================
+# ═══════════════════════════════════════════════════════════════════════════════
 
 class TestCompileToWasm:
     """Test the top-level compile_to_wasm API."""
@@ -219,9 +216,9 @@ class TestCompileToWasm:
         assert "main" in wat
 
 
-# ===============================================================================
+# ═══════════════════════════════════════════════════════════════════════════════
 # WAT Serialization Tests
-# ===============================================================================
+# ═══════════════════════════════════════════════════════════════════════════════
 
 class TestWatSerialization:
     """Test that generated WAT is well-formed."""
@@ -251,9 +248,9 @@ class TestWatSerialization:
             assert line[0] in (' ', '(', ')'), f"Bad indent: {line!r}"
 
 
-# ===============================================================================
+# ═══════════════════════════════════════════════════════════════════════════════
 # Integration: Round-trip structure tests
-# ===============================================================================
+# ═══════════════════════════════════════════════════════════════════════════════
 
 class TestWasmIntegration:
     """Integration tests for the WASM backend."""

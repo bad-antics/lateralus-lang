@@ -16,11 +16,9 @@ This module defines:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple, FrozenSet
+from dataclasses import dataclass
 from enum import Enum, auto
-import itertools
-
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 # --- Type Kind ---------------------------------------------------------
 
@@ -855,9 +853,14 @@ class TypeInferencer:
         pattern.  Also adds appropriate unification constraints.
         """
         from lateralus_lang.ast_nodes import (
-            WildcardPattern, LiteralPattern, BindingPattern,
-            TypePattern, EnumVariantPattern, TuplePattern,
-            ListPattern, OrPattern,
+            BindingPattern,
+            EnumVariantPattern,
+            ListPattern,
+            LiteralPattern,
+            OrPattern,
+            TuplePattern,
+            TypePattern,
+            WildcardPattern,
         )
         bindings: Dict[str, LTLType] = {}
 

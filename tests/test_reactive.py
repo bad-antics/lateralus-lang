@@ -3,19 +3,23 @@ tests/test_reactive.py
 Tests for lateralus_lang.reactive — Signals, Observables, Subjects, Store
 """
 
-import pytest
-import sys
 import os
-import time
-import threading
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from lateralus_lang.reactive import (
-    Signal, Computed, Effect, Observable, Subject, BehaviorSubject,
-    ReplaySubject, Store, batch, get_reactive_builtins
+    BehaviorSubject,
+    Computed,
+    Effect,
+    Observable,
+    ReplaySubject,
+    Signal,
+    Store,
+    Subject,
+    batch,
+    get_reactive_builtins,
 )
-
 
 # ---------------------------------------------------------------------------
 # Signal

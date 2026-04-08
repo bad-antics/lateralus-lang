@@ -3,9 +3,6 @@ LATERALUS Standard Library — algorithms
 Python implementation of stdlib/algorithms.ltl
 """
 from __future__ import annotations
-import math
-from typing import Any, List, Optional, Callable
-
 
 # --- Sorting ----------------------------------------------------------
 

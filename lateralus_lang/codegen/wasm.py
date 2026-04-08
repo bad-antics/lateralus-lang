@@ -25,10 +25,8 @@ WebAssembly types used:
 from __future__ import annotations
 
 import re
-import struct
-from typing import Any, Optional
 from dataclasses import dataclass, field
-
+from typing import Optional
 
 # ---------------------------------------------------------------------------
 # WAT type system

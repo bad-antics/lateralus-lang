@@ -2,16 +2,35 @@
 Tests for the LATERALUS scientific computing library.
 """
 import math
+
 import pytest
 
 from lateralus_lang.science import (
-    CONSTANTS, Dimension, Quantity,
-    meters, kilograms, seconds, newtons, joules, kelvin,
-    euler_step, rk4_step, solve_ode, solve_ode_system,
-    fft, ifft, power_spectrum, moving_average, convolve,
-    normal_pdf, normal_cdf, poisson_pmf, exponential_pdf, binomial_pmf,
+    CONSTANTS,
+    KILOGRAM,
+    METER,
+    NEWTON,
+    SECOND,
+    VELOCITY,
+    Dimension,
+    Quantity,
+    binomial_pmf,
+    convolve,
+    euler_step,
+    exponential_pdf,
+    fft,
+    ifft,
+    kilograms,
     lagrange_interpolate,
-    METER, KILOGRAM, SECOND, NEWTON, JOULE, VELOCITY,
+    meters,
+    moving_average,
+    normal_cdf,
+    normal_pdf,
+    poisson_pmf,
+    power_spectrum,
+    seconds,
+    solve_ode,
+    solve_ode_system,
 )
 
 

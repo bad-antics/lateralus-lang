@@ -2,14 +2,18 @@
 lateralus_lang/__main__.py  -  Entry point for `python -m lateralus_lang`
 """
 import sys
+
 from .compiler import Compiler, Target
-from .repl     import start_repl
+from .markup import parse as _ltlm_parse
+from .markup import to_ansi as _ltlm_ansi
+from .markup import to_html as _ltlm_html
+from .repl import start_repl
 from .repl_enhanced import start_repl as start_repl_enhanced
-from .markup   import parse as _ltlm_parse, to_html as _ltlm_html, to_ansi as _ltlm_ansi
 
 
 def main(argv=None) -> int:
     import argparse
+
     from . import __version__
     p = argparse.ArgumentParser(
         prog="python -m lateralus_lang",
@@ -225,7 +229,8 @@ def main(argv=None) -> int:
     elif ns.cmd == "build":
         result = c.compile_file(ns.file, target=Target.BYTECODE)
         if result.ok:
-            import pickle, pathlib
+            import pathlib
+            import pickle
             out = ns.output or (pathlib.Path(ns.file).stem + ".ltbc")
             pathlib.Path(out).write_bytes(pickle.dumps(result.bytecode))
             print(f"Built → {out}")
@@ -299,7 +304,8 @@ def main(argv=None) -> int:
     elif ns.cmd == "asm":
         result = c.compile_file(ns.file, target=Target.ASSEMBLE)
         if result.ok:
-            import pickle, pathlib
+            import pathlib
+            import pickle
             out = ns.output or (pathlib.Path(ns.file).stem + ".ltbc")
             pathlib.Path(out).write_bytes(pickle.dumps(result.bytecode))
             print(f"Assembled → {out}")
@@ -308,9 +314,11 @@ def main(argv=None) -> int:
         return 0 if result.ok else 1
 
     elif ns.cmd == "ast":
-        import pathlib, pprint
-        from .lexer  import lex, LexError
-        from .parser import parse, ParseError
+        import pathlib
+        import pprint
+
+        from .lexer import LexError, lex
+        from .parser import ParseError, parse
         src = pathlib.Path(ns.file).read_text(encoding="utf-8")
         try:
             tree = parse(src, ns.file)
@@ -332,9 +340,10 @@ def main(argv=None) -> int:
 
     elif ns.cmd == "ir":
         import pathlib
-        from .lexer   import lex, LexError
-        from .parser  import parse, ParseError
-        from .ir      import analyze
+
+        from .ir import analyze
+        from .lexer import LexError, lex
+        from .parser import ParseError, parse
         src = pathlib.Path(ns.file).read_text(encoding="utf-8")
         try:
             tree = parse(src, ns.file)
@@ -354,7 +363,7 @@ def main(argv=None) -> int:
         return 0
 
     elif ns.cmd == "test":
-        import pathlib, time as _time2
+        import pathlib
 
         result = c.compile_file(ns.file, target=Target.PYTHON)
         if not result.ok:
@@ -378,7 +387,9 @@ for _fn in _LATERALUS_TESTS:
 print(f"\n  {_passed} passed  {_failed} failed")
 """
         py_src = result.code + "\n" + runner
-        import tempfile, subprocess, pathlib
+        import pathlib
+        import subprocess
+        import tempfile
         tmp = tempfile.NamedTemporaryFile(suffix=".py", delete=False, mode="w")
         tmp.write(py_src); tmp.close()
         ret = subprocess.run([sys.executable, tmp.name]).returncode
@@ -412,6 +423,7 @@ print(f"\n  {_passed} passed  {_failed} failed")
 
     elif ns.cmd == "decompile":
         import pathlib
+
         from .binary import decompile_ltlc_to_source
         source = decompile_ltlc_to_source(ns.file)
         if ns.output:
@@ -429,31 +441,33 @@ print(f"\n  {_passed} passed  {_failed} failed")
         return 0
 
     elif ns.cmd == "info":
-        from . import __version__
         import pathlib
+
+        from . import __version__
         stdlib_dir = pathlib.Path(__file__).parent.parent / "stdlib"
         stdlib_modules = sorted(p.stem for p in stdlib_dir.glob("*.ltl")) if stdlib_dir.exists() else []
         print(f"Lateralus Language  v{__version__}")
         print(f"Python backend:     {sys.version.split()[0]}")
         print(f"Stdlib modules:     {len(stdlib_modules)} ({', '.join(stdlib_modules[:12])}{'...' if len(stdlib_modules) > 12 else ''})")
-        print(f"Targets:            Python 3 · C99 (hosted/freestanding) · JavaScript (ESM/CJS/IIFE)")
-        print(f"                    WebAssembly (WAT) · Bytecode/IR · .ltlc binary")
-        print(f"Features (v1.5):    Result/Option · HM type inference · match expressions")
-        print(f"                    complex · Matrix · statistics · crypto · LTLM markup")
-        print(f"Features (v1.6):    nursery · channels · select · async-for · structured concurrency")
-        print(f"Features (v1.7):    lateralus.toml · workspaces · build profiles · @cfg")
-        print(f"Features (v1.8):    macro! · comptime · #[derive] · @foreign · metaprogramming")
-        print(f"Features (v1.9):    FFI · Jupyter kernel · enhanced REPL · source maps")
-        print(f"Features (v2.0):    C99 backend · DAP debugger · optimizer (O0–O3)")
-        print(f"Features (v2.1):    JS backend · WASM backend · polyglot runtime")
-        print(f"Features (v2.2):    12 new stdlib · 4 linter rules · OS apps (ltlc/chat/edit/pkg)")
-        print(f"Features (v2.3):    6 new stdlib · 5 linter rules · LSP code actions/rename")
-        print(f"Tooling:            LSP server · DAP server · formatter · linter · benchmarks")
+        print("Targets:            Python 3 · C99 (hosted/freestanding) · JavaScript (ESM/CJS/IIFE)")
+        print("                    WebAssembly (WAT) · Bytecode/IR · .ltlc binary")
+        print("Features (v1.5):    Result/Option · HM type inference · match expressions")
+        print("                    complex · Matrix · statistics · crypto · LTLM markup")
+        print("Features (v1.6):    nursery · channels · select · async-for · structured concurrency")
+        print("Features (v1.7):    lateralus.toml · workspaces · build profiles · @cfg")
+        print("Features (v1.8):    macro! · comptime · #[derive] · @foreign · metaprogramming")
+        print("Features (v1.9):    FFI · Jupyter kernel · enhanced REPL · source maps")
+        print("Features (v2.0):    C99 backend · DAP debugger · optimizer (O0–O3)")
+        print("Features (v2.1):    JS backend · WASM backend · polyglot runtime")
+        print("Features (v2.2):    12 new stdlib · 4 linter rules · OS apps (ltlc/chat/edit/pkg)")
+        print("Features (v2.3):    6 new stdlib · 5 linter rules · LSP code actions/rename")
+        print("Tooling:            LSP server · DAP server · formatter · linter · benchmarks")
         return 0
 
     elif ns.cmd == "fmt":
-        from .formatter import LateralusFormatter, FormatConfig, format_file
         import pathlib
+
+        from .formatter import FormatConfig, format_file
         config = FormatConfig(indent_size=getattr(ns, "indent", 4))
         files = []
         for f in ns.files:
@@ -478,8 +492,9 @@ print(f"\n  {_passed} passed  {_failed} failed")
         return 0
 
     elif ns.cmd == "lint":
-        from .linter import LateralusLinter
         import pathlib
+
+        from .linter import LateralusLinter
         linter = LateralusLinter(strict=getattr(ns, "strict", False))
         total_issues = 0
         for f in ns.files:
@@ -510,18 +525,18 @@ print(f"\n  {_passed} passed  {_failed} failed")
         return 0
 
     elif ns.cmd == "init":
-        from .package_manager import scaffold_project
         import pathlib
+
+        from .package_manager import scaffold_project
         project = scaffold_project(ns.name, pathlib.Path.cwd(),
                                    template=getattr(ns, "template", "default"))
         print(f"Created LATERALUS project: {project}")
         print(f"  cd {ns.name}")
-        print(f"  lateralus run src/main.ltl")
+        print("  lateralus run src/main.ltl")
         return 0
 
     elif ns.cmd == "add":
-        from .package_manager import (_find_manifest, ProjectManifest,
-                                      Dependency)
+        from .package_manager import Dependency, ProjectManifest, _find_manifest
         manifest_path = _find_manifest()
         if not manifest_path:
             print("No lateralus.toml found. Run 'lateralus init' first.",
@@ -543,8 +558,7 @@ print(f"\n  {_passed} passed  {_failed} failed")
         return 0
 
     elif ns.cmd == "publish":
-        from .package_manager import (_find_manifest, ProjectManifest,
-                                      PackageBundle)
+        from .package_manager import PackageBundle, ProjectManifest, _find_manifest
         manifest_path = _find_manifest()
         if not manifest_path:
             print("No lateralus.toml found.", file=sys.stderr)
@@ -562,7 +576,7 @@ print(f"\n  {_passed} passed  {_failed} failed")
                 print(f"    ... and {len(bundle.files) - 10} more")
         else:
             print(f"Publishing {bundle.name}@{bundle.version}")
-            print(f"  (Registry not yet available — use --dry-run to preview)")
+            print("  (Registry not yet available — use --dry-run to preview)")
         return 0
 
     elif ns.cmd == "serve":
@@ -595,7 +609,8 @@ print(f"\n  {_passed} passed  {_failed} failed")
         return 0
 
     elif ns.cmd == "profile":
-        import pathlib, time as _ptime
+        import pathlib
+        import time as _ptime
         target_map = {
             "python": Target.PYTHON, "c": Target.C, "js": Target.JAVASCRIPT,
             "wasm": Target.WASM, "check": Target.CHECK,
@@ -606,9 +621,9 @@ print(f"\n  {_passed} passed  {_failed} failed")
         fname = pathlib.Path(ns.file).name
 
         # Phase timing
+        from .ir import analyze
         from .lexer import lex
         from .parser import parse
-        from .ir import analyze
 
         times_lex = []
         times_parse = []
@@ -647,7 +662,8 @@ print(f"\n  {_passed} passed  {_failed} failed")
         return 0
 
     elif ns.cmd == "disasm":
-        import pathlib, pickle
+        import pathlib
+        import pickle
         bc_path = pathlib.Path(ns.file)
         if not bc_path.exists():
             print(f"error: file not found: {ns.file}", file=sys.stderr)
@@ -663,7 +679,8 @@ print(f"\n  {_passed} passed  {_failed} failed")
         return 0
 
     elif ns.cmd == "clean":
-        import pathlib, shutil
+        import pathlib
+        import shutil
         root = pathlib.Path(__file__).resolve().parent.parent
         removed = []
         for pat in ["build/", "__pycache__", "*.pyc"]:

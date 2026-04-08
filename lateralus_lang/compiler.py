@@ -35,28 +35,26 @@ ErrorBridge for integration with the Lateralus error_engine.
 """
 from __future__ import annotations
 
-import os
 import pathlib
 import time
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
-from .lexer   import lex, LexError
-from .parser  import parse, ParseError
-from .ir      import analyze, IRModule, SemanticError as IRSemanticError
-from .codegen.bytecode import generate_bytecode, BytecodeGenError
-from .codegen.python   import transpile_to_python
-from .codegen.c        import transpile_to_c, CMode
-from .vm.assembler     import assemble, AssemblerError, Bytecode
-from .vm.vm            import VM, VMError
-from .errors           import (
-    ErrorContext, ErrorReporter, Severity,
-    LTLLexError, LTLParseError, LTLSemanticError,
-    LTLCompileError, LTLVMError, LTLAssemblerError,
+from .codegen.bytecode import BytecodeGenError, generate_bytecode
+from .codegen.c import CMode, transpile_to_c
+from .codegen.python import transpile_to_python
+from .errors import (
+    ErrorContext,
+    ErrorReporter,
+    Severity,
     get_bridge,
 )
-
+from .ir import IRModule, analyze
+from .lexer import LexError, lex
+from .parser import ParseError, parse
+from .vm.assembler import AssemblerError, Bytecode, assemble
+from .vm.vm import VM, VMError
 
 # -----------------------------------------------------------------------------
 # Compilation target
@@ -338,7 +336,9 @@ class Compiler:
 
     def _run_python(self, result: CompileResult) -> CompileResult:
         """Transpile to Python source and exec it in-process."""
-        import tempfile, subprocess as _sp, sys as _sys
+        import subprocess as _sp
+        import sys as _sys
+        import tempfile
         src = result.python_src
         if not src:
             result.ok = False

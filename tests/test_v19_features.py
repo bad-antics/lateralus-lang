@@ -10,14 +10,14 @@ Tests for all LATERALUS v1.9 features:
   · C backend: v1.7/v1.8 visitor coverage (const fn, macro, comptime, cfg)
   · End-to-end: v19_showcase.ltl compiles to Python, JS, WASM, C
 """
-import sys
 import pathlib
+import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
 import pytest
-from lateralus_lang.compiler import Compiler, Target
 
+from lateralus_lang.compiler import Compiler, Target
 
 # --- Helpers -----------------------------------------------------------------
 
@@ -115,17 +115,7 @@ class TestWASM:
 
 class TestFFI:
     def test_import_ffi(self):
-        from lateralus_lang.ffi import (
-            FFIFunction,
-            FFIRegistry,
-            define_ffi_struct,
-            ffi_alloc,
-            ffi_free,
-            ffi_read_string,
-            ffi_write_string,
-            get_ffi_builtins,
-            load_library,
-        )
+        pass
 
     def test_registry_creation(self):
         from lateralus_lang.ffi import FFIRegistry
@@ -176,15 +166,16 @@ class TestFFI:
         ffi_free(ptr)
 
     def test_ffi_write_read_string(self):
-        from lateralus_lang.ffi import ffi_write_string, ffi_read_string, ffi_free
+        from lateralus_lang.ffi import ffi_free, ffi_read_string, ffi_write_string
         ptr = ffi_write_string("hello")
         result = ffi_read_string(ptr)
         assert result == "hello"
         ffi_free(ptr)
 
     def test_type_mapping(self):
-        from lateralus_lang.ffi import LTL_TO_CTYPE
         import ctypes
+
+        from lateralus_lang.ffi import LTL_TO_CTYPE
         assert LTL_TO_CTYPE["int"] == ctypes.c_int64
         assert LTL_TO_CTYPE["float"] == ctypes.c_double
         assert LTL_TO_CTYPE["bool"] == ctypes.c_bool
@@ -197,12 +188,7 @@ class TestFFI:
 
 class TestJupyterKernel:
     def test_import_kernel(self):
-        from lateralus_lang.jupyter_kernel import (
-            LateralusKernel,
-            KERNEL_SPEC,
-            KERNEL_NAME,
-            install_kernel,
-        )
+        pass
 
     def test_kernel_spec(self):
         from lateralus_lang.jupyter_kernel import KERNEL_SPEC

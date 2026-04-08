@@ -2,16 +2,15 @@
 """
 Tests for the LATERALUS source map module.
 """
-import pytest
-import json
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from lateralus_lang.source_map import (
-    SourceMapping, SourceMap, SourceMapBuilder,
-    enhance_error_with_source_map
+    SourceMap,
+    SourceMapBuilder,
+    SourceMapping,
+    enhance_error_with_source_map,
 )
 
 

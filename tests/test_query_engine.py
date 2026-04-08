@@ -3,16 +3,12 @@ tests/test_query_engine.py
 Tests for lateralus_lang.query_engine — LQL fluent query API
 """
 
-import pytest
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from lateralus_lang.query_engine import (
-    Query, lql, parse_lql, AGG_FUNCTIONS, get_query_builtins
-)
-
+from lateralus_lang.query_engine import AGG_FUNCTIONS, Query, get_query_builtins, lql, parse_lql
 
 # ---------------------------------------------------------------------------
 # Test data

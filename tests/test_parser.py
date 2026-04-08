@@ -1,15 +1,25 @@
 """
 tests/test_parser.py  -  Parser unit tests
 """
-import sys, pathlib
+import pathlib
+import sys
+
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
-import pytest
-from lateralus_lang.parser  import parse, ParseError
 from lateralus_lang.ast_nodes import (
-    Program, FnDecl, LetDecl, IfStmt, TryStmt, ReturnStmt, Literal, Ident,
-    BinOp, CallExpr, WhileStmt, ForStmt, MatchStmt,
+    BinOp,
+    CallExpr,
+    FnDecl,
+    ForStmt,
+    IfStmt,
+    LetDecl,
+    Literal,
+    MatchStmt,
+    Program,
+    TryStmt,
+    WhileStmt,
 )
+from lateralus_lang.parser import parse
 
 
 def ast(src):

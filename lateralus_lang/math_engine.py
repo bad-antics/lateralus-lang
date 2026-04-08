@@ -22,11 +22,17 @@ from __future__ import annotations
 
 import math
 import operator
-from dataclasses import dataclass, field
-from decimal import Decimal, getcontext, ROUND_HALF_UP
+from dataclasses import dataclass
+from decimal import ROUND_HALF_UP, Decimal, getcontext
 from fractions import Fraction
 from typing import (
-    Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple, Union,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
 )
 
 # -----------------------------------------------------------------------------

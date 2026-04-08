@@ -10,14 +10,12 @@ Tests for LATERALUS v2.1 features:
   · join / sqrt / math stdlib shims
   · v21 showcase compiles and runs
 """
-import sys
 import pathlib
+import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
-import pytest
 from lateralus_lang.compiler import Compiler, Target
-from lateralus_lang.codegen.python import PythonTranspiler
 
 # --- Helpers -----------------------------------------------------------------
 
@@ -43,8 +41,8 @@ def python_src(src, filename="<test>"):
 
 def run_ltl(src):
     """Compile and execute LTL source, return captured stdout."""
-    import io
     import contextlib
+    import io
     py = python_src(src)
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
@@ -365,7 +363,8 @@ class TestV21Showcase:
     def test_v21_showcase_runs(self):
         r = compile_file("examples/v21_showcase.ltl")
         assert r.ok
-        import io, contextlib
+        import contextlib
+        import io
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             exec(r.python_src, {"__name__": "__main__"})

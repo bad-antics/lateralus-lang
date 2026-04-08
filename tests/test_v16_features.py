@@ -12,22 +12,26 @@ Covers:
                     parallel_map/filter/reduce, TaskGroup
 ===========================================================================
 """
-import sys
 import pathlib
+import sys
 import threading
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
 import pytest
-from lateralus_lang.lexer import lex, TK
-from lateralus_lang.parser import parse, ParseError
+
 from lateralus_lang.ast_nodes import (
-    SelectStmt, SelectArm, NurseryBlock, AsyncForStmt,
-    ChannelExpr, CancelExpr, ParallelExpr, SpawnExpr,
+    AsyncForStmt,
+    CancelExpr,
+    ChannelExpr,
+    NurseryBlock,
+    ParallelExpr,
+    SelectStmt,
 )
 from lateralus_lang.compiler import Compiler, Target
-
+from lateralus_lang.lexer import TK, lex
+from lateralus_lang.parser import parse
 
 # --- Helper -----------------------------------------------------------
 

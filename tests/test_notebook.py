@@ -3,20 +3,25 @@ tests/test_notebook.py
 Tests for lateralus_lang.notebook — .ltlnb notebook format
 """
 
-import pytest
-import sys
-import os
 import json
+import os
+import sys
 import tempfile
-from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from lateralus_lang.notebook import (
-    Notebook, NotebookCell, NotebookOutput, NotebookExecutor,
-    CellType, OutputType, NOTEBOOK_FORMAT_VERSION, get_notebook_builtins
+    NOTEBOOK_FORMAT_VERSION,
+    CellType,
+    Notebook,
+    NotebookCell,
+    NotebookExecutor,
+    NotebookOutput,
+    OutputType,
+    get_notebook_builtins,
 )
-
 
 # ---------------------------------------------------------------------------
 # NotebookOutput

@@ -2,16 +2,28 @@
 tests/test_math_engine.py — Tests for the LATERALUS Math Engine
 """
 import math
-import pytest
-from lateralus_lang.math_engine import (
-    LTLNumber, Matrix, Vector, Interval, Dual,
-    dual_sin, dual_cos, dual_exp, dual_log, dual_sqrt,
-    derivative, gradient,
-    mean, median, variance, std_dev, correlation, linear_regression,
-    newton_raphson, bisection, trapezoidal_integrate, simpson_integrate,
-    set_precision,
-)
 
+import pytest
+
+from lateralus_lang.math_engine import (
+    Dual,
+    Interval,
+    LTLNumber,
+    Matrix,
+    Vector,
+    bisection,
+    correlation,
+    derivative,
+    dual_exp,
+    dual_sin,
+    linear_regression,
+    mean,
+    median,
+    simpson_integrate,
+    std_dev,
+    trapezoidal_integrate,
+    variance,
+)
 
 # -------------------------------------------------------------------------
 # LTLNumber

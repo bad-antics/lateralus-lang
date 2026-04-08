@@ -4,8 +4,6 @@ Python implementation of stdlib/data.ltl
 Data structures and containers.
 """
 from __future__ import annotations
-from typing import Any, Optional
-
 
 # --- Stack ------------------------------------------------------------
 

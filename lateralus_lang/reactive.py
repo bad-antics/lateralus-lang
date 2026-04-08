@@ -17,15 +17,11 @@ Key primitives:
 
 from __future__ import annotations
 
-import time
 import threading
 import weakref
 from collections import deque
 from contextlib import contextmanager
-from typing import (
-    Any, Callable, Generic, Iterable, Iterator,
-    Optional, TypeVar, Union
-)
+from typing import Any, Callable, Generic, Iterable, Iterator, Optional, TypeVar
 
 T = TypeVar("T")
 U = TypeVar("U")
@@ -500,7 +496,7 @@ class Observable(Generic[T]):
         return Observable(subscribe)
 
     def __repr__(self) -> str:
-        return f"Observable()"
+        return "Observable()"
 
 
 # ---------------------------------------------------------------------------
@@ -517,7 +513,7 @@ class Observer(Generic[T]):
         self._completed = False
 
     def __repr__(self) -> str:
-        return f"Observer()"
+        return "Observer()"
 
 
 class Subscription:

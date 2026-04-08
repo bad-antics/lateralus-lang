@@ -1,11 +1,11 @@
 """
-lateralus_lang/vm/vm.py  -  LATERALUS Stack Virtual Machine
-===========================================================================
+lateralus_lang/vm/vm.py  ─  LATERALUS Stack Virtual Machine
+═══════════════════════════════════════════════════════════════════════════
 Executes LTasm Bytecode objects produced by the assembler or bytecode
 code-generator.
 
 Architecture
-------------
+────────────
   · Stack:    Python list acting as the operand stack
   · Registers: r0–r15, sp (auto), pc (byte offset into code)
   · Flags:    Z, C, N, O  (zero, carry, negative, overflow)
@@ -15,24 +15,22 @@ Architecture
 
 All VM errors surface as VMError which integrates with the Lateralus
 error_engine via errors/bridge.py when available.
-===========================================================================
+═══════════════════════════════════════════════════════════════════════════
 """
 from __future__ import annotations
 
-import math
 import struct
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from .assembler import Bytecode
 from .opcodes import Op
 
-
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # VM error types
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 class VMError(Exception):
     """Base class for all VM runtime errors."""
@@ -53,9 +51,9 @@ class ThrownError(VMError):
         self.payload = payload
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # Frames
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 @dataclass
 class CallFrame:
@@ -70,9 +68,9 @@ class ErrorFrame:
     ensure_addr:  Optional[int] = None
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # VM
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 _MAX_STEPS = 10_000_000   # safety limit
 
@@ -117,7 +115,7 @@ class VM:
         self.steps     = 0
         self.exit_code = 0
 
-    # -- public API ------------------------------------------------------------
+    # ── public API ────────────────────────────────────────────────────────────
 
     def run(self) -> int:
         code = self.bc.code
@@ -136,7 +134,7 @@ class VM:
                 break
         return self.exit_code
 
-    # -- stack helpers ---------------------------------------------------------
+    # ── stack helpers ─────────────────────────────────────────────────────────
 
     def _push(self, v: Any) -> None:
         self.stack.append(v)
@@ -166,7 +164,7 @@ class VM:
     def _str(self, idx: int) -> str:
         return self.bc.string_table[idx]
 
-    # -- flag helpers ----------------------------------------------------------
+    # ── flag helpers ──────────────────────────────────────────────────────────
 
     def _set_flags(self, a: Any, b: Any) -> None:
         try:
@@ -178,10 +176,10 @@ class VM:
         except TypeError:
             pass
 
-    # -- dispatcher ------------------------------------------------------------
+    # ── dispatcher ────────────────────────────────────────────────────────────
 
     def _dispatch(self, op: Op, code: bytes) -> Optional[str]:  # noqa: C901
-        # -- Stack ----------------------------------------------------------
+        # ── Stack ──────────────────────────────────────────────────────────
         if op == Op.NOP:
             pass
 
@@ -228,7 +226,7 @@ class VM:
             a, b = self._pop(), self._pop()
             self._push(a); self._push(b)
 
-        # -- Arithmetic ------------------------------------------------------
+        # ── Arithmetic ──────────────────────────────────────────────────────
         elif op == Op.ADD:
             b, a = self._pop(), self._pop(); self._push(a + b)
         elif op == Op.SUB:
@@ -262,7 +260,7 @@ class VM:
             if float(b) == 0.0: raise DivisionByZeroError("Float division by zero", pc=self.pc)
             self._push(float(a) / float(b))
 
-        # -- Bitwise ---------------------------------------------------------
+        # ── Bitwise ─────────────────────────────────────────────────────────
         elif op == Op.AND:
             b, a = self._pop(), self._pop(); self._push(int(a) & int(b))
         elif op == Op.OR:
@@ -276,7 +274,7 @@ class VM:
         elif op == Op.SHR:
             b, a = self._pop(), self._pop(); self._push(int(a) >> int(b))
 
-        # -- Comparison ------------------------------------------------------
+        # ── Comparison ──────────────────────────────────────────────────────
         elif op == Op.CMP:
             b, a = self._pop(), self._pop()
             self._set_flags(a, b)
@@ -294,7 +292,7 @@ class VM:
         elif op == Op.CMPGE:
             b, a = self._pop(), self._pop(); self._push(int(a >= b))
 
-        # -- Control flow ----------------------------------------------------
+        # ── Control flow ────────────────────────────────────────────────────
         elif op == Op.JMP:
             self.pc = self._read_u32(code)
         elif op == Op.JT:
@@ -334,7 +332,7 @@ class VM:
             self.exit_code = 0
             return "HALT"
 
-        # -- Registers / memory ----------------------------------------------
+        # ── Registers / memory ──────────────────────────────────────────────
         elif op == Op.LOAD:
             r = self._read_u8(code); addr = self._read_u32(code)
             self.regs[r] = self.heap.get(addr, 0)
@@ -355,7 +353,7 @@ class VM:
             base = self._read_u8(code); idx_r = self._read_u8(code); src = self._read_u8(code)
             self.regs[base][self.regs[idx_r]] = self.regs[src]
 
-        # -- Heap ------------------------------------------------------------
+        # ── Heap ────────────────────────────────────────────────────────────
         elif op == Op.ALLOC:
             r = self._read_u8(code); size = self._read_u32(code)
             self._next_addr += size
@@ -371,7 +369,7 @@ class VM:
             v = self.regs[src]
             self.regs[dst] = len(v) if hasattr(v, "__len__") else 8
 
-        # -- Type coercion ---------------------------------------------------
+        # ── Type coercion ───────────────────────────────────────────────────
         elif op == Op.INT_TO_F:
             self._push(float(self._pop()))
         elif op == Op.F_TO_INT:
@@ -388,7 +386,7 @@ class VM:
             v = self._top()
             self._push(type(v).__name__)
 
-        # -- Strings / collections -------------------------------------------
+        # ── Strings / collections ───────────────────────────────────────────
         elif op == Op.STR_CAT:
             b, a = self._pop(), self._pop(); self._push(str(a) + str(b))
         elif op == Op.STR_LEN:
@@ -424,7 +422,7 @@ class VM:
         elif op == Op.MAP_KEYS:
             m = self._pop(); self._push(list(m.keys()))
 
-        # -- I/O -------------------------------------------------------------
+        # ── I/O ─────────────────────────────────────────────────────────────
         elif op == Op.PRINT:
             self.stdout.write(str(self._pop()))
             self.stdout.flush()
@@ -440,7 +438,7 @@ class VM:
         elif op == Op.FLUSH:
             self.stdout.flush()
 
-        # -- System ----------------------------------------------------------
+        # ── System ──────────────────────────────────────────────────────────
         elif op == Op.SYSCALL:
             _id = self._read_u8(code)
             self._syscall(_id)
@@ -448,7 +446,7 @@ class VM:
             ms = self._pop()
             time.sleep(float(ms) / 1000.0)
 
-        # -- Error handling ---------------------------------------------------
+        # ── Error handling ───────────────────────────────────────────────────
         elif op == Op.TRY_BEGIN:
             recover_addr = self._read_u32(code)
             self.error_stack.append(ErrorFrame(
@@ -469,7 +467,7 @@ class VM:
         elif op in (Op.ENSURE_BEG, Op.ENSURE_END):
             pass   # structural markers; logic handled by TRY_BEGIN/END
 
-        # -- Debug ------------------------------------------------------------
+        # ── Debug ────────────────────────────────────────────────────────────
         elif op == Op.BREAKPOINT:
             self.stderr.write(f"[BREAKPOINT] pc={self.pc-1}  stack={self.stack}\n")
         elif op == Op.TRACE:
@@ -490,7 +488,7 @@ class VM:
 
         return None
 
-    # -- throw / unwind --------------------------------------------------------
+    # ── throw / unwind ────────────────────────────────────────────────────────
 
     def _do_throw(self, err: ThrownError) -> None:
         """Unwind to the nearest error frame or propagate."""
@@ -507,7 +505,7 @@ class VM:
         # Jump to recover block
         self.pc = frame.recover_addr
 
-    # -- syscalls -------------------------------------------------------------
+    # ── syscalls ─────────────────────────────────────────────────────────────
 
     def _syscall(self, syscall_id: int) -> None:
         """Built-in system call handlers."""
@@ -529,7 +527,7 @@ class VM:
         else:
             self._push(0)
 
-    # -- repr -----------------------------------------------------------------
+    # ── repr ─────────────────────────────────────────────────────────────────
 
     def __repr__(self) -> str:
         return (f"<VM pc={self.pc} stack_depth={len(self.stack)} "

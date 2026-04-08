@@ -12,12 +12,10 @@ Provides:
 """
 from __future__ import annotations
 
-import math
 import cmath
+import math
 from dataclasses import dataclass
-from typing import Callable, Optional
-from fractions import Fraction
-
+from typing import Callable
 
 # --- Physical Constants (CODATA 2018) ---------------------------------
 

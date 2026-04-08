@@ -1,14 +1,16 @@
 """
 tests/test_vm.py  -  VM & assembler integration tests
 """
-import sys, pathlib
+import pathlib
+import sys
+
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
 import pytest
-from lateralus_lang.vm.opcodes    import Op
-from lateralus_lang.vm.assembler  import Bytecode, assemble
-from lateralus_lang.vm.vm         import VM, VMError, ThrownError
 
+from lateralus_lang.vm.assembler import Bytecode, assemble
+from lateralus_lang.vm.opcodes import Op
+from lateralus_lang.vm.vm import VM, ThrownError
 
 # --- helpers ------------------------------------------------------------------
 

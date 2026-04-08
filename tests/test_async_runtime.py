@@ -1,14 +1,18 @@
 """
 tests/test_async_runtime.py — Tests for the LATERALUS async/concurrent runtime
 """
-import pytest
-import time
 import threading
+import time
+
 from lateralus_lang.async_runtime import (
-    Channel, TaskGroup, ParallelPipeline, RateLimiter,
-    TaskStatus, TaskResult,
-    parallel_map, parallel_filter, run_with_timeout,
     AsyncPipelineExecutor,
+    Channel,
+    ParallelPipeline,
+    RateLimiter,
+    TaskGroup,
+    parallel_filter,
+    parallel_map,
+    run_with_timeout,
 )
 
 

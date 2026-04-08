@@ -13,14 +13,14 @@ Usage:
 """
 
 import argparse
+import hashlib
+import json
 import os
 import shutil
 import subprocess
 import sys
-import hashlib
-import json
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 
 def main():
@@ -104,7 +104,7 @@ def build_iso(args):
     if not args.verbose:
         cmd.append("--quiet")
 
-    print(f"[mkimage] Running grub-mkrescue...")
+    print("[mkimage] Running grub-mkrescue...")
     result = subprocess.run(cmd, capture_output=True, text=True)
 
     if result.returncode != 0:

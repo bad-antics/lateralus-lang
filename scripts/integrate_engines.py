@@ -15,9 +15,8 @@ What it does:
   4. Runs a quick smoke test
 """
 
-import sys
-import os
 import re
+import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -197,7 +196,7 @@ def smoke_test():
     print("    Math engine: OK")
 
     print("  Testing crypto engine...")
-    from lateralus_lang.crypto_engine import sha256, to_base64, from_base64, lbe_encode, lbe_decode
+    from lateralus_lang.crypto_engine import from_base64, lbe_decode, lbe_encode, sha256, to_base64
     h = sha256("test")
     assert len(h) == 64
     encoded = to_base64("hello")
@@ -221,7 +220,7 @@ def smoke_test():
     print("    Bytecode format: OK")
 
     print("  Testing error engine...")
-    from lateralus_lang.error_engine import ErrorCode, Severity, LateralusError, ErrorCollector
+    from lateralus_lang.error_engine import ErrorCode, ErrorCollector
     ec = ErrorCollector()
     ec.error(ErrorCode.E1001, "Test error")
     assert ec.error_count() == 1

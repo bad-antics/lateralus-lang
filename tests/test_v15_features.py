@@ -8,25 +8,46 @@ Tests for all LATERALUS v1.5 features:
   · Codegen: v1.5 nodes transpile correctly to Python
   · End-to-end: v1.5 showcase compiles without errors
 """
-import sys, pathlib
+import pathlib
+import sys
+
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
-import pytest
-from lateralus_lang.lexer import lex, TK, LexError
-from lateralus_lang.parser import parse, ParseError
 from lateralus_lang.ast_nodes import (
-    Program, LetDecl, ReturnStmt, FnDecl, ExprStmt,
-    Literal, Ident, BinOp,
-    ResultExpr, OptionExpr, TypeMatchExpr, TypeMatchArm,
-    WildcardPattern, LiteralPattern, BindingPattern, TypePattern,
-    EnumVariantPattern, TuplePattern, ListPattern, OrPattern,
-)
-from lateralus_lang.type_system import (
-    TypeInferencer, TypeVar, INT, FLOAT, STR, BOOL,
-    ListType, TupleType, FunctionType, OptionalType, ANY,
+    BindingPattern,
+    BinOp,
+    EnumVariantPattern,
+    ExprStmt,
+    FnDecl,
+    Ident,
+    LetDecl,
+    ListPattern,
+    Literal,
+    LiteralPattern,
+    OptionExpr,
+    OrPattern,
+    ResultExpr,
+    ReturnStmt,
+    TuplePattern,
+    TypeMatchArm,
+    TypeMatchExpr,
+    WildcardPattern,
 )
 from lateralus_lang.compiler import Compiler, Target
-
+from lateralus_lang.lexer import TK, lex
+from lateralus_lang.parser import parse
+from lateralus_lang.type_system import (
+    ANY,
+    BOOL,
+    INT,
+    STR,
+    FunctionType,
+    ListType,
+    OptionalType,
+    TupleType,
+    TypeInferencer,
+    TypeVar,
+)
 
 # --- Helpers -----------------------------------------------------------------
 
@@ -625,7 +646,7 @@ class TestV15Codegen:
         showcase = pathlib.Path(__file__).parent.parent / "examples" / "v15_showcase.ltl"
         src = showcase.read_text()
         r = Compiler().compile_source(src, target=Target.PYTHON, filename="v15_showcase.ltl")
-        assert r.ok, f"v15_showcase.ltl compile failed:\n" + "\n".join(str(e) for e in r.errors)
+        assert r.ok, "v15_showcase.ltl compile failed:\n" + "\n".join(str(e) for e in r.errors)
 
 
 # ===========================================================================
@@ -758,7 +779,7 @@ class TestTypeNarrowing:
 
     def test_is_nilable(self):
         """is_nilable should detect optional and none types."""
-        from lateralus_lang.type_system import TypeNarrower, NONE, UnionType
+        from lateralus_lang.type_system import NONE, TypeNarrower, UnionType
         assert TypeNarrower.is_nilable(OptionalType(INT)) is True
         assert TypeNarrower.is_nilable(NONE) is True
         assert TypeNarrower.is_nilable(INT) is False
@@ -767,7 +788,7 @@ class TestTypeNarrowing:
 
     def test_narrow_env_available(self):
         """TypeEnvironment.child_scope should work with narrowing."""
-        from lateralus_lang.type_system import TypeEnvironment, TypeNarrower
+        from lateralus_lang.type_system import TypeEnvironment
         env = TypeEnvironment()
         env.define("x", OptionalType(INT))
         child = env.child_scope()

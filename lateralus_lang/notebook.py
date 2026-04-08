@@ -13,20 +13,19 @@ A Jupyter-inspired notebook format tailored for LATERALUS:
 
 from __future__ import annotations
 
-import json
-import time
-import textwrap
-import traceback
-import io
-import sys
 import hashlib
-import base64
-from datetime import datetime, timezone as _tz
-from dataclasses import dataclass, field, asdict
+import io
+import json
+import sys
+import textwrap
+import time
+import traceback
+from dataclasses import dataclass, field
+from datetime import datetime
+from datetime import timezone as _tz
 from enum import Enum
 from pathlib import Path
 from typing import Any, Optional, Union
-
 
 # ---------------------------------------------------------------------------
 # Cell types and output types
@@ -141,7 +140,7 @@ class NotebookOutput:
 
     @property
     def elapsed_ms(self) -> Optional[float]:
-        """For TIMING outputs: elapsed time in milliseconds."""  
+        """For TIMING outputs: elapsed time in milliseconds."""
         return self.data.get("elapsed_ms")
 
 
@@ -482,8 +481,8 @@ class NotebookExecutor:
         Returns the last expression value, if any.
         """
         try:
-            from lateralus_lang.compiler import Compiler, CompileOptions
             from lateralus_lang.codegen.python import Target
+            from lateralus_lang.compiler import CompileOptions, Compiler
 
             options = CompileOptions(target=Target.PYTHON, optimize=1)
             compiler = Compiler(options)
@@ -610,7 +609,7 @@ def _simple_md(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _render_markdown(notebook: Notebook) -> str:
-    lines = [f"# {notebook.title}", f"", f"> LATERALUS Notebook · {notebook.created_at[:10]}", ""]
+    lines = [f"# {notebook.title}", "", f"> LATERALUS Notebook · {notebook.created_at[:10]}", ""]
     for cell in notebook.cells:
         if cell.cell_type == CellType.CODE:
             ec = f" [{cell.execution_count}]" if cell.execution_count else ""
@@ -621,7 +620,7 @@ def _render_markdown(notebook: Notebook) -> str:
                 if out.output_type in (OutputType.STREAM, OutputType.EXECUTE_RESULT):
                     text = out.data.get("text/plain", "")
                     if text:
-                        lines.append(f"```")
+                        lines.append("```")
                         lines.append(str(text))
                         lines.append("```")
         elif cell.cell_type == CellType.MARKDOWN:

@@ -23,9 +23,8 @@ import struct
 from io import StringIO
 from typing import Dict, List, Optional, Set, Tuple
 
-from .opcodes import Op, OPCODE_META
 from .assembler import Bytecode
-
+from .opcodes import OPCODE_META, Op
 
 # -----------------------------------------------------------------------------
 # Operand decoders

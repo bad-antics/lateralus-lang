@@ -2,12 +2,14 @@
 tests/test_bytecode_format.py — Tests for the LATERALUS .ltlc binary format
 """
 import pytest
-from lateralus_lang.bytecode_format import (
-    LTLCCompiler, LTLCDecompiler, LTLCInspector,
-    LTLCFile, LTLCMetadata, Symbol,
-    LTLC_MAGIC, LTLC_VERSION,
-)
 
+from lateralus_lang.bytecode_format import (
+    LTLC_MAGIC,
+    LTLC_VERSION,
+    LTLCCompiler,
+    LTLCDecompiler,
+    LTLCInspector,
+)
 
 SAMPLE_SOURCE = '''
 fn greet(name: str) -> str {

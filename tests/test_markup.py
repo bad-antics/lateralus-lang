@@ -1,10 +1,10 @@
 """
 tests/test_markup.py — Tests for the LTLML Markup Language
 """
-import pytest
 from lateralus_lang.markup import (
-    LTLMLParser, LTLMLRenderer, NodeKind,
-    parse_ltlml, render_ltlml,
+    NodeKind,
+    parse_ltlml,
+    render_ltlml,
 )
 
 

@@ -16,15 +16,20 @@ from __future__ import annotations
 
 import textwrap
 
-import pytest
-
 from lateralus_lang.ast_nodes import (
-    ConstFnDecl, MacroDecl, MacroInvocation, CompTimeBlock,
-    DeriveAttr, ReflectExpr, QuoteExpr, UnquoteExpr, SourceSpan,
+    CompTimeBlock,
+    ConstFnDecl,
+    DeriveAttr,
+    MacroDecl,
+    MacroInvocation,
+    QuoteExpr,
+    ReflectExpr,
+    UnquoteExpr,
 )
 from lateralus_lang.compiler import Compiler, Target
-from lateralus_lang.lexer import Lexer, TK
+from lateralus_lang.lexer import TK, Lexer
 from lateralus_lang.parser import Parser
+
 
 # Helpers
 def _compile(src: str) -> object:

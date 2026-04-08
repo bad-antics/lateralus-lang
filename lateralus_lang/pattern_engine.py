@@ -25,10 +25,9 @@ exhaustiveness checking and efficient decision trees.
 from __future__ import annotations
 
 import re
-from enum import Enum, auto
-from typing import Any, Optional, Callable
 from dataclasses import dataclass, field
-
+from enum import Enum, auto
+from typing import Any, Callable, Optional
 
 # ---------------------------------------------------------------------------
 # Match result
@@ -179,7 +178,7 @@ def match_pattern(value: Any, pattern: Pattern) -> MatchResult:
 
     # --- Literal ----------------------------------------------------------
     if kind == PatternKind.LITERAL:
-        if value == pattern.value and type(value) == type(pattern.value):
+        if value == pattern.value and type(value) is type(pattern.value):
             return MATCH_SUCCESS
         return MATCH_FAILURE
 

@@ -11,14 +11,12 @@ Usage:
     python scripts/serve_docs.py [--port PORT] [--dir DIR] [--no-reload]
     lateralus serve [--port PORT] [--dir DIR]
 """
-import sys
-import os
-import re
 import mimetypes
+import re
+import sys
 import urllib.parse
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
-from functools import lru_cache
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -261,14 +259,14 @@ def serve(port: int = 8400, docs_dir: Path = None, reload: bool = True):
     ltlml_count = len(list(docs_dir.rglob("*.ltlml")))
 
     print()
-    print(f"  \033[1;36mLATERALUS Documentation Server\033[0m")
+    print("  \033[1;36mLATERALUS Documentation Server\033[0m")
     print(f"  {'='*45}")
     print(f"  Serving:  {docs_dir}")
     print(f"  Files:    {ltlml_count} .ltlml documents")
     print(f"  URL:      \033[4;34mhttp://127.0.0.1:{port}/\033[0m")
     print(f"  Reload:   {'enabled' if reload else 'disabled'}")
     print(f"  {'='*45}")
-    print(f"  Press Ctrl+C to stop\n")
+    print("  Press Ctrl+C to stop\n")
 
     try:
         httpd.serve_forever()
