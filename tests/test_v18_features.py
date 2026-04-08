@@ -439,7 +439,7 @@ class TestCodegenQuote:
 class TestVersion:
     def test_version_is_1_8_0(self):
         import lateralus_lang
-        assert lateralus_lang.__version__ == "2.5.1"
+        assert lateralus_lang.__version__ == "3.0.0"
 
 
 # =======================================================================
