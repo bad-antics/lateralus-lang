@@ -1,0 +1,102 @@
+// Lateralus Standard Library — Bit Flags
+// Type-safe bitflag operations for system programming
+
+/// A set of named bit flags backed by a u64
+struct BitFlags {
+    value: u64,
+    names: [(str, u64)],
+}
+
+impl BitFlags {
+    /// Create an empty flag set
+    pub fn new() -> BitFlags {
+        BitFlags { value: 0, names: [] }
+    }
+
+    /// Create from a raw integer value
+    pub fn from_raw(value: u64) -> BitFlags {
+        BitFlags { value, names: [] }
+    }
+
+    /// Define a named flag
+    pub fn define(mut self, name: str, bit: u64) -> BitFlags {
+        self.names.push((name, 1u64 << bit))
+        self
+    }
+
+    /// Set a flag by name
+    pub fn set(mut self, name: str) -> Result<BitFlags, str> {
+        let mask = self.names
+            |> find(|(n, _)| n == name)
+            |> map(|(_, m)| m)
+            |> ok_or("Unknown flag: {name}")?
+        self.value |= mask
+        Ok(self)
+    }
+
+    /// Clear a flag by name
+    pub fn clear(mut self, name: str) -> Result<BitFlags, str> {
+        let mask = self.names
+            |> find(|(n, _)| n == name)
+            |> map(|(_, m)| m)
+            |> ok_or("Unknown flag: {name}")?
+        self.value &= !mask
+        Ok(self)
+    }
+
+    /// Toggle a flag by name
+    pub fn toggle(mut self, name: str) -> Result<BitFlags, str> {
+        let mask = self.names
+            |> find(|(n, _)| n == name)
+            |> map(|(_, m)| m)
+            |> ok_or("Unknown flag: {name}")?
+        self.value ^= mask
+        Ok(self)
+    }
+
+    /// Check if a flag is set
+    pub fn has(self, name: str) -> bool {
+        self.names
+            |> find(|(n, _)| n == name)
+            |> map(|(_, m)| self.value & m != 0)
+            |> unwrap_or(false)
+    }
+
+    /// Check if all given flags are set
+    pub fn has_all(self, names: [str]) -> bool {
+        names |> all(|n| self.has(n))
+    }
+
+    /// Check if any of the given flags are set
+    pub fn has_any(self, names: [str]) -> bool {
+        names |> any(|n| self.has(n))
+    }
+
+    /// Get raw value
+    pub fn raw(self) -> u64 { self.value }
+
+    /// Union of two flag sets
+    pub fn union(self, other: BitFlags) -> BitFlags {
+        BitFlags { value: self.value | other.value, names: self.names }
+    }
+
+    /// Intersection of two flag sets
+    pub fn intersect(self, other: BitFlags) -> BitFlags {
+        BitFlags { value: self.value & other.value, names: self.names }
+    }
+
+    /// List all active flag names
+    pub fn active(self) -> [str] {
+        self.names
+            |> filter(|(_, m)| self.value & m != 0)
+            |> map(|(n, _)| n)
+            |> collect
+    }
+
+    /// Display as a human-readable string
+    pub fn to_string(self) -> str {
+        let flags = self.active()
+        if flags.is_empty() { "(none)" }
+        else { flags |> join(" | ") }
+    }
+}

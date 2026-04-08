@@ -1,0 +1,99 @@
+// Lateralus Standard Library — Rate Limiter
+// Token bucket rate limiting for APIs and network operations
+
+import stdlib::time
+import stdlib::sync::Mutex
+
+/// Token bucket rate limiter
+struct RateLimiter {
+    capacity: u64,
+    tokens: f64,
+    refill_rate: f64,    // tokens per second
+    last_refill: u64,    // timestamp in ms
+    mutex: Mutex<()>,
+}
+
+impl RateLimiter {
+    /// Create a new rate limiter
+    /// capacity: max tokens in the bucket
+    /// per_second: how many tokens are added per second
+    pub fn new(capacity: u64, per_second: f64) -> RateLimiter {
+        RateLimiter {
+            capacity,
+            tokens: capacity as f64,
+            refill_rate: per_second,
+            last_refill: time::now_ms(),
+            mutex: Mutex::new(()),
+        }
+    }
+
+    /// Try to consume one token. Returns true if allowed.
+    pub fn try_acquire(mut self) -> bool {
+        self.try_acquire_n(1)
+    }
+
+    /// Try to consume n tokens. Returns true if allowed.
+    pub fn try_acquire_n(mut self, n: u64) -> bool {
+        let _lock = self.mutex.lock()
+        self.refill()
+
+        if self.tokens >= n as f64 {
+            self.tokens -= n as f64
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Wait until a token is available, then consume it
+    pub async fn acquire(mut self) {
+        loop {
+            if self.try_acquire() { return }
+            let wait_ms = self.time_until_available(1)
+            time::sleep_ms(wait_ms).await
+        }
+    }
+
+    /// Get the time in ms until n tokens will be available
+    pub fn time_until_available(self, n: u64) -> u64 {
+        let _lock = self.mutex.lock()
+        let needed = n as f64 - self.tokens
+        if needed <= 0.0 { return 0 }
+        ((needed / self.refill_rate) * 1000.0) as u64 + 1
+    }
+
+    /// Get current number of available tokens
+    pub fn available(mut self) -> u64 {
+        let _lock = self.mutex.lock()
+        self.refill()
+        self.tokens as u64
+    }
+
+    /// Reset the limiter to full capacity
+    pub fn reset(mut self) {
+        let _lock = self.mutex.lock()
+        self.tokens = self.capacity as f64
+        self.last_refill = time::now_ms()
+    }
+
+    /// Internal: refill tokens based on elapsed time
+    fn refill(mut self) {
+        let now = time::now_ms()
+        let elapsed = (now - self.last_refill) as f64 / 1000.0
+        self.tokens = f64::min(
+            self.capacity as f64,
+            self.tokens + elapsed * self.refill_rate,
+        )
+        self.last_refill = now
+    }
+}
+
+/// Convenience: create a limiter allowing n requests per second
+pub fn per_second(n: u64) -> RateLimiter {
+    RateLimiter::new(n, n as f64)
+}
+
+/// Convenience: create a limiter allowing n requests per minute
+pub fn per_minute(n: u64) -> RateLimiter {
+    RateLimiter::new(n, n as f64 / 60.0)
+}
