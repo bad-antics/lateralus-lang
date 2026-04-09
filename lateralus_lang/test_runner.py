@@ -7,10 +7,9 @@ Usage:
 """
 from __future__ import annotations
 
-import time
-import sys
 import re
-import traceback
+import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -208,7 +207,7 @@ def run_tests(
 
     if total == 0:
         print(f"  {_C.YELLOW}No tests found.{_C.RESET}")
-        print(f"  Hint: Add @test decorator to functions in .ltl files")
+        print("  Hint: Add @test decorator to functions in .ltl files")
         suite.end_time = time.perf_counter()
         return suite
 
@@ -235,7 +234,7 @@ def run_tests(
 
     # Summary
     print(f"\n  {'='*50}")
-    print(f"  Results: ", end="")
+    print("  Results: ", end="")
 
     if suite.all_passed:
         print(f"{_C.GREEN}{_C.BOLD}{suite.passed} passed{_C.RESET}", end="")

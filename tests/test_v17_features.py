@@ -1,43 +1,42 @@
 """
 tests/test_v17_features.py  —  LATERALUS v1.7 Package Manager & Build System
-=============================================================================
+═════════════════════════════════════════════════════════════════════════════
 """
 import json
 import os
-import shutil
 import tempfile
 import textwrap
 from pathlib import Path
 
 import pytest
 
-# --- Package manager imports ------------------------------------------
-from lateralus_lang.package_manager import (
-    parse_toml,
-    write_toml,
-    SemVer,
-    Dependency,
-    BuildProfile,
-    Workspace,
-    CfgContext,
-    ProjectManifest,
-    LockFile,
-    LockEntry,
-    DepGraph,
-    DependencyCycle,
-    DependencyResolver,
-    PackageBundle,
-    scaffold_project,
-    MANIFEST_FILE,
-    DEFAULT_PROFILES,
-)
 from lateralus_lang.ast_nodes import CfgAttr, CfgExpr
 from lateralus_lang.compiler import Compiler, Target
 
+# ─── Package manager imports ──────────────────────────────────────────
+from lateralus_lang.package_manager import (
+    DEFAULT_PROFILES,
+    MANIFEST_FILE,
+    BuildProfile,
+    CfgContext,
+    Dependency,
+    DependencyCycle,
+    DependencyResolver,
+    DepGraph,
+    LockEntry,
+    LockFile,
+    PackageBundle,
+    ProjectManifest,
+    SemVer,
+    Workspace,
+    parse_toml,
+    scaffold_project,
+    write_toml,
+)
 
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 # TOML Parser
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 
 class TestTOMLParser:
     """Test the lightweight TOML parser."""
@@ -152,9 +151,9 @@ class TestTOMLParser:
         assert "debug = true" in text
 
 
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 # SemVer
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 
 class TestSemVer:
     """Test semantic versioning."""
@@ -229,9 +228,9 @@ class TestSemVer:
         assert {a, b} == {a}
 
 
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 # BuildProfile
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 
 class TestBuildProfile:
     """Test build profiles."""
@@ -271,9 +270,9 @@ class TestBuildProfile:
         assert p.features == ["profiling"]
 
 
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 # Workspace
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 
 class TestWorkspace:
     """Test workspace support."""
@@ -309,9 +308,9 @@ class TestWorkspace:
             assert "tmp" not in names
 
 
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 # CfgContext
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 
 class TestCfgContext:
     """Test conditional compilation context."""
@@ -353,9 +352,9 @@ class TestCfgContext:
         assert not ctx.evaluate("arch", "arm64")
 
 
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 # DepGraph
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 
 class TestDepGraph:
     """Test dependency graph."""
@@ -417,9 +416,9 @@ class TestDepGraph:
         assert len(cycles) == 0
 
 
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 # ProjectManifest
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 
 class TestProjectManifest:
     """Test project manifest loading and saving."""
@@ -549,9 +548,9 @@ class TestProjectManifest:
         assert "optimize" in p.features
 
 
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 # Project Scaffolding
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 
 class TestScaffold:
     """Test project scaffolding."""
@@ -583,9 +582,9 @@ class TestScaffold:
             assert result.ok, f"Scaffold main.ltl should compile: {result.errors}"
 
 
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 # DependencyResolver
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 
 class TestDependencyResolver:
     """Test dependency resolution."""
@@ -628,9 +627,9 @@ class TestDependencyResolver:
             assert "github.com" in lock.entries["remote"].resolved
 
 
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 # PackageBundle
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 
 class TestPackageBundle:
     """Test package publishing bundle."""
@@ -647,9 +646,9 @@ class TestPackageBundle:
             assert len(bundle.files) > 0
 
 
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 # LockFile
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 
 class TestLockFile:
     """Test lock file creation and loading."""
@@ -672,9 +671,9 @@ class TestLockFile:
             assert loaded.entries["core"].integrity == "sha256-abc123"
 
 
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 # Conditional Compilation — Parser
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 
 class TestCfgParser:
     """Test cfg!() expression parsing."""
@@ -707,9 +706,9 @@ class TestCfgParser:
         assert result.ok, f"@cfg should parse: {[e.message for e in result.errors]}"
 
 
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 # Conditional Compilation — Codegen
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 
 class TestCfgCodegen:
     """Test @cfg conditional compilation in code generation."""
@@ -735,9 +734,9 @@ class TestCfgCodegen:
         assert "py_func" in result.python_src
 
 
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 # AST Nodes
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 
 class TestCfgASTNodes:
     """Test v1.7 AST nodes."""
@@ -753,21 +752,21 @@ class TestCfgASTNodes:
         assert expr.value == "async"
 
 
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 # Version
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 
 class TestVersion:
     """Verify version bump."""
 
     def test_version_is_1_7_0(self):
         from lateralus_lang import __version__
-        assert __version__ == "2.5.1"
+        assert __version__ == "3.0.0"
 
 
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 # Integration: Full v1.7 Showcase Compiles
-# =======================================================================
+# ═══════════════════════════════════════════════════════════════════════
 
 class TestV17Integration:
     """Integration tests for v1.7 features."""
@@ -795,4 +794,4 @@ class TestV17Integration:
                     failed.append(f"{f.name}: {result.errors[0].message if result.errors else '?'}")
             except Exception as exc:
                 failed.append(f"{f.name}: EXCEPTION: {exc}")
-        assert not failed, f"Examples failed:\n" + "\n".join(failed)
+        assert not failed, "Examples failed:\n" + "\n".join(failed)

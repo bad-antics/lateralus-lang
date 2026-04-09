@@ -16,15 +16,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import shutil
 import sys
-from dataclasses import dataclass, field, asdict
-from glob import glob
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
-
+from typing import Any, Optional
 
 # --- Project Manifest --------------------------------------------------
 
@@ -1042,8 +1039,8 @@ def scaffold_project(name: str, path: Path, template: str = "default") -> Path:
         description=f"A LATERALUS project: {name}",
         lateralus_version=">=1.7.0",
         scripts={
-            "start": f"lateralus run src/main.ltl",
-            "test": f"lateralus test tests/",
+            "start": "lateralus run src/main.ltl",
+            "test": "lateralus test tests/",
             "build": f"lateralus build src/main.ltl -o build/{name}.ltlc",
         },
     )
@@ -1256,7 +1253,7 @@ def main():
                                    template=getattr(args, "template", "default"))
         print(f"Created LATERALUS project: {project}")
         print(f"  cd {args.name}")
-        print(f"  lateralus run src/main.ltl")
+        print("  lateralus run src/main.ltl")
 
     elif args.command == "info":
         manifest_path = _find_manifest()
@@ -1343,9 +1340,9 @@ def main():
         compiler = Compiler()
         result = compiler.compile_file(str(main_file), target=target)
         if result.ok:
-            print(f"  ✓ Build succeeded")
+            print("  ✓ Build succeeded")
         else:
-            print(f"  ✗ Build failed")
+            print("  ✗ Build failed")
             for e in result.errors[:5]:
                 print(f"    {e.message}")
             sys.exit(1)
@@ -1369,7 +1366,7 @@ def main():
         else:
             print(f"Publishing {bundle.name}@{bundle.version}"
                   f" to registry.lateralus.dev ...")
-            print(f"  (Registry not yet available — use --dry-run to preview)")
+            print("  (Registry not yet available — use --dry-run to preview)")
 
     else:
         parser.print_help()

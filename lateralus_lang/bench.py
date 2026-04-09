@@ -7,13 +7,11 @@ Usage:
 """
 from __future__ import annotations
 
-import time
-import statistics
 import json as json_mod
-import sys
+import statistics
+import time
 from dataclasses import dataclass, field
-from typing import Callable, Any, Optional
-
+from typing import Callable, Optional
 
 # --- Benchmark Infrastructure -----------------------------------------
 
@@ -126,9 +124,18 @@ class BenchmarkSuite:
 def bench_math_engine(iterations: int = 1000) -> BenchmarkSuite:
     """Benchmark the math engine."""
     from lateralus_lang.math_engine import (
-        LTLNumber, Matrix, Vector, Interval, Dual,
-        mean, median, variance, std_dev,
-        newton_raphson, trapezoidal_integrate, simpson_integrate,
+        Dual,
+        Interval,
+        LTLNumber,
+        Matrix,
+        Vector,
+        mean,
+        median,
+        newton_raphson,
+        simpson_integrate,
+        std_dev,
+        trapezoidal_integrate,
+        variance,
     )
 
     suite = BenchmarkSuite("Math Engine")
@@ -201,7 +208,13 @@ def bench_math_engine(iterations: int = 1000) -> BenchmarkSuite:
 def bench_crypto_engine(iterations: int = 1000) -> BenchmarkSuite:
     """Benchmark the crypto engine."""
     from lateralus_lang.crypto_engine import (
-        Hashing, HMAC, Password, RandomTokens, Encoding, LBEEncoder, LBEDecoder,
+        HMAC,
+        Encoding,
+        Hashing,
+        LBEDecoder,
+        LBEEncoder,
+        Password,
+        RandomTokens,
     )
 
     suite = BenchmarkSuite("Crypto Engine")
@@ -251,7 +264,7 @@ def bench_crypto_engine(iterations: int = 1000) -> BenchmarkSuite:
 
 def bench_markup_engine(iterations: int = 500) -> BenchmarkSuite:
     """Benchmark the LTLML markup engine."""
-    from lateralus_lang.markup import parse_ltlml, render_ltlml, compile_ltlml_file
+    from lateralus_lang.markup import parse_ltlml, render_ltlml
 
     suite = BenchmarkSuite("Markup Engine (LTLML)")
 
@@ -367,9 +380,13 @@ println(result)
 def bench_type_system(iterations: int = 1000) -> BenchmarkSuite:
     """Benchmark the type system."""
     from lateralus_lang.type_system import (
-        TypeChecker, TypeEnvironment, TypeInferencer,
-        parse_type_annotation, INT, FLOAT, STR, BOOL,
-        FunctionType, ListType, UnionType, OptionalType,
+        FLOAT,
+        INT,
+        STR,
+        TypeEnvironment,
+        TypeInferencer,
+        UnionType,
+        parse_type_annotation,
     )
 
     suite = BenchmarkSuite("Type System")

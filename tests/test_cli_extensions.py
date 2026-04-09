@@ -1,18 +1,17 @@
 """
 tests/test_cli_extensions.py — Tests for CLI extension commands
 """
-import pytest
-import tempfile
-import os
-from pathlib import Path
-from unittest.mock import MagicMock
 from types import SimpleNamespace
 
 from lateralus_lang.cli_extensions import (
-    cmd_compile, cmd_decompile, cmd_inspect, cmd_doc,
-    cmd_engines, cmd_hash, register_subcommands,
+    cmd_compile,
+    cmd_decompile,
+    cmd_doc,
+    cmd_engines,
+    cmd_hash,
+    cmd_inspect,
+    register_subcommands,
 )
-
 
 SAMPLE_LTL = '''
 fn greet(name: str) -> str {

@@ -1,17 +1,17 @@
 """
-lateralus_lang/errors/handler.py  -  LATERALUS Proprietary Error Handler
-===========================================================================
+lateralus_lang/errors/handler.py  ─  LATERALUS Proprietary Error Handler
+═══════════════════════════════════════════════════════════════════════════
 The LTL error system extends the existing Lateralus error_engine with
 language-level constructs:
 
   LTLError           — base for all language errors
-  +-- LexError       — tokenisation failure
-  +-- ParseError     — syntax failure
-  +-- SemanticError  — type / scope failure
-  +-- CompileError   — code-generation failure
-  +-- VMError        — runtime VM failure
-  +-- AssemblerError — .ltasm assembly failure
-  +-- LTLRuntimeError— user-thrown error from .ltl code
+  ├── LexError       — tokenisation failure
+  ├── ParseError     — syntax failure
+  ├── SemanticError  — type / scope failure
+  ├── CompileError   — code-generation failure
+  ├── VMError        — runtime VM failure
+  ├── AssemblerError — .ltasm assembly failure
+  └── LTLRuntimeError— user-thrown error from .ltl code
 
 ErrorContext
     Carries the full diagnostic context:
@@ -25,23 +25,21 @@ ErrorReporter
     Collects ErrorContext objects, renders colourised console output,
     serialises to JSON for the error_engine bridge, and emits structured
     log messages.
-===========================================================================
+═══════════════════════════════════════════════════════════════════════════
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import sys
-import textwrap
 import traceback
 from dataclasses import dataclass, field
-from enum import Enum, auto
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
-
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # Severity
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 class Severity(Enum):
     FATAL   = 0
@@ -61,9 +59,9 @@ class Severity(Enum):
         }[self]
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # Base error types
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 class LTLError(Exception):
     """Base class for all Lateralus Language errors."""
@@ -118,9 +116,9 @@ class LTLRuntimeError(LTLError):
         self.payload = payload
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # ErrorContext — full diagnostic record
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 @dataclass
 class StackFrame:
@@ -223,9 +221,9 @@ class ErrorContext:
         return d
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # Suggestion engine  (basic auto-fix hints)
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 _COMMON_TYPOS: Dict[str, str] = {
     "funciton":  "fn",
@@ -291,9 +289,9 @@ def _closest_keyword(word: str) -> str:
     return _COMMON_TYPOS.get(matches[0], matches[0]) if matches else ""
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # ErrorReporter
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 _RESET = "\033[0m"
 _BOLD  = "\033[1m"
@@ -313,7 +311,7 @@ class ErrorReporter:
         self._colour       = use_colour and sys.stderr.isatty()
         self._fatal_seen   = False
 
-    # -- add -------------------------------------------------------------------
+    # ── add ───────────────────────────────────────────────────────────────────
 
     def add(self, ctx: ErrorContext) -> None:
         if ctx.dna in self._seen_dna:
@@ -345,7 +343,7 @@ class ErrorReporter:
             )
             self.add(ctx)
 
-    # -- query -----------------------------------------------------------------
+    # ── query ─────────────────────────────────────────────────────────────────
 
     @property
     def has_errors(self) -> bool:
@@ -367,7 +365,7 @@ class ErrorReporter:
     def all(self) -> List[ErrorContext]:
         return list(self._contexts)
 
-    # -- render ----------------------------------------------------------------
+    # ── render ────────────────────────────────────────────────────────────────
 
     def render(self, stream=None) -> None:
         stream = stream or sys.stderr
@@ -424,7 +422,7 @@ class ErrorReporter:
     def _b(self, s: str) -> str:
         return f"{_BOLD}{s}{_RESET}" if self._colour else s
 
-    # -- helpers ----------------------------------------------------------------
+    # ── helpers ────────────────────────────────────────────────────────────────
 
     def chain_error(self, outer: ErrorContext, inner: ErrorContext) -> None:
         """Link inner error as the cause of outer error."""
@@ -449,7 +447,7 @@ class ErrorReporter:
         if w: parts.append(f"{w} warning{'s' if w != 1 else ''}")
         return f"Found {', '.join(parts)}."
 
-    # -- serialise -------------------------------------------------------------
+    # ── serialise ─────────────────────────────────────────────────────────────
 
     def to_json(self) -> str:
         return json.dumps([c.to_dict() for c in self._contexts], indent=2)

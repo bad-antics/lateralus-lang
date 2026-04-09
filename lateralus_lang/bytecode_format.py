@@ -1,6 +1,6 @@
 """
-lateralus_lang/bytecode_format.py  -  LATERALUS Compiled Binary Format (.ltlc)
-===============================================================================
+lateralus_lang/bytecode_format.py  ─  LATERALUS Compiled Binary Format (.ltlc)
+═══════════════════════════════════════════════════════════════════════════════
 Proprietary compiler and decompiler for LATERALUS bytecode.
 
 The .ltlc format is a binary container that packages:
@@ -18,7 +18,7 @@ Workflow:
   lateralus run program.ltlc                        (direct execution)
 
 v1.5.0
-===============================================================================
+═══════════════════════════════════════════════════════════════════════════════
 """
 from __future__ import annotations
 
@@ -29,14 +29,13 @@ import time
 import zlib
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional
 
 from lateralus_lang.crypto_engine import hmac_sign, hmac_verify
 
-
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # Binary format constants
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 LTLC_MAGIC      = b"\x89LTL"   # 4 bytes — file magic
 LTLC_VERSION    = 1             # uint16 — format version
@@ -62,9 +61,9 @@ class ConstTag(IntEnum):
     STRING  = 0x04
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # Data structures
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 @dataclass
 class LTLCMetadata:
@@ -122,9 +121,9 @@ class LTLCFile:
     signature: str = ""
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # Compiler — Source (.ltl) → Binary (.ltlc)
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 class LTLCCompiler:
     """Compile LATERALUS source or IR into .ltlc binary format."""
@@ -176,7 +175,7 @@ class LTLCCompiler:
             f.write(data)
         return output_path
 
-    # -- Extraction helpers ------------------------------------------------
+    # ── Extraction helpers ────────────────────────────────────────────────
 
     def _extract_constants(self, source: str) -> List[Any]:
         """Extract literal constants from source for the constant pool."""
@@ -248,7 +247,7 @@ class LTLCCompiler:
             offset += len(line.encode("utf-8")) + 1  # +1 for newline
         return debug
 
-    # -- Serialization -----------------------------------------------------
+    # ── Serialization ─────────────────────────────────────────────────────
 
     def _serialize(self, ltlc: LTLCFile) -> bytes:
         """Serialize LTLCFile to binary format."""
@@ -342,9 +341,9 @@ class LTLCCompiler:
         return b"".join(parts)
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # Decompiler — Binary (.ltlc) → Source (.ltl)
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 class LTLCDecompiler:
     """Decompile .ltlc binary back to LATERALUS source."""
@@ -433,7 +432,7 @@ class LTLCDecompiler:
             f.write(source)
         return output_path
 
-    # -- Section processing ------------------------------------------------
+    # ── Section processing ────────────────────────────────────────────────
 
     def _process_section(self, ltlc: LTLCFile, section_type: int,
                          data: bytes):
@@ -489,9 +488,9 @@ class LTLCDecompiler:
         return constants
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # Inspector — analyze .ltlc files without decompiling
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 class LTLCInspector:
     """Inspect a .ltlc binary and report its contents."""
@@ -531,26 +530,26 @@ class LTLCInspector:
     def print_report(self, data: bytes):
         """Print a human-readable report."""
         info = self.inspect(data)
-        print(f"+===================================================+")
-        print(f"|  LATERALUS Compiled Binary (.ltlc) Inspector     |")
-        print(f"+===================================================+")
-        print(f"|  Source:    {info['source_file']:<38s} |")
-        print(f"|  Compiled:  {info['compiled_at']:<38s} |")
-        print(f"|  Version:   {info['language_version']:<38s} |")
-        print(f"|  Compiler:  {info['compiler_version']:<38s} |")
-        print(f"|  Hash:      {info['source_hash'][:32]:<38s} |")
-        print(f"+===================================================+")
-        print(f"|  Constants: {info['constants_count']:<38d} |")
-        print(f"|  Symbols:   {info['symbols_count']:<38d} |")
-        print(f"|  Code size: {info['instruction_bytes']:<38d} |")
-        print(f"|  Debug:     {str(info['has_debug']):<38s} |")
-        print(f"|  Signed:    {str(info['signed']):<38s} |")
-        print(f"|  Compressed:{str(info['compressed']):<38s} |")
-        print(f"+===================================================+")
-        print(f"|  Symbol Table:                                   |")
+        print("╔═══════════════════════════════════════════════════╗")
+        print("║  LATERALUS Compiled Binary (.ltlc) Inspector     ║")
+        print("╠═══════════════════════════════════════════════════╣")
+        print(f"║  Source:    {info['source_file']:<38s} ║")
+        print(f"║  Compiled:  {info['compiled_at']:<38s} ║")
+        print(f"║  Version:   {info['language_version']:<38s} ║")
+        print(f"║  Compiler:  {info['compiler_version']:<38s} ║")
+        print(f"║  Hash:      {info['source_hash'][:32]:<38s} ║")
+        print("╠═══════════════════════════════════════════════════╣")
+        print(f"║  Constants: {info['constants_count']:<38d} ║")
+        print(f"║  Symbols:   {info['symbols_count']:<38d} ║")
+        print(f"║  Code size: {info['instruction_bytes']:<38d} ║")
+        print(f"║  Debug:     {str(info['has_debug']):<38s} ║")
+        print(f"║  Signed:    {str(info['signed']):<38s} ║")
+        print(f"║  Compressed:{str(info['compressed']):<38s} ║")
+        print("╠═══════════════════════════════════════════════════╣")
+        print("║  Symbol Table:                                   ║")
         for sym in info['symbols']:
             kind_str = f"[{sym['kind']}]"
             name = sym['name']
             line = f"L{sym['line']}"
-            print(f"|    {kind_str:<12s} {name:<24s} {line:<8s}  |")
-        print(f"+===================================================+")
+            print(f"║    {kind_str:<12s} {name:<24s} {line:<8s}  ║")
+        print("╚═══════════════════════════════════════════════════╝")

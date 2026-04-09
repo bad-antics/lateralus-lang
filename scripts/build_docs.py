@@ -36,7 +36,7 @@ def build_docs(output_dir: Path = None):
         print("No .ltlml files found in docs/")
         return
 
-    print(f"  Building LATERALUS Documentation")
+    print("  Building LATERALUS Documentation")
     print(f"  {'='*50}")
     print(f"  Source: {docs_dir}")
     print(f"  Output: {output_dir}")
@@ -119,7 +119,7 @@ def build_docs(output_dir: Path = None):
     # Generate index if it doesn't exist already
     index_html = output_dir / "index.html"
     if not index_html.exists():
-        print(f"  Note: No index.ltlml found, skipping index generation")
+        print("  Note: No index.ltlml found, skipping index generation")
 
     return success, failed
 
@@ -128,7 +128,7 @@ def watch_mode(output_dir: Path = None):
     """Watch for changes and rebuild."""
     docs_dir = PROJECT_ROOT / "docs"
     print(f"  Watching {docs_dir} for changes...")
-    print(f"  Press Ctrl+C to stop")
+    print("  Press Ctrl+C to stop")
 
     last_build = 0
     while True:
@@ -138,7 +138,7 @@ def watch_mode(output_dir: Path = None):
                 default=0
             )
             if newest > last_build:
-                print(f"\n  Change detected, rebuilding...")
+                print("\n  Change detected, rebuilding...")
                 build_docs(output_dir)
                 last_build = time.time()
             time.sleep(1)

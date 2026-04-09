@@ -9,17 +9,29 @@ All tests operate through the public API:
     parse()               – test parsing only
     Compiler().compile_source()  – test parse + IR + transpile
 """
-import sys, pathlib
+import pathlib
+import sys
+
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
-import pytest
-from lateralus_lang.parser  import parse, ParseError
 from lateralus_lang.ast_nodes import (
-    StructDecl, StructField, EnumDecl, EnumVariant, ImplBlock, InterfaceDecl,
-    TypeAlias, StructLiteral, YieldExpr, SpawnExpr, ForeignBlock, ForeignParam,
-    Decorator, FnDecl, ImportStmt, Literal, BinOp, InterpolatedStr,
+    BinOp,
+    EnumDecl,
+    FnDecl,
+    ForeignBlock,
+    ImplBlock,
+    ImportStmt,
+    InterfaceDecl,
+    InterpolatedStr,
+    Literal,
+    SpawnExpr,
+    StructDecl,
+    StructLiteral,
+    TypeAlias,
+    YieldExpr,
 )
 from lateralus_lang.compiler import Compiler, Target
+from lateralus_lang.parser import parse
 
 
 def ast(src):
@@ -296,14 +308,12 @@ class TestYieldAndSpawn:
 
     def test_yield_with_value(self):
         p = ast("fn gen() { yield x + 1 }")
-        from lateralus_lang.ast_nodes import ExprStmt
         stmt = p.body[0].body.stmts[0]
         assert isinstance(stmt.expr.value, BinOp)
         assert stmt.expr.value.op == "+"
 
     def test_yield_nil(self):
         p = ast("fn gen() { yield }")
-        from lateralus_lang.ast_nodes import ExprStmt
         stmt = p.body[0].body.stmts[0]
         assert stmt.expr.value is None
 

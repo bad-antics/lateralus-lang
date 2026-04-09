@@ -4,17 +4,24 @@ tests/test_vm_expanded.py — Expanded VM tests: disassembler, round-trip,
                             coroutines, debug ops, and edge cases.
 =============================================================================
 """
-import pytest
 import struct
 
-from lateralus_lang.vm import (
-    Op, OPCODE_META, MNEMONIC_MAP,
-    Bytecode, Assembler, AssemblerError, assemble,
-    VM, VMError, StackUnderflowError, DivisionByZeroError, ThrownError,
-    disassemble, disassemble_instruction, instruction_length,
-    DisassemblerError,
-)
+import pytest
 
+from lateralus_lang.vm import (
+    MNEMONIC_MAP,
+    OPCODE_META,
+    VM,
+    AssemblerError,
+    Bytecode,
+    Op,
+    ThrownError,
+    VMError,
+    assemble,
+    disassemble,
+    disassemble_instruction,
+    instruction_length,
+)
 
 # -----------------------------------------------------------------------------
 # Helpers

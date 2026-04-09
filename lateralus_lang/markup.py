@@ -73,12 +73,11 @@ v1.5.0
 """
 from __future__ import annotations
 
-import re
 import html
+import re
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, Dict, List, Optional, Tuple
-
+from typing import Any, Dict, List, Optional
 
 # -----------------------------------------------------------------------------
 # AST Nodes for LTLML

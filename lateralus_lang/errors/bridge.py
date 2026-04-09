@@ -22,8 +22,7 @@ This bridge is the integration seam — it NEVER blocks compilation.
 from __future__ import annotations
 
 import logging
-import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from .handler import ErrorContext, ErrorReporter, LTLError, Severity
 

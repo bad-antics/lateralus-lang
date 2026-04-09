@@ -23,8 +23,8 @@ Features
 """
 from __future__ import annotations
 
-import sys
 import os
+import sys
 
 try:
     import readline
@@ -32,8 +32,8 @@ try:
 except ImportError:
     _HAS_READLINE = False
 
-from .compiler import Compiler, Target, CompileResult
-from .errors   import ErrorReporter, Severity
+from .compiler import Compiler, CompileResult, Target
+from .errors import ErrorReporter
 
 # -----------------------------------------------------------------------------
 # Colours
@@ -271,8 +271,8 @@ class REPL:
         self._session_errors.extend(result.errors)
 
     def _dump_ast(self, src: str) -> None:
-        from .lexer  import LexError
-        from .parser import parse, ParseError
+        from .lexer import LexError
+        from .parser import ParseError, parse
         try:
             import pprint
             tree = parse(src, "<repl>")
@@ -283,9 +283,9 @@ class REPL:
             print(_red(str(exc)))
 
     def _dump_ir(self, src: str) -> None:
-        from .lexer   import LexError
-        from .parser  import parse, ParseError
-        from .ir      import analyze
+        from .ir import analyze
+        from .lexer import LexError
+        from .parser import ParseError, parse
         try:
             tree = parse(src, "<repl>")
             ir_module, errors = analyze(tree, "<repl>")

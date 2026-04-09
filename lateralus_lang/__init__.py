@@ -3,20 +3,30 @@ lateralus_lang  -  LATERALUS Proprietary Language Toolkit
 ==============================================================
 Exports the primary public API.
 """
+from .codegen import generate_bytecode, transpile_to_python
 from .compiler import (
-    Compiler, CompileResult, Target,
-    get_compiler, compile_file, compile_source, run_file, run_source,
+    Compiler,
+    CompileResult,
+    Target,
+    compile_file,
+    compile_source,
+    get_compiler,
+    run_file,
+    run_source,
 )
-from .lexer    import lex, Token, TK, LexError
-from .parser   import parse, ParseError
-from .ir       import analyze, IRModule
-from .repl     import start_repl, REPL
-from .vm       import VM, VMError, Bytecode, assemble
-from .codegen  import generate_bytecode, transpile_to_python
-from .errors   import (
-    LTLError, ErrorContext, ErrorReporter, Severity,
-    get_bridge, ErrorBridge,
+from .errors import (
+    ErrorBridge,
+    ErrorContext,
+    ErrorReporter,
+    LTLError,
+    Severity,
+    get_bridge,
 )
+from .ir import IRModule, analyze
+from .lexer import TK, LexError, Token, lex
+from .parser import ParseError, parse
+from .repl import REPL, start_repl
+from .vm import VM, Bytecode, VMError, assemble
 
 __version__ = "3.0.0"
 __author__  = "bad-antics"

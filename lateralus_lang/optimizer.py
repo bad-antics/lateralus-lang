@@ -17,9 +17,8 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
-from enum import Enum, auto
-
 
 # --- Optimization Level ------------------------------------------------
 

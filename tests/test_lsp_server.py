@@ -1,13 +1,17 @@
 """
 Tests for the LATERALUS LSP server.
 """
-import pytest
 from lateralus_lang.lsp_server import (
-    TextDocument, DocumentManager, LateralusLSP,
-    collect_diagnostics, get_completions, get_hover,
-    get_document_symbols, get_definition, get_references,
+    DocumentManager,
+    LateralusLSP,
+    TextDocument,
+    collect_diagnostics,
+    get_completions,
+    get_definition,
+    get_document_symbols,
+    get_hover,
+    get_references,
     get_signature_help,
-    LATERALUS_KEYWORDS, LATERALUS_BUILTINS,
 )
 
 

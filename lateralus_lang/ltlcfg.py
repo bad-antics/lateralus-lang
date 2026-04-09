@@ -45,10 +45,9 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Any, Optional, Union, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-
+from typing import Any, Callable, Optional, Union
 
 # ---------------------------------------------------------------------------
 # Type system for config values

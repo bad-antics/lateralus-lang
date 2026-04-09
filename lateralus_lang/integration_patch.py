@@ -10,9 +10,6 @@ Import this module early to enable all new features:
 from __future__ import annotations
 
 import sys
-from pathlib import Path
-from typing import Optional
-
 
 _PATCHED = False
 
@@ -21,7 +18,7 @@ def patch_builtins():
     """Inject new engine builtins into the Python codegen preamble."""
     try:
         from lateralus_lang.codegen import python as codegen_mod
-        from lateralus_lang.engines import get_preamble_code, get_all_builtins
+        from lateralus_lang.engines import get_all_builtins, get_preamble_code
 
         # Append engine preamble to the existing PREAMBLE
         if hasattr(codegen_mod, 'PREAMBLE'):

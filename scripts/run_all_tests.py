@@ -14,12 +14,11 @@ Suites:
     science     — Scientific computing tests
     all         — Everything (default)
 """
+import json
 import subprocess
 import sys
 import time
-import json
 from pathlib import Path
-
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
@@ -211,7 +210,7 @@ def print_report(results: dict, suite_name: str):
           f"{total_errors} errors in {total_duration:.1f}s")
 
     if total_failed == 0 and total_errors == 0:
-        print(f"\n  All tests passed!")
+        print("\n  All tests passed!")
     else:
         print(f"\n  {total_failed + total_errors} issue(s) found.")
 

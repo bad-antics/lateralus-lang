@@ -1,11 +1,14 @@
 """
 tests/test_lexer.py  -  Lexer unit tests
 """
-import sys, pathlib
+import pathlib
+import sys
+
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
 import pytest
-from lateralus_lang.lexer import lex, TK, LexError
+
+from lateralus_lang.lexer import TK, LexError, lex
 
 
 def tokens(src):

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Check which example .ltl files compile successfully."""
-import os, glob, sys
+import glob
+import os
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from lateralus_lang.compiler import Compiler, Target

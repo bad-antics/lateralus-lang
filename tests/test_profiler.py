@@ -2,19 +2,21 @@
 """
 Tests for the LATERALUS profiler module.
 """
-import pytest
 import sys
 import time
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from lateralus_lang.profiler import (
-    ProfileResult, TimingBlock, LateralusProfiler,
-    CompilationProfiler
+    CompilationProfiler,
+    LateralusProfiler,
+    ProfileResult,
+    TimingBlock,
 )
 
-
-# --- ProfileResult Tests -----------------------------------------------
+# ─── ProfileResult Tests ───────────────────────────────────────────────
 
 class TestProfileResult:
     def test_basic_result(self):
@@ -59,7 +61,7 @@ class TestProfileResult:
         assert "test.ltl" in summary
 
 
-# --- TimingBlock Tests --------------------------------------------------
+# ─── TimingBlock Tests ──────────────────────────────────────────────────
 
 class TestTimingBlock:
     def test_basic_timing(self):
@@ -84,7 +86,7 @@ class TestTimingBlock:
         assert block.self_time == 5.0
 
 
-# --- LateralusProfiler Tests -------------------------------------------
+# ─── LateralusProfiler Tests ───────────────────────────────────────────
 
 class TestLateralusProfiler:
     def test_timing_blocks(self):
@@ -149,7 +151,7 @@ class TestLateralusProfiler:
         assert elapsed == 0.0
 
 
-# --- CompilationProfiler Tests ------------------------------------------
+# ─── CompilationProfiler Tests ──────────────────────────────────────────
 
 class TestCompilationProfiler:
     def test_basic_phase_timing(self):

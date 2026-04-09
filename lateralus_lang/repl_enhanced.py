@@ -15,9 +15,7 @@ from __future__ import annotations
 
 import sys
 import time
-import traceback
-from typing import Any, Dict, List, Optional, Set
-
+from typing import Any, Dict, List, Optional
 
 # --- ANSI Colors -------------------------------------------------------
 
@@ -381,9 +379,9 @@ class REPLSession:
 
     def _run_profiled(self, code: str) -> None:
         """Execute code with per-phase timing breakdown."""
+        from lateralus_lang.compiler import Compiler, Target
         from lateralus_lang.lexer import Lexer
         from lateralus_lang.parser import Parser
-        from lateralus_lang.compiler import Compiler, Target
 
         print(f"{_C.DIM}-- Profile --{_C.RESET}")
 

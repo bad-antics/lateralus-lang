@@ -1,11 +1,14 @@
 """
 tests/test_compiler.py  -  End-to-end compiler pipeline tests
 """
-import sys, pathlib
+import pathlib
+import sys
+
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
 import pytest
-from lateralus_lang.compiler import Compiler, Target, CompileResult
+
+from lateralus_lang.compiler import Compiler, CompileResult, Target
 
 
 @pytest.fixture

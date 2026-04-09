@@ -3,17 +3,18 @@ tests/test_javascript_transpiler.py
 Tests for lateralus_lang.codegen.javascript — JS/ES2022+ transpiler (v2.0)
 """
 
-import pytest
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from lateralus_lang.codegen.javascript import (
-    JavaScriptTranspiler, JSBuffer, transpile_to_js,
-    get_js_transpiler_builtins, JS_RUNTIME
+    JS_RUNTIME,
+    JavaScriptTranspiler,
+    JSBuffer,
+    get_js_transpiler_builtins,
+    transpile_to_js,
 )
-
 
 # ---------------------------------------------------------------------------
 # JSBuffer

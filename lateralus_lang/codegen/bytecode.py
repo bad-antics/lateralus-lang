@@ -14,9 +14,9 @@ The generated code uses the full LTasm opcode set including:
 from __future__ import annotations
 
 import struct
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
-from ..ir import IROp, IRFunction, IRInstr, IRModule, BasicBlock
+from ..ir import BasicBlock, IRFunction, IRInstr, IRModule, IROp
 from ..vm.assembler import Bytecode
 from ..vm.opcodes import Op
 

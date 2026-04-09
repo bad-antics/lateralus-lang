@@ -9,15 +9,16 @@ Tests for LATERALUS v2.3 features:
   · New stdlib modules: sort, set, ringbuf, semver, event, template
   · New examples: v23_showcase, game_of_life, interpreter_demo
 """
-import sys
 import pathlib
+import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
 import pytest
+
 from lateralus_lang.compiler import Compiler, Target
+from lateralus_lang.formatter import FormatConfig, LateralusFormatter
 from lateralus_lang.linter import LateralusLinter, Severity
-from lateralus_lang.formatter import LateralusFormatter, FormatConfig
 
 # --- Helpers -----------------------------------------------------------------
 
@@ -43,8 +44,8 @@ def python_src(src, filename="<test>"):
 
 def run_ltl(src):
     """Compile and execute LTL source, return captured stdout."""
-    import io
     import contextlib
+    import io
     py = python_src(src)
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
@@ -270,7 +271,7 @@ class TestFormatterImportSort:
 
 class TestLSPCodeActions:
     def _make_server(self):
-        from lateralus_lang.lsp_server import LateralusLSP, DocumentManager
+        from lateralus_lang.lsp_server import LateralusLSP
         server = LateralusLSP()
         return server
 

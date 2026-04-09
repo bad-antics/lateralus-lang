@@ -6,12 +6,13 @@ Tests for LATERALUS v2.2 features:
   · New stdlib modules: fmt, encoding, csv, logging, filepath
   · v22 showcase compilation
 """
-import sys
 import pathlib
+import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
 import pytest
+
 from lateralus_lang.compiler import Compiler, Target
 from lateralus_lang.linter import LateralusLinter, Severity
 
@@ -39,8 +40,8 @@ def python_src(src, filename="<test>"):
 
 def run_ltl(src):
     """Compile and execute LTL source, return captured stdout."""
-    import io
     import contextlib
+    import io
     py = python_src(src)
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):

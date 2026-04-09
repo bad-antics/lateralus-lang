@@ -16,15 +16,20 @@ from __future__ import annotations
 
 import textwrap
 
-import pytest
-
 from lateralus_lang.ast_nodes import (
-    ConstFnDecl, MacroDecl, MacroInvocation, CompTimeBlock,
-    DeriveAttr, ReflectExpr, QuoteExpr, UnquoteExpr, SourceSpan,
+    CompTimeBlock,
+    ConstFnDecl,
+    DeriveAttr,
+    MacroDecl,
+    MacroInvocation,
+    QuoteExpr,
+    ReflectExpr,
+    UnquoteExpr,
 )
 from lateralus_lang.compiler import Compiler, Target
-from lateralus_lang.lexer import Lexer, TK
+from lateralus_lang.lexer import TK, Lexer
 from lateralus_lang.parser import Parser
+
 
 # Helpers
 def _compile(src: str) -> object:
@@ -434,7 +439,7 @@ class TestCodegenQuote:
 class TestVersion:
     def test_version_is_1_8_0(self):
         import lateralus_lang
-        assert lateralus_lang.__version__ == "2.5.1"
+        assert lateralus_lang.__version__ == "3.0.0"
 
 
 # =======================================================================

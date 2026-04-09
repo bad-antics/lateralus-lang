@@ -1,6 +1,6 @@
 """
-lateralus_lang/codegen/c.py  -  LTL → C99 Transpiler
-===========================================================================
+lateralus_lang/codegen/c.py  ─  LTL → C99 Transpiler
+═══════════════════════════════════════════════════════════════════════════
 Converts a Lateralus (.ltl) AST to C99 source code suitable for bare-metal
 compilation (kernel, embedded, OS components) or hosted userspace programs.
 
@@ -9,70 +9,127 @@ to be compiled with GCC/Clang for any target architecture (x86_64, ARM,
 RISC-V, etc.).
 
 Modes
------
+─────
   · HOSTED   — links against libc, includes main() wrapper, runtime GC
   · FREESTANDING — no libc, no runtime, static alloc only (OS kernel mode)
 
 Output
-------
+──────
   · Single .c file with all definitions (header-free for simplicity)
   · Optional companion .h file for public symbols
   · Build command hints in comments
 
 v1.5.0 — 2026-03-30
-===========================================================================
+═══════════════════════════════════════════════════════════════════════════
 """
 from __future__ import annotations
 
-import textwrap
 from enum import Enum, auto
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set
 
 from ..ast_nodes import (
-    AssignStmt, ASTVisitor, AwaitExpr, BinOp, BlockStmt, BreakStmt,
-    CallExpr, CastExpr, ContinueStmt, Decorator, EmitStmt, EnumDecl,
-    EnumVariant,
-    ExprStmt, FieldExpr, FnDecl, ForeignBlock, ForeignParam,
-    ForStmt, Ident, IfStmt, ImplBlock,
-    ImportStmt, IndexExpr, InterfaceDecl, InterpolatedStr, LambdaExpr,
-    LetDecl, ListExpr, Literal, LoopStmt, MapExpr, MatchArm, MatchStmt,
-    ChainExpr, MeasureBlock, Node, Param, Program, ProbeExpr, PropagateExpr,
-    RangeExpr, RecoverClause,
-    ReturnStmt, SelfExpr,
-    SpawnExpr, StructDecl, StructField, StructLiteral, ThrowStmt, TryExpr,
+    # v1.6 — low-level / OS-dev
+    AddrOfExpr,
+    AlignofExpr,
+    AssignStmt,
+    ASTVisitor,
+    # v1.6 — async / concurrency
+    AsyncForStmt,
+    AwaitExpr,
+    BindingPattern,
+    BinOp,
+    BlockStmt,
+    CallExpr,
+    CancelExpr,
+    CastExpr,
+    # v1.7 — conditional compilation
+    CfgAttr,
+    CfgExpr,
+    ChainExpr,
+    ChannelExpr,
+    ComprehensionExpr,
+    # v1.8 — metaprogramming
+    CompTimeBlock,
+    ConstFnDecl,
+    DerefExpr,
+    DeriveAttr,
+    EmitStmt,
+    EnumDecl,
+    ExprStmt,
+    ExternDecl,
+    FieldExpr,
+    FnDecl,
+    ForeignBlock,
+    ForeignParam,
+    ForStmt,
+    GuardExpr,
+    Ident,
+    IfStmt,
+    ImplBlock,
+    ImportStmt,
+    IndexExpr,
+    InlineAsm,
+    InterfaceDecl,
+    InterpolatedStr,
+    LambdaExpr,
+    LetDecl,
+    ListExpr,
+    Literal,
+    LiteralPattern,
+    LoopStmt,
+    MacroDecl,
+    MacroInvocation,
+    MapExpr,
+    MatchStmt,
+    MeasureBlock,
+    Node,
+    NurseryBlock,
+    OffsetofExpr,
+    OptionExpr,
+    Param,
+    PipelineAssign,
+    ProbeExpr,
+    Program,
+    PropagateExpr,
+    QuoteExpr,
+    RangeExpr,
+    ReflectExpr,
+    ResultExpr,
+    ReturnStmt,
+    SpawnExpr,
+    SpreadExpr,
+    StaticDecl,
+    StructDecl,
+    StructLiteral,
+    TernaryExpr,
+    ThrowStmt,
+    TryExpr,
     TryStmt,
     TupleExpr,
-    TypeAlias, TypeRef, UnaryOp, WhileStmt, YieldExpr,
-    ComprehensionExpr, GuardExpr, WhereClause, PipelineAssign, SpreadExpr,
-    TernaryExpr,
-    TypeMatchExpr, TypeMatchArm, ResultExpr, OptionExpr,
-    WildcardPattern, LiteralPattern, BindingPattern, TypePattern,
-    EnumVariantPattern, TuplePattern, ListPattern, OrPattern,
-    # v1.6 — low-level / OS-dev
-    AddrOfExpr, AlignofExpr, DerefExpr, ExternDecl, InlineAsm,
-    OffsetofExpr, StaticDecl, UnsafeBlock, VolatileExpr,
-    # v1.6 — async / concurrency
-    AsyncForStmt, CancelExpr, ChannelExpr, NurseryBlock,
-    # v1.7 — conditional compilation
-    CfgAttr, CfgExpr,
-    # v1.8 — metaprogramming
-    CompTimeBlock, ConstFnDecl, DeriveAttr, MacroDecl, MacroInvocation,
-    QuoteExpr, ReflectExpr, UnquoteExpr,
+    TypeAlias,
+    TypeMatchExpr,
+    TypeRef,
+    UnaryOp,
+    UnsafeBlock,
+    VolatileExpr,
+    WhereClause,
+    WhileStmt,
+    WildcardPattern,
+    YieldExpr,
 )
 
-
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # Build mode
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 class CMode(Enum):
     HOSTED       = auto()  # Standard userspace (links libc)
     FREESTANDING = auto()  # Bare-metal / kernel (no libc, no runtime)
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # Code writer
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 class _W:
     """Indented C code writer."""
@@ -115,9 +172,9 @@ class _W:
         return "\n".join(self._lines) + "\n"
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # Type mapping  (Lateralus type annotations → C types)
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 _TYPE_MAP: Dict[str, str] = {
     "int":    "int64_t",
@@ -160,19 +217,19 @@ def _c_type(type_ref: Optional[TypeRef], default: str = "ltl_value_t") -> str:
     return default
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # Preamble templates
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 _HOSTED_PREAMBLE = '''\
-/* =======================================================================
+/* ═══════════════════════════════════════════════════════════════════════
  * Generated by LATERALUS C Transpiler v1.5.0
  * Mode: HOSTED (userspace, libc linked)
  *
  * Build:
  *   gcc -O2 -std=c99 -o program program.c -lm
  *   clang -O2 -std=c99 -o program program.c -lm
- * ======================================================================= */
+ * ═══════════════════════════════════════════════════════════════════════ */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -182,7 +239,7 @@ _HOSTED_PREAMBLE = '''\
 #include <math.h>
 #include <assert.h>
 
-/* -- Lateralus Runtime Types ------------------------------------------- */
+/* ── Lateralus Runtime Types ─────────────────────────────────────────── */
 
 typedef struct ltl_string {
     int64_t len;
@@ -206,7 +263,7 @@ typedef struct ltl_value {
     };
 } ltl_value_t;
 
-/* -- Result / Option ADTs ---------------------------------------------- */
+/* ── Result / Option ADTs ────────────────────────────────────────────── */
 
 typedef struct {
     bool    is_ok;
@@ -219,7 +276,7 @@ typedef struct {
     ltl_value_t value;
 } ltl_option_t;
 
-/* -- String helpers ---------------------------------------------------- */
+/* ── String helpers ──────────────────────────────────────────────────── */
 
 static ltl_string_t* ltl_str_new(const char *s) {
     int64_t len = (int64_t)strlen(s);
@@ -240,7 +297,7 @@ static ltl_string_t* ltl_str_concat(ltl_string_t *a, ltl_string_t *b) {
     return r;
 }
 
-/* -- I/O & Lateralus stdlib bindings ---------------------------------- */
+/* ── I/O & Lateralus stdlib bindings ────────────────────────────────── */
 
 static void println(const char *s)         { puts(s ? s : ""); }
 static void print_int(int64_t v)           { printf("%lld", (long long)v); }
@@ -286,7 +343,7 @@ static void ltl_println_any(ltl_value_t v) {
     }
 }
 
-/* -- Dynamic list (growable array) ------------------------------------- */
+/* ── Dynamic list (growable array) ───────────────────────────────────── */
 
 typedef struct {
     ltl_value_t *items;
@@ -313,7 +370,7 @@ static void ltl_list_push(ltl_list_t *l, ltl_value_t v) {
 '''
 
 _FREESTANDING_PREAMBLE = '''\
-/* =======================================================================
+/* ═══════════════════════════════════════════════════════════════════════
  * Generated by LATERALUS C Transpiler v1.5.0
  * Mode: FREESTANDING (bare-metal / OS kernel)
  *
@@ -323,7 +380,7 @@ _FREESTANDING_PREAMBLE = '''\
  *
  * Build (ARM Cortex-M):
  *   arm-none-eabi-gcc -ffreestanding -nostdlib -mcpu=cortex-m4 -c kernel.c
- * ======================================================================= */
+ * ═══════════════════════════════════════════════════════════════════════ */
 
 /* No libc — provide our own primitives */
 
@@ -338,7 +395,7 @@ typedef _Bool              bool;
 #define false 0
 #define NULL  ((void*)0)
 
-/* -- Freestanding memory primitives ------------------------------------ */
+/* ── Freestanding memory primitives ──────────────────────────────────── */
 
 static void* ltl_memcpy(void *dst, const void *src, size_t n) {
     uint8_t *d = (uint8_t*)dst;
@@ -359,7 +416,7 @@ static size_t ltl_strlen(const char *s) {
     return n;
 }
 
-/* -- Kernel memory allocator (bump allocator) -------------------------- */
+/* ── Kernel memory allocator (bump allocator) ────────────────────────── */
 
 static uint8_t _heap[1048576];  /* 1 MB static heap */
 static size_t  _heap_offset = 0;
@@ -382,7 +439,7 @@ static void ltl_heap_reset(void) {
     _heap_offset = 0;
 }
 
-/* -- Freestanding types (same layout as hosted) ------------------------ */
+/* ── Freestanding types (same layout as hosted) ──────────────────────── */
 
 typedef struct ltl_string {
     int64_t len;
@@ -417,7 +474,7 @@ typedef struct {
     ltl_value_t value;
 } ltl_option_t;
 
-/* -- Port I/O (x86) --------------------------------------------------- */
+/* ── Port I/O (x86) ─────────────────────────────────────────────────── */
 
 static inline void outb(uint16_t port, uint8_t val) {
     __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
@@ -429,7 +486,7 @@ static inline uint8_t inb(uint16_t port) {
     return ret;
 }
 
-/* -- VGA text mode (0xB8000) ------------------------------------------- */
+/* ── VGA text mode (0xB8000) ─────────────────────────────────────────── */
 
 static volatile uint16_t *const VGA_BUFFER = (volatile uint16_t*)0xB8000;
 static int vga_row = 0, vga_col = 0;
@@ -449,9 +506,9 @@ static void println(const char *s) {
 '''
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # C Transpiler
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 class CTranspiler(ASTVisitor):
     """
@@ -475,7 +532,7 @@ class CTranspiler(ASTVisitor):
         self._local_types: Dict[str, str] = {}    # name → C type for current fn
         self._fn_return_types: Dict[str, str] = {}  # fn name → C return type
 
-    # -- helpers -----------------------------------------------------------
+    # ── helpers ───────────────────────────────────────────────────────────
 
     def _temp(self, prefix: str = "_t") -> str:
         self._temp_counter += 1
@@ -495,7 +552,7 @@ class CTranspiler(ASTVisitor):
             return f"ltl_{name}"
         return name.replace("::", "_")
 
-    # -- main entry --------------------------------------------------------
+    # ── main entry ────────────────────────────────────────────────────────
 
     def transpile(self, ast: Program) -> str:
         """Transpile a complete Program AST to C source."""
@@ -507,7 +564,7 @@ class CTranspiler(ASTVisitor):
         else:
             w.raw(_HOSTED_PREAMBLE)
 
-        w.comment("=== Forward Declarations ===")
+        w.comment("═══ Forward Declarations ═══")
         w.line()
 
         # First pass: collect enum/struct/fn forward declarations
@@ -521,7 +578,7 @@ class CTranspiler(ASTVisitor):
                 self._emit_fn_forward(node)
 
         w.line()
-        w.comment("=== Struct Definitions ===")
+        w.comment("═══ Struct Definitions ═══")
         w.line()
 
         # Second pass: emit structs
@@ -530,7 +587,7 @@ class CTranspiler(ASTVisitor):
                 self._emit_struct(node)
 
         w.line()
-        w.comment("=== Function Definitions ===")
+        w.comment("═══ Function Definitions ═══")
         w.line()
 
         # Third pass: emit everything else
@@ -540,7 +597,7 @@ class CTranspiler(ASTVisitor):
             if isinstance(node, ExprStmt):
                 # Bare expression statements at file scope are invalid C
                 # (e.g. top-level function calls). Skip them — main() handles entry.
-                w.comment(f"top-level expr (skipped in C — handled by main)")
+                w.comment("top-level expr (skipped in C — handled by main)")
                 continue
             self._visit(node)
             w.line()
@@ -553,9 +610,9 @@ class CTranspiler(ASTVisitor):
 
         return w.result()
 
-    # -- visit dispatch ----------------------------------------------------
+    # ── visit dispatch ────────────────────────────────────────────────────
 
-    # -- type inference helpers --------------------------------------------
+    # ── type inference helpers ────────────────────────────────────────────
 
     def _infer_ctype_from_expr(self, node) -> str:
         """Heuristically infer a C type from an AST expression node."""
@@ -605,7 +662,7 @@ class CTranspiler(ASTVisitor):
                     return self._fn_return_types[nm]
         return "ltl_value_t"
 
-    # -- stdlib module call mapping -----------------------------------------
+    # ── stdlib module call mapping ─────────────────────────────────────────
 
     _IO_MATH = {
         "sqrt": "sqrt", "cbrt": "cbrt", "abs": "fabs", "fabs": "fabs",
@@ -625,7 +682,7 @@ class CTranspiler(ASTVisitor):
             if method == "println":  return f"ltl_io_println({a0})"
             if method == "print":    return f"ltl_io_print({a0})"
             if method == "eprintln": return f"ltl_io_eprintln({a0})"
-            if method == "readline": return f"ltl_io_readline()"
+            if method == "readline": return "ltl_io_readline()"
             if method in ("println_int",):
                 return f"printf(\"%%lld\\n\", (long long){a0})"
         # fmt module
@@ -677,7 +734,7 @@ class CTranspiler(ASTVisitor):
             return visitor(node)
         return f"/* unsupported: {type(node).__name__} */ 0"
 
-    # -- struct emission ---------------------------------------------------
+    # ── struct emission ───────────────────────────────────────────────────
 
     def _emit_struct_forward(self, node: StructDecl):
         name = self._mangle(node.name)
@@ -695,7 +752,7 @@ class CTranspiler(ASTVisitor):
         w.block_close(";")
         w.line()
 
-    # -- function forward declaration --------------------------------------
+    # ── function forward declaration ──────────────────────────────────────
 
     def _emit_fn_forward(self, node: FnDecl):
         ret = _c_type(node.ret_type, "ltl_value_t")
@@ -715,7 +772,7 @@ class CTranspiler(ASTVisitor):
             parts.append(f"{ptype} {pname}")
         return ", ".join(parts)
 
-    # -- function definition -----------------------------------------------
+    # ── function definition ───────────────────────────────────────────────
 
     def _visit_FnDecl(self, node: FnDecl):
         w = self._w
@@ -744,7 +801,7 @@ class CTranspiler(ASTVisitor):
         elif isinstance(block, Node):
             self._visit(block)
 
-    # -- statements --------------------------------------------------------
+    # ── statements ────────────────────────────────────────────────────────
 
     def _visit_LetDecl(self, node: LetDecl):
         explicit = _c_type(getattr(node, "type_", None), None)
@@ -966,7 +1023,7 @@ class CTranspiler(ASTVisitor):
 
     def _visit_ThrowStmt(self, node: ThrowStmt):
         expr = self._visit_expr(node.value) if hasattr(node, "value") and node.value else "1"
-        self._w.comment(f"throw → return error")
+        self._w.comment("throw → return error")
         self._w.line(f"return {expr}; /* throw */")
 
     def _visit_InterfaceDecl(self, node: InterfaceDecl):
@@ -982,7 +1039,7 @@ class CTranspiler(ASTVisitor):
         w.block_close(f" {name}_vtable;")
         w.line()
 
-    # -- expressions -------------------------------------------------------
+    # ── expressions ───────────────────────────────────────────────────────
 
     def _expr_Literal(self, node: Literal) -> str:
         if isinstance(node.value, str):
@@ -1226,7 +1283,7 @@ class CTranspiler(ASTVisitor):
         inner = self._visit_expr(node.expr) if hasattr(node, "expr") and node.expr else "0"
         return f"/* propagate */ {inner}"
 
-    # -- v1.5 completeness: previously-missing visitors --------------------
+    # ── v1.5 completeness: previously-missing visitors ────────────────────
 
     def _visit_EmitStmt(self, node: EmitStmt):
         w = self._w
@@ -1276,7 +1333,7 @@ class CTranspiler(ASTVisitor):
         label = getattr(node, "label", None) or getattr(node, "name", "probe")
         return f'/* probe "{label}" */ 0'
 
-    # -- v1.6 low-level statement visitors ---------------------------------
+    # ── v1.6 low-level statement visitors ─────────────────────────────────
 
     def _visit_UnsafeBlock(self, node: UnsafeBlock):
         w = self._w
@@ -1312,7 +1369,7 @@ class CTranspiler(ASTVisitor):
         else:
             w.line(f"static {qual}{ctype} {name};")
 
-    # -- v1.6 low-level expression visitors --------------------------------
+    # ── v1.6 low-level expression visitors ────────────────────────────────
 
     def _expr_InlineAsm(self, node: InlineAsm) -> str:
         escaped = node.template.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
@@ -1339,12 +1396,12 @@ class CTranspiler(ASTVisitor):
         fname = self._mangle(node.field_name)
         return f"__builtin_offsetof({sname}, {fname})"
 
-    # -- v1.6 async / concurrency visitors --------------------------------
+    # ── v1.6 async / concurrency visitors ────────────────────────────────
 
     def _visit_NurseryBlock(self, node: NurseryBlock):
         w = self._w
         name = getattr(node, "name", None) or "_nursery"
-        w.comment(f"nursery {{ ... }} → sequential fallback in C (no green threads)")
+        w.comment("nursery { ... } → sequential fallback in C (no green threads)")
         w.block_open(f"/* nursery: {name} */")
         if node.body:
             self._visit_block(node.body)
@@ -1370,7 +1427,7 @@ class CTranspiler(ASTVisitor):
         scope = getattr(node, "scope", None)
         return f'/* cancel("{scope}") */ 0'
 
-    # -- v1.7 — conditional compilation visitors ---------------------------
+    # ── v1.7 — conditional compilation visitors ───────────────────────────
 
     def _visit_CfgAttr(self, node: CfgAttr):
         w = self._w
@@ -1381,7 +1438,7 @@ class CTranspiler(ASTVisitor):
         macro = f"LTL_CFG_{node.key.upper()}_{node.value.upper()}"
         return f"(defined({macro}) ? 1 : 0)"
 
-    # -- v1.8 — metaprogramming visitors -----------------------------------
+    # ── v1.8 — metaprogramming visitors ───────────────────────────────────
 
     def _visit_ConstFnDecl(self, node: ConstFnDecl):
         w = self._w
@@ -1411,10 +1468,10 @@ class CTranspiler(ASTVisitor):
         if params:
             param_str = ", ".join(params)
             w.line(f"#define {name}({param_str})  \\")
-            w.line(f"    /* macro body — expand at call site */")
+            w.line("    /* macro body — expand at call site */")
         else:
             w.line(f"#define {name}()  \\")
-            w.line(f"    /* macro body — expand at call site */")
+            w.line("    /* macro body — expand at call site */")
         w.line()
 
     def _visit_MacroInvocation(self, node: MacroInvocation):
@@ -1452,7 +1509,7 @@ class CTranspiler(ASTVisitor):
             return self._visit_expr(node.expr)
         return "0"
 
-    # -- pattern matching helpers ------------------------------------------
+    # ── pattern matching helpers ──────────────────────────────────────────
 
     def _pattern_cond(self, subject: str, pattern) -> str:
         """Generate a C boolean expression for pattern matching."""
@@ -1465,12 +1522,12 @@ class CTranspiler(ASTVisitor):
             return "1"  # always matches, binding handled separately
         return "1"
 
-    # -- main / kernel entry -----------------------------------------------
+    # ── main / kernel entry ───────────────────────────────────────────────
 
     def _emit_main_wrapper(self):
         w = self._w
         w.line()
-        w.comment("=== Entry Point ===")
+        w.comment("═══ Entry Point ═══")
         w.block_open("int main(int argc, char *argv[])")
         if "main" in self._functions or "ltl_main" in [
                 self._mangle("main")]:
@@ -1483,7 +1540,7 @@ class CTranspiler(ASTVisitor):
     def _emit_kernel_entry(self):
         w = self._w
         w.line()
-        w.comment("=== Kernel Entry Point ===")
+        w.comment("═══ Kernel Entry Point ═══")
         w.block_open("void _start(void)")
         w.comment("Clear BSS")
         w.line("ltl_heap_reset();")
@@ -1502,9 +1559,9 @@ class CTranspiler(ASTVisitor):
         w.block_close()
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # Public API (matches python.py pattern)
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 def transpile_to_c(ast: Program, mode: CMode = CMode.HOSTED,
                    target_arch: str = "x86_64") -> str:

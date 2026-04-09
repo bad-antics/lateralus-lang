@@ -12,17 +12,16 @@ Zed, and any LSP-compliant editor.
 from __future__ import annotations
 
 import json
-import sys
-import re
 import logging
-from dataclasses import dataclass, field, asdict
-from pathlib import Path
+import re
+import sys
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 # --- Compiler integration (real diagnostics) --------------------------
 try:
-    from .compiler import Compiler, Target, CompileResult
-    from .errors   import Severity as LTLSeverity
+    from .compiler import Compiler, Target
+    from .errors import Severity as LTLSeverity
     _HAS_COMPILER = True
 except Exception:          # pragma: no cover – graceful degradation
     _HAS_COMPILER = False
@@ -885,7 +884,7 @@ class LateralusLSP:
         if not doc:
             return {"jsonrpc": "2.0", "id": msg_id, "result": []}
         try:
-            from .formatter import LateralusFormatter, FormatConfig
+            from .formatter import FormatConfig, LateralusFormatter
             config = FormatConfig()
             opts = params.get("options", {})
             if "tabSize" in opts:

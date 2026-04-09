@@ -1,14 +1,16 @@
 """
 Tests for the LATERALUS package manager.
 """
-import json
-import pytest
-from pathlib import Path
 
 from lateralus_lang.package_manager import (
-    ProjectManifest, Dependency, LockFile, LockEntry,
-    SemVer, scaffold_project, DependencyResolver,
     MANIFEST_FILE,
+    Dependency,
+    DependencyResolver,
+    LockEntry,
+    LockFile,
+    ProjectManifest,
+    SemVer,
+    scaffold_project,
 )
 
 

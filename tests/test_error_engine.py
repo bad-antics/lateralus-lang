@@ -2,14 +2,20 @@
 tests/test_error_engine.py — Tests for the LATERALUS rich error diagnostics engine
 """
 import pytest
-from lateralus_lang.error_engine import (
-    ErrorCode, Severity, SourceLocation,
-    LateralusError, ErrorCollector,
-    LateralusCompileError, LateralusRuntimeError,
-    suggest_similar, suggest_fix_for_undefined,
-    suggest_fix_for_type_mismatch, enhance_traceback,
-)
 
+from lateralus_lang.error_engine import (
+    ErrorCode,
+    ErrorCollector,
+    LateralusCompileError,
+    LateralusError,
+    LateralusRuntimeError,
+    Severity,
+    SourceLocation,
+    enhance_traceback,
+    suggest_fix_for_type_mismatch,
+    suggest_fix_for_undefined,
+    suggest_similar,
+)
 
 # --- SourceLocation ---
 

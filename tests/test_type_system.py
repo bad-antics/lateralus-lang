@@ -1,17 +1,33 @@
 """
 tests/test_type_system.py — Tests for the LATERALUS type system
 """
-import pytest
 from lateralus_lang.type_system import (
-    LTLType, PrimitiveType, FunctionType, ListType, MapType, TupleType,
-    UnionType, OptionalType, TypeVar, StructType, InterfaceType,
-    INT, FLOAT, STR, BOOL, NONE, ANY, NEVER, VOID, NUMBER,
-    TypeEnvironment, TypeInferencer, TypeChecker,
-    parse_type_annotation, TypeKind,
+    ANY,
+    BOOL,
+    FLOAT,
+    INT,
+    NONE,
+    NUMBER,
+    STR,
+    VOID,
+    FunctionType,
+    InterfaceType,
+    ListType,
+    MapType,
+    OptionalType,
+    PrimitiveType,
+    StructType,
+    TupleType,
+    TypeChecker,
+    TypeEnvironment,
+    TypeInferencer,
+    TypeKind,
+    TypeVar,
+    UnionType,
+    parse_type_annotation,
 )
 
-
-# --- Primitive Types ---------------------------------------------------
+# ─── Primitive Types ───────────────────────────────────────────────────
 
 class TestPrimitiveTypes:
     def test_int(self):
@@ -50,7 +66,7 @@ class TestPrimitiveTypes:
         assert STR.is_assignable_from(BOOL)
 
 
-# --- Function Types ---------------------------------------------------
+# ─── Function Types ───────────────────────────────────────────────────
 
 class TestFunctionTypes:
     def test_creation(self):
@@ -73,7 +89,7 @@ class TestFunctionTypes:
         assert not fn1.is_assignable_from(fn2)
 
 
-# --- List Types --------------------------------------------------------
+# ─── List Types ────────────────────────────────────────────────────────
 
 class TestListTypes:
     def test_creation(self):
@@ -92,7 +108,7 @@ class TestListTypes:
         assert not ListType(INT).is_assignable_from(ListType(STR))
 
 
-# --- Map Types ---------------------------------------------------------
+# ─── Map Types ─────────────────────────────────────────────────────────
 
 class TestMapTypes:
     def test_creation(self):
@@ -106,7 +122,7 @@ class TestMapTypes:
         assert not MapType(STR, INT).is_assignable_from(MapType(INT, STR))
 
 
-# --- Tuple Types -------------------------------------------------------
+# ─── Tuple Types ───────────────────────────────────────────────────────
 
 class TestTupleTypes:
     def test_creation(self):
@@ -120,7 +136,7 @@ class TestTupleTypes:
         assert not TupleType([INT]).is_assignable_from(TupleType([INT, STR]))
 
 
-# --- Union Types -------------------------------------------------------
+# ─── Union Types ───────────────────────────────────────────────────────
 
 class TestUnionTypes:
     def test_creation(self):
@@ -149,7 +165,7 @@ class TestUnionTypes:
         assert NUMBER.is_assignable_from(FLOAT)
 
 
-# --- Optional Types ---------------------------------------------------
+# ─── Optional Types ───────────────────────────────────────────────────
 
 class TestOptionalTypes:
     def test_creation(self):
@@ -169,7 +185,7 @@ class TestOptionalTypes:
         assert not opt.is_assignable_from(STR)
 
 
-# --- Type Variables ----------------------------------------------------
+# ─── Type Variables ────────────────────────────────────────────────────
 
 class TestTypeVar:
     def test_unconstrained(self):
@@ -183,7 +199,7 @@ class TestTypeVar:
         assert tv.is_assignable_from(FLOAT)
 
 
-# --- Struct Types ------------------------------------------------------
+# ─── Struct Types ──────────────────────────────────────────────────────
 
 class TestStructTypes:
     def test_creation(self):
@@ -209,7 +225,7 @@ class TestStructTypes:
         assert not s1.is_assignable_from(s2)
 
 
-# --- Interface Types --------------------------------------------------
+# ─── Interface Types ──────────────────────────────────────────────────
 
 class TestInterfaceTypes:
     def test_satisfied(self):
@@ -229,7 +245,7 @@ class TestInterfaceTypes:
         assert not iface.is_satisfied_by(struct)
 
 
-# --- Type Environment --------------------------------------------------
+# ─── Type Environment ──────────────────────────────────────────────────
 
 class TestTypeEnvironment:
     def test_define_and_lookup(self):
@@ -262,7 +278,7 @@ class TestTypeEnvironment:
         assert env.lookup_type("Point") == point
 
 
-# --- Type Inferencer ---------------------------------------------------
+# ─── Type Inferencer ───────────────────────────────────────────────────
 
 class TestTypeInferencer:
     def test_infer_int(self):
@@ -309,7 +325,7 @@ class TestTypeInferencer:
         assert inf.infer_binary("+", STR, STR) == STR
 
 
-# --- Type Checker ------------------------------------------------------
+# ─── Type Checker ──────────────────────────────────────────────────────
 
 class TestTypeChecker:
     def test_valid_assignment(self):
@@ -345,7 +361,7 @@ class TestTypeChecker:
         assert err is not None
 
 
-# --- Parse Type Annotation --------------------------------------------
+# ─── Parse Type Annotation ────────────────────────────────────────────
 
 class TestParseTypeAnnotation:
     def test_primitive(self):

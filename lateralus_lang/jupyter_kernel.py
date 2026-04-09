@@ -1,6 +1,6 @@
 """
 lateralus_lang/jupyter_kernel.py
-=============================================================================
+═════════════════════════════════════════════════════════════════════════════
 LATERALUS v1.9 — Jupyter Kernel
 
 A full Jupyter kernel for LATERALUS, enabling interactive notebooks with:
@@ -16,22 +16,20 @@ Install:
 Then select "LATERALUS" from the Jupyter kernel list.
 
 Requires: ipykernel (optional dependency)
-=============================================================================
+═════════════════════════════════════════════════════════════════════════════
 """
 
 from __future__ import annotations
 
 import json
-import os
 import sys
 import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # Kernel specification (no ipykernel dependency needed)
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 KERNEL_NAME = "lateralus"
 KERNEL_DISPLAY_NAME = "LATERALUS"
@@ -74,9 +72,9 @@ LATERALUS_BUILTINS = [
 ]
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # Kernel installation
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 def install_kernel(user: bool = True) -> str:
     """Install the LATERALUS Jupyter kernel spec.
@@ -123,9 +121,9 @@ def _install_kernel_manual(user: bool) -> str:
     return str(dest)
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # Kernel implementation
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 class LateralusKernel:
     """LATERALUS Jupyter kernel.
@@ -192,7 +190,7 @@ class LateralusKernel:
 
             # Execute the transpiled Python
             import io
-            from contextlib import redirect_stdout, redirect_stderr
+            from contextlib import redirect_stderr, redirect_stdout
 
             stdout_buf = io.StringIO()
             stderr_buf = io.StringIO()
@@ -304,7 +302,7 @@ class LateralusKernel:
 
         return {"status": "complete"}
 
-    # -- Helper methods ----------------------------------------------------
+    # ── Helper methods ────────────────────────────────────────────────────
 
     def _ok_reply(self) -> dict:
         return {
@@ -333,9 +331,9 @@ class LateralusKernel:
             sys.stderr.write(text)
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # ipykernel integration (if available)
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 _IpykernelKernel = None
 
@@ -375,11 +373,11 @@ def _make_ipykernel_class():
             else:
                 # Check if there was stdout
                 import io
-                from contextlib import redirect_stdout, redirect_stderr
+                from contextlib import redirect_stderr, redirect_stdout
                 stdout_buf = io.StringIO()
                 stderr_buf = io.StringIO()
 
-                from .compiler import Compiler, Target
+                from .compiler import Target
                 compiler = self._ltl._get_compiler()
                 result = compiler.compile_source(code, target=Target.PYTHON)
 
@@ -411,9 +409,9 @@ def _make_ipykernel_class():
     return LateralusIPyKernel
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # Entry point
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 def main():
     """Entry point: either install kernel or start it."""

@@ -29,43 +29,104 @@ Supported constructs
 """
 from __future__ import annotations
 
-import re
-from typing import Any, Optional
-from enum import Enum
-
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # AST node imports — full v1.0-v1.9 coverage
 # ---------------------------------------------------------------------------
-
 from ..ast_nodes import (
-    # Core
-    Program, FnDecl, LetDecl, AssignStmt, IfStmt, WhileStmt, ForStmt,
-    ReturnStmt, ExprStmt, BlockStmt, BinOp, UnaryOp, CallExpr,
-    IndexExpr, FieldExpr, LambdaExpr, MatchStmt, MatchArm,
-    StructDecl, StructField, StructLiteral, ImportStmt, RangeExpr,
-    ListExpr, MapExpr, Ident, Literal, EmitStmt, MeasureBlock, ProbeExpr,
-    BreakStmt, ContinueStmt, TryStmt, ThrowStmt, LoopStmt,
-    # Types
-    EnumDecl, EnumVariant, TypeAlias, ImplBlock, InterfaceDecl, ForeignBlock,
-    # Expressions
-    InterpolatedStr, SelfExpr, AwaitExpr, CastExpr, TupleExpr,
-    SpreadExpr, TernaryExpr, OptionExpr, ResultExpr,
-    ComprehensionExpr, WhereClause, GuardExpr, PipelineAssign,
-    TypeMatchExpr, SpawnExpr, ChannelExpr, CancelExpr, YieldExpr,
-    ChainExpr, PropagateExpr, TryExpr, RecoverClause,
-    # Patterns
-    WildcardPattern, LiteralPattern, BindingPattern, TypePattern,
-    EnumVariantPattern, TuplePattern, ListPattern, OrPattern,
+    AssignStmt,
     # v1.6
-    AsyncForStmt, NurseryBlock, SelectStmt, SelectArm, ParallelExpr,
+    AsyncForStmt,
+    AwaitExpr,
+    BindingPattern,
+    BinOp,
+    BlockStmt,
+    BreakStmt,
+    CallExpr,
+    CancelExpr,
+    CastExpr,
     # v1.7
     CfgExpr,
+    ChainExpr,
+    ChannelExpr,
+    ComprehensionExpr,
     # v1.8
-    CompTimeBlock, ConstFnDecl, MacroDecl, MacroInvocation,
-    QuoteExpr, ReflectExpr, UnquoteExpr, DeriveAttr, Decorator,
+    CompTimeBlock,
+    ConstFnDecl,
+    ContinueStmt,
+    Decorator,
+    EmitStmt,
+    # Types
+    EnumDecl,
+    EnumVariant,
+    EnumVariantPattern,
+    ExprStmt,
+    FieldExpr,
+    FnDecl,
+    ForeignBlock,
+    ForStmt,
+    GuardExpr,
+    Ident,
+    IfStmt,
+    ImplBlock,
+    ImportStmt,
+    IndexExpr,
+    InterfaceDecl,
+    # Expressions
+    InterpolatedStr,
+    LambdaExpr,
+    LetDecl,
+    ListExpr,
+    ListPattern,
+    Literal,
+    LiteralPattern,
+    LoopStmt,
+    MacroDecl,
+    MacroInvocation,
+    MapExpr,
+    MatchStmt,
+    MeasureBlock,
+    NurseryBlock,
+    OptionExpr,
+    OrPattern,
+    ParallelExpr,
+    PipelineAssign,
+    ProbeExpr,
+    # Core
+    Program,
+    PropagateExpr,
+    QuoteExpr,
+    RangeExpr,
+    RecoverClause,
+    ReflectExpr,
+    ResultExpr,
+    ReturnStmt,
+    SelectArm,
+    SelectStmt,
+    SelfExpr,
+    SpawnExpr,
+    SpreadExpr,
+    StructDecl,
+    StructField,
+    StructLiteral,
+    TernaryExpr,
+    ThrowStmt,
+    TryExpr,
+    TryStmt,
+    TupleExpr,
+    TuplePattern,
+    TypeAlias,
+    TypeMatchExpr,
+    TypePattern,
+    UnaryOp,
+    UnquoteExpr,
+    WhereClause,
+    WhileStmt,
+    # Patterns
+    WildcardPattern,
+    YieldExpr,
 )
-
 
 # ---------------------------------------------------------------------------
 # JavaScript indenter / code buffer
@@ -574,7 +635,7 @@ class JavaScriptTranspiler:
             return f"/* reflect */ JSON.stringify({self._expr(node.target)})"
 
         if isinstance(node, QuoteExpr):
-            return f"/* quote */ null"
+            return "/* quote */ null"
 
         if isinstance(node, UnquoteExpr):
             return self._expr(node.expr)

@@ -2,16 +2,11 @@
 """
 Tests for the LATERALUS debugger module.
 """
-import pytest
-from unittest.mock import patch, MagicMock
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from lateralus_lang.debugger import (
-    Breakpoint, StackFrame, WatchExpression, LateralusDebugger
-)
-
+from lateralus_lang.debugger import Breakpoint, LateralusDebugger, StackFrame, WatchExpression
 
 # --- Breakpoint Tests --------------------------------------------------
 
