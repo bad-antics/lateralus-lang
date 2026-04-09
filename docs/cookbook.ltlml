@@ -704,6 +704,115 @@ lateralus watch src/ --run --entry src/main.ltl
 
 {separator}
 
+{h2 Chapter 11: Concurrency: Channels and Actors}
+
+{h3 Recipe 11.1 — Worker Pool with Channels}
+
+{p
+  {strong Problem}: Distribute heavy tasks across a pool of concurrent workers
+  to process a large dataset faster, limiting the number of active tasks.
+}
+
+{code lang="lateralus"
+import "channel"
+import "async"
+
+fn worker(id: int, tasks: map, results: map) {
+    loop {
+        let task = channel.channel_recv(tasks)
+        if task == none { break }  -- channel closed and empty
+        
+        println("Worker {id} processing task {task.id}")
+        let result = process_task(task)
+        channel.channel_send(results, {id: task.id, result: result, worker: id})
+    }
+}
+
+async fn run_pool(n_workers: int, task_list: list) -> list {
+    let tasks   = channel.channel_new(100)
+    let results = channel.channel_new(100)
+    
+    -- Start workers
+    let worker_tasks = []
+    for i in range(0, n_workers) {
+        worker_tasks = worker_tasks + [async { worker(i, tasks, results) }]
+    }
+    
+    -- Send tasks
+    for t in task_list {
+        channel.channel_send(tasks, t)
+    }
+    channel.channel_close(tasks)  -- signal workers to finish
+    
+    -- Collect results
+    let final_results = []
+    for _ in range(0, len(task_list)) {
+        final_results = final_results + [channel.channel_recv(results)]
+    }
+    
+    return final_results
+}
+}
+
+{h3 Recipe 11.2 — Fan-In: Merging Multiple Channels}
+
+{p
+  {strong Problem}: Merge data streams from multiple sources into a single
+  channel for centralized processing.
+}
+
+{code lang="lateralus"
+import "channel"
+
+fn merge_streams(sources: list) -> map {
+    let out = channel.channel_new(50)
+    
+    async {
+        loop {
+            -- select() returns {index, value, channel} or none if all closed
+            let res = channel.select(sources)
+            if res == none { break }
+            
+            channel.channel_send(out, {
+                source_id: res.index,
+                data:      res.value
+            })
+        }
+        channel.channel_close(out)
+    }
+    
+    return out
+}
+}
+
+{h3 Recipe 11.3 — Non-blocking Select with Timeout}
+
+{p
+  {strong Problem}: Wait for data from a channel but stop waiting if no data
+  arrives within a specific timeframe.
+}
+
+{code lang="lateralus"
+import "channel"
+
+fn wait_with_timeout(ch: map, timeout_ms: int) -> any {
+    let res = channel.select_timeout([ch], timeout_ms)
+    
+    match res {
+        {value} => {
+            println("Received: {value}")
+            return value
+        },
+        _ => {
+            println("Timed out after {timeout_ms}ms")
+            return none
+        }
+    }
+}
+}
+
+{separator}
+
 {h2 Appendix: Quick Reference}
 
 {h3 Pipeline Operators}
