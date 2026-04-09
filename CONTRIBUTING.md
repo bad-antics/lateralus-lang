@@ -187,7 +187,7 @@ Use **plain ASCII** instead:
 |------------------|-------|--------------------------|
 | Horizontal line  | `-`   | `----------`             |
 | Thick h-line     | `=`   | `==========`             |
-| Vertical line    | `\|`  | `\|  content  \|`        |
+| Vertical line    | `\|`  | `\  content  \`        |
 | Corner / joint   | `+`   | `+----------+`           |
 | Section break    | `=`   | `# ==================`   |
 
@@ -195,7 +195,7 @@ Use **plain ASCII** instead:
 
 ```
 +==================================+
-|  LateralusOS v0.3.0             |
+   LateralusOS v0.3.0             
 +==================================+
 ```
 
