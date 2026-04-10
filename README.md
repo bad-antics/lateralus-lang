@@ -470,6 +470,6 @@ pytest tests/ --tb=short -q
 
 **LATERALUS v3.0.1**
 Created and maintained by **bad-antics**
-License: Proprietary — LATERALUS Research
+License: MIT
 
 *Spiral outward. Build something beautiful.*
