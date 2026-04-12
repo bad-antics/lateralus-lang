@@ -311,3 +311,108 @@ Each version builds on the last, with clear milestones and feature gates.
 LATERALUS is a solo project by **antics**. Contributions welcome after v1.5.
 
 *Last updated: v2.4.0*
+
+---
+
+## v3.0 — The Spiral Expansion (Planned)
+
+> *Phase 1: Making Lateralus production-ready for real-world systems programming.*
+
+### v3.0 — LLVM Native Backend
+- [ ] **LLVM IR Emitter**: Direct AST-to-LLVM-IR compilation (replacing C99 as primary native backend)
+- [ ] **Optimization Passes**: LLVM O0–O3 integration, LTO (Link-Time Optimization)
+- [ ] **Native Binary Output**: `lateralus build --target native` producing ELF/Mach-O/PE binaries
+- [ ] **Cross-Compilation**: `--target aarch64-linux`, `--target x86_64-windows`, `--target wasm32-wasi`
+- [ ] **Debug Info**: DWARF debug symbols for GDB/LLDB integration
+- [ ] **ABI Compatibility**: C-compatible calling convention for seamless C library linking
+- [ ] **Benchmark Suite**: Formal performance comparison against Rust, Go, C on micro/macro benchmarks
+- [ ] **Tests**: Target 2,200+ tests
+
+### v3.1 — Effect System & Linear Types
+- [ ] **Effect System**: `fn read_file(path: str) -> str ! IO` — track side effects in types
+- [ ] **Effect Handlers**: `handle { expr } with { IO => ... }` — algebraic effect handlers
+- [ ] **Linear Types**: `linear struct Connection { ... }` — must be consumed exactly once
+- [ ] **Borrow Checker (Lite)**: Ownership tracking for linear resources without full Rust-style borrowing
+- [ ] **Region-Based Memory**: `region r { let x = alloc(r, 42) }` — arena-scoped allocation
+- [ ] **Move Semantics**: `let y = move x` — explicit ownership transfer
+- [ ] **Tests**: Target 2,400+ tests
+
+### v3.2 — Dependent Types (Phase 1)
+- [ ] **Dependent Function Types**: `fn zeros(n: int) -> Vector<n>` — types that depend on values
+- [ ] **Refinement Types**: `type Positive = int where { it > 0 }` — value-constrained types
+- [ ] **Compile-Time Proof Obligations**: SMT solver integration (Z3) for refinement checking
+- [ ] **Sized Types**: `type FixedArray<N: nat> = [T; N]` — compile-time known sizes
+- [ ] **Type-Level Arithmetic**: `Vector<N> + Vector<M> -> Vector<N + M>`
+- [ ] **Tests**: Target 2,600+ tests
+
+### v3.3 — GPU Compute Backend
+- [ ] **GPU Kernel Syntax**: `@gpu fn vector_add(a: &[f32], b: &[f32]) -> [f32]`
+- [ ] **CUDA Backend**: Compile `@gpu` functions to PTX via LLVM NVPTX
+- [ ] **Metal Backend**: Compile `@gpu` functions to Metal Shading Language (macOS/iOS)
+- [ ] **Vulkan Compute**: SPIR-V output for cross-platform GPU compute
+- [ ] **Automatic Data Transfer**: `gpu { let result = vector_add(host_a, host_b) }` — implicit host↔device
+- [ ] **Pipeline Fusion on GPU**: `data |> @gpu map(f) |> @gpu reduce(+)` — fused GPU kernels
+- [ ] **Tensor Types**: `Tensor<f32, [batch, channels, height, width]>` with shape inference
+- [ ] **Tests**: Target 2,800+ tests
+
+---
+
+## v4.0 — The Transcendence (Planned)
+
+> *Phase 2: Lateralus becomes a self-sufficient ecosystem.*
+
+### v4.0 — Spiral Package Manager
+- [ ] **`spiral` CLI**: Standalone package manager (`spiral init`, `spiral add`, `spiral publish`, `spiral search`)
+- [ ] **Central Registry**: `registry.lateralus.dev` with package hosting, versioning, and search
+- [ ] **Lock File v2**: Reproducible builds with content-addressed dependencies
+- [ ] **Private Registries**: Corporate/self-hosted package registry support
+- [ ] **Workspace Monorepo**: Enhanced workspace support with dependency graph visualization
+- [ ] **Binary Distribution**: Pre-compiled packages for common targets
+- [ ] **Security Auditing**: `spiral audit` — check dependencies for known vulnerabilities
+- [ ] **Tests**: Target 3,000+ tests
+
+### v4.1 — Formal Verification
+- [ ] **Specification Language**: `@spec fn sort<T: Ord>(xs: list<T>) -> list<T> { ensures sorted(result) && permutation(result, xs) }`
+- [ ] **SMT Integration**: Z3/CVC5 backend for automated theorem proving
+- [ ] **Proof Annotations**: `@proof fn lemma_sort_stable() { ... }` — machine-checked proofs
+- [ ] **Contract System**: `@requires`, `@ensures`, `@invariant` — design-by-contract
+- [ ] **Symbolic Execution**: `lateralus verify file.ltl` — exhaustive path exploration
+- [ ] **Property-Based Testing**: `@property fn reverse_reverse<T>(xs: list<T>) { assert xs == reverse(reverse(xs)) }`
+- [ ] **Tests**: Target 3,200+ tests
+
+### v4.2 — Distributed Computing
+- [ ] **Actor Model**: `actor Counter { state: int, on Increment => state += 1 }` — Erlang-style actors
+- [ ] **Remote Actors**: `let counter = spawn_remote("node2", Counter)` — transparent distribution
+- [ ] **Cluster Primitives**: Node discovery, leader election, consensus protocols
+- [ ] **Distributed Pipelines**: `data |> scatter(nodes) |> @distributed map(f) |> gather()` — MapReduce via pipelines
+- [ ] **Fault Tolerance**: Supervision trees, automatic actor restart, circuit breakers
+- [ ] **Serialization**: Automatic binary serialization for cross-node message passing
+- [ ] **Tests**: Target 3,400+ tests
+
+### v4.3 — AI/ML Native Integration
+- [ ] **Tensor Literals**: `let t = tensor[[1.0, 2.0], [3.0, 4.0]]` — first-class tensor type
+- [ ] **Autograd**: `let grad_f = grad(f)` — automatic differentiation via dual numbers / tape
+- [ ] **Model DSL**: `model MLP { layers: [Dense(784, 256), ReLU, Dense(256, 10)] }`
+- [ ] **Training Loop**: `model |> train(dataset, epochs=10, lr=0.001) |> evaluate(test_set)`
+- [ ] **ONNX Import/Export**: Load pre-trained models, export Lateralus models
+- [ ] **Hardware Dispatch**: Automatic CPU/GPU/TPU selection based on tensor size and operation
+- [ ] **Tests**: Target 3,600+ tests
+
+### v4.4 — WebAssembly Component Model
+- [ ] **WASI Preview 2**: Full WASI support (filesystem, sockets, HTTP, clocks)
+- [ ] **Component Model**: Import/export typed interfaces between Wasm components
+- [ ] **Browser Runtime**: `lateralus build --target web` — full web application compilation
+- [ ] **DOM Bindings**: `@web fn render() -> Html { div { h1 { "Hello from Lateralus" } } }`
+- [ ] **Server-Side WASM**: Cloudflare Workers / Fastly Compute compatible output
+- [ ] **Tests**: Target 3,800+ tests
+
+---
+
+## Long-Term Vision (v5.0+)
+
+- **Self-Hosted Compiler in Lateralus**: Full compiler rewrite from Python → Lateralus (bootstrapped via LLVM backend)
+- **Language Server Protocol v3**: Semantic tokens, inlay hints, call hierarchy, type hierarchy
+- **Interactive Theorem Prover**: Coq/Lean-style proof mode integrated into the language
+- **Quantum Computing Backend**: Compile quantum circuits to OpenQASM/Cirq
+- **IDE**: Native Lateralus IDE built with the language itself (dogfooding)
+
