@@ -1,0 +1,458 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// GRUGBOT — Brain Architecture: Lobe & BrainStem
+// Subject-partitioned neural organization with winner-take-all dispatch
+// ═══════════════════════════════════════════════════════════════════════════
+
+module grugbot.brain
+
+import math
+import random
+import grugbot.core
+import grugbot.scanner
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LOBE CONSTANTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub const MAX_NODES_PER_LOBE: int = 20000
+pub const MAX_LOBES: int = 64
+pub const CROSS_LOBE_DECAY: float = 0.60
+pub const SUBJECT_MATCH_THRESHOLD: float = 0.35
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LOBE — Subject-partitioned node container
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub struct Lobe {
+    id: int
+    subject: str
+    node_ids: list
+    subject_signal: list
+    active: bool
+    last_fire_time: float
+    fire_count: int
+}
+
+// Global state
+let mut LOBES: map = {}
+let mut LOBE_COUNTER: int = 0
+let mut NODE_TO_LOBE: map = {}  // O(1) reverse lookup: node_id -> lobe_id
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LOBE CREATION & MANAGEMENT
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn create_lobe(subject: str) -> int {
+    if len(LOBES) >= MAX_LOBES {
+        return -1  // Capacity reached
+    }
+
+    LOBE_COUNTER = LOBE_COUNTER + 1
+    let lobe_id = LOBE_COUNTER
+    let subject_signal = grugbot.core.words_to_signal(subject)
+
+    let lobe = Lobe {
+        id: lobe_id,
+        subject: subject,
+        node_ids: [],
+        subject_signal: subject_signal,
+        active: true,
+        last_fire_time: 0.0,
+        fire_count: 0
+    }
+
+    let key = str(lobe_id)
+    LOBES[key] = lobe
+    return lobe_id
+}
+
+pub fn get_lobe(lobe_id: int) -> Lobe {
+    let key = str(lobe_id)
+    return LOBES[key]
+}
+
+pub fn lobe_exists(lobe_id: int) -> bool {
+    let key = str(lobe_id)
+    return contains(keys(LOBES), key)
+}
+
+pub fn lobe_count() -> int {
+    return len(LOBES)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LOBE NODE MANAGEMENT
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn add_node_to_lobe(lobe_id: int, node_id: int) -> bool {
+    if not lobe_exists(lobe_id) {
+        return false
+    }
+
+    let key = str(lobe_id)
+    let lobe = LOBES[key]
+
+    if len(lobe.node_ids) >= MAX_NODES_PER_LOBE {
+        return false  // Lobe full
+    }
+
+    lobe.node_ids = lobe.node_ids + [node_id]
+    let node_key = str(node_id)
+    NODE_TO_LOBE[node_key] = lobe_id
+    LOBES[key] = lobe
+    return true
+}
+
+pub fn remove_node_from_lobe(node_id: int) -> bool {
+    let node_key = str(node_id)
+    if not contains(keys(NODE_TO_LOBE), node_key) {
+        return false
+    }
+
+    let lobe_id = NODE_TO_LOBE[node_key]
+    let key = str(lobe_id)
+    let lobe = LOBES[key]
+
+    // Filter out the node
+    let new_ids = []
+    for id in lobe.node_ids {
+        if id != node_id {
+            new_ids = new_ids + [id]
+        }
+    }
+    lobe.node_ids = new_ids
+    LOBES[key] = lobe
+
+    // Remove reverse lookup
+    del NODE_TO_LOBE[node_key]
+    return true
+}
+
+pub fn get_lobe_for_node(node_id: int) -> int {
+    let node_key = str(node_id)
+    if contains(keys(NODE_TO_LOBE), node_key) {
+        return NODE_TO_LOBE[node_key]
+    }
+    return -1
+}
+
+pub fn nodes_in_lobe(lobe_id: int) -> int {
+    if not lobe_exists(lobe_id) {
+        return 0
+    }
+    let key = str(lobe_id)
+    return len(LOBES[key].node_ids)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUBJECT MATCHING — Find best lobe for input
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn find_best_lobe(input_signal: list) -> int {
+    let best_lobe_id = -1
+    let best_conf = 0.0
+
+    for lobe_id_str in keys(LOBES) {
+        let lobe = LOBES[lobe_id_str]
+
+        if len(lobe.subject_signal) == 0 or len(input_signal) == 0 {
+            continue
+        }
+
+        // Use scanner for pattern matching
+        let result = grugbot.scanner.scan(input_signal, lobe.subject_signal, 3, 0.3)
+
+        if result.found and result.confidence > best_conf {
+            best_conf = result.confidence
+            best_lobe_id = lobe.id
+        }
+    }
+
+    if best_conf >= SUBJECT_MATCH_THRESHOLD {
+        return best_lobe_id
+    }
+    return -1
+}
+
+pub fn auto_assign_node(node_id: int) -> int {
+    let node_key = str(node_id)
+    let node = grugbot.core.get_node(node_key)
+    if node == nil {
+        return -1
+    }
+
+    let best_lobe = find_best_lobe(node.signal)
+
+    if best_lobe >= 0 {
+        add_node_to_lobe(best_lobe, node_id)
+        return best_lobe
+    }
+
+    // Create new lobe for unmatched subjects
+    let pattern_text = node.pattern
+    let words = split(pattern_text, " ")
+    let subject = len(words) > 0 ? words[0] : "general"
+
+    let new_lobe = create_lobe(subject)
+    if new_lobe >= 0 {
+        add_node_to_lobe(new_lobe, node_id)
+    }
+    return new_lobe
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BRAINSTEM — Winner-take-all dispatch system
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub struct BrainStemResult {
+    winner_node_id: int
+    winner_lobe_id: int
+    confidence: float
+    action: str
+    cross_lobe_propagation: bool
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CANDIDATE — Internal voting structure
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct Candidate {
+    node_id: int
+    lobe_id: int
+    confidence: float
+    is_cross_lobe: bool
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BRAINSTEM DISPATCH — Find winner across all lobes
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn brainstem_dispatch(input_signal: list, threshold: float) -> BrainStemResult {
+    let mut candidates = []
+
+    // First, try primary lobe match
+    let primary_lobe = find_best_lobe(input_signal)
+
+    if primary_lobe >= 0 {
+        // Scan nodes within primary lobe
+        let key = str(primary_lobe)
+        let lobe = LOBES[key]
+        candidates = collect_candidates(lobe.node_ids, input_signal, threshold, 1.0)
+    }
+
+    // If no candidates in primary lobe, scan secondary lobes with decay
+    if len(candidates) == 0 {
+        for lobe_id_str in keys(LOBES) {
+            let lobe = LOBES[lobe_id_str]
+            if lobe.id != primary_lobe {
+                let lobe_candidates = collect_candidates(lobe.node_ids, input_signal, threshold, CROSS_LOBE_DECAY)
+                candidates = candidates + lobe_candidates
+            }
+        }
+    }
+
+    // Winner-take-all selection
+    if len(candidates) == 0 {
+        return BrainStemResult {
+            winner_node_id: -1,
+            winner_lobe_id: -1,
+            confidence: 0.0,
+            action: "",
+            cross_lobe_propagation: false
+        }
+    }
+
+    // Sort by confidence (highest first)
+    candidates = sort_candidates_by_confidence(candidates)
+
+    let winner = candidates[0]
+    let winner_key = str(winner.node_id)
+    let winner_node = grugbot.core.get_node(winner_key)
+    let action = winner_node != nil ? winner_node.action_packet : ""
+
+    return BrainStemResult {
+        winner_node_id: winner.node_id,
+        winner_lobe_id: winner.lobe_id,
+        confidence: winner.confidence,
+        action: action,
+        cross_lobe_propagation: winner.is_cross_lobe
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CANDIDATE COLLECTION — Gather matching nodes from a lobe
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn collect_candidates(node_ids: list, input_signal: list, threshold: float, decay_factor: float) -> list {
+    let mut candidates = []
+
+    for node_id in node_ids {
+        let node_key = str(node_id)
+        let node = grugbot.core.get_node(node_key)
+        if node == nil or node.is_grave {
+            continue
+        }
+
+        // Strength-biased coinflip
+        if not grugbot.core.strength_biased_coinflip(node.strength) {
+            continue
+        }
+
+        // Determine scan tier based on node complexity
+        let tier = grugbot.scanner.effective_scan_mode(node.signal, node.triples)
+
+        // Scan
+        let result = grugbot.scanner.scan(input_signal, node.signal, tier, threshold)
+
+        if result.found {
+            let final_conf = result.confidence * decay_factor
+            let lobe_id = get_lobe_for_node(node_id)
+
+            candidates = candidates + [Candidate {
+                node_id: node_id,
+                lobe_id: lobe_id,
+                confidence: final_conf,
+                is_cross_lobe: decay_factor < 1.0
+            }]
+        }
+    }
+
+    return candidates
+}
+
+fn sort_candidates_by_confidence(candidates: list) -> list {
+    // Simple bubble sort for small candidate lists
+    let n = len(candidates)
+    for i in range(0, n) {
+        for j in range(0, n - i - 1) {
+            if candidates[j].confidence < candidates[j + 1].confidence {
+                let temp = candidates[j]
+                candidates[j] = candidates[j + 1]
+                candidates[j + 1] = temp
+            }
+        }
+    }
+    return candidates
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CROSS-LOBE PROPAGATION — Signal spreading across lobes
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn propagate_signal(source_lobe: int, signal_strength: float, max_hops: int) -> list {
+    let mut propagated = []
+    let mut visited = {}
+    let mut current_strength = signal_strength
+    let mut current_lobe = source_lobe
+
+    for hop in range(0, max_hops) {
+        if current_strength < 0.1 {
+            break  // Signal too weak
+        }
+
+        let key = str(current_lobe)
+        visited[key] = true
+
+        // Find connected lobes (lobes with shared neighbor relationships)
+        let connected = find_connected_lobes(current_lobe, visited)
+
+        for target_lobe in connected {
+            let target_key = str(target_lobe)
+            if not contains(keys(visited), target_key) {
+                let propagated_strength = current_strength * CROSS_LOBE_DECAY
+                let prop_entry = {}
+                prop_entry["lobe_id"] = target_lobe
+                prop_entry["strength"] = propagated_strength
+                prop_entry["hop"] = hop + 1
+                propagated = propagated + [prop_entry]
+            }
+        }
+
+        // Pick first unvisited for next hop
+        if len(connected) > 0 {
+            current_lobe = connected[0]
+            current_strength = current_strength * CROSS_LOBE_DECAY
+        } else {
+            break
+        }
+    }
+
+    return propagated
+}
+
+fn find_connected_lobes(lobe_id: int, visited: map) -> list {
+    let mut connected = []
+
+    if not lobe_exists(lobe_id) {
+        return connected
+    }
+
+    let key = str(lobe_id)
+    let lobe = LOBES[key]
+
+    // Find lobes that share neighbor relationships
+    for node_id in lobe.node_ids {
+        let node_key = str(node_id)
+        let node = grugbot.core.get_node(node_key)
+        if node == nil {
+            continue
+        }
+
+        for neighbor_id in node.neighbor_ids {
+            let neighbor_lobe = get_lobe_for_node(neighbor_id)
+            let neighbor_key = str(neighbor_lobe)
+            if neighbor_lobe >= 0 and neighbor_lobe != lobe_id and not contains(keys(visited), neighbor_key) {
+                if not contains(connected, neighbor_lobe) {
+                    connected = connected + [neighbor_lobe]
+                }
+            }
+        }
+    }
+
+    return connected
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LOBE STATISTICS
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn lobe_stats() -> map {
+    let stats = {}
+    let mut total_nodes = 0
+    let mut active_lobes = 0
+
+    for lobe_id_str in keys(LOBES) {
+        let lobe = LOBES[lobe_id_str]
+        let count = len(lobe.node_ids)
+        total_nodes = total_nodes + count
+
+        if lobe.active {
+            active_lobes = active_lobes + 1
+        }
+
+        let lobe_stat = {}
+        lobe_stat["id"] = lobe.id
+        lobe_stat["nodes"] = count
+        lobe_stat["active"] = lobe.active
+        lobe_stat["fire_count"] = lobe.fire_count
+        stats[lobe.subject] = lobe_stat
+    }
+
+    let summary = {}
+    summary["total_lobes"] = len(LOBES)
+    summary["active_lobes"] = active_lobes
+    summary["total_nodes"] = total_nodes
+    stats["_summary"] = summary
+
+    return stats
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RESET
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn reset_brain() {
+    LOBES = {}
+    LOBE_COUNTER = 0
+    NODE_TO_LOBE = {}
+}

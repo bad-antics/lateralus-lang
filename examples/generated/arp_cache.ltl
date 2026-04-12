@@ -1,0 +1,86 @@
+// ═══════════════════════════════════════════════════════════
+// LATERALUS — ARP Cache
+// Example implementation of arp cache in Lateralus
+// ═══════════════════════════════════════════════════════════
+// ─── Section: Helper Functions ────────────────────────────────
+
+import math / import strings / import crypto / import io
+
+let is_gratuitous = fn (ip, arp) {
+    // Check if ARP is sent from same IP
+    return arp["ip"] == ip;
+}
+
+let has_timeout = fn (entry, elapsed) {
+    // Check if entry time exceeds timeout duration
+    const TIMEOUT_DURATION = 10 * math.second();
+    return elapsed > TIMEOUT_DURATION;
+}
+
+let get_next_entry = fn (entries, new_entry) {
+    // Find and replace first matching entry in list
+    for i, e in entries {
+        if matches(e["ip"], new_entry["ip"]) {
+            entries[i] = new_entry;
+            return;
+        }
+    }
+    // Append to end of list
+    entries.push(new_entry);
+}
+
+let update_entry = fn (entries, old_entry, new_value) {
+    // Update existing entry with new value
+    let index = find_index(entries, old_entry);
+    if index != -1 {
+        entries[index] = { "ip": old_entry["ip"], "value": new_value };
+    }
+}
+
+let remove_expired_entries = fn (entries) {
+    // Remove expired entries from list
+    let filtered_entries = [e for e in entries if !has_timeout(e, elapsed)];
+    return filtered_entries;
+}
+
+// ─── Section: ARP Cache Implementation ─────────────────────────────
+
+import io;
+
+let ARP_CACHE_SIZE = 32; // Maximum number of cache entries
+
+let create_cache() {
+    // Create a new, empty ARP cache
+    return [struct { ip: string, value: any }] for _ in range(ARPCACHE_SIZE);
+}
+
+let add_entry_to_cache = fn (cache, entry) {
+    get_next_entry(cache, entry);
+}
+
+let retrieve_entry_from_cache = fn (cache, ip) {
+    for e in cache {
+        if matches(e["ip"], ip) {
+            return e;
+        }
+    }
+    // Return nil if no matching entry exists
+    return null;
+}
+
+let update_cache = fn (cache, entry) {
+    update_entry(cache, retrieve_entry_from_cache(cache, entry["ip"]), entry["value"]);
+}
+
+let remove_entry_from_cache = fn (cache, ip) {
+    let index = find_index(cache, struct { ip: string, value: any }, "ip");
+    if index != -1 {
+        cache.splice(index, 1);
+    }
+}
+
+let check_gratuitous_arp = fn (entries, ip, arp) {
+    let gratuitous_entry = retrieve_entry_from_cache(entries, ip);
+    if is_gratuitous(gratuitous_entry, arp) || has_timeout(gratuitous_entry, elapsed) {
+        remove_entry_from_cache(entries, ip);
+        return true;

@@ -1,0 +1,396 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// GRUGBOT — Main Entry Point
+// Neuromorphic cognitive engine with CLI interface
+// ═══════════════════════════════════════════════════════════════════════════
+
+module grugbot
+
+import io
+import strings
+import math
+import random
+import grugbot.core
+import grugbot.brain
+import grugbot.scanner
+import grugbot.thesaurus
+import grugbot.modes
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VERSION & METADATA
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub const VERSION: str = "1.0.0"
+pub const NAME: str = "GrugBot"
+pub const TAGLINE: str = "grug learn. grug remember. grug help."
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENGINE STATE
+// ─────────────────────────────────────────────────────────────────────────────
+
+let mut MISSION: str = ""
+let mut TICK_COUNT: int = 0
+let mut LAST_INPUT: str = ""
+let mut LAST_OUTPUT: str = ""
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INITIALIZATION
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn init() {
+    grugbot.thesaurus.seed_common_words()
+    grugbot.brain.create_lobe("general")
+    grugbot.brain.create_lobe("greeting")
+    grugbot.brain.create_lobe("question")
+    grugbot.brain.create_lobe("command")
+}
+
+pub fn reset() {
+    grugbot.core.reset()
+    grugbot.brain.reset_brain()
+    grugbot.thesaurus.reset_thesaurus()
+    MISSION = ""
+    TICK_COUNT = 0
+    LAST_INPUT = ""
+    LAST_OUTPUT = ""
+    init()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CORE PROCESSING
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn process(input: str) -> str {
+    LAST_INPUT = input
+    TICK_COUNT = TICK_COUNT + 1
+
+    // Check for commands
+    if starts_with(input, "/") {
+        let result = handle_command(input)
+        LAST_OUTPUT = result
+        return result
+    }
+
+    // Convert input to signal
+    let input_signal = grugbot.core.words_to_signal(input)
+
+    // Check Hopfield cache for fast path
+    let input_hash = grugbot.core.hopfield_hash(input_signal)
+    let cached = grugbot.core.hopfield_lookup(input_hash)
+
+    if cached != nil and len(cached) > 0 {
+        let node_id = cached[0]
+        let node = grugbot.core.get_node(str(node_id))
+        if node != nil and not node.is_grave {
+            grugbot.core.boost_strength(str(node_id))
+            let result = execute_action(node)
+            LAST_OUTPUT = result
+            return result
+        }
+    }
+
+    // BrainStem dispatch
+    let dispatch = grugbot.brain.brainstem_dispatch(input_signal, 0.3)
+
+    if dispatch.winner_node_id >= 0 {
+        let winner_id = str(dispatch.winner_node_id)
+        grugbot.core.boost_strength(winner_id)
+
+        // Update Hopfield cache
+        grugbot.core.hopfield_store(input_hash, [dispatch.winner_node_id])
+
+        let node = grugbot.core.get_node(winner_id)
+        let result = execute_action(node)
+        LAST_OUTPUT = result
+        return result
+    }
+
+    // No match - learn new node
+    let new_id = learn(input, "", "")
+    let result = "grug learn: \"" + input + "\""
+    LAST_OUTPUT = result
+    return result
+}
+
+fn execute_action(node) -> str {
+    if node == nil {
+        return "grug confused"
+    }
+
+    // Fire attachments
+    let attachments = grugbot.core.fire_attachments(str(node.id))
+
+    // Parse action packet
+    let action = grugbot.core.parse_action_packet(node.action_packet)
+
+    if action != "" {
+        return action
+    }
+
+    // Default response using pattern
+    return node.pattern
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LEARNING
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn learn(pattern: str, action: str, json_data: str) -> str {
+    let signal = grugbot.core.words_to_signal(pattern)
+
+    // Extract relational triples from pattern
+    let triples = extract_triples(pattern)
+
+    let node_id = grugbot.core.create_node(
+        pattern,
+        signal,
+        action,
+        json_data,
+        "",  // No drop table
+        triples
+    )
+
+    // Auto-assign to lobe
+    grugbot.brain.auto_assign_node(int(node_id))
+
+    return node_id
+}
+
+fn extract_triples(pattern: str) -> list {
+    let mut triples = []
+    let words = split(pattern, " ")
+
+    // Simple SVO extraction: look for verb-like patterns
+    if len(words) >= 3 {
+        let triple = grugbot.core.RelationalTriple {
+            subject: words[0],
+            predicate: words[1],
+            object: words[2]
+        }
+        triples = triples + [triple]
+    }
+
+    return triples
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COMMAND HANDLING
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn handle_command(input: str) -> str {
+    let parts = split(input, " ")
+    let cmd = parts[0]
+    let args = slice(parts, 1, len(parts))
+
+    if cmd == "/help" {
+        return cmd_help()
+    }
+    if cmd == "/mission" {
+        return cmd_mission(args)
+    }
+    if cmd == "/status" {
+        return cmd_status()
+    }
+    if cmd == "/nodes" {
+        return cmd_nodes()
+    }
+    if cmd == "/lobes" {
+        return cmd_lobes()
+    }
+    if cmd == "/learn" {
+        return cmd_learn(args)
+    }
+    if cmd == "/wrong" {
+        return cmd_wrong()
+    }
+    if cmd == "/grow" {
+        return cmd_grow(args)
+    }
+    if cmd == "/idle" {
+        return cmd_idle()
+    }
+    if cmd == "/thesaurus" {
+        return cmd_thesaurus(args)
+    }
+    if cmd == "/reset" {
+        reset()
+        return "grug forget everything. start fresh."
+    }
+
+    return "grug not know command: " + cmd + ". try /help"
+}
+
+fn cmd_help() -> str {
+    let lines = [
+        "=== GRUGBOT COMMANDS ===",
+        "/help          - show this help",
+        "/mission <msg> - set grug's mission",
+        "/status        - show brain status",
+        "/nodes         - show node count",
+        "/lobes         - show lobe info",
+        "/learn <pat>   - teach grug pattern",
+        "/wrong         - penalize last response",
+        "/grow <topic>  - expand on topic",
+        "/idle          - run maintenance cycle",
+        "/thesaurus <w> - lookup word",
+        "/reset         - reset brain"
+    ]
+    return join(lines, "\n")
+}
+
+fn cmd_mission(args: list) -> str {
+    if len(args) == 0 {
+        if MISSION == "" {
+            return "grug has no mission"
+        }
+        return "grug mission: " + MISSION
+    }
+    MISSION = join(args, " ")
+    return "grug understand. mission: " + MISSION
+}
+
+fn cmd_status() -> str {
+    let alive = grugbot.core.alive_count()
+    let total = grugbot.core.total_count()
+    let lobe_count = grugbot.brain.lobe_count()
+    let thes_stats = grugbot.thesaurus.thesaurus_stats()
+
+    let lines = [
+        "=== GRUGBOT STATUS ===",
+        "Version: " + VERSION,
+        "Ticks: " + str(TICK_COUNT),
+        "Alive Nodes: " + str(alive),
+        "Total Nodes: " + str(total),
+        "Lobes: " + str(lobe_count),
+        "Thesaurus Words: " + str(thes_stats["total_words"]),
+        "Mission: " + (MISSION != "" ? MISSION : "(none)")
+    ]
+    return join(lines, "\n")
+}
+
+fn cmd_nodes() -> str {
+    let alive = grugbot.core.alive_count()
+    let total = grugbot.core.total_count()
+    let graves = total - alive
+    return "Nodes: " + str(alive) + " alive, " + str(graves) + " graves, " + str(total) + " total"
+}
+
+fn cmd_lobes() -> str {
+    let stats = grugbot.brain.lobe_stats()
+    let mut lines = ["=== LOBES ==="]
+
+    for subject in keys(stats) {
+        if subject == "_summary" {
+            continue
+        }
+        let info = stats[subject]
+        lines = lines + [subject + ": " + str(info["nodes"]) + " nodes"]
+    }
+
+    return join(lines, "\n")
+}
+
+fn cmd_learn(args: list) -> str {
+    if len(args) == 0 {
+        return "usage: /learn <pattern>"
+    }
+    let pattern = join(args, " ")
+    let node_id = learn(pattern, "", "")
+    return "grug learn: \"" + pattern + "\" (node " + node_id + ")"
+}
+
+fn cmd_wrong() -> str {
+    // Penalize the last winning node
+    let last_signal = grugbot.core.words_to_signal(LAST_INPUT)
+    let dispatch = grugbot.brain.brainstem_dispatch(last_signal, 0.3)
+
+    if dispatch.winner_node_id >= 0 {
+        grugbot.core.penalize_strength(str(dispatch.winner_node_id))
+        return "grug understand. that was wrong. grug learn."
+    }
+    return "grug not remember what was wrong"
+}
+
+fn cmd_grow(args: list) -> str {
+    if len(args) == 0 {
+        return "usage: /grow <topic>"
+    }
+    let topic = args[0]
+    let expanded = grugbot.thesaurus.expand_terms(topic, 2)
+
+    let mut created = 0
+    for term in expanded {
+        if term != topic {
+            learn(term, "", "")
+            created = created + 1
+        }
+    }
+
+    return "grug grow " + str(created) + " nodes from \"" + topic + "\""
+}
+
+fn cmd_idle() -> str {
+    let result = grugbot.modes.idle_tick(TICK_COUNT)
+    let mut lines = ["=== IDLE CYCLE ==="]
+
+    for key in keys(result) {
+        lines = lines + [key + ": " + str(result[key])]
+    }
+
+    return join(lines, "\n")
+}
+
+fn cmd_thesaurus(args: list) -> str {
+    if len(args) == 0 {
+        return "usage: /thesaurus <word>"
+    }
+    let word = args[0]
+    let entry = grugbot.thesaurus.get_entry(word)
+
+    let lines = [
+        "=== " + word + " ===",
+        "Synonyms: " + join(entry.synonyms, ", "),
+        "Antonyms: " + join(entry.antonyms, ", "),
+        "Contexts: " + join(entry.contexts, ", "),
+        "Associations: " + join(entry.associations, ", ")
+    ]
+    return join(lines, "\n")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REPL INTERFACE
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn repl() {
+    init()
+    println(NAME + " v" + VERSION)
+    println(TAGLINE)
+    println("Type /help for commands, or just talk to grug.")
+    println("")
+
+    while true {
+        let input = readline("grug> ")
+
+        if input == "" {
+            continue
+        }
+        if input == "/quit" or input == "/exit" {
+            println("grug sleep now. bye bye.")
+            break
+        }
+
+        let response = process(input)
+        println(response)
+        println("")
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPER FUNCTIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn starts_with(s: str, prefix: str) -> bool {
+    if len(s) < len(prefix) {
+        return false
+    }
+    return slice(s, 0, len(prefix)) == prefix
+}

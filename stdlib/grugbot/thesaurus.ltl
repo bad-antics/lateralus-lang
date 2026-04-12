@@ -1,0 +1,367 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// GRUGBOT — Thesaurus Engine
+// Dimensional similarity with negative inhibition filtering
+// ═══════════════════════════════════════════════════════════════════════════
+
+module grugbot.thesaurus
+
+import math
+import random
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SIMILARITY DIMENSIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub const DIM_SEMANTIC: int = 0
+pub const DIM_CONTEXTUAL: int = 1
+pub const DIM_ASSOCIATIVE: int = 2
+
+pub const WEIGHT_SEMANTIC: float = 0.50
+pub const WEIGHT_CONTEXTUAL: float = 0.30
+pub const WEIGHT_ASSOCIATIVE: float = 0.20
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SYNONYM ENTRY
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub struct SynonymEntry {
+    word: str
+    synonyms: list
+    antonyms: list
+    contexts: list
+    associations: list
+}
+
+// Global storage
+let mut THESAURUS: map = {}
+let mut NEGATIVE_THESAURUS: map = {}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THESAURUS MANAGEMENT
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn add_word(word: str, synonyms: list, antonyms: list, contexts: list, associations: list) {
+    let entry = SynonymEntry {
+        word: word,
+        synonyms: synonyms,
+        antonyms: antonyms,
+        contexts: contexts,
+        associations: associations
+    }
+    THESAURUS[word] = entry
+
+    for ant in antonyms {
+        add_negative(word, ant)
+    }
+}
+
+pub fn get_entry(word: str) -> SynonymEntry {
+    if contains(keys(THESAURUS), word) {
+        return THESAURUS[word]
+    }
+    return SynonymEntry {
+        word: word,
+        synonyms: [],
+        antonyms: [],
+        contexts: [],
+        associations: []
+    }
+}
+
+pub fn has_word(word: str) -> bool {
+    return contains(keys(THESAURUS), word)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NEGATIVE THESAURUS — Inhibition filter
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn add_negative(word1: str, word2: str) {
+    if not contains(keys(NEGATIVE_THESAURUS), word1) {
+        NEGATIVE_THESAURUS[word1] = []
+    }
+    if not contains(NEGATIVE_THESAURUS[word1], word2) {
+        NEGATIVE_THESAURUS[word1] = NEGATIVE_THESAURUS[word1] + [word2]
+    }
+
+    if not contains(keys(NEGATIVE_THESAURUS), word2) {
+        NEGATIVE_THESAURUS[word2] = []
+    }
+    if not contains(NEGATIVE_THESAURUS[word2], word1) {
+        NEGATIVE_THESAURUS[word2] = NEGATIVE_THESAURUS[word2] + [word1]
+    }
+}
+
+pub fn is_negative_pair(word1: str, word2: str) -> bool {
+    if contains(keys(NEGATIVE_THESAURUS), word1) {
+        if contains(NEGATIVE_THESAURUS[word1], word2) {
+            return true
+        }
+    }
+    return false
+}
+
+pub fn filter_negatives(base_word: str, candidates: list) -> list {
+    if not contains(keys(NEGATIVE_THESAURUS), base_word) {
+        return candidates
+    }
+
+    let negatives = NEGATIVE_THESAURUS[base_word]
+    let mut filtered = []
+
+    for candidate in candidates {
+        if not contains(negatives, candidate) {
+            filtered = filtered + [candidate]
+        }
+    }
+
+    return filtered
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DIMENSIONAL SIMILARITY
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn semantic_similarity(word1: str, word2: str) -> float {
+    let entry1 = get_entry(word1)
+    let entry2 = get_entry(word2)
+
+    if contains(entry1.synonyms, word2) or contains(entry2.synonyms, word1) {
+        return 1.0
+    }
+
+    let mut shared = 0
+    for syn in entry1.synonyms {
+        if contains(entry2.synonyms, syn) {
+            shared = shared + 1
+        }
+    }
+
+    let total = len(entry1.synonyms) + len(entry2.synonyms)
+    if total == 0 {
+        return 0.0
+    }
+
+    return math.min(1.0, (shared * 2.0) / total)
+}
+
+pub fn contextual_similarity(word1: str, word2: str) -> float {
+    let entry1 = get_entry(word1)
+    let entry2 = get_entry(word2)
+
+    let mut shared = 0
+    for ctx in entry1.contexts {
+        if contains(entry2.contexts, ctx) {
+            shared = shared + 1
+        }
+    }
+
+    let total = len(entry1.contexts) + len(entry2.contexts)
+    if total == 0 {
+        return 0.0
+    }
+
+    return math.min(1.0, (shared * 2.0) / total)
+}
+
+pub fn associative_similarity(word1: str, word2: str) -> float {
+    let entry1 = get_entry(word1)
+    let entry2 = get_entry(word2)
+
+    if contains(entry1.associations, word2) or contains(entry2.associations, word1) {
+        return 0.8
+    }
+
+    let mut shared = 0
+    for assoc in entry1.associations {
+        if contains(entry2.associations, assoc) {
+            shared = shared + 1
+        }
+    }
+
+    let total = len(entry1.associations) + len(entry2.associations)
+    if total == 0 {
+        return 0.0
+    }
+
+    return math.min(1.0, (shared * 2.0) / total)
+}
+
+pub fn combined_similarity(word1: str, word2: str) -> float {
+    if is_negative_pair(word1, word2) {
+        return 0.0
+    }
+
+    let sem = semantic_similarity(word1, word2)
+    let ctx = contextual_similarity(word1, word2)
+    let assoc = associative_similarity(word1, word2)
+
+    return (sem * WEIGHT_SEMANTIC) + (ctx * WEIGHT_CONTEXTUAL) + (assoc * WEIGHT_ASSOCIATIVE)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SYNONYM LOOKUP
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn get_synonyms(word: str) -> list {
+    if has_word(word) {
+        return THESAURUS[word].synonyms
+    }
+    return []
+}
+
+pub fn get_antonyms(word: str) -> list {
+    if has_word(word) {
+        return THESAURUS[word].antonyms
+    }
+    return []
+}
+
+pub fn get_associations(word: str) -> list {
+    if has_word(word) {
+        return THESAURUS[word].associations
+    }
+    return []
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BEST MATCH SEARCH
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn find_best_match(target: str, candidates: list) -> str {
+    let mut best = ""
+    let mut best_sim = 0.0
+
+    for candidate in candidates {
+        let sim = combined_similarity(target, candidate)
+        if sim > best_sim {
+            best_sim = sim
+            best = candidate
+        }
+    }
+
+    return best
+}
+
+pub fn rank_by_similarity(target: str, candidates: list) -> list {
+    let mut pairs = []
+    for candidate in candidates {
+        let sim = combined_similarity(target, candidate)
+        pairs = pairs + [[candidate, sim]]
+    }
+
+    pairs = sort_pairs_by_score(pairs)
+
+    let mut result = []
+    for pair in pairs {
+        result = result + [pair[0]]
+    }
+
+    return result
+}
+
+fn sort_pairs_by_score(pairs: list) -> list {
+    let n = len(pairs)
+    for i in range(0, n) {
+        for j in range(0, n - i - 1) {
+            if pairs[j][1] < pairs[j + 1][1] {
+                let temp = pairs[j]
+                pairs[j] = pairs[j + 1]
+                pairs[j + 1] = temp
+            }
+        }
+    }
+    return pairs
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EXPANSION — Generate related terms
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn expand_terms(word: str, depth: int) -> list {
+    let mut expanded = [word]
+    let mut frontier = [word]
+
+    for d in range(0, depth) {
+        let mut next_frontier = []
+
+        for term in frontier {
+            let entry = get_entry(term)
+
+            for syn in entry.synonyms {
+                if not contains(expanded, syn) {
+                    expanded = expanded + [syn]
+                    next_frontier = next_frontier + [syn]
+                }
+            }
+
+            for assoc in entry.associations {
+                if not contains(expanded, assoc) and random.random() > 0.5 {
+                    expanded = expanded + [assoc]
+                    next_frontier = next_frontier + [assoc]
+                }
+            }
+        }
+
+        frontier = next_frontier
+    }
+
+    return filter_negatives(word, expanded)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SEED DATA
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn seed_common_words() {
+    add_word("happy", ["joyful", "glad", "cheerful"], ["sad", "unhappy"], ["emotion"], ["smile", "laugh"])
+    add_word("sad", ["unhappy", "sorrowful", "gloomy"], ["happy", "joyful"], ["emotion"], ["cry", "tears"])
+    add_word("good", ["great", "excellent", "fine"], ["bad", "poor"], ["quality"], ["success", "approval"])
+    add_word("bad", ["poor", "terrible", "awful"], ["good", "great"], ["quality"], ["failure"])
+    add_word("fast", ["quick", "rapid", "swift"], ["slow", "sluggish"], ["motion"], ["run", "race"])
+    add_word("slow", ["sluggish", "gradual", "leisurely"], ["fast", "quick"], ["motion"], ["walk", "wait"])
+    add_word("big", ["large", "huge", "enormous"], ["small", "tiny"], ["size"], ["giant", "expand"])
+    add_word("small", ["tiny", "little", "miniature"], ["big", "large"], ["size"], ["shrink"])
+    add_word("hot", ["warm", "burning", "heated"], ["cold", "cool"], ["temperature"], ["fire", "summer"])
+    add_word("cold", ["cool", "freezing", "chilly"], ["hot", "warm"], ["temperature"], ["ice", "winter"])
+    add_word("think", ["consider", "ponder", "reason"], [], ["cognitive"], ["brain", "idea"])
+    add_word("feel", ["sense", "perceive", "experience"], [], ["cognitive"], ["heart", "emotion"])
+    add_word("make", ["create", "build", "construct"], ["destroy", "break"], ["action"], ["work", "craft"])
+    add_word("break", ["destroy", "shatter", "smash"], ["make", "fix"], ["action"], ["damage"])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STATISTICS
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn thesaurus_stats() -> map {
+    let total_words = len(THESAURUS)
+    let mut total_synonyms = 0
+    let mut total_antonyms = 0
+    let mut total_associations = 0
+
+    for word in keys(THESAURUS) {
+        let entry = THESAURUS[word]
+        total_synonyms = total_synonyms + len(entry.synonyms)
+        total_antonyms = total_antonyms + len(entry.antonyms)
+        total_associations = total_associations + len(entry.associations)
+    }
+
+    let stats = {}
+    stats["total_words"] = total_words
+    stats["total_synonyms"] = total_synonyms
+    stats["total_antonyms"] = total_antonyms
+    stats["total_associations"] = total_associations
+    stats["negative_pairs"] = len(NEGATIVE_THESAURUS)
+
+    return stats
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RESET
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn reset_thesaurus() {
+    THESAURUS = {}
+    NEGATIVE_THESAURUS = {}
+}

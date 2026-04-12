@@ -1,0 +1,509 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// GRUGBOT — Neuromorphic Cognitive Engine
+// A Lateralus port of grugbot420 (https://github.com/bad-antics/grugbot420)
+//
+// "Many rocks compete to be loudest. Loudest rock gets to talk."
+// ═══════════════════════════════════════════════════════════════════════════
+
+module grugbot.core
+
+import math
+import random
+import strings
+import hash
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONSTANTS — Biological thresholds for cognitive behavior
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub const STRENGTH_CAP: float = 10.0
+pub const STRENGTH_FLOOR: float = 0.0
+pub const STRENGTH_DECAY: float = 0.1
+pub const STRENGTH_BOOST: float = 0.5
+
+pub const MAX_NEIGHBORS: int = 4
+pub const NODE_LATCH_THRESHOLD: int = 1000
+
+pub const ACTIVE_CAP_MIN: int = 600
+pub const ACTIVE_CAP_MAX: int = 1800
+
+pub const HOPFIELD_STORE_THRESHOLD: float = 0.80
+pub const JITTER_SIGMA: float = 0.05
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RELATIONAL TRIPLE — Subject-Verb-Object cognitive structure
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub struct RelationalTriple {
+    subject: str
+    verb: str
+    object: str
+}
+
+pub fn make_triple(subject: str, verb: str, object: str) -> RelationalTriple {
+    return RelationalTriple { subject: subject, verb: verb, object: object }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NODE — Atomic cognitive unit with pattern, action, and strength
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub struct Node {
+    id: str
+    pattern: str
+    signal: list
+    action_packet: str
+    json_data: map
+    drop_table: list
+    throttle: float
+    relational_patterns: list
+    required_relations: list
+    relation_weights: map
+    strength: float
+    neighbor_ids: list
+    is_unlinkable: bool
+    is_grave: bool
+    grave_reason: str
+    hopfield_key: int
+    fire_count: int
+    last_fire_time: float
+    created_at: float
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VOTE — A node's weighted bid to speak
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub struct Vote {
+    node_id: str
+    confidence: float
+    is_antimatch: bool
+    selected_action: str
+    action_weight: float
+    user_triples: list
+    node_triples: list
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ATTACHED NODE — Connector pattern for relational firing
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub struct AttachedNode {
+    node_id: str
+    pattern: str
+    base_confidence: float
+    attached_at: float
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SPECIMEN — Persistent state container for save/load
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub struct Specimen {
+    version: str
+    created_at: float
+    nodes: list
+    attachments: map
+    lobes: map
+    lobe_connections: list
+    thesaurus_synonyms: map
+    thesaurus_negatives: list
+    semantic_verbs: map
+    hopfield_cache: map
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GLOBAL STATE
+// ─────────────────────────────────────────────────────────────────────────────
+
+let mut NODE_MAP = {}
+let mut ATTACHMENT_MAP = {}
+let mut HOPFIELD_CACHE = {}
+let mut ID_COUNTER: int = 0
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SIGNAL ENCODING — Convert text to numeric rocks
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn word_to_float(word: str) -> float {
+    let h = hash.fnv1a(word)
+    return (h % 10000) / 10000.0
+}
+
+pub fn words_to_signal(text: str) -> list {
+    let clean = strings.to_lower(strings.trim(text))
+    let tokens = strings.split(clean, " ")
+    let mut signal = []
+
+    for tok in tokens {
+        if strings.len(tok) > 0 {
+            signal = signal + [word_to_float(tok)]
+        }
+    }
+
+    return signal
+}
+
+pub fn hopfield_hash(text: str) -> int {
+    let clean = strings.join(strings.split(strings.to_lower(strings.trim(text)), " "), " ")
+    return hash.fnv1a(clean)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COINFLIP MECHANICS — Stochastic selection with bias
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn coinflip(p: float) -> bool {
+    return random.random() < math.clamp(p, 0.0, 1.0)
+}
+
+pub fn weighted_select(options: list) -> str {
+    let total = sum([opt[1] for opt in options])
+    if total <= 0.0 {
+        if len(options) > 0 {
+            return options[0][0]
+        }
+        return ""
+    }
+
+    let mut r = random.random() * total
+    for opt in options {
+        r = r - opt[1]
+        if r <= 0.0 {
+            return opt[0]
+        }
+    }
+
+    return options[len(options) - 1][0]
+}
+
+pub fn strength_biased_coinflip(strength: float) -> bool {
+    let base_prob = 0.20
+    let bonus_prob = 0.70
+    let scan_prob = base_prob + (strength / STRENGTH_CAP) * bonus_prob
+    return coinflip(scan_prob)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// JITTER — Biological noise modeling
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn slight_jitter(confidence: float) -> float {
+    let magnitude = 0.005 + (0.01 * (1.0 - math.abs(confidence)))
+    let jitter = (random.random() * 2.0 - 1.0) * magnitude
+    return math.clamp(confidence + jitter, 0.0, 1.0)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NODE CREATION
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn next_id() -> str {
+    ID_COUNTER = ID_COUNTER + 1
+    return "node_" + str(ID_COUNTER)
+}
+
+pub fn create_node(pattern: str, action_packet: str, json_data: map, drop_table: list, initial_strength: float) -> str {
+    let id = next_id()
+    let signal = words_to_signal(pattern)
+    let hkey = hopfield_hash(pattern)
+    let now = 0.0
+
+    let node = Node {
+        id: id,
+        pattern: pattern,
+        signal: signal,
+        action_packet: action_packet,
+        json_data: json_data,
+        drop_table: drop_table,
+        throttle: 0.5,
+        relational_patterns: [],
+        required_relations: [],
+        relation_weights: {},
+        strength: math.clamp(initial_strength, STRENGTH_FLOOR, STRENGTH_CAP),
+        neighbor_ids: [],
+        is_unlinkable: false,
+        is_grave: false,
+        grave_reason: "",
+        hopfield_key: hkey,
+        fire_count: 0,
+        last_fire_time: 0.0,
+        created_at: now,
+    }
+
+    NODE_MAP[id] = node
+    return id
+}
+
+pub fn get_node(id: str) {
+    if contains(keys(NODE_MAP), id) {
+        return NODE_MAP[id]
+    }
+    return nil
+}
+
+pub fn alive_count() -> int {
+    let mut count = 0
+    for id in keys(NODE_MAP) {
+        let node = NODE_MAP[id]
+        if not node.is_grave {
+            count = count + 1
+        }
+    }
+    return count
+}
+
+pub fn total_count() -> int {
+    return len(NODE_MAP)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STRENGTH SYSTEM — Darwinian selection pressure
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn boost_strength(id: str) {
+    if contains(keys(NODE_MAP), id) {
+        let node = NODE_MAP[id]
+        if not node.is_grave {
+            node.strength = math.min(node.strength + STRENGTH_BOOST, STRENGTH_CAP)
+            NODE_MAP[id] = node
+        }
+    }
+}
+
+pub fn penalize_strength(id: str) {
+    if contains(keys(NODE_MAP), id) {
+        let node = NODE_MAP[id]
+        node.strength = math.max(node.strength - 1.0, STRENGTH_FLOOR)
+        if node.strength <= STRENGTH_FLOOR {
+            node.is_grave = true
+            node.grave_reason = "PENALTY_DEATH"
+        }
+        NODE_MAP[id] = node
+    }
+}
+
+pub fn decay_strength(id: str) {
+    if contains(keys(NODE_MAP), id) {
+        let node = NODE_MAP[id]
+        if not node.is_grave {
+            node.strength = math.max(node.strength - STRENGTH_DECAY, STRENGTH_FLOOR)
+            if node.strength <= STRENGTH_FLOOR {
+                node.is_grave = true
+                node.grave_reason = "DECAY_DEATH"
+            }
+            NODE_MAP[id] = node
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NEIGHBOR LINKING — Associative graph topology
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn link_neighbors(id1: str, id2: str) -> bool {
+    if not contains(keys(NODE_MAP), id1) or not contains(keys(NODE_MAP), id2) {
+        return false
+    }
+
+    let n1 = NODE_MAP[id1]
+    let n2 = NODE_MAP[id2]
+
+    if n1.is_unlinkable or n2.is_unlinkable {
+        return false
+    }
+
+    if not contains(n1.neighbor_ids, id2) and len(n1.neighbor_ids) < MAX_NEIGHBORS {
+        n1.neighbor_ids = n1.neighbor_ids + [id2]
+        if len(n1.neighbor_ids) >= MAX_NEIGHBORS {
+            n1.is_unlinkable = true
+        }
+        NODE_MAP[id1] = n1
+    }
+
+    if not contains(n2.neighbor_ids, id1) and len(n2.neighbor_ids) < MAX_NEIGHBORS {
+        n2.neighbor_ids = n2.neighbor_ids + [id1]
+        if len(n2.neighbor_ids) >= MAX_NEIGHBORS {
+            n2.is_unlinkable = true
+        }
+        NODE_MAP[id2] = n2
+    }
+
+    return true
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ATTACHMENT SYSTEM — Relational firing with JIT confidence
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn attach_node(target_id: str, attach_id: str, connector_pattern: str) -> bool {
+    if not contains(keys(NODE_MAP), target_id) or not contains(keys(NODE_MAP), attach_id) {
+        return false
+    }
+
+    let attach = NODE_MAP[attach_id]
+    let base_conf = compute_token_overlap(words_to_signal(connector_pattern), attach.signal)
+
+    let attached = AttachedNode {
+        node_id: attach_id,
+        pattern: connector_pattern,
+        base_confidence: base_conf,
+        attached_at: 0.0,
+    }
+
+    if not contains(keys(ATTACHMENT_MAP), target_id) {
+        ATTACHMENT_MAP[target_id] = []
+    }
+    ATTACHMENT_MAP[target_id] = ATTACHMENT_MAP[target_id] + [attached]
+
+    return true
+}
+
+pub fn fire_attachments(target_id: str) -> list {
+    if not contains(keys(ATTACHMENT_MAP), target_id) {
+        return []
+    }
+
+    let mut fired = []
+    let attachments = ATTACHMENT_MAP[target_id]
+
+    for att in attachments {
+        if not contains(keys(NODE_MAP), att.node_id) {
+            continue
+        }
+        let node = NODE_MAP[att.node_id]
+        if node.is_grave {
+            continue
+        }
+
+        if not strength_biased_coinflip(node.strength) {
+            continue
+        }
+
+        let jittered_conf = slight_jitter(att.base_confidence)
+        let final_conf = math.max(0.1, jittered_conf)
+
+        fired = fired + [[att.node_id, final_conf]]
+    }
+
+    return fired
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HOPFIELD CACHE — Fast-path for familiar inputs
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn hopfield_store(input_hash: int, node_ids: list) {
+    HOPFIELD_CACHE[input_hash] = node_ids
+}
+
+pub fn hopfield_lookup(input_hash: int) {
+    let hash_key = str(input_hash)
+    if contains(keys(HOPFIELD_CACHE), hash_key) {
+        return HOPFIELD_CACHE[hash_key]
+    }
+    return nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PATTERN MATCHING — Token overlap confidence
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn compute_token_overlap(target: list, pattern: list) -> float {
+    if len(target) == 0 or len(pattern) == 0 {
+        return 0.0
+    }
+
+    let pat_len = len(pattern)
+    if pat_len > len(target) {
+        return 0.0
+    }
+
+    let mut best_conf = 0.0
+
+    for i in range(0, len(target) - pat_len + 1) {
+        let window = slice(target, i, i + pat_len)
+        let conf = evaluate_window(window, pattern)
+        if conf > best_conf {
+            best_conf = conf
+        }
+    }
+
+    return best_conf
+}
+
+fn evaluate_window(window: list, pattern: list) -> float {
+    let mut matches = 0.0
+    let tolerance = 0.1
+
+    for i in range(0, len(pattern)) {
+        let diff = math.abs(window[i] - pattern[i])
+        if diff <= tolerance {
+            matches = matches + 1.0
+        } else if diff <= tolerance * 2 {
+            matches = matches + 0.5
+        }
+    }
+
+    let similarity = matches / len(pattern)
+    if similarity > 0.0 {
+        return math.max(0.1, similarity)
+    }
+    return 0.0
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ACTION PACKET PARSING — Weighted action extraction
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn parse_action_packet(packet: str) -> list {
+    let mut actions = []
+    let parts = strings.split(packet, "|")
+
+    for part in parts {
+        let trimmed = strings.trim(part)
+        if strings.contains(trimmed, "^") {
+            let pair = strings.split(trimmed, "^")
+            let action = strings.trim(pair[0])
+            let weight = 1.0
+            if len(pair) > 1 {
+                weight = float(strings.trim(pair[1]))
+            }
+            actions = actions + [[action, weight]]
+        } else if len(trimmed) > 0 {
+            actions = actions + [[trimmed, 1.0]]
+        }
+    }
+
+    return actions
+}
+
+pub fn select_action(packet: str) -> list {
+    let actions = parse_action_packet(packet)
+    if len(actions) == 0 {
+        return ["noop", 0.0]
+    }
+
+    let selected = weighted_select(actions)
+    let mut weight = 1.0
+
+    for act in actions {
+        if act[0] == selected {
+            weight = act[1]
+            break
+        }
+    }
+
+    return [selected, weight]
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RESET
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn reset() {
+    NODE_MAP = {}
+    ATTACHMENT_MAP = {}
+    HOPFIELD_CACHE = {}
+    ID_COUNTER = 0
+}

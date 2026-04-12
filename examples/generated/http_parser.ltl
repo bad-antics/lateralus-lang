@@ -1,0 +1,84 @@
+// ─── http_parser.ltl ────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════
+// LATERALUS — HTTP Parser
+// Example implementation of http parser in Lateralus
+// ═══════════════════════════════════════════════════════════
+
+// Import necessary standard library modules
+import strings
+import io
+import crypto
+import math
+
+// ─── Structures and Types ────────────────────────────────────────
+// Define structures for HTTP request and response
+struct Request {
+    method: str
+    url: str
+    headers: map[str, str]
+}
+
+struct Response {
+    status_code: int
+    reason_phrase: str
+    headers: map[str, str]
+}
+
+// Define types for HTTP header fields
+type Field = string
+
+// Define type for HTTP header values
+type Value = str
+
+// ─── Helper Functions ────────────────────────────────────────
+fn parseChunked(header: Value) -> bytes:
+    // Parse chunk size from header
+    var chunkSize = 0
+    for i in range(len(header)) {
+        if header[i] == '\r' {
+            break
+        }
+        chunkSize = chunkSize * 16 + ord(header[i])
+    }
+
+    // Read chunk data
+    var chunkData = make(bytes)
+    for _ in range(chunkSize):
+        var chunkLine = readLine()
+        append(chunkData, chunkLine)
+    return chunkData
+
+fn parseHeader(line: Value) -> (Field, Value):
+    // Split line into field and value
+    var parts = split(line, ':')
+    if len(parts) != 2 {
+        error("Invalid header format")
+    }
+    return (parts[0], parts[1])
+
+// ─── Main Function ──────────────────────────────────────
+async fn main():
+    // Create sample request and response
+    var request = Request { method: "GET", url: "/path/to/resource", headers: {} }
+    request.headers["Host"] = "example.com"
+
+    var response = Response { status_code: 200, reason_phrase: "", headers: {} }
+
+    // Parse HTTP request headers
+    for line in readLines() {
+        if line == "" {
+            break
+        }
+        var field, value = parseHeader(line)
+        request.headers[field] = value
+    }
+
+    // Check for chunked transfer encoding
+    if request.headers["Transfer-Encoding"] == "chunked" {
+        var lastLine = readLine()
+        var lastChunkSize = parseChunked(lastLine)[0]
+        response.headers["Transfer-Encoding"] = ""
+        var remaining = lastLine
+        while remaining != "" {
+            var chunkStart = find(remaining, "\r\n")
+            if chunkStart ==

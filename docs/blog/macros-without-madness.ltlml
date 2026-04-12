@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lateralus Procedural Macros: A Sanity Check</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "Lateralus Procedural Macros: A Sanity Check"
+author: bad-antics
+date: 2026-04-06
+abstract: Lateralus procedural macros offer a powerful way to extend the language without breaking existing code. However, their misuse can lead to complex and hard-to-maintain codebases.
+
+# Why Procedural Macros Are Necessary
+
+As our languages evolve, we need ways to extend them without sacrificing readability or maintainability. Procedural macros provide a solution by allowing us to generate code at compile-time. This approach has several benefits, including reduced runtime overhead and improved code reuse.
+
+## The Problem with Manual AST Transformations
+
+Manual AST (Abstract Syntax Tree) transformations can quickly become unwieldy as projects grow in complexity. Not only do they add unnecessary boilerplate, but also introduce fragile point of failures that can be difficult to track down.
+
+// Bad example: manual AST transformation using `ast` crate
+mod ast {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    pub struct Code {
+        name: String,
+        value: String,
+    }
+
+    impl Code {
+        fn transform(&self) -> Code {
+            // Simplified transformation for illustration purposes
+            let mut transformed = Code {
+                name: self.name.clone(),
+                value: self.value.clone(),
+            };
+            transformed.value = format!("{} {}", self.value, "generated");
+            transformed
+        }
+    }
+
+    pub fn transform_code(code: &Code) -> Code {
+        let mutex = Arc::new(Mutex::new(()));
+        let lock = mutex.lock().unwrap();
+        *lock = Code::transform(*code);
+        *lock
+    }
+}
+
+The above example demonstrates how cumbersome manual AST transformations can be, especially when dealing with complex logic.
+
+## Quote, Unquote, and the AST Transformation
+
+Lateralus procedural macros, on the other hand, provide a more elegant solution using the `quote!` macro. This allows us to quote our input code, apply transformations, and then unquote the results.
+
+// Good example: using `quote!` macro for AST transformation
+mod lateralus_macro {
+    use quote::quote;
+
+    pub fn transform_code(code: &str) -> String {
+        let ast = parse_code(code).unwrap();
+        let transformed_ast = transform(ast).unwrap();
+        quote!(#transformed_ast)

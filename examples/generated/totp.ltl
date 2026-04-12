@@ -1,0 +1,93 @@
+// ═══════════════════════════════════════════════════════════
+// LATERALUS
+// RFC 6238 TOTP One-Time Password Generation
+// ═══════════════════════════════════════════════════════════
+// ─── Import Modules ────────────────────────────────────────────────
+import math / import strings / import crypto / import io
+
+// ─── Structs ────────────────────────────────────────────────────────
+struct Time {
+    epoch: int
+}
+
+struct TotpSecret {
+    secret: str
+}
+
+struct TotpParams {
+    k: int
+    n: int
+    window: int
+}
+
+// ─── Helper Functions ────────────────────────────────────────────
+fn hexToBin(hex: str) -> list(str) {
+    // Convert hexadecimal to binary digits
+    map(x |> { x: bin(x) }, x: "0x" + hex)
+}
+
+fn binToHex(bin: list(str)) -> str {
+    // Convert binary digits back to hexadecimal
+    join(" ", map(x => if x == "1" then "f" else "0", x: bin))
+}
+
+fn modPow(a: float, b: int) -> float {
+    // Calculate modular exponentiation using binary exponentiation
+    pow(10.0, b * a % 1.0, 1.0)
+}
+
+fn hmacSha1(key: str, data: str) -> str {
+    // Calculate HMAC-SHA1 hash
+    crypto.hmac_sha1(key, data)
+}
+
+fn getEpoch() -> int {
+    // Get the current time in seconds since Unix epoch
+    math.floor(math.floor(crypto.now()) / 30.0) * 30.0
+}
+
+// ─── Main Function ──────────────────────────────────────────────
+async fn main() {
+    // Initialize TOTP parameters
+    let params = struct(TotpParams { k: 6, n: 30, window: 1 });
+
+    // Read secret key from user input
+    print("Enter TOTP secret key:");
+    let key = strings.getline();
+
+    // Validate user input (should be URL-safe base32 encoded)
+    if !strings.contains("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_=", key) {
+        println("Invalid TOTP secret key");
+        return;
+    }
+
+    // Convert secret key to binary format
+    let binKey = hexToBin(key);
+
+    // Initialize counter and last seen timestamp
+    let counter = 0;
+    let lastSeen = 0;
+
+    // Infinite loop for generating totp tokens
+    while true {
+        // Calculate the number of ticks since last seen
+        let ticksSinceLastSeen = getEpoch() - lastSeen + 30;
+
+        // Calculate the index for the current counter value
+        let index = modPow(ticksSinceLastSeen % 10, params.k);
+
+        // Generate the current token
+        let token = binToHex(map(x => x ^ binKey[x], x: range(params.n)));
+
+        // Check if this is within the validation window
+        if counter > lastSeen + params.window {
+            println(token);
+            break;
+        } else {
+            counter += 1;
+        }
+        lastSeen = getEpoch();
+    }
+}
+
+main();

@@ -1,0 +1,88 @@
+// ═══════════════════════════════════════════════════════════
+// LATERALUS — Word2vec
+// Example implementation of word2vec in Lateralus
+// ═══════════════════════════════════════════════════════════
+// ─── Section: Importing Required Libraries ─────────────────────
+import math / import strings / import crypto / import io
+
+// ─── Section: Defining Helper Functions ─────────────────────
+let dotProduct = fn(x, y) { x * y }
+let magnitude = fn(vector) { sqrt(dotProduct(vector, vector)) }
+
+let normalize = fn(vector) {
+    let norm = magnitude(vector)
+    return [vector[0] / norm, vector[1] / norm]
+}
+
+let cosineSimilarity = fn(a, b) { dotProduct(a, b) / (magnitude(a) * magnitude(b)) }
+
+// ─── Section: Word2Vec Skip-Gram Model Implementation ──────────
+struct Word {
+    idx: int
+    vec: list[float]
+}
+
+let createWord = fn(idx, vec) { Word { idx: idx, vec: vec } }
+
+let addVectorToWord = fn(word, vec) {
+    word.vec += vec
+}
+
+let removeVectorFromWord = fn(word, vec) {
+    word.vec -= vec
+}
+
+let sampleNegativeNeighbours = fn(word, num_samples) {
+    let neighbours = list[int]()
+    for _ in range(num_samples) {
+        neighbours.push(sampleIdx())
+    }
+    return neighbours
+}
+
+let sampleIdx = fn() { int(math.random()) % 10000 }
+
+let train = fn(model, words, epochs) {
+    for epoch in range(epochs) {
+        for word in words {
+            let neighbours = sampleNegativeNeighbours(word, 5)
+            let target_vector = model[word.idx].vec
+            for neighbour_idx in neighbours {
+                let neighbour_word = model[neighbour_idx]
+                addVectorToWord(neighbour_word, normalise(target_vector - neighbour_word.vec))
+            }
+        }
+    }
+}
+
+let evaluate = fn(model, words, query_word) {
+    let similarity_threshold = 0.5
+    let results = list[tuple[float, int]]()
+    for word in words {
+        if word != query_word {
+            let similarity = cosineSimilarity(query_word.vec, word.vec)
+            if similarity >= similarity_threshold {
+                results.append((similarity, word.idx))
+            }
+        }
+    }
+    return results
+}
+
+let getTopKNeighbours = fn(model, query_word, k) {
+    let results = evaluate(model, list[Word](), query_word)
+    results.sort()
+    results = results.slice(0, min(k, length(results)))
+    return [result[1] for result in results]
+}
+
+// ─── Section: Main Function ──────────────────────────────
+fn main() {
+    // Create a new Word2Vec model
+    let model = map(fn(x) { x.vec } => createWord(sampleIdx(), normalize(x.vec)))
+
+    // Train the model
+    train(model, [createWord(1, [0.1, 0.2]), createWord(2, [0.3, 0.4])], 100)
+
+    // Evaluate the model
+    let top_k_neighbours = getTopKNeighbours(model,

@@ -1,0 +1,89 @@
+// ═══════════════════════════════════════════════════════════
+// LATERALUS Crc Module
+// 
+// This module provides an implementation of cyclic redundancy checks (CRCs) for various algorithms.
+// 
+// The provided functions allow users to easily compute CRC values using different polynomial and size options.
+
+module Crc {
+
+  // ──────────────────────────────────────────────────────────────
+  // Struct definition for CRC data type
+  //
+  // The CRC data type is used by all functions in this module.
+  // It represents the input byte stream being processed.
+  struct ByteStream {
+    bytes: list[uint8]
+  }
+
+  // ──────────────────────────────────────────────────────────────
+  // Struct definition for CRC result type
+  //
+  // The CRC result type is used by most functions in this module.
+  // It represents the computed CRC value as a uint32.
+  struct CrcResult {
+    value: uint32
+  }
+
+  // ──────────────────────────────────────────────────────────────
+  // Function to initialize a new CRC instance with the given polynomial
+  //
+  // @param p Polynomial to use for CRC computation
+  // @param size Size of the CRC
+  fn init(p: uint8, size: int) -> CrcResult {
+    let crc = struct {
+      value: uint32
+      p: uint8
+      size: int
+    };
+    crc.value = 0;
+    crc.p = p;
+    crc.size = size;
+    return crc;
+  }
+
+  // ──────────────────────────────────────────────────────────────
+  // Function to compute the CRC value for the given byte stream
+  //
+  // @param bs Input byte stream being processed
+  // @return CRC value as a uint32
+  fn compute(bs: ByteStream) -> CrcResult {
+    let crc = init(0x07, 8);
+    for b in bs.bytes {
+      crc.value = crc.value ^ b;
+      for i in range(crc.size - 1, 0, -1) {
+        if crc.value & (1 << i) != 0 {
+          crc.value = crc.value >> 1;
+          crc.value = crc.value ^ crc.p;
+        }
+      }
+    }
+    return crc;
+  }
+
+  // ──────────────────────────────────────────────────────────────
+  // Function to generate a lookup table for the given polynomial and size
+  //
+  // @param p Polynomial to use for CRC computation
+  // @param size Size of the CRC
+  // @return Lookup table as a map of uint32 keys to uint16 values
+  fn lookupTable(p: uint8, size: int) -> map[uint32, uint16] {
+    let lut = {};
+    for i in range(size) {
+      let value = struct {
+        high: uint16
+        low: uint16
+      };
+      value.high = (i shr 2) + 1;
+      value.low = i shr 1;
+      lut[(p << i)] = value;
+    }
+    return lut;
+  }
+
+  // ──────────────────────────────────────────────────────────────
+  // Function to compute the CRC-8 value using the given byte stream and polynomial
+  //
+  // @param bs Input byte stream being processed
+  // @param poly Polynomial to use for CRC-8 computation
+  //

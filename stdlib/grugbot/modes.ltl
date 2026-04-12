@@ -1,0 +1,445 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// GRUGBOT — ChatterMode & PhagyMode
+// Idle gossip system and maintenance automata
+// ═══════════════════════════════════════════════════════════════════════════
+
+module grugbot.modes
+
+import math
+import random
+import grugbot.core
+import grugbot.brain
+import grugbot.thesaurus
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CHATTERMODE CONSTANTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub const CHATTER_MIN_CLONES: int = 50
+pub const CHATTER_MAX_CLONES: int = 500
+pub const CHATTER_ROUNDS: int = 3
+pub const MORPH_PROBABILITY: float = 0.15
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PHAGYMODE AUTOMATA CONSTANTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub const ORPHAN_THRESHOLD: int = 0       // No neighbors = orphan
+pub const GRAVE_RECYCLE_CHANCE: float = 0.30
+pub const DECAY_CYCLE_INTERVAL: int = 10  // Every N ticks
+pub const MAX_GRAVES_PER_CYCLE: int = 100
+pub const PRUNE_LOW_STRENGTH: float = 1.0
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CHATTERMODE — Idle gossip sessions
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub struct ChatterSession {
+    session_id: int
+    clone_count: int
+    rounds: int
+    morphs_performed: int
+    started_at: float
+}
+
+let mut CHATTER_COUNTER: int = 0
+
+pub fn start_chatter_session() -> ChatterSession {
+    CHATTER_COUNTER = CHATTER_COUNTER + 1
+
+    let clone_count = CHATTER_MIN_CLONES + int(random.random() * (CHATTER_MAX_CLONES - CHATTER_MIN_CLONES))
+
+    return ChatterSession {
+        session_id: CHATTER_COUNTER,
+        clone_count: clone_count,
+        rounds: CHATTER_ROUNDS,
+        morphs_performed: 0,
+        started_at: 0.0
+    }
+}
+
+pub fn run_chatter_round(session: ChatterSession) -> ChatterSession {
+    let mut morphs = 0
+
+    // Gather a random sample of alive nodes
+    let all_nodes = get_all_alive_node_ids()
+    let sample_size = math.min(session.clone_count, len(all_nodes))
+    let sample = random_sample(all_nodes, sample_size)
+
+    // Each node may "morph" another via thesaurus expansion
+    for node_id in sample {
+        if random.random() < MORPH_PROBABILITY {
+            let success = attempt_morph(node_id)
+            if success {
+                morphs = morphs + 1
+            }
+        }
+    }
+
+    session.morphs_performed = session.morphs_performed + morphs
+    session.rounds = session.rounds - 1
+    return session
+}
+
+fn attempt_morph(node_id: str) -> bool {
+    let node = grugbot.core.get_node(node_id)
+    if node == nil or node.is_grave {
+        return false
+    }
+
+    // Extract first word from pattern as seed
+    let words = split(node.pattern, " ")
+    if len(words) == 0 {
+        return false
+    }
+    let seed_word = words[0]
+
+    // Try to expand via thesaurus
+    let expanded = grugbot.thesaurus.expand_terms(seed_word, 1)
+    if len(expanded) <= 1 {
+        return false
+    }
+
+    // Pick a random expanded term
+    let new_word = expanded[int(random.random() * len(expanded))]
+    if new_word == seed_word {
+        return false
+    }
+
+    // Create a morphed clone node
+    let new_pattern = new_word + " " + join(slice(words, 1, len(words)), " ")
+    let new_signal = grugbot.core.words_to_signal(new_pattern)
+
+    let new_id = grugbot.core.create_node(
+        new_pattern,
+        new_signal,
+        node.action_packet,
+        node.json_data,
+        node.drop_table,
+        node.triples
+    )
+
+    // Link morphed node to original
+    grugbot.core.link_neighbors(node_id, new_id)
+
+    return true
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PHAGYMODE — Maintenance automata
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub struct PhagyCycle {
+    cycle_id: int
+    orphans_pruned: int
+    graves_recycled: int
+    strengths_decayed: int
+    duplicates_merged: int
+    weak_culled: int
+    lobes_balanced: int
+    attachments_cleaned: int
+}
+
+let mut PHAGY_COUNTER: int = 0
+
+pub fn run_phagy_cycle() -> PhagyCycle {
+    PHAGY_COUNTER = PHAGY_COUNTER + 1
+
+    let cycle = PhagyCycle {
+        cycle_id: PHAGY_COUNTER,
+        orphans_pruned: 0,
+        graves_recycled: 0,
+        strengths_decayed: 0,
+        duplicates_merged: 0,
+        weak_culled: 0,
+        lobes_balanced: 0,
+        attachments_cleaned: 0
+    }
+
+    // Automaton 1: Orphan pruning
+    cycle.orphans_pruned = prune_orphans()
+
+    // Automaton 2: Grave recycling
+    cycle.graves_recycled = recycle_graves()
+
+    // Automaton 3: Strength decay
+    cycle.strengths_decayed = decay_all_strengths()
+
+    // Automaton 4: Duplicate merging (pattern-based)
+    cycle.duplicates_merged = merge_duplicates()
+
+    // Automaton 5: Weak node culling
+    cycle.weak_culled = cull_weak_nodes()
+
+    // Automaton 6: Lobe balancing
+    cycle.lobes_balanced = balance_lobes()
+
+    // Automaton 7: Attachment cleanup
+    cycle.attachments_cleaned = clean_attachments()
+
+    return cycle
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTOMATON 1: Orphan Pruning
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn prune_orphans() -> int {
+    let mut pruned = 0
+    let all_nodes = get_all_alive_node_ids()
+
+    for node_id in all_nodes {
+        let node = grugbot.core.get_node(node_id)
+        if node == nil {
+            continue
+        }
+
+        // Node with no neighbors is orphan
+        if len(node.neighbor_ids) <= ORPHAN_THRESHOLD and node.fire_count == 0 {
+            grugbot.core.penalize_strength(node_id)
+            pruned = pruned + 1
+        }
+    }
+
+    return pruned
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTOMATON 2: Grave Recycling
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn recycle_graves() -> int {
+    let mut recycled = 0
+    let all_keys = keys(grugbot.core.NODE_MAP)
+
+    for node_id in all_keys {
+        if recycled >= MAX_GRAVES_PER_CYCLE {
+            break
+        }
+
+        let node = grugbot.core.NODE_MAP[node_id]
+        if node.is_grave and random.random() < GRAVE_RECYCLE_CHANCE {
+            // Actually remove from map
+            del grugbot.core.NODE_MAP[node_id]
+            grugbot.brain.remove_node_from_lobe(int(node_id))
+            recycled = recycled + 1
+        }
+    }
+
+    return recycled
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTOMATON 3: Strength Decay
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn decay_all_strengths() -> int {
+    let mut decayed = 0
+    let all_nodes = get_all_alive_node_ids()
+
+    for node_id in all_nodes {
+        grugbot.core.decay_strength(node_id)
+        decayed = decayed + 1
+    }
+
+    return decayed
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTOMATON 4: Duplicate Merging
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn merge_duplicates() -> int {
+    let mut merged = 0
+    let seen_patterns = {}
+    let all_nodes = get_all_alive_node_ids()
+
+    for node_id in all_nodes {
+        let node = grugbot.core.get_node(node_id)
+        if node == nil {
+            continue
+        }
+
+        let pattern = node.pattern
+        if contains(keys(seen_patterns), pattern) {
+            // Duplicate found - boost original, kill this one
+            let original_id = seen_patterns[pattern]
+            grugbot.core.boost_strength(original_id)
+            grugbot.core.penalize_strength(node_id)
+            grugbot.core.penalize_strength(node_id)  // Double penalty
+            merged = merged + 1
+        } else {
+            seen_patterns[pattern] = node_id
+        }
+    }
+
+    return merged
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTOMATON 5: Weak Node Culling
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn cull_weak_nodes() -> int {
+    let mut culled = 0
+    let all_nodes = get_all_alive_node_ids()
+
+    for node_id in all_nodes {
+        let node = grugbot.core.get_node(node_id)
+        if node == nil {
+            continue
+        }
+
+        if node.strength < PRUNE_LOW_STRENGTH and node.fire_count == 0 {
+            grugbot.core.penalize_strength(node_id)
+            culled = culled + 1
+        }
+    }
+
+    return culled
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTOMATON 6: Lobe Balancing
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn balance_lobes() -> int {
+    let mut balanced = 0
+    let stats = grugbot.brain.lobe_stats()
+
+    if not contains(keys(stats), "_summary") {
+        return 0
+    }
+
+    let summary = stats["_summary"]
+    let total_lobes = summary["total_lobes"]
+    let total_nodes = summary["total_nodes"]
+
+    if total_lobes == 0 {
+        return 0
+    }
+
+    let avg_per_lobe = total_nodes / total_lobes
+    let threshold = avg_per_lobe * 2  // Imbalance if 2x average
+
+    for subject in keys(stats) {
+        if subject == "_summary" {
+            continue
+        }
+
+        let lobe_info = stats[subject]
+        if lobe_info["nodes"] > threshold {
+            // This lobe is overloaded - flag for attention
+            balanced = balanced + 1
+        }
+    }
+
+    return balanced
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTOMATON 7: Attachment Cleanup
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn clean_attachments() -> int {
+    let mut cleaned = 0
+
+    for target_id in keys(grugbot.core.ATTACHMENT_MAP) {
+        let attachments = grugbot.core.ATTACHMENT_MAP[target_id]
+        let mut valid_attachments = []
+
+        for att in attachments {
+            if contains(keys(grugbot.core.NODE_MAP), att.node_id) {
+                let node = grugbot.core.NODE_MAP[att.node_id]
+                if not node.is_grave {
+                    valid_attachments = valid_attachments + [att]
+                } else {
+                    cleaned = cleaned + 1
+                }
+            } else {
+                cleaned = cleaned + 1
+            }
+        }
+
+        grugbot.core.ATTACHMENT_MAP[target_id] = valid_attachments
+    }
+
+    return cleaned
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPER FUNCTIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn get_all_alive_node_ids() -> list {
+    let mut alive = []
+    for node_id in keys(grugbot.core.NODE_MAP) {
+        let node = grugbot.core.NODE_MAP[node_id]
+        if not node.is_grave {
+            alive = alive + [node_id]
+        }
+    }
+    return alive
+}
+
+fn random_sample(items: list, n: int) -> list {
+    if n >= len(items) {
+        return items
+    }
+
+    let mut result = []
+    let mut available = items
+
+    for i in range(0, n) {
+        let idx = int(random.random() * len(available))
+        result = result + [available[idx]]
+        // Remove selected item (simple swap-remove)
+        let last_idx = len(available) - 1
+        available[idx] = available[last_idx]
+        available = slice(available, 0, last_idx)
+    }
+
+    return result
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COMBINED IDLE LOOP
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn idle_tick(tick_count: int) -> map {
+    let result = {}
+
+    // Run PhagyMode every DECAY_CYCLE_INTERVAL ticks
+    if tick_count % DECAY_CYCLE_INTERVAL == 0 {
+        let phagy = run_phagy_cycle()
+        result["phagy_cycle"] = phagy.cycle_id
+        result["orphans_pruned"] = phagy.orphans_pruned
+        result["graves_recycled"] = phagy.graves_recycled
+        result["strengths_decayed"] = phagy.strengths_decayed
+    }
+
+    // ChatterMode runs less frequently
+    if tick_count % (DECAY_CYCLE_INTERVAL * 3) == 0 {
+        let mut session = start_chatter_session()
+        for r in range(0, session.rounds) {
+            session = run_chatter_round(session)
+        }
+        result["chatter_session"] = session.session_id
+        result["chatter_morphs"] = session.morphs_performed
+    }
+
+    return result
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STATISTICS
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn mode_stats() -> map {
+    let stats = {}
+    stats["phagy_cycles_run"] = PHAGY_COUNTER
+    stats["chatter_sessions_run"] = CHATTER_COUNTER
+    stats["alive_nodes"] = len(get_all_alive_node_ids())
+    stats["total_nodes"] = grugbot.core.total_count()
+    return stats
+}

@@ -1,0 +1,308 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// GRUGBOT — Pattern Scanner Module
+// Multi-resolution signal pattern matching with selective scan tiers
+// ═══════════════════════════════════════════════════════════════════════════
+
+module grugbot.scanner
+
+import math
+import random
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SCAN TIERS — Complexity-based resolution selection
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub const TIER_CHEAP: int = 1
+pub const TIER_MEDIUM: int = 2
+pub const TIER_HIGH_RES: int = 3
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SCAN RESULT
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub struct ScanResult {
+    best_index: int
+    confidence: float
+    found: bool
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// JITTER — Bounded uniform noise
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn slight_jitter(confidence: float) -> float {
+    let jitter_magnitude = 0.005 + (0.01 * (1.0 - math.abs(confidence)))
+    let jitter = (random.random() * 2.0 - 1.0) * jitter_magnitude
+    return math.clamp(confidence + jitter, 0.0, 1.0)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WINDOW EVALUATION — Core similarity metric
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn evaluate_window(window: list, pattern: list, tolerance: float) -> float {
+    let mut matches = 0.0
+
+    for i in range(0, len(pattern)) {
+        let diff = math.abs(window[i] - pattern[i])
+        if diff <= tolerance {
+            matches = matches + 1.0
+        } else if diff <= tolerance * 2 {
+            matches = matches + 0.5
+        }
+    }
+
+    let similarity = matches / len(pattern)
+    if similarity > 0.0 {
+        return math.max(0.1, similarity)
+    }
+    return 0.0
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CHEAP SCAN — Strided sliding window, O(n/stride)
+// "Grug skip over some rocks (stride) to run fast"
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn cheap_scan(target: list, pattern: list, tolerance: float, threshold: float) -> ScanResult {
+    if len(target) == 0 or len(pattern) == 0 {
+        return ScanResult { best_index: 0, confidence: 0.0, found: false }
+    }
+
+    let pat_len = len(pattern)
+    if pat_len > len(target) {
+        return ScanResult { best_index: 0, confidence: 0.0, found: false }
+    }
+
+    // Stride clamped to max 8
+    let stride = math.clamp(pat_len / 4, 1, 8)
+    let mut best_conf = -1.0
+    let mut best_idx = 0
+
+    let mut i = 0
+    while i <= len(target) - pat_len {
+        let window = slice(target, i, i + pat_len)
+        let conf = evaluate_window(window, pattern, tolerance)
+
+        if conf > best_conf {
+            best_conf = conf
+            best_idx = i
+        }
+        i = i + stride
+    }
+
+    if best_conf < threshold {
+        return ScanResult { best_index: best_idx, confidence: best_conf, found: false }
+    }
+
+    return ScanResult { best_index: best_idx, confidence: best_conf, found: true }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MEDIUM SCAN — Every-index sliding window, O(n)
+// "Grug check every single rock. Good balance."
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn medium_scan(target: list, pattern: list, tolerance: float, threshold: float) -> ScanResult {
+    if len(target) == 0 or len(pattern) == 0 {
+        return ScanResult { best_index: 0, confidence: 0.0, found: false }
+    }
+
+    let pat_len = len(pattern)
+    if pat_len > len(target) {
+        return ScanResult { best_index: 0, confidence: 0.0, found: false }
+    }
+
+    let mut best_conf = -1.0
+    let mut best_idx = 0
+
+    for i in range(0, len(target) - pat_len + 1) {
+        let window = slice(target, i, i + pat_len)
+        let conf = evaluate_window(window, pattern, tolerance)
+
+        if conf > best_conf {
+            best_conf = conf
+            best_idx = i
+        }
+    }
+
+    if best_conf < threshold {
+        return ScanResult { best_index: best_idx, confidence: best_conf, found: false }
+    }
+
+    return ScanResult { best_index: best_idx, confidence: best_conf, found: true }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HIGH RES SCAN — Two-pass with variance penalty
+// "Grug squint real hard. First pass: blurry spots. Second pass: exact variance."
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn high_res_scan(target: list, pattern: list, tolerance: float, threshold: float) -> ScanResult {
+    if len(target) == 0 or len(pattern) == 0 {
+        return ScanResult { best_index: 0, confidence: 0.0, found: false }
+    }
+
+    let pat_len = len(pattern)
+    if pat_len > len(target) {
+        return ScanResult { best_index: 0, confidence: 0.0, found: false }
+    }
+
+    // Pass 1: Find candidate zones (loose threshold)
+    let mut candidates = []
+    let candidate_threshold = threshold * 0.7
+
+    for i in range(0, len(target) - pat_len + 1) {
+        let window = slice(target, i, i + pat_len)
+        let conf = evaluate_window(window, pattern, tolerance * 1.5)
+
+        if conf >= candidate_threshold {
+            candidates = candidates + [i]
+        }
+    }
+
+    if len(candidates) == 0 {
+        return ScanResult { best_index: 0, confidence: 0.0, found: false }
+    }
+
+    // Pass 2: Strict variance-penalized validation
+    let mut best_conf = -1.0
+    let mut best_idx = 0
+
+    for idx in candidates {
+        let window = slice(target, idx, idx + pat_len)
+        let conf = evaluate_window(window, pattern, tolerance)
+
+        // Variance penalty
+        let mut variance = 0.0
+        for i in range(0, pat_len) {
+            let diff = window[i] - pattern[i]
+            variance = variance + (diff * diff)
+        }
+        variance = variance / pat_len
+
+        // Apply penalty but floor at 0.1 for positive matches
+        let mut penalized_conf = conf
+        if conf > 0.0 {
+            penalized_conf = math.max(0.1, conf - (variance * 0.1))
+        } else {
+            penalized_conf = conf - (variance * 0.1)
+        }
+
+        let final_conf = slight_jitter(penalized_conf)
+
+        if final_conf > best_conf {
+            best_conf = final_conf
+            best_idx = idx
+        }
+    }
+
+    if best_conf < threshold {
+        return ScanResult { best_index: best_idx, confidence: best_conf, found: false }
+    }
+
+    return ScanResult { best_index: best_idx, confidence: best_conf, found: true }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BIDIRECTIONAL CHEAP SCAN — Forward + reverse, smoothed confidence
+// "Catches order-reversed token matches"
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn bidirectional_cheap_scan(target: list, pattern: list, threshold: float) -> ScanResult {
+    if len(target) == 0 or len(pattern) == 0 {
+        return ScanResult { best_index: 0, confidence: 0.0, found: false }
+    }
+
+    let tolerance = 0.1
+    let miss_contribution = math.max(0.0, threshold - 0.01)
+
+    // Forward scan
+    let forward = cheap_scan(target, pattern, tolerance, threshold)
+    let forward_conf = forward.found ? forward.confidence : miss_contribution
+
+    // Reverse scan (reverse the pattern)
+    let reversed_pattern = reverse(pattern)
+    let reverse_result = cheap_scan(target, reversed_pattern, tolerance, threshold)
+    let reverse_conf = reverse_result.found ? reverse_result.confidence : miss_contribution
+
+    // Smoothed confidence = average of both directions
+    let smoothed_conf = (forward_conf + reverse_conf) / 2.0
+
+    if not forward.found and not reverse_result.found {
+        return ScanResult { best_index: 0, confidence: smoothed_conf, found: false }
+    }
+
+    // Use the index from whichever direction found the better match
+    let best_idx = forward_conf >= reverse_conf ? forward.best_index : reverse_result.best_index
+
+    return ScanResult { best_index: best_idx, confidence: smoothed_conf, found: true }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COMPLEXITY SCREENER — Determine base scan tier from input
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn screen_input_complexity(signal: list, triple_count: int) -> int {
+    if len(signal) == 0 {
+        return TIER_CHEAP
+    }
+
+    let sig_len = len(signal)
+    let complexity_score = (sig_len * 0.15) + (triple_count * 1.5)
+
+    if complexity_score < 1.5 {
+        return TIER_CHEAP
+    } else if complexity_score < 4.5 {
+        return TIER_MEDIUM
+    } else {
+        return TIER_HIGH_RES
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EFFECTIVE SCAN MODE — Per-node downgrade based on pattern complexity
+// "Simple patterns don't justify expensive scanning"
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn effective_scan_mode(base_mode: int, node_signal: list) -> int {
+    if len(node_signal) == 0 {
+        return base_mode
+    }
+
+    let sig_len = len(node_signal)
+
+    // ≤3 tokens → capped at tier 1 (cheap scan only, BIDIRECTIONAL)
+    if sig_len <= 3 {
+        return math.min(base_mode, TIER_CHEAP)
+    }
+
+    // 4–8 tokens → capped at tier 2 (medium scan max)
+    if sig_len <= 8 {
+        return math.min(base_mode, TIER_MEDIUM)
+    }
+
+    // >8 tokens → no cap (full tier from input complexity)
+    return base_mode
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UNIFIED SCAN — Select scan mode and execute
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn scan(target: list, pattern: list, mode: int) -> ScanResult {
+    match mode {
+        TIER_CHEAP => {
+            return bidirectional_cheap_scan(target, pattern, 0.3)
+        }
+        TIER_MEDIUM => {
+            return medium_scan(target, pattern, 0.1, 0.4)
+        }
+        TIER_HIGH_RES => {
+            return high_res_scan(target, pattern, 0.05, 0.5)
+        }
+        _ => {
+            return cheap_scan(target, pattern, 0.1, 0.3)
+        }
+    }
+}
