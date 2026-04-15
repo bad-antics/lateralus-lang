@@ -25,8 +25,8 @@ const ALLOWED_FILES = new Set([
   'nullsec-linux-server-2.1.0-x86_64.iso.sha256',
   'nullsec-linux-arm64-2.1.0-aarch64.iso',
   'nullsec-linux-arm64-2.1.0-aarch64.iso.sha256',
-  'nullsec-linux-pi-2.1.0-aarch64.img',
-  'nullsec-linux-pi-2.1.0-aarch64.img.sha256',
+  'nullsec-linux-pi-2.1.0-aarch64.img.xz',
+  'nullsec-linux-pi-2.1.0-aarch64.img.xz.sha256',
   'nullsec-linux-micro-2.1.0-x86_64.iso',
   'nullsec-linux-micro-2.1.0-x86_64.iso.sha256',
   // NullSec checksums
@@ -41,6 +41,8 @@ const ALLOWED_FILES = new Set([
 const MIME = {
   '.iso':     'application/octet-stream',
   '.img':     'application/octet-stream',
+  '.img.xz':  'application/x-xz',
+  '.xz':      'application/x-xz',
   '.tar.gz':  'application/gzip',
   '.tgz':     'application/gzip',
   '.zip':     'application/zip',
@@ -340,7 +342,7 @@ export default {
       return errorResponse(404, 'File Not Found');
     }
 
-    // Look up in R2
+    // Look up in R2 — try direct object first, then chunked manifest
     let object;
     try {
       object = await env.DOWNLOADS.get(filename);
@@ -349,9 +351,55 @@ export default {
       return errorResponse(503, 'Storage Unavailable');
     }
 
+    // ── Chunked file serving ─────────────────────────────────────────────────
+    // If direct object not found, check for a split-upload manifest
     if (!object) {
-      return errorResponse(404, 'File Not Found');
+      let manifest;
+      try {
+        const mObj = await env.DOWNLOADS.get(`${filename}.manifest`);
+        if (mObj) manifest = JSON.parse(await mObj.text());
+      } catch (_) {}
+
+      if (!manifest) return errorResponse(404, 'File Not Found');
+
+      // Serve all parts concatenated as a single stream
+      const { parts, size: totalSize } = manifest;
+      const contentType = getMime(filename);
+
+      const headers = new Headers({
+        'Content-Type': contentType,
+        'Content-Length': String(totalSize),
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Accept-Ranges': 'none',
+        'Cache-Control': 'public, max-age=86400',
+        ...CORS_HEADERS,
+        ...SEC_HEADERS,
+      });
+
+      if (method === 'HEAD') return new Response(null, { status: 200, headers });
+
+      // Create a ReadableStream that yields all parts sequentially
+      const { readable, writable } = new TransformStream();
+      const writer = writable.getWriter();
+
+      (async () => {
+        for (let i = 0; i < parts; i++) {
+          const partKey = `${filename}.part${i}`;
+          const part = await env.DOWNLOADS.get(partKey);
+          if (!part) { writer.close(); return; }
+          const reader = part.body.getReader();
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            await writer.write(value);
+          }
+        }
+        writer.close();
+      })();
+
+      return new Response(readable, { status: 200, headers });
     }
+    // ── End chunked serving ──────────────────────────────────────────────────
 
     const contentType = getMime(filename);
     const size = object.size;
