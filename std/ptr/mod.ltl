@@ -1,0 +1,119 @@
+// std.ptr - Raw pointer utilities
+// null, read, write, copy, offset, slice_from_raw_parts.
+
+pub fn null<T>() -> *const T { 0 as *const T }
+pub fn null_mut<T>() -> *mut T { 0 as *mut T }
+
+pub fn is_null<T>(ptr: *const T) -> bool { ptr as usize == 0 }
+
+pub unsafe fn read<T>(src: *const T) -> T {
+    @intrinsic("ptr_read", src)
+}
+
+pub unsafe fn read_volatile<T>(src: *const T) -> T {
+    @intrinsic("ptr_read_volatile", src)
+}
+
+pub unsafe fn read_unaligned<T>(src: *const T) -> T {
+    @intrinsic("ptr_read_unaligned", src)
+}
+
+pub unsafe fn write<T>(dst: *mut T, val: T) {
+    @intrinsic("ptr_write", dst, val)
+}
+
+pub unsafe fn write_volatile<T>(dst: *mut T, val: T) {
+    @intrinsic("ptr_write_volatile", dst, val)
+}
+
+pub unsafe fn write_unaligned<T>(dst: *mut T, val: T) {
+    @intrinsic("ptr_write_unaligned", dst, val)
+}
+
+pub unsafe fn write_bytes<T>(dst: *mut T, val: u8, count: usize) {
+    @intrinsic("write_bytes", dst, val, count)
+}
+
+pub unsafe fn copy<T>(src: *const T, dst: *mut T, count: usize) {
+    @intrinsic("copy_overlapping", src, dst, count)
+}
+
+pub unsafe fn copy_nonoverlapping<T>(src: *const T, dst: *mut T, count: usize) {
+    @intrinsic("copy_nonoverlapping", src, dst, count)
+}
+
+pub unsafe fn drop_in_place<T: ?Sized>(ptr: *mut T) {
+    @intrinsic("drop_in_place", ptr)
+}
+
+pub unsafe fn swap<T>(a: *mut T, b: *mut T) {
+    let tmp = read(a)
+    copy_nonoverlapping(b, a, 1)
+    write(b, tmp)
+}
+
+pub unsafe fn swap_nonoverlapping<T>(a: *mut T, b: *mut T, count: usize) {
+    let mut i = 0
+    while i < count {
+        swap(a.add(i), b.add(i))
+        i += 1
+    }
+}
+
+pub unsafe fn replace<T>(dst: *mut T, val: T) -> T {
+    let old = read(dst)
+    write(dst, val)
+    old
+}
+
+pub fn slice_from_raw_parts<T>(data: *const T, len: usize) -> *const [T] {
+    @intrinsic("slice_from_raw_parts", data, len)
+}
+
+pub fn slice_from_raw_parts_mut<T>(data: *mut T, len: usize) -> *mut [T] {
+    @intrinsic("slice_from_raw_parts_mut", data, len)
+}
+
+pub fn eq<T>(a: *const T, b: *const T) -> bool { a as usize == b as usize }
+
+pub fn addr<T>(ptr: *const T) -> usize { ptr as usize }
+
+pub fn from_addr<T>(addr: usize) -> *const T { addr as *const T }
+pub fn from_addr_mut<T>(addr: usize) -> *mut T { addr as *mut T }
+
+// NonNull - a pointer guaranteed non-null
+pub struct NonNull<T: ?Sized> {
+    ptr: *const T,
+}
+
+impl<T: ?Sized> NonNull<T> {
+    pub unsafe fn new_unchecked(ptr: *mut T) -> NonNull<T> {
+        NonNull { ptr: ptr as *const T }
+    }
+
+    pub fn new(ptr: *mut T) -> Option<NonNull<T>> {
+        if is_null(ptr as *const T) { none }
+        else { some(NonNull { ptr: ptr as *const T }) }
+    }
+
+    pub fn as_ptr(self) -> *mut T { self.ptr as *mut T }
+
+    pub unsafe fn as_ref(self) -> &T { &*self.ptr }
+    pub unsafe fn as_mut(mut self) -> &mut T { &mut *(self.ptr as *mut T) }
+
+    pub fn cast<U>(self) -> NonNull<U> { NonNull { ptr: self.ptr as *const U } }
+
+    pub fn dangling() -> NonNull<T> {
+        NonNull { ptr: std.mem.align_of::<T>() as *const T }
+    }
+}
+
+impl<T> NonNull<[T]> {
+    pub fn slice_from_raw_parts(data: NonNull<T>, len: usize) -> NonNull<[T]> {
+        unsafe { NonNull.new_unchecked(slice_from_raw_parts_mut(data.as_ptr(), len)) }
+    }
+
+    pub fn len(self) -> usize {
+        @intrinsic("ptr_metadata", self.ptr)
+    }
+}
