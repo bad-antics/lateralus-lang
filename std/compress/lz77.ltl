@@ -1,0 +1,70 @@
+// lz77.ltl — LZ77 sliding window compression
+const WINDOW_SIZE:  int = 255
+const LOOKAHEAD:    int = 15
+
+struct Token {
+    offset: u8,    // 0 = literal
+    length: u8,
+    next:   u8,    // next literal byte
+}
+
+fn find_longest_match(buf: [u8], pos: int) -> (int, int) {
+    let win_start = (pos - WINDOW_SIZE).max(0)
+    let mut best_off = 0
+    let mut best_len = 0
+    for i in range(win_start, pos) {
+        let mut len = 0
+        while pos + len < buf.len()
+              && buf[i + len] == buf[pos + len]
+              && len < LOOKAHEAD - 1 {
+            len += 1
+        }
+        if len > best_len {
+            best_len = len
+            best_off = pos - i
+        }
+    }
+    (best_off, best_len)
+}
+
+fn compress(data: [u8]) -> [Token] {
+    let mut tokens = []
+    let mut pos    = 0
+    while pos < data.len() {
+        let (off, len) = find_longest_match(data, pos)
+        let next = if pos + len < data.len() { data[pos + len] } else { 0 }
+        tokens.push(Token { offset: off as u8, length: len as u8, next })
+        pos += len + 1
+    }
+    tokens
+}
+
+fn decompress(tokens: [Token]) -> [u8] {
+    let mut out = []
+    for t in tokens {
+        if t.offset > 0 {
+            let start = out.len() - t.offset as int
+            for i in range(0, t.length as int) {
+                out.push(out[start + i])
+            }
+        }
+        if !(t.length == 0 && t.offset == 0 && t.next == 0 && out.len() > 0) || t.next != 0 {
+            out.push(t.next)
+        }
+    }
+    out
+}
+
+fn main() {
+    let input   = "abracadabra".as_bytes()
+    let tokens  = compress(input)
+    let output  = decompress(tokens)
+    assert(output == input)
+    print("LZ77 compress/decompress: '${string.from_bytes(output)}' ✓")
+
+    let repeat  = [0x42u8; 50]
+    let ctokens = compress(repeat)
+    let decoded = decompress(ctokens)
+    assert(decoded == repeat)
+    print("LZ77 repetitive data ✓")
+}
