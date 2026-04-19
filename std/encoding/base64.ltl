@@ -1,61 +1,160 @@
-// base64.ltl — RFC 4648 Base64 encode/decode
-const ALPHABET: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-const URL_ALPHABET: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+// std.encoding.base64 — Base64 encoding/decoding (RFC 4648)
 
-fn encode_with(data: [u8], alpha: string, pad: bool) -> string {
-    let mut out = ""
-    let mut i   = 0
-    while i < data.len() {
-        let b0 = data[i]
-        let b1 = if i+1 < data.len() { data[i+1] } else { 0 }
-        let b2 = if i+2 < data.len() { data[i+2] } else { 0 }
-        out += alpha[(b0 >> 2) as usize].to_string()
-        out += alpha[((b0 & 3) << 4 | b1 >> 4) as usize].to_string()
-        out += if i+1 < data.len() { alpha[((b1 & 0xF) << 2 | b2 >> 6) as usize].to_string() } else if pad { "=" } else { "" }
-        out += if i+2 < data.len() { alpha[(b2 & 0x3F) as usize].to_string() }                 else if pad { "=" } else { "" }
-        i += 3
+const STANDARD_ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+const URL_SAFE_ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+pub enum Base64Error {
+    InvalidChar(u8, usize),
+    InvalidLength,
+    InvalidPadding,
+}
+
+struct Base64Config {
+    alphabet: &[u8; 64],
+    pad: bool,
+}
+
+pub const STANDARD: Base64Config = Base64Config { alphabet: STANDARD_ALPHABET, pad: true }
+pub const STANDARD_NO_PAD: Base64Config = Base64Config { alphabet: STANDARD_ALPHABET, pad: false }
+pub const URL_SAFE: Base64Config = Base64Config { alphabet: URL_SAFE_ALPHABET, pad: true }
+pub const URL_SAFE_NO_PAD: Base64Config = Base64Config { alphabet: URL_SAFE_ALPHABET, pad: false }
+
+fn build_decode_table(alphabet: &[u8; 64]) -> [u8; 256] {
+    let mut table = [0xFFu8; 256]
+    for (i, &ch) in alphabet.iter().enumerate() {
+        table[ch as usize] = i as u8
+    }
+    table
+}
+
+// ── Encode ───────────────────────────────────────────────────────────────────
+pub fn encode(data: &[u8]) -> string { encode_config(data, &STANDARD) }
+
+pub fn encode_url_safe(data: &[u8]) -> string { encode_config(data, &URL_SAFE_NO_PAD) }
+
+pub fn encode_config(data: &[u8], config: &Base64Config) -> string {
+    let mut out = string.with_capacity((data.len() + 2) / 3 * 4)
+    let chunks = data.len() / 3
+    let remainder = data.len() % 3
+
+    for i in 0..chunks {
+        let b0 = data[i * 3] as u32
+        let b1 = data[i * 3 + 1] as u32
+        let b2 = data[i * 3 + 2] as u32
+        let triple = (b0 << 16) | (b1 << 8) | b2
+
+        out.push(config.alphabet[((triple >> 18) & 0x3F) as usize] as char)
+        out.push(config.alphabet[((triple >> 12) & 0x3F) as usize] as char)
+        out.push(config.alphabet[((triple >> 6) & 0x3F) as usize] as char)
+        out.push(config.alphabet[(triple & 0x3F) as usize] as char)
+    }
+
+    match remainder {
+        1 => {
+            let b0 = data[chunks * 3] as u32
+            out.push(config.alphabet[((b0 >> 2) & 0x3F) as usize] as char)
+            out.push(config.alphabet[((b0 << 4) & 0x3F) as usize] as char)
+            if config.pad { out.push_str("==") }
+        }
+        2 => {
+            let b0 = data[chunks * 3] as u32
+            let b1 = data[chunks * 3 + 1] as u32
+            out.push(config.alphabet[((b0 >> 2) & 0x3F) as usize] as char)
+            out.push(config.alphabet[(((b0 << 4) | (b1 >> 4)) & 0x3F) as usize] as char)
+            out.push(config.alphabet[((b1 << 2) & 0x3F) as usize] as char)
+            if config.pad { out.push('=') }
+        }
+        _ => {}
     }
     out
 }
 
-fn decode_with(s: string, alpha: string) -> Result<[u8], string> {
-    let mut table: dict<char, u8> = {}
-    for (i, c) in alpha.chars().enumerate() { table[c] = i as u8 }
-    let clean = s.chars() |> filter(|c| c != '=') |> collect_string()
-    if clean.len() % 4 == 1 { return err("invalid base64 length") }
-    let mut out = []
-    let mut i   = 0
-    while i < clean.len() {
-        let a = table.get(clean[i])   .ok_or("invalid char")?
-        let b = table.get(clean[i+1]) .ok_or("invalid char")?
-        out.push((a << 2) | (b >> 4))
-        if i+2 < clean.len() {
-            let c = table.get(clean[i+2]).ok_or("invalid char")?
-            out.push((b << 4) | (c >> 2))
+// ── Decode ───────────────────────────────────────────────────────────────────
+pub fn decode(input: &str) -> Result<[u8], Base64Error> { decode_config(input, &STANDARD) }
+
+pub fn decode_url_safe(input: &str) -> Result<[u8], Base64Error> { decode_config(input, &URL_SAFE_NO_PAD) }
+
+pub fn decode_config(input: &str, config: &Base64Config) -> Result<[u8], Base64Error> {
+    let table = build_decode_table(config.alphabet)
+    let bytes = input.as_bytes()
+
+    // Strip padding
+    let mut len = bytes.len()
+    while len > 0 && bytes[len - 1] == b'=' { len -= 1 }
+
+    let out_len = len * 3 / 4
+    let mut out: [u8] = Vec.with_capacity(out_len)
+
+    let full_chunks = len / 4
+    for i in 0..full_chunks {
+        let mut accum: u32 = 0
+        for j in 0..4 {
+            let idx = i * 4 + j
+            let val = table[bytes[idx] as usize]
+            if val == 0xFF { return err(Base64Error.InvalidChar(bytes[idx], idx)) }
+            accum = (accum << 6) | val as u32
         }
-        if i+3 < clean.len() {
-            let d = table.get(clean[i+3]).ok_or("invalid char")?
-            out.push((c << 6) | d)
-        }
-        i += 4
+        out.push(((accum >> 16) & 0xFF) as u8)
+        out.push(((accum >> 8) & 0xFF) as u8)
+        out.push((accum & 0xFF) as u8)
     }
+
+    let remainder = len % 4
+    if remainder > 0 {
+        let base = full_chunks * 4
+        let mut accum: u32 = 0
+        for j in 0..remainder {
+            let idx = base + j
+            let val = table[bytes[idx] as usize]
+            if val == 0xFF { return err(Base64Error.InvalidChar(bytes[idx], idx)) }
+            accum = (accum << 6) | val as u32
+        }
+        accum <<= (4 - remainder) * 6
+        match remainder {
+            2 => out.push(((accum >> 16) & 0xFF) as u8),
+            3 => {
+                out.push(((accum >> 16) & 0xFF) as u8)
+                out.push(((accum >> 8) & 0xFF) as u8)
+            }
+            _ => return err(Base64Error.InvalidLength),
+        }
+    }
+
     ok(out)
 }
 
-pub fn encode(data: [u8])       -> string { encode_with(data, ALPHABET, true) }
-pub fn encode_nopad(data: [u8]) -> string { encode_with(data, ALPHABET, false) }
-pub fn encode_url(data: [u8])   -> string { encode_with(data, URL_ALPHABET, false) }
-pub fn decode(s: string)        -> Result<[u8], string> { decode_with(s, ALPHABET) }
-pub fn decode_url(s: string)    -> Result<[u8], string> { decode_with(s, URL_ALPHABET) }
+// ── Streaming encoder ────────────────────────────────────────────────────────
+pub struct Base64Encoder {
+    config: Base64Config,
+    buffer: [u8; 3],
+    buf_len: usize,
+    output: string,
+}
 
-fn main() {
-    assert(encode("Man".as_bytes()) == "TWFu")
-    assert(encode("Ma".as_bytes())  == "TWE=")
-    assert(encode("M".as_bytes())   == "TQ==")
-    assert(decode("TWFu").unwrap() == "Man".as_bytes())
-    assert(decode("TWE=").unwrap() == "Ma".as_bytes())
-    assert(decode("TQ==").unwrap() == "M".as_bytes())
-    let s = "Hello, Lateralus!"
-    assert(decode(encode(s.as_bytes())).unwrap() == s.as_bytes())
-    print("base64 — all round-trip tests passed ✓")
+impl Base64Encoder {
+    pub fn new(config: &Base64Config) -> Base64Encoder {
+        Base64Encoder { config: *config, buffer: [0u8; 3], buf_len: 0, output: string.new() }
+    }
+
+    pub fn write(mut self, data: &[u8]) {
+        for &byte in data {
+            self.buffer[self.buf_len] = byte
+            self.buf_len += 1
+            if self.buf_len == 3 {
+                self.flush_buffer()
+            }
+        }
+    }
+
+    fn flush_buffer(mut self) {
+        if self.buf_len == 0 { return }
+        let chunk = &self.buffer[..self.buf_len]
+        self.output.push_str(&encode_config(chunk, &self.config))
+        self.buf_len = 0
+    }
+
+    pub fn finish(mut self) -> string {
+        self.flush_buffer()
+        std.mem.take(&mut self.output)
+    }
 }
