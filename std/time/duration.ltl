@@ -1,0 +1,167 @@
+// std.time — Duration and Instant types
+
+pub struct Duration {
+    secs: u64,
+    nanos: u32,
+}
+
+impl Duration {
+    pub fn new(secs: u64, nanos: u32) -> Duration {
+        let extra_secs = (nanos / 1_000_000_000) as u64
+        Duration { secs: secs + extra_secs, nanos: nanos % 1_000_000_000 }
+    }
+
+    pub fn from_secs(secs: u64) -> Duration { Duration { secs, nanos: 0 } }
+    pub fn from_millis(millis: u64) -> Duration {
+        Duration { secs: millis / 1000, nanos: ((millis % 1000) * 1_000_000) as u32 }
+    }
+    pub fn from_micros(micros: u64) -> Duration {
+        Duration { secs: micros / 1_000_000, nanos: ((micros % 1_000_000) * 1000) as u32 }
+    }
+    pub fn from_nanos(nanos: u64) -> Duration {
+        Duration { secs: nanos / 1_000_000_000, nanos: (nanos % 1_000_000_000) as u32 }
+    }
+
+    pub fn zero() -> Duration { Duration { secs: 0, nanos: 0 } }
+    pub fn is_zero(self) -> bool { self.secs == 0 && self.nanos == 0 }
+
+    pub fn as_secs(self) -> u64 { self.secs }
+    pub fn as_millis(self) -> u128 { self.secs as u128 * 1000 + self.nanos as u128 / 1_000_000 }
+    pub fn as_micros(self) -> u128 { self.secs as u128 * 1_000_000 + self.nanos as u128 / 1000 }
+    pub fn as_nanos(self) -> u128 { self.secs as u128 * 1_000_000_000 + self.nanos as u128 }
+    pub fn as_secs_f64(self) -> f64 { self.secs as f64 + self.nanos as f64 / 1e9 }
+    pub fn subsec_nanos(self) -> u32 { self.nanos }
+    pub fn subsec_millis(self) -> u32 { self.nanos / 1_000_000 }
+
+    pub fn checked_add(self, other: Duration) -> Option<Duration> {
+        let mut secs = self.secs.checked_add(other.secs)?
+        let mut nanos = self.nanos + other.nanos
+        if nanos >= 1_000_000_000 { nanos -= 1_000_000_000; secs = secs.checked_add(1)? }
+        some(Duration { secs, nanos })
+    }
+
+    pub fn checked_sub(self, other: Duration) -> Option<Duration> {
+        let mut secs = self.secs.checked_sub(other.secs)?
+        let nanos = if self.nanos >= other.nanos {
+            self.nanos - other.nanos
+        } else {
+            secs = secs.checked_sub(1)?
+            self.nanos + 1_000_000_000 - other.nanos
+        }
+        some(Duration { secs, nanos })
+    }
+
+    pub fn checked_mul(self, rhs: u32) -> Option<Duration> {
+        let total_nanos = self.nanos as u64 * rhs as u64
+        let extra_secs = total_nanos / 1_000_000_000
+        let nanos = (total_nanos % 1_000_000_000) as u32
+        let secs = self.secs.checked_mul(rhs as u64)?.checked_add(extra_secs)?
+        some(Duration { secs, nanos })
+    }
+
+    pub fn saturating_add(self, other: Duration) -> Duration {
+        self.checked_add(other).unwrap_or(Duration { secs: u64.MAX, nanos: 999_999_999 })
+    }
+
+    pub fn saturating_sub(self, other: Duration) -> Duration {
+        self.checked_sub(other).unwrap_or(Duration.zero())
+    }
+
+    pub fn min(self, other: Duration) -> Duration {
+        if self <= other { self } else { other }
+    }
+
+    pub fn max(self, other: Duration) -> Duration {
+        if self >= other { self } else { other }
+    }
+}
+
+impl PartialOrd for Duration {
+    fn partial_cmp(self, other: &Duration) -> Option<std.cmp.Ordering> {
+        some(self.cmp(other))
+    }
+}
+
+impl Ord for Duration {
+    fn cmp(self, other: &Duration) -> std.cmp.Ordering {
+        match self.secs.cmp(&other.secs) {
+            std.cmp.Ordering.Equal => self.nanos.cmp(&other.nanos),
+            ord => ord,
+        }
+    }
+}
+
+impl PartialEq for Duration {
+    fn eq(self, other: &Duration) -> bool { self.secs == other.secs && self.nanos == other.nanos }
+}
+
+impl Eq for Duration {}
+
+// ── Instant ──────────────────────────────────────────────────────────────────
+pub struct Instant {
+    inner: u64,  // nanoseconds since some epoch
+}
+
+impl Instant {
+    pub fn now() -> Instant {
+        extern "C" { fn clock_gettime(clockid: i32, tp: *mut TimeSpec) -> i32; }
+        let mut ts = TimeSpec { tv_sec: 0, tv_nsec: 0 }
+        unsafe { clock_gettime(1, &mut ts) }  // CLOCK_MONOTONIC
+        Instant { inner: ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64 }
+    }
+
+    pub fn elapsed(self) -> Duration {
+        Self.now().duration_since(self)
+    }
+
+    pub fn duration_since(self, earlier: Instant) -> Duration {
+        let nanos = self.inner.saturating_sub(earlier.inner)
+        Duration.from_nanos(nanos)
+    }
+
+    pub fn checked_add(self, duration: Duration) -> Option<Instant> {
+        let nanos = self.inner.checked_add(duration.as_nanos() as u64)?
+        some(Instant { inner: nanos })
+    }
+
+    pub fn checked_sub(self, duration: Duration) -> Option<Instant> {
+        let nanos = self.inner.checked_sub(duration.as_nanos() as u64)?
+        some(Instant { inner: nanos })
+    }
+
+    pub fn saturating_duration_since(self, earlier: Instant) -> Duration {
+        if self.inner >= earlier.inner {
+            Duration.from_nanos(self.inner - earlier.inner)
+        } else { Duration.zero() }
+    }
+}
+
+#[repr(C)]
+struct TimeSpec { tv_sec: i64, tv_nsec: i64 }
+
+// ── SystemTime ───────────────────────────────────────────────────────────────
+pub struct SystemTime {
+    secs: u64,
+    nanos: u32,
+}
+
+pub const UNIX_EPOCH: SystemTime = SystemTime { secs: 0, nanos: 0 }
+
+impl SystemTime {
+    pub fn now() -> SystemTime {
+        extern "C" { fn clock_gettime(clockid: i32, tp: *mut TimeSpec) -> i32; }
+        let mut ts = TimeSpec { tv_sec: 0, tv_nsec: 0 }
+        unsafe { clock_gettime(0, &mut ts) }  // CLOCK_REALTIME
+        SystemTime { secs: ts.tv_sec as u64, nanos: ts.tv_nsec as u32 }
+    }
+
+    pub fn duration_since(self, earlier: SystemTime) -> Result<Duration, string> {
+        if self.secs < earlier.secs { return err("SystemTime before reference".to_string()) }
+        let secs = self.secs - earlier.secs
+        let nanos = if self.nanos >= earlier.nanos { self.nanos - earlier.nanos }
+        else { return ok(Duration.new(secs - 1, self.nanos + 1_000_000_000 - earlier.nanos)) }
+        ok(Duration.new(secs, nanos))
+    }
+
+    pub fn elapsed(self) -> Result<Duration, string> { Self.now().duration_since(self) }
+}
