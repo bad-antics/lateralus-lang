@@ -1,0 +1,228 @@
+// std/collections/bloom_filter.ltl — Probabilistic set membership
+use std.hash.{Hash, Hasher, SipHash}
+
+// ── Bloom filter ─────────────────────────────────────────────────────────────
+pub struct BloomFilter<T: Hash> {
+    bits:       [u64],
+    num_bits:   usize,
+    num_hashes: u32,
+    count:      usize,
+    _phantom:   PhantomData<T>,
+}
+
+impl<T: Hash> BloomFilter<T> {
+    /// Create from desired capacity and false positive rate
+    pub fn with_rate(capacity: usize, fp_rate: f64) -> BloomFilter<T> {
+        assert(capacity > 0 && fp_rate > 0.0 && fp_rate < 1.0)
+
+        // m = -n * ln(p) / (ln(2))^2
+        let m = (-(capacity as f64) * fp_rate.ln() / (2.0f64.ln().powi(2))).ceil() as usize
+        // k = (m / n) * ln(2)
+        let k = ((m as f64 / capacity as f64) * 2.0f64.ln()).ceil() as u32
+
+        let num_words = (m + 63) / 64
+        BloomFilter {
+            bits: vec![0u64; num_words],
+            num_bits: m,
+            num_hashes: std.cmp.max(k, 1),
+            count: 0,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Create with explicit parameters
+    pub fn new(num_bits: usize, num_hashes: u32) -> BloomFilter<T> {
+        let num_words = (num_bits + 63) / 64
+        BloomFilter {
+            bits: vec![0u64; num_words],
+            num_bits,
+            num_hashes,
+            count: 0,
+            _phantom: PhantomData,
+        }
+    }
+
+    fn hash_pair(item: &T) -> (u64, u64) {
+        let mut h1 = SipHash.new_with_keys(0, 0)
+        let mut h2 = SipHash.new_with_keys(1, 1)
+        item.hash(&mut h1)
+        item.hash(&mut h2)
+        (h1.finish(), h2.finish())
+    }
+
+    fn get_index(h1: u64, h2: u64, i: u32, num_bits: usize) -> usize {
+        // Enhanced double hashing: h(i) = h1 + i*h2 + i*i
+        let hash = h1.wrapping_add((i as u64).wrapping_mul(h2))
+            .wrapping_add((i as u64).wrapping_mul(i as u64))
+        (hash % num_bits as u64) as usize
+    }
+
+    fn set_bit(mut self, pos: usize) {
+        self.bits[pos / 64] |= 1u64 << (pos % 64)
+    }
+
+    fn get_bit(self, pos: usize) -> bool {
+        (self.bits[pos / 64] >> (pos % 64)) & 1 == 1
+    }
+
+    pub fn insert(mut self, item: &T) {
+        let (h1, h2) = BloomFilter.hash_pair(item)
+        for i in 0..self.num_hashes {
+            let idx = BloomFilter::<T>.get_index(h1, h2, i, self.num_bits)
+            self.set_bit(idx)
+        }
+        self.count += 1
+    }
+
+    pub fn contains(self, item: &T) -> bool {
+        let (h1, h2) = BloomFilter.hash_pair(item)
+        for i in 0..self.num_hashes {
+            let idx = BloomFilter::<T>.get_index(h1, h2, i, self.num_bits)
+            if !self.get_bit(idx) { return false }
+        }
+        true
+    }
+
+    pub fn clear(mut self) {
+        for word in &mut self.bits { *word = 0 }
+        self.count = 0
+    }
+
+    pub fn len(self) -> usize { self.count }
+    pub fn is_empty(self) -> bool { self.count == 0 }
+
+    /// Estimated false positive rate at current fill
+    pub fn estimated_fp_rate(self) -> f64 {
+        let m = self.num_bits as f64
+        let k = self.num_hashes as f64
+        let n = self.count as f64
+        (1.0 - std.math.exp(-k * n / m)).powf(k)
+    }
+
+    /// Union of two filters (same parameters required)
+    pub fn union(self, other: &BloomFilter<T>) -> BloomFilter<T> {
+        assert(self.num_bits == other.num_bits && self.num_hashes == other.num_hashes)
+        let mut result = self.clone()
+        for i in 0..result.bits.len() {
+            result.bits[i] |= other.bits[i]
+        }
+        result
+    }
+
+    /// Intersection of two filters
+    pub fn intersection(self, other: &BloomFilter<T>) -> BloomFilter<T> {
+        assert(self.num_bits == other.num_bits && self.num_hashes == other.num_hashes)
+        let mut result = self.clone()
+        for i in 0..result.bits.len() {
+            result.bits[i] &= other.bits[i]
+        }
+        result
+    }
+
+    /// Approximate count of set bits
+    pub fn popcount(self) -> usize {
+        self.bits.iter().map(|w| w.count_ones() as usize).sum()
+    }
+}
+
+// ── Counting bloom filter ────────────────────────────────────────────────────
+pub struct CountingBloomFilter<T: Hash> {
+    counters:   [u8],
+    num_slots:  usize,
+    num_hashes: u32,
+    count:      usize,
+    _phantom:   PhantomData<T>,
+}
+
+impl<T: Hash> CountingBloomFilter<T> {
+    pub fn new(num_slots: usize, num_hashes: u32) -> CountingBloomFilter<T> {
+        CountingBloomFilter {
+            counters: vec![0u8; num_slots],
+            num_slots, num_hashes, count: 0,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn insert(mut self, item: &T) {
+        let (h1, h2) = BloomFilter::<T>.hash_pair(item)
+        for i in 0..self.num_hashes {
+            let idx = (h1.wrapping_add((i as u64).wrapping_mul(h2)) % self.num_slots as u64) as usize
+            self.counters[idx] = self.counters[idx].saturating_add(1)
+        }
+        self.count += 1
+    }
+
+    pub fn remove(mut self, item: &T) -> bool {
+        if !self.contains(item) { return false }
+        let (h1, h2) = BloomFilter::<T>.hash_pair(item)
+        for i in 0..self.num_hashes {
+            let idx = (h1.wrapping_add((i as u64).wrapping_mul(h2)) % self.num_slots as u64) as usize
+            self.counters[idx] = self.counters[idx].saturating_sub(1)
+        }
+        self.count -= 1
+        true
+    }
+
+    pub fn contains(self, item: &T) -> bool {
+        let (h1, h2) = BloomFilter::<T>.hash_pair(item)
+        for i in 0..self.num_hashes {
+            let idx = (h1.wrapping_add((i as u64).wrapping_mul(h2)) % self.num_slots as u64) as usize
+            if self.counters[idx] == 0 { return false }
+        }
+        true
+    }
+}
+
+fn main() {
+    // Basic bloom filter
+    let mut bf = BloomFilter::<string>.with_rate(1000, 0.01)
+    print("Bloom filter: ${bf.num_bits} bits, ${bf.num_hashes} hashes")
+
+    bf.insert(&"hello")
+    bf.insert(&"world")
+    bf.insert(&"lateralus")
+
+    assert(bf.contains(&"hello"))
+    assert(bf.contains(&"world"))
+    assert(bf.contains(&"lateralus"))
+    print("Inserted items found ✓")
+
+    // Check false positive rate (should be very low with few items)
+    let mut false_positives = 0
+    for i in 0..1000 {
+        if bf.contains(&format!("nonexistent_{i}")) {
+            false_positives += 1
+        }
+    }
+    print("False positives: ${false_positives}/1000 (expected ~10)")
+    assert(false_positives < 50, "false positive rate too high")
+    print("False positive rate acceptable ✓")
+
+    // Union
+    let mut bf2 = BloomFilter::<string>.new(bf.num_bits, bf.num_hashes)
+    bf2.insert(&"foo")
+    bf2.insert(&"bar")
+
+    let merged = bf.union(&bf2)
+    assert(merged.contains(&"hello"))
+    assert(merged.contains(&"foo"))
+    print("Union of bloom filters ✓")
+
+    // Counting bloom filter
+    let mut cbf = CountingBloomFilter::<string>.new(10000, 7)
+    cbf.insert(&"apple")
+    cbf.insert(&"banana")
+    assert(cbf.contains(&"apple"))
+
+    cbf.remove(&"apple")
+    assert(!cbf.contains(&"apple"), "removed item should not be found")
+    assert(cbf.contains(&"banana"), "other items unaffected")
+    print("Counting bloom filter with removal ✓")
+
+    // Estimated FP rate
+    let rate = bf.estimated_fp_rate()
+    print("Estimated FP rate: ${rate:.6}")
+    assert(rate < 0.01)
+
+    print("Bloom filter — all passed ✓")
+}
