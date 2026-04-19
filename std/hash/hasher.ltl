@@ -1,0 +1,201 @@
+// std.hash — Hashing traits, SipHash, FxHash
+// Deterministic hashing for hash maps and integrity checks.
+
+// ── Trait ────────────────────────────────────────────────────────────────────
+pub trait Hash {
+    fn hash<H: Hasher>(self, state: &mut H)
+}
+
+pub trait Hasher {
+    fn write(mut self, bytes: &[u8])
+    fn finish(self) -> u64
+
+    fn write_u8(mut self, val: u8) { self.write(&[val]) }
+    fn write_u16(mut self, val: u16) { self.write(&val.to_le_bytes()) }
+    fn write_u32(mut self, val: u32) { self.write(&val.to_le_bytes()) }
+    fn write_u64(mut self, val: u64) { self.write(&val.to_le_bytes()) }
+    fn write_i64(mut self, val: i64) { self.write(&val.to_le_bytes()) }
+    fn write_usize(mut self, val: usize) { self.write(&val.to_le_bytes()) }
+    fn write_str(mut self, val: &str) {
+        self.write_usize(val.len())
+        self.write(val.as_bytes())
+    }
+}
+
+pub trait BuildHasher {
+    type Hasher: Hasher
+    fn build_hasher(self) -> Self.Hasher
+}
+
+// ── SipHash 2-4 (default hasher, DoS resistant) ─────────────────────────────
+pub struct SipHasher {
+    v0: u64, v1: u64, v2: u64, v3: u64,
+    buf: [u8],
+    length: usize,
+}
+
+impl SipHasher {
+    pub fn new() -> SipHasher { Self.new_with_keys(0, 0) }
+
+    pub fn new_with_keys(key0: u64, key1: u64) -> SipHasher {
+        SipHasher {
+            v0: key0 ^ 0x736f6d6570736575,
+            v1: key1 ^ 0x646f72616e646f6d,
+            v2: key0 ^ 0x6c7967656e657261,
+            v3: key1 ^ 0x7465646279746573,
+            buf: [],
+            length: 0,
+        }
+    }
+
+    fn sipround(mut self) {
+        self.v0 = self.v0.wrapping_add(self.v1)
+        self.v1 = self.v1.rotate_left(13)
+        self.v1 ^= self.v0
+        self.v0 = self.v0.rotate_left(32)
+        self.v2 = self.v2.wrapping_add(self.v3)
+        self.v3 = self.v3.rotate_left(16)
+        self.v3 ^= self.v2
+        self.v0 = self.v0.wrapping_add(self.v3)
+        self.v3 = self.v3.rotate_left(21)
+        self.v3 ^= self.v0
+        self.v2 = self.v2.wrapping_add(self.v1)
+        self.v1 = self.v1.rotate_left(17)
+        self.v1 ^= self.v2
+        self.v2 = self.v2.rotate_left(32)
+    }
+
+    fn compress(mut self, m: u64) {
+        self.v3 ^= m
+        self.sipround()
+        self.sipround()
+        self.v0 ^= m
+    }
+}
+
+impl Hasher for SipHasher {
+    fn write(mut self, bytes: &[u8]) {
+        self.length += bytes.len()
+        self.buf.extend_from_slice(bytes)
+
+        while self.buf.len() >= 8 {
+            let m = u64.from_le_bytes([
+                self.buf[0], self.buf[1], self.buf[2], self.buf[3],
+                self.buf[4], self.buf[5], self.buf[6], self.buf[7],
+            ])
+            self.compress(m)
+            self.buf = self.buf[8..].to_vec()
+        }
+    }
+
+    fn finish(mut self) -> u64 {
+        let mut last: u64 = (self.length as u64) << 56
+
+        let remaining = &self.buf
+        for i in 0..remaining.len() {
+            last |= (remaining[i] as u64) << (i * 8)
+        }
+        self.compress(last)
+
+        self.v2 ^= 0xff
+        self.sipround()
+        self.sipround()
+        self.sipround()
+        self.sipround()
+
+        self.v0 ^ self.v1 ^ self.v2 ^ self.v3
+    }
+}
+
+pub struct SipHasherBuilder { key0: u64, key1: u64 }
+
+impl SipHasherBuilder {
+    pub fn new() -> SipHasherBuilder { SipHasherBuilder { key0: 0, key1: 0 } }
+    pub fn with_keys(key0: u64, key1: u64) -> SipHasherBuilder { SipHasherBuilder { key0, key1 } }
+}
+
+impl BuildHasher for SipHasherBuilder {
+    type Hasher = SipHasher
+    fn build_hasher(self) -> SipHasher { SipHasher.new_with_keys(self.key0, self.key1) }
+}
+
+// ── FxHash (fast, non-cryptographic) ─────────────────────────────────────────
+const FX_SEED: u64 = 0x517cc1b727220a95
+
+pub struct FxHasher { hash: u64 }
+
+impl FxHasher {
+    pub fn new() -> FxHasher { FxHasher { hash: 0 } }
+
+    fn add_to_hash(mut self, word: u64) {
+        self.hash = (self.hash.rotate_left(5) ^ word).wrapping_mul(FX_SEED)
+    }
+}
+
+impl Hasher for FxHasher {
+    fn write(mut self, bytes: &[u8]) {
+        let mut i = 0
+        while i + 8 <= bytes.len() {
+            let word = u64.from_le_bytes([
+                bytes[i], bytes[i+1], bytes[i+2], bytes[i+3],
+                bytes[i+4], bytes[i+5], bytes[i+6], bytes[i+7],
+            ])
+            self.add_to_hash(word)
+            i += 8
+        }
+        if i < bytes.len() {
+            let mut word: u64 = 0
+            for j in i..bytes.len() { word |= (bytes[j] as u64) << ((j - i) * 8) }
+            self.add_to_hash(word)
+        }
+    }
+
+    fn finish(self) -> u64 { self.hash }
+}
+
+pub struct FxHasherBuilder {}
+impl FxHasherBuilder { pub fn new() -> FxHasherBuilder { FxHasherBuilder {} } }
+impl BuildHasher for FxHasherBuilder {
+    type Hasher = FxHasher
+    fn build_hasher(self) -> FxHasher { FxHasher.new() }
+}
+
+// ── Built-in Hash implementations ───────────────────────────────────────────
+impl Hash for u8 { fn hash<H: Hasher>(self, state: &mut H) { state.write_u8(self) } }
+impl Hash for u16 { fn hash<H: Hasher>(self, state: &mut H) { state.write_u16(self) } }
+impl Hash for u32 { fn hash<H: Hasher>(self, state: &mut H) { state.write_u32(self) } }
+impl Hash for u64 { fn hash<H: Hasher>(self, state: &mut H) { state.write_u64(self) } }
+impl Hash for i64 { fn hash<H: Hasher>(self, state: &mut H) { state.write_i64(self) } }
+impl Hash for usize { fn hash<H: Hasher>(self, state: &mut H) { state.write_usize(self) } }
+impl Hash for bool { fn hash<H: Hasher>(self, state: &mut H) { state.write_u8(if self { 1 } else { 0 }) } }
+impl Hash for string {
+    fn hash<H: Hasher>(self, state: &mut H) { state.write_str(self.as_str()) }
+}
+impl<T: Hash> Hash for [T] {
+    fn hash<H: Hasher>(self, state: &mut H) {
+        state.write_usize(self.len())
+        for item in self { item.hash(state) }
+    }
+}
+impl<T: Hash> Hash for Option<T> {
+    fn hash<H: Hasher>(self, state: &mut H) {
+        match self {
+            some(val) => { state.write_u8(1); val.hash(state) }
+            none => state.write_u8(0),
+        }
+    }
+}
+impl<A: Hash, B: Hash> Hash for (A, B) {
+    fn hash<H: Hasher>(self, state: &mut H) { self.0.hash(state); self.1.hash(state) }
+}
+
+// ── Convenience function ─────────────────────────────────────────────────────
+pub fn hash_one<T: Hash>(value: &T) -> u64 {
+    let mut hasher = SipHasher.new()
+    value.hash(&mut hasher)
+    hasher.finish()
+}
+
+pub fn hash_combine(a: u64, b: u64) -> u64 {
+    a ^ (b.wrapping_add(0x9e3779b97f4a7c15).wrapping_add(a << 6).wrapping_add(a >> 2))
+}
