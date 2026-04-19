@@ -1,0 +1,224 @@
+// std.fs.path — File system path manipulation
+// Platform-aware path components, joining, normalization.
+
+const SEPARATOR: char = '/'
+const SEPARATOR_STR: &str = "/"
+
+// ── Path ─────────────────────────────────────────────────────────────────────
+pub struct Path {
+    inner: string,
+}
+
+impl Path {
+    pub fn new(s: &str) -> Path { Path { inner: s.to_string() } }
+
+    pub fn as_str(self) -> &str { &self.inner }
+
+    pub fn parent(self) -> Option<Path> {
+        let s = self.inner.trim_end_matches('/')
+        match s.rfind('/') {
+            some(0) => some(Path.new("/")),
+            some(pos) => some(Path.new(&s[..pos])),
+            none => none,
+        }
+    }
+
+    pub fn file_name(self) -> Option<&str> {
+        let s = self.inner.trim_end_matches('/')
+        match s.rfind('/') {
+            some(pos) => some(&s[pos + 1..]),
+            none => if s.is_empty() { none } else { some(s) },
+        }
+    }
+
+    pub fn file_stem(self) -> Option<string> {
+        self.file_name().map(|name| {
+            match name.rfind('.') {
+                some(0) => name.to_string(),  // .hidden files
+                some(pos) => name[..pos].to_string(),
+                none => name.to_string(),
+            }
+        })
+    }
+
+    pub fn extension(self) -> Option<&str> {
+        self.file_name().and_then(|name| {
+            match name.rfind('.') {
+                some(0) => none,  // .hidden files have no extension
+                some(pos) => some(&name[pos + 1..]),
+                none => none,
+            }
+        })
+    }
+
+    pub fn join(self, other: &str) -> Path {
+        if other.starts_with('/') { return Path.new(other) }
+        let base = self.inner.trim_end_matches('/')
+        Path.new(&format!("{base}/{other}"))
+    }
+
+    pub fn with_extension(self, ext: &str) -> Path {
+        let stem = match self.extension() {
+            some(_) => {
+                let s = self.inner.as_str()
+                let pos = s.rfind('.').unwrap()
+                &s[..pos]
+            }
+            none => self.inner.as_str(),
+        }
+        if ext.is_empty() { Path.new(stem) }
+        else { Path.new(&format!("{stem}.{ext}")) }
+    }
+
+    pub fn with_file_name(self, name: &str) -> Path {
+        match self.parent() {
+            some(parent) => parent.join(name),
+            none => Path.new(name),
+        }
+    }
+
+    pub fn is_absolute(self) -> bool { self.inner.starts_with('/') }
+    pub fn is_relative(self) -> bool { !self.is_absolute() }
+
+    pub fn starts_with(self, prefix: &str) -> bool {
+        let normalized = self.normalize()
+        let prefix_normalized = Path.new(prefix).normalize()
+        normalized.inner.starts_with(&prefix_normalized.inner)
+    }
+
+    pub fn ends_with(self, suffix: &str) -> bool {
+        self.inner.ends_with(suffix)
+    }
+
+    pub fn components(self) -> [string] {
+        let mut parts: [string] = []
+        let s = self.inner.as_str()
+        if s.starts_with('/') { parts.push("/".to_string()) }
+        for component in s.split('/') {
+            if !component.is_empty() { parts.push(component.to_string()) }
+        }
+        parts
+    }
+
+    pub fn normalize(self) -> Path {
+        let is_absolute = self.is_absolute()
+        let mut stack: [string] = []
+
+        for component in self.components() {
+            match component.as_str() {
+                "/" => {}
+                "." => {}
+                ".." => {
+                    if !stack.is_empty() && stack.last().unwrap() != ".." {
+                        stack.pop();
+                    } else if !is_absolute {
+                        stack.push("..".to_string())
+                    }
+                }
+                other => stack.push(other.to_string()),
+            }
+        }
+
+        let joined = stack.join(SEPARATOR_STR)
+        if is_absolute { Path.new(&format!("/{joined}")) }
+        else if joined.is_empty() { Path.new(".") }
+        else { Path.new(&joined) }
+    }
+
+    pub fn strip_prefix(self, prefix: &str) -> Option<Path> {
+        let norm = self.normalize().inner
+        let prefix_norm = Path.new(prefix).normalize().inner
+        if norm.starts_with(&prefix_norm) {
+            let rest = norm[prefix_norm.len()..].trim_start_matches('/')
+            some(Path.new(rest))
+        } else { none }
+    }
+
+    pub fn exists(self) -> bool {
+        extern "C" { fn access(path: *const u8, mode: i32) -> i32; }
+        unsafe { access(self.inner.as_c_str().as_ptr(), 0) == 0 }  // F_OK
+    }
+
+    pub fn is_dir(self) -> bool {
+        extern "C" { fn stat(path: *const u8, buf: *mut u8) -> i32; }
+        let mut buf = [0u8; 144]
+        let result = unsafe { stat(self.inner.as_c_str().as_ptr(), buf.as_mut_ptr()) }
+        if result != 0 { return false }
+        let mode = u32.from_le_bytes([buf[24], buf[25], buf[26], buf[27]])
+        (mode & 0o170000) == 0o040000  // S_IFDIR
+    }
+
+    pub fn is_file(self) -> bool {
+        extern "C" { fn stat(path: *const u8, buf: *mut u8) -> i32; }
+        let mut buf = [0u8; 144]
+        let result = unsafe { stat(self.inner.as_c_str().as_ptr(), buf.as_mut_ptr()) }
+        if result != 0 { return false }
+        let mode = u32.from_le_bytes([buf[24], buf[25], buf[26], buf[27]])
+        (mode & 0o170000) == 0o100000  // S_IFREG
+    }
+
+    pub fn is_symlink(self) -> bool {
+        extern "C" { fn lstat(path: *const u8, buf: *mut u8) -> i32; }
+        let mut buf = [0u8; 144]
+        let result = unsafe { lstat(self.inner.as_c_str().as_ptr(), buf.as_mut_ptr()) }
+        if result != 0 { return false }
+        let mode = u32.from_le_bytes([buf[24], buf[25], buf[26], buf[27]])
+        (mode & 0o170000) == 0o120000  // S_IFLNK
+    }
+
+    pub fn to_string(self) -> string { self.inner.clone() }
+}
+
+impl Display for Path {
+    fn fmt(self, f: &mut Formatter) -> Result<(), string> { write!(f, "{}", self.inner) }
+}
+
+impl Clone for Path {
+    fn clone(self) -> Path { Path { inner: self.inner.clone() } }
+}
+
+impl PartialEq for Path {
+    fn eq(self, other: &Path) -> bool { self.normalize().inner == other.normalize().inner }
+}
+
+// ── PathBuf (owned, mutable path) ────────────────────────────────────────────
+pub struct PathBuf {
+    inner: string,
+}
+
+impl PathBuf {
+    pub fn new() -> PathBuf { PathBuf { inner: string.new() } }
+    pub fn from(s: &str) -> PathBuf { PathBuf { inner: s.to_string() } }
+
+    pub fn push(mut self, component: &str) {
+        if component.starts_with('/') {
+            self.inner = component.to_string()
+        } else {
+            if !self.inner.is_empty() && !self.inner.ends_with('/') {
+                self.inner.push('/')
+            }
+            self.inner.push_str(component)
+        }
+    }
+
+    pub fn pop(mut self) -> bool {
+        let path = Path.new(&self.inner)
+        match path.parent() {
+            some(parent) => { self.inner = parent.inner; true }
+            none => false,
+        }
+    }
+
+    pub fn set_extension(mut self, ext: &str) {
+        let path = Path.new(&self.inner).with_extension(ext)
+        self.inner = path.inner
+    }
+
+    pub fn set_file_name(mut self, name: &str) {
+        let path = Path.new(&self.inner).with_file_name(name)
+        self.inner = path.inner
+    }
+
+    pub fn as_path(self) -> Path { Path.new(&self.inner) }
+    pub fn to_string(self) -> string { self.inner.clone() }
+}
