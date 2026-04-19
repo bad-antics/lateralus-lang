@@ -1,0 +1,246 @@
+// std.fs.watch — File system watcher
+// Monitor files and directories for changes using inotify/kqueue.
+
+use std.collections.HashMap
+use std.sync.{Arc, Mutex}
+use std.thread
+
+// ── Event types ──────────────────────────────────────────────────────────────
+pub enum EventKind {
+    Create,
+    Modify,
+    Delete,
+    Rename { from: string, to: string },
+    MetadataChange,
+    Access,
+}
+
+pub struct FsEvent {
+    pub path: string,
+    pub kind: EventKind,
+    pub is_dir: bool,
+    pub timestamp: std.time.Instant,
+}
+
+impl std.fmt.Display for FsEvent {
+    fn fmt(self, f: &mut std.fmt.Formatter) -> std.fmt.Result {
+        let kind_str = match &self.kind {
+            EventKind.Create => "CREATE",
+            EventKind.Modify => "MODIFY",
+            EventKind.Delete => "DELETE",
+            EventKind.Rename { from, to } => return write!(f, "RENAME {} → {}", from, to),
+            EventKind.MetadataChange => "META",
+            EventKind.Access => "ACCESS",
+        }
+        write!(f, "{kind_str} {}{}", self.path, if self.is_dir { "/" } else { "" })
+    }
+}
+
+// ── Watch configuration ──────────────────────────────────────────────────────
+pub struct WatchConfig {
+    pub recursive: bool,
+    pub poll_interval_ms: u64,
+    pub filter: Option<fn(&str) -> bool>,
+    pub debounce_ms: u64,
+}
+
+impl WatchConfig {
+    pub fn default() -> WatchConfig {
+        WatchConfig { recursive: true, poll_interval_ms: 100, filter: none, debounce_ms: 50 }
+    }
+    pub fn non_recursive() -> WatchConfig {
+        let mut c = Self.default(); c.recursive = false; c
+    }
+}
+
+// ── Watch handle ─────────────────────────────────────────────────────────────
+type WatchCallback = fn(FsEvent)
+type WatchId = u32
+
+pub struct WatchHandle {
+    id: WatchId,
+    path: string,
+    active: Arc<Mutex<bool>>,
+}
+
+impl WatchHandle {
+    pub fn unwatch(self) { *self.active.lock().unwrap() = false }
+    pub fn is_active(self) -> bool { *self.active.lock().unwrap() }
+    pub fn path(self) -> &str { &self.path }
+}
+
+// ── Debouncer ────────────────────────────────────────────────────────────────
+struct Debouncer {
+    pending: HashMap<string, (FsEvent, std.time.Instant)>,
+    delay: std.time.Duration,
+}
+
+impl Debouncer {
+    fn new(delay_ms: u64) -> Debouncer {
+        Debouncer { pending: HashMap.new(), delay: std.time.Duration.from_millis(delay_ms) }
+    }
+
+    fn push(mut self, event: FsEvent) {
+        self.pending.insert(event.path.clone(), (event, std.time.Instant.now()))
+    }
+
+    fn drain_ready(mut self) -> [FsEvent] {
+        let now = std.time.Instant.now()
+        let mut ready: [FsEvent] = []
+        let mut to_remove: [string] = []
+
+        for (path, (event, time)) in &self.pending {
+            if now.duration_since(*time) >= self.delay {
+                ready.push(event.clone())
+                to_remove.push(path.clone())
+            }
+        }
+
+        for path in to_remove { self.pending.remove(&path); }
+        ready
+    }
+}
+
+// ── File system watcher (inotify backend) ────────────────────────────────────
+pub struct Watcher {
+    watches: HashMap<WatchId, WatchHandle>,
+    callbacks: HashMap<WatchId, WatchCallback>,
+    next_id: WatchId,
+    inotify_fd: i32,
+    running: Arc<Mutex<bool>>,
+}
+
+extern "C" {
+    fn inotify_init1(flags: i32) -> i32
+    fn inotify_add_watch(fd: i32, pathname: *const u8, mask: u32) -> i32
+    fn inotify_rm_watch(fd: i32, wd: i32) -> i32
+    fn read(fd: i32, buf: *mut u8, count: usize) -> isize
+    fn close(fd: i32) -> i32
+}
+
+const IN_CREATE:    u32 = 0x100
+const IN_DELETE:    u32 = 0x200
+const IN_MODIFY:    u32 = 0x002
+const IN_MOVED_FROM: u32 = 0x040
+const IN_MOVED_TO:   u32 = 0x080
+const IN_ATTRIB:    u32 = 0x004
+const IN_ACCESS:    u32 = 0x001
+const IN_ISDIR:     u32 = 0x4000_0000
+const IN_NONBLOCK:  i32 = 0x800
+
+#[repr(C)]
+struct InotifyEvent {
+    wd: i32,
+    mask: u32,
+    cookie: u32,
+    len: u32,
+    // name follows (variable length)
+}
+
+impl Watcher {
+    pub fn new() -> Result<Watcher, string> {
+        let fd = unsafe { inotify_init1(IN_NONBLOCK) }
+        if fd < 0 { return err("failed to create inotify instance".to_string()) }
+        ok(Watcher {
+            watches: HashMap.new(), callbacks: HashMap.new(),
+            next_id: 1, inotify_fd: fd, running: Arc.new(Mutex.new(true)),
+        })
+    }
+
+    pub fn watch(mut self, path: &str, config: WatchConfig, callback: WatchCallback) -> Result<WatchHandle, string> {
+        let mask = IN_CREATE | IN_DELETE | IN_MODIFY | IN_MOVED_FROM | IN_MOVED_TO | IN_ATTRIB
+
+        let cpath = std.ffi.CString.new(path).unwrap()
+        let wd = unsafe { inotify_add_watch(self.inotify_fd, cpath.as_ptr(), mask) }
+        if wd < 0 { return err(format!("failed to watch: {path}")) }
+
+        let id = self.next_id
+        self.next_id += 1
+        let active = Arc.new(Mutex.new(true))
+        let handle = WatchHandle { id, path: path.to_string(), active: active.clone() }
+        self.watches.insert(id, WatchHandle { id, path: path.to_string(), active })
+        self.callbacks.insert(id, callback)
+
+        // If recursive, also watch subdirectories
+        if config.recursive {
+            self.watch_recursive(path, &config, callback)?
+        }
+
+        ok(handle)
+    }
+
+    fn watch_recursive(mut self, dir: &str, config: &WatchConfig, callback: WatchCallback) -> Result<(), string> {
+        for entry in std.fs.read_dir(dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?
+            if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
+                let sub_path = entry.path().to_str().unwrap().to_string()
+                self.watch(&sub_path, WatchConfig { recursive: true, ..*config }, callback)?
+            }
+        }
+        ok(())
+    }
+
+    pub fn poll(mut self) -> [FsEvent] {
+        let mut events: [FsEvent] = []
+        let mut buf = [0u8; 4096]
+
+        let n = unsafe { read(self.inotify_fd, buf.as_mut_ptr(), buf.len()) }
+        if n <= 0 { return events }
+
+        let mut offset: usize = 0
+        while offset < n as usize {
+            let event = unsafe { &*(buf.as_ptr().add(offset) as *const InotifyEvent) }
+
+            let name = if event.len > 0 {
+                let name_ptr = unsafe { buf.as_ptr().add(offset + std.mem.size_of::<InotifyEvent>()) }
+                let name_slice = unsafe { std.slice.from_raw_parts(name_ptr, event.len as usize) }
+                let end = name_slice.iter().position(|&b| b == 0).unwrap_or(name_slice.len())
+                string.from_utf8_lossy(&name_slice[..end]).to_string()
+            } else { string.new() }
+
+            let kind = if event.mask & IN_CREATE != 0 { EventKind.Create }
+                else if event.mask & IN_DELETE != 0 { EventKind.Delete }
+                else if event.mask & IN_MODIFY != 0 { EventKind.Modify }
+                else if event.mask & IN_ATTRIB != 0 { EventKind.MetadataChange }
+                else if event.mask & IN_ACCESS != 0 { EventKind.Access }
+                else { EventKind.Modify }
+
+            events.push(FsEvent {
+                path: name, kind,
+                is_dir: event.mask & IN_ISDIR != 0,
+                timestamp: std.time.Instant.now(),
+            })
+
+            offset += std.mem.size_of::<InotifyEvent>() + event.len as usize
+        }
+        events
+    }
+
+    pub fn close(mut self) {
+        *self.running.lock().unwrap() = false
+        unsafe { close(self.inotify_fd); }
+    }
+}
+
+impl Drop for Watcher {
+    fn drop(mut self) { self.close() }
+}
+
+// ── Convenience: watch with channel ──────────────────────────────────────────
+pub fn watch_channel(path: &str, config: WatchConfig) -> Result<(WatchHandle, std.sync.mpsc.Receiver<FsEvent>), string> {
+    let (tx, rx) = std.sync.mpsc.channel()
+    let mut watcher = Watcher.new()?
+    let handle = watcher.watch(path, config, move |event| { tx.send(event).ok(); })?
+
+    // Spawn polling thread
+    let running = handle.active.clone()
+    thread.spawn(move || {
+        while *running.lock().unwrap() {
+            let events = watcher.poll()
+            for event in events { tx.send(event).ok(); }
+            thread.sleep(std.time.Duration.from_millis(50))
+        }
+    })
+
+    ok((handle, rx))
+}
