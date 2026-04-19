@@ -1,0 +1,265 @@
+// std.net.tcp — TCP stream and listener
+// Non-blocking and blocking socket I/O, accept loop, connect.
+
+use std.io.{Read, Write}
+
+// ── Socket Address ───────────────────────────────────────────────────────────
+pub struct SocketAddr {
+    ip: IpAddr,
+    port: u16,
+}
+
+pub enum IpAddr {
+    V4(u8, u8, u8, u8),
+    V6([u8; 16]),
+}
+
+impl IpAddr {
+    pub fn parse(s: &str) -> Result<IpAddr, string> {
+        let parts: [&str] = s.split('.').collect()
+        if parts.len() == 4 {
+            let a = parts[0].parse::<u8>().map_err(|_| "invalid octet".to_string())?
+            let b = parts[1].parse::<u8>().map_err(|_| "invalid octet".to_string())?
+            let c = parts[2].parse::<u8>().map_err(|_| "invalid octet".to_string())?
+            let d = parts[3].parse::<u8>().map_err(|_| "invalid octet".to_string())?
+            ok(IpAddr.V4(a, b, c, d))
+        } else { err("invalid IP address".to_string()) }
+    }
+
+    pub fn is_loopback(self) -> bool {
+        match self { IpAddr.V4(127, _, _, _) => true, _ => false }
+    }
+
+    pub fn is_private(self) -> bool {
+        match self {
+            IpAddr.V4(10, _, _, _) => true,
+            IpAddr.V4(172, b, _, _) if b >= 16 && b <= 31 => true,
+            IpAddr.V4(192, 168, _, _) => true,
+            _ => false,
+        }
+    }
+
+    pub fn to_string(self) -> string {
+        match self {
+            IpAddr.V4(a, b, c, d) => format!("{a}.{b}.{c}.{d}"),
+            IpAddr.V6(bytes) => {
+                let groups: [string] = (0..8).map(|i| {
+                    let hi = bytes[i * 2] as u16; let lo = bytes[i * 2 + 1] as u16
+                    format!("{:x}", (hi << 8) | lo)
+                }).collect()
+                groups.join(":")
+            }
+        }
+    }
+
+    pub fn localhost() -> IpAddr { IpAddr.V4(127, 0, 0, 1) }
+    pub fn unspecified() -> IpAddr { IpAddr.V4(0, 0, 0, 0) }
+}
+
+impl SocketAddr {
+    pub fn new(ip: IpAddr, port: u16) -> SocketAddr { SocketAddr { ip, port } }
+
+    pub fn parse(s: &str) -> Result<SocketAddr, string> {
+        let parts: [&str] = s.rsplitn(2, ':').collect()
+        if parts.len() != 2 { return err("invalid socket address".to_string()) }
+        let port = parts[0].parse::<u16>().map_err(|_| "invalid port".to_string())?
+        let ip = IpAddr.parse(parts[1])?
+        ok(SocketAddr { ip, port })
+    }
+
+    pub fn to_string(self) -> string { format!("{}:{}", self.ip.to_string(), self.port) }
+}
+
+// ── TCP Stream ───────────────────────────────────────────────────────────────
+pub struct TcpStream {
+    fd: i32,
+    peer_addr: SocketAddr,
+    local_addr: SocketAddr,
+    nonblocking: bool,
+    read_timeout: Option<u64>,
+    write_timeout: Option<u64>,
+}
+
+impl TcpStream {
+    pub fn connect(addr: &SocketAddr) -> Result<TcpStream, string> {
+        extern "C" {
+            fn socket(domain: i32, socktype: i32, protocol: i32) -> i32;
+            fn connect(fd: i32, addr: *const u8, addrlen: u32) -> i32;
+        }
+        let fd = unsafe { socket(2, 1, 0) }  // AF_INET, SOCK_STREAM
+        if fd < 0 { return err("socket creation failed".to_string()) }
+
+        let sockaddr = encode_sockaddr(addr)
+        let result = unsafe { connect(fd, sockaddr.as_ptr(), sockaddr.len() as u32) }
+        if result < 0 { return err("connection failed".to_string()) }
+
+        ok(TcpStream {
+            fd, peer_addr: addr.clone(),
+            local_addr: SocketAddr.new(IpAddr.unspecified(), 0),
+            nonblocking: false, read_timeout: none, write_timeout: none,
+        })
+    }
+
+    pub fn peer_addr(self) -> &SocketAddr { &self.peer_addr }
+    pub fn local_addr(self) -> &SocketAddr { &self.local_addr }
+
+    pub fn set_nonblocking(mut self, nonblocking: bool) -> Result<(), string> {
+        extern "C" { fn fcntl(fd: i32, cmd: i32, arg: i32) -> i32; }
+        let flags = unsafe { fcntl(self.fd, 3, 0) }  // F_GETFL
+        let new_flags = if nonblocking { flags | 0x800 } else { flags & !0x800 }  // O_NONBLOCK
+        unsafe { fcntl(self.fd, 4, new_flags) };  // F_SETFL
+        self.nonblocking = nonblocking
+        ok(())
+    }
+
+    pub fn set_read_timeout(mut self, timeout: Option<u64>) { self.read_timeout = timeout }
+    pub fn set_write_timeout(mut self, timeout: Option<u64>) { self.write_timeout = timeout }
+
+    pub fn set_nodelay(self, nodelay: bool) -> Result<(), string> {
+        extern "C" { fn setsockopt(fd: i32, level: i32, optname: i32, optval: *const i32, optlen: u32) -> i32; }
+        let val: i32 = if nodelay { 1 } else { 0 }
+        let result = unsafe { setsockopt(self.fd, 6, 1, &val, 4) }  // IPPROTO_TCP, TCP_NODELAY
+        if result < 0 { err("setsockopt failed".to_string()) } else { ok(()) }
+    }
+
+    pub fn set_keepalive(self, keepalive: bool) -> Result<(), string> {
+        extern "C" { fn setsockopt(fd: i32, level: i32, optname: i32, optval: *const i32, optlen: u32) -> i32; }
+        let val: i32 = if keepalive { 1 } else { 0 }
+        let result = unsafe { setsockopt(self.fd, 1, 9, &val, 4) }  // SOL_SOCKET, SO_KEEPALIVE
+        if result < 0 { err("setsockopt failed".to_string()) } else { ok(()) }
+    }
+
+    pub fn shutdown(self, how: Shutdown) -> Result<(), string> {
+        extern "C" { fn shutdown(fd: i32, how: i32) -> i32; }
+        let result = unsafe { shutdown(self.fd, how as i32) }
+        if result < 0 { err("shutdown failed".to_string()) } else { ok(()) }
+    }
+
+    pub fn try_clone(self) -> Result<TcpStream, string> {
+        extern "C" { fn dup(fd: i32) -> i32; }
+        let new_fd = unsafe { dup(self.fd) }
+        if new_fd < 0 { return err("dup failed".to_string()) }
+        ok(TcpStream { fd: new_fd, ..self.clone() })
+    }
+}
+
+impl Read for TcpStream {
+    fn read(self, buf: &mut [u8]) -> Result<usize, string> {
+        extern "C" { fn read(fd: i32, buf: *mut u8, count: usize) -> isize; }
+        let n = unsafe { read(self.fd, buf.as_mut_ptr(), buf.len()) }
+        if n < 0 { err("read error".to_string()) } else { ok(n as usize) }
+    }
+}
+
+impl Write for TcpStream {
+    fn write(self, buf: &[u8]) -> Result<usize, string> {
+        extern "C" { fn write(fd: i32, buf: *const u8, count: usize) -> isize; }
+        let n = unsafe { write(self.fd, buf.as_ptr(), buf.len()) }
+        if n < 0 { err("write error".to_string()) } else { ok(n as usize) }
+    }
+
+    fn flush(self) -> Result<(), string> { ok(()) }
+}
+
+impl Drop for TcpStream {
+    fn drop(self) {
+        extern "C" { fn close(fd: i32) -> i32; }
+        unsafe { close(self.fd) };
+    }
+}
+
+pub enum Shutdown { Read = 0, Write = 1, Both = 2 }
+
+// ── TCP Listener ─────────────────────────────────────────────────────────────
+pub struct TcpListener {
+    fd: i32,
+    local_addr: SocketAddr,
+}
+
+impl TcpListener {
+    pub fn bind(addr: &SocketAddr) -> Result<TcpListener, string> {
+        extern "C" {
+            fn socket(domain: i32, socktype: i32, protocol: i32) -> i32;
+            fn bind(fd: i32, addr: *const u8, addrlen: u32) -> i32;
+            fn listen(fd: i32, backlog: i32) -> i32;
+            fn setsockopt(fd: i32, level: i32, optname: i32, optval: *const i32, optlen: u32) -> i32;
+        }
+
+        let fd = unsafe { socket(2, 1, 0) }
+        if fd < 0 { return err("socket failed".to_string()) }
+
+        // SO_REUSEADDR
+        let val: i32 = 1
+        unsafe { setsockopt(fd, 1, 2, &val, 4) };
+
+        let sockaddr = encode_sockaddr(addr)
+        let result = unsafe { bind(fd, sockaddr.as_ptr(), sockaddr.len() as u32) }
+        if result < 0 { return err("bind failed".to_string()) }
+
+        let result = unsafe { listen(fd, 128) }
+        if result < 0 { return err("listen failed".to_string()) }
+
+        ok(TcpListener { fd, local_addr: addr.clone() })
+    }
+
+    pub fn accept(self) -> Result<(TcpStream, SocketAddr), string> {
+        extern "C" { fn accept(fd: i32, addr: *mut u8, addrlen: *mut u32) -> i32; }
+        let mut addr_buf = [0u8; 16]
+        let mut addr_len: u32 = 16
+        let client_fd = unsafe { accept(self.fd, addr_buf.as_mut_ptr(), &mut addr_len) }
+        if client_fd < 0 { return err("accept failed".to_string()) }
+
+        let peer_addr = decode_sockaddr(&addr_buf)
+        let stream = TcpStream {
+            fd: client_fd, peer_addr: peer_addr.clone(),
+            local_addr: self.local_addr.clone(),
+            nonblocking: false, read_timeout: none, write_timeout: none,
+        }
+        ok((stream, peer_addr))
+    }
+
+    pub fn incoming(self) -> IncomingConnections { IncomingConnections { listener: self } }
+    pub fn local_addr(self) -> &SocketAddr { &self.local_addr }
+
+    pub fn set_nonblocking(self, nonblocking: bool) -> Result<(), string> {
+        extern "C" { fn fcntl(fd: i32, cmd: i32, arg: i32) -> i32; }
+        let flags = unsafe { fcntl(self.fd, 3, 0) }
+        let new_flags = if nonblocking { flags | 0x800 } else { flags & !0x800 }
+        unsafe { fcntl(self.fd, 4, new_flags) };
+        ok(())
+    }
+}
+
+impl Drop for TcpListener {
+    fn drop(self) {
+        extern "C" { fn close(fd: i32) -> i32; }
+        unsafe { close(self.fd) };
+    }
+}
+
+pub struct IncomingConnections<'a> {
+    listener: &'a TcpListener,
+}
+
+impl<'a> Iterator for IncomingConnections<'a> {
+    type Item = Result<(TcpStream, SocketAddr), string>
+    fn next(self) -> Option<Self.Item> { some(self.listener.accept()) }
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+fn encode_sockaddr(addr: &SocketAddr) -> [u8] {
+    let mut buf = [0u8; 16]
+    buf[0] = 0; buf[1] = 2  // AF_INET
+    buf[2] = (addr.port >> 8) as u8; buf[3] = (addr.port & 0xFF) as u8
+    match &addr.ip {
+        IpAddr.V4(a, b, c, d) => { buf[4] = *a; buf[5] = *b; buf[6] = *c; buf[7] = *d }
+        _ => {}
+    }
+    buf.to_vec()
+}
+
+fn decode_sockaddr(buf: &[u8]) -> SocketAddr {
+    let port = ((buf[2] as u16) << 8) | buf[3] as u16
+    let ip = IpAddr.V4(buf[4], buf[5], buf[6], buf[7])
+    SocketAddr { ip, port }
+}
