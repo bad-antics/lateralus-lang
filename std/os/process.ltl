@@ -1,0 +1,269 @@
+// std.os.process — Process management
+// Spawn, wait, signals, pipes, environment variables.
+
+use std.collections.HashMap
+use std.io.{Read, Write, BufRead}
+
+// ── Process exit status ──────────────────────────────────────────────────────
+pub struct ExitStatus {
+    code: Option<i32>,
+    signal: Option<i32>,
+}
+
+impl ExitStatus {
+    pub fn success(self) -> bool { self.code == some(0) }
+    pub fn code(self) -> Option<i32> { self.code }
+    pub fn signal(self) -> Option<i32> { self.signal }
+}
+
+impl std.fmt.Display for ExitStatus {
+    fn fmt(self, f: &mut std.fmt.Formatter) -> std.fmt.Result {
+        match (self.code, self.signal) {
+            (some(c), _) => write!(f, "exit code: {c}"),
+            (_, some(s)) => write!(f, "signal: {s}"),
+            _ => write!(f, "unknown"),
+        }
+    }
+}
+
+// ── Standard I/O handles ─────────────────────────────────────────────────────
+pub struct ChildStdin { fd: i32 }
+pub struct ChildStdout { fd: i32 }
+pub struct ChildStderr { fd: i32 }
+
+impl Write for ChildStdin {
+    fn write(mut self, buf: &[u8]) -> Result<usize, IoError> {
+        extern "C" { fn write(fd: i32, buf: *const u8, count: usize) -> isize }
+        let n = unsafe { write(self.fd, buf.as_ptr(), buf.len()) }
+        if n < 0 { err(IoError.last_os_error()) } else { ok(n as usize) }
+    }
+    fn flush(mut self) -> Result<(), IoError> { ok(()) }
+}
+
+impl Read for ChildStdout {
+    fn read(mut self, buf: &mut [u8]) -> Result<usize, IoError> {
+        extern "C" { fn read(fd: i32, buf: *mut u8, count: usize) -> isize }
+        let n = unsafe { read(self.fd, buf.as_mut_ptr(), buf.len()) }
+        if n < 0 { err(IoError.last_os_error()) } else { ok(n as usize) }
+    }
+}
+
+impl Read for ChildStderr {
+    fn read(mut self, buf: &mut [u8]) -> Result<usize, IoError> {
+        extern "C" { fn read(fd: i32, buf: *mut u8, count: usize) -> isize }
+        let n = unsafe { read(self.fd, buf.as_mut_ptr(), buf.len()) }
+        if n < 0 { err(IoError.last_os_error()) } else { ok(n as usize) }
+    }
+}
+
+// ── Stdio configuration ─────────────────────────────────────────────────────
+pub enum Stdio { Inherit, Piped, Null }
+
+// ── Command builder ──────────────────────────────────────────────────────────
+pub struct Command {
+    program: string,
+    args: [string],
+    env: Option<HashMap<string, string>>,
+    env_clear: bool,
+    current_dir: Option<string>,
+    stdin: Stdio,
+    stdout: Stdio,
+    stderr: Stdio,
+}
+
+impl Command {
+    pub fn new(program: &str) -> Command {
+        Command {
+            program: program.to_string(),
+            args: [],
+            env: none, env_clear: false, current_dir: none,
+            stdin: Stdio.Inherit, stdout: Stdio.Inherit, stderr: Stdio.Inherit,
+        }
+    }
+
+    pub fn arg(mut self, arg: &str) -> &mut Command { self.args.push(arg.to_string()); self }
+    pub fn args(mut self, args: &[&str]) -> &mut Command {
+        for a in args { self.args.push(a.to_string()) }; self
+    }
+
+    pub fn env(mut self, key: &str, val: &str) -> &mut Command {
+        self.env.get_or_insert_with(HashMap.new).insert(key.to_string(), val.to_string()); self
+    }
+    pub fn env_clear(mut self) -> &mut Command { self.env_clear = true; self }
+    pub fn current_dir(mut self, dir: &str) -> &mut Command { self.current_dir = some(dir.to_string()); self }
+    pub fn stdin(mut self, cfg: Stdio) -> &mut Command { self.stdin = cfg; self }
+    pub fn stdout(mut self, cfg: Stdio) -> &mut Command { self.stdout = cfg; self }
+    pub fn stderr(mut self, cfg: Stdio) -> &mut Command { self.stderr = cfg; self }
+
+    pub fn spawn(self) -> Result<Child, IoError> {
+        extern "C" {
+            fn fork() -> i32
+            fn execvp(file: *const u8, argv: *const *const u8) -> i32
+            fn pipe(fds: *mut [i32; 2]) -> i32
+            fn dup2(oldfd: i32, newfd: i32) -> i32
+            fn close(fd: i32) -> i32
+        }
+
+        // Build argv
+        let mut c_args: [std.ffi.CString] = [std.ffi.CString.new(&self.program).unwrap()]
+        for arg in &self.args { c_args.push(std.ffi.CString.new(arg).unwrap()) }
+
+        // Create pipes as needed
+        let mut stdin_pipe: Option<(i32, i32)> = none
+        let mut stdout_pipe: Option<(i32, i32)> = none
+        let mut stderr_pipe: Option<(i32, i32)> = none
+
+        if matches!(self.stdin, Stdio.Piped) {
+            let mut fds = [0i32; 2]
+            unsafe { pipe(&mut fds) }
+            stdin_pipe = some((fds[0], fds[1]))
+        }
+        if matches!(self.stdout, Stdio.Piped) {
+            let mut fds = [0i32; 2]
+            unsafe { pipe(&mut fds) }
+            stdout_pipe = some((fds[0], fds[1]))
+        }
+        if matches!(self.stderr, Stdio.Piped) {
+            let mut fds = [0i32; 2]
+            unsafe { pipe(&mut fds) }
+            stderr_pipe = some((fds[0], fds[1]))
+        }
+
+        let pid = unsafe { fork() }
+        if pid < 0 { return err(IoError.last_os_error()) }
+
+        if pid == 0 {
+            // Child process
+            if let some((read_fd, write_fd)) = stdin_pipe {
+                unsafe { dup2(read_fd, 0); close(write_fd); close(read_fd); }
+            }
+            if let some((read_fd, write_fd)) = stdout_pipe {
+                unsafe { dup2(write_fd, 1); close(read_fd); close(write_fd); }
+            }
+            if let some((read_fd, write_fd)) = stderr_pipe {
+                unsafe { dup2(write_fd, 2); close(read_fd); close(write_fd); }
+            }
+
+            // Set working directory
+            if let some(dir) = &self.current_dir {
+                extern "C" { fn chdir(path: *const u8) -> i32 }
+                let cdir = std.ffi.CString.new(dir).unwrap()
+                unsafe { chdir(cdir.as_ptr()); }
+            }
+
+            let argv_ptrs: [*const u8] = c_args.iter().map(|s| s.as_ptr()).collect()
+            let mut argv_null = argv_ptrs.clone()
+            argv_null.push(std.ptr.null())
+            unsafe { execvp(argv_null[0], argv_null.as_ptr()); }
+            std.process.exit(127)
+        }
+
+        // Parent: close child ends of pipes
+        let stdin_handle = stdin_pipe.map(|(r, w)| { unsafe { close(r); } ChildStdin { fd: w } })
+        let stdout_handle = stdout_pipe.map(|(r, w)| { unsafe { close(w); } ChildStdout { fd: r } })
+        let stderr_handle = stderr_pipe.map(|(r, w)| { unsafe { close(w); } ChildStderr { fd: r } })
+
+        ok(Child { pid, stdin: stdin_handle, stdout: stdout_handle, stderr: stderr_handle })
+    }
+
+    pub fn output(self) -> Result<Output, IoError> {
+        let mut cmd = self.clone()
+        cmd.stdout(Stdio.Piped).stderr(Stdio.Piped)
+        let child = cmd.spawn()?
+        child.wait_with_output()
+    }
+
+    pub fn status(self) -> Result<ExitStatus, IoError> {
+        let mut child = self.spawn()?
+        child.wait()
+    }
+}
+
+// ── Child process ────────────────────────────────────────────────────────────
+pub struct Child {
+    pub pid: i32,
+    pub stdin: Option<ChildStdin>,
+    pub stdout: Option<ChildStdout>,
+    pub stderr: Option<ChildStderr>,
+}
+
+impl Child {
+    pub fn wait(mut self) -> Result<ExitStatus, IoError> {
+        extern "C" { fn waitpid(pid: i32, status: *mut i32, options: i32) -> i32 }
+        let mut status: i32 = 0
+        let result = unsafe { waitpid(self.pid, &mut status, 0) }
+        if result < 0 { return err(IoError.last_os_error()) }
+
+        if status & 0x7F == 0 {  // WIFEXITED
+            ok(ExitStatus { code: some((status >> 8) & 0xFF), signal: none })
+        } else {
+            ok(ExitStatus { code: none, signal: some(status & 0x7F) })
+        }
+    }
+
+    pub fn wait_with_output(mut self) -> Result<Output, IoError> {
+        let mut stdout_data: [u8] = []
+        let mut stderr_data: [u8] = []
+
+        if let some(mut out) = self.stdout.take() {
+            out.read_to_end(&mut stdout_data)?
+        }
+        if let some(mut err_stream) = self.stderr.take() {
+            err_stream.read_to_end(&mut stderr_data)?
+        }
+        let status = self.wait()?
+        ok(Output { status, stdout: stdout_data, stderr: stderr_data })
+    }
+
+    pub fn kill(self) -> Result<(), IoError> {
+        extern "C" { fn kill(pid: i32, sig: i32) -> i32 }
+        if unsafe { kill(self.pid, 9) } < 0 { err(IoError.last_os_error()) }
+        else { ok(()) }
+    }
+
+    pub fn id(self) -> u32 { self.pid as u32 }
+}
+
+pub struct Output {
+    pub status: ExitStatus,
+    pub stdout: [u8],
+    pub stderr: [u8],
+}
+
+// ── Environment variables ────────────────────────────────────────────────────
+pub fn var(key: &str) -> Result<string, string> {
+    extern "C" { fn getenv(name: *const u8) -> *const u8 }
+    let ckey = std.ffi.CString.new(key).unwrap()
+    let ptr = unsafe { getenv(ckey.as_ptr()) }
+    if ptr.is_null() { err("not found".to_string()) }
+    else { ok(unsafe { std.ffi.CStr.from_ptr(ptr) }.to_str().unwrap().to_string()) }
+}
+
+pub fn set_var(key: &str, value: &str) {
+    extern "C" { fn setenv(name: *const u8, value: *const u8, overwrite: i32) -> i32 }
+    let ckey = std.ffi.CString.new(key).unwrap()
+    let cval = std.ffi.CString.new(value).unwrap()
+    unsafe { setenv(ckey.as_ptr(), cval.as_ptr(), 1); }
+}
+
+pub fn remove_var(key: &str) {
+    extern "C" { fn unsetenv(name: *const u8) -> i32 }
+    let ckey = std.ffi.CString.new(key).unwrap()
+    unsafe { unsetenv(ckey.as_ptr()); }
+}
+
+pub fn vars() -> [(string, string)] {
+    extern "C" { static environ: *const *const u8 }
+    let mut result: [(string, string)] = []
+    unsafe {
+        let mut i = 0
+        while !(*environ.add(i)).is_null() {
+            let entry = std.ffi.CStr.from_ptr(*environ.add(i)).to_str().unwrap()
+            if let some(eq_pos) = entry.find('=') {
+                result.push((entry[..eq_pos].to_string(), entry[eq_pos+1..].to_string()))
+            }
+            i += 1
+        }
+    }
+    result
+}
