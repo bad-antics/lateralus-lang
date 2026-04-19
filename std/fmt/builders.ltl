@@ -1,0 +1,231 @@
+// Standard Library - Format Builders
+// Structured formatting helpers for debug and display output.
+
+use std.fmt.{Formatter, Result as FmtResult, Write}
+
+struct DebugStruct<'a> {
+    fmt: &'a mut Formatter,
+    name: string,
+    fields: [(string, string)],
+    has_fields: bool,
+}
+
+impl<'a> DebugStruct<'a> {
+    fn new(fmt: &'a mut Formatter, name: &str) -> DebugStruct<'a> {
+        DebugStruct { fmt, name: name.to_string(), fields: [], has_fields: false }
+    }
+
+    fn field(mut self, name: &str, value: &dyn Debug) -> &mut Self {
+        self.fields.push((name.to_string(), format!("{:?}", value)))
+        self.has_fields = true
+        self
+    }
+
+    fn finish(self) -> FmtResult {
+        write!(self.fmt, "{}", self.name)?;
+        if self.has_fields {
+            write!(self.fmt, " {{ ")?;
+            for (i, (name, val)) in self.fields.iter().enumerate() {
+                if i > 0 { write!(self.fmt, ", ")?; }
+                write!(self.fmt, "{}: {}", name, val)?;
+            }
+            write!(self.fmt, " }}")?;
+        }
+        ok(())
+    }
+
+    fn finish_non_exhaustive(self) -> FmtResult {
+        write!(self.fmt, "{}", self.name)?;
+        write!(self.fmt, " {{ ")?;
+        for (i, (name, val)) in self.fields.iter().enumerate() {
+            if i > 0 { write!(self.fmt, ", ")?; }
+            write!(self.fmt, "{}: {}", name, val)?;
+        }
+        if self.has_fields { write!(self.fmt, ", ")?; }
+        write!(self.fmt, ".. }}")?;
+        ok(())
+    }
+}
+
+struct DebugTuple<'a> {
+    fmt: &'a mut Formatter,
+    name: string,
+    fields: [string],
+}
+
+impl<'a> DebugTuple<'a> {
+    fn new(fmt: &'a mut Formatter, name: &str) -> DebugTuple<'a> {
+        DebugTuple { fmt, name: name.to_string(), fields: [] }
+    }
+
+    fn field(mut self, value: &dyn Debug) -> &mut Self {
+        self.fields.push(format!("{:?}", value))
+        self
+    }
+
+    fn finish(self) -> FmtResult {
+        write!(self.fmt, "{}(", self.name)?;
+        for (i, val) in self.fields.iter().enumerate() {
+            if i > 0 { write!(self.fmt, ", ")?; }
+            write!(self.fmt, "{}", val)?;
+        }
+        write!(self.fmt, ")")?;
+        ok(())
+    }
+}
+
+struct DebugList<'a> {
+    fmt: &'a mut Formatter,
+    entries: [string],
+}
+
+impl<'a> DebugList<'a> {
+    fn new(fmt: &'a mut Formatter) -> DebugList<'a> {
+        DebugList { fmt, entries: [] }
+    }
+
+    fn entry(mut self, value: &dyn Debug) -> &mut Self {
+        self.entries.push(format!("{:?}", value))
+        self
+    }
+
+    fn entries<I: Iterator<Item = &dyn Debug>>(mut self, iter: I) -> &mut Self {
+        for item in iter {
+            self.entry(item);
+        }
+        self
+    }
+
+    fn finish(self) -> FmtResult {
+        write!(self.fmt, "[")?;
+        for (i, val) in self.entries.iter().enumerate() {
+            if i > 0 { write!(self.fmt, ", ")?; }
+            write!(self.fmt, "{}", val)?;
+        }
+        write!(self.fmt, "]")?;
+        ok(())
+    }
+}
+
+struct DebugSet<'a> {
+    fmt: &'a mut Formatter,
+    entries: [string],
+}
+
+impl<'a> DebugSet<'a> {
+    fn new(fmt: &'a mut Formatter) -> DebugSet<'a> {
+        DebugSet { fmt, entries: [] }
+    }
+
+    fn entry(mut self, value: &dyn Debug) -> &mut Self {
+        self.entries.push(format!("{:?}", value))
+        self
+    }
+
+    fn finish(self) -> FmtResult {
+        write!(self.fmt, "{{")?;
+        for (i, val) in self.entries.iter().enumerate() {
+            if i > 0 { write!(self.fmt, ", ")?; }
+            write!(self.fmt, "{}", val)?;
+        }
+        write!(self.fmt, "}}")?;
+        ok(())
+    }
+}
+
+struct DebugMap<'a> {
+    fmt: &'a mut Formatter,
+    entries: [(string, string)],
+}
+
+impl<'a> DebugMap<'a> {
+    fn new(fmt: &'a mut Formatter) -> DebugMap<'a> {
+        DebugMap { fmt, entries: [] }
+    }
+
+    fn entry(mut self, key: &dyn Debug, value: &dyn Debug) -> &mut Self {
+        self.entries.push((format!("{:?}", key), format!("{:?}", value)))
+        self
+    }
+
+    fn key(mut self, key: &dyn Debug) -> &mut Self {
+        self.entries.push((format!("{:?}", key), string.new()))
+        self
+    }
+
+    fn value(mut self, value: &dyn Debug) -> &mut Self {
+        if let some(last) = self.entries.last_mut() {
+            last.1 = format!("{:?}", value)
+        }
+        self
+    }
+
+    fn finish(self) -> FmtResult {
+        write!(self.fmt, "{{")?;
+        for (i, (k, v)) in self.entries.iter().enumerate() {
+            if i > 0 { write!(self.fmt, ", ")?; }
+            write!(self.fmt, "{}: {}", k, v)?;
+        }
+        write!(self.fmt, "}}")?;
+        ok(())
+    }
+}
+
+// Padding and alignment helpers
+enum Alignment { Left, Right, Center }
+
+fn pad(s: &str, width: usize, fill: char, align: Alignment) -> string {
+    if s.len() >= width { return s.to_string() }
+    let padding = width - s.len()
+    match align {
+        Alignment.Left => {
+            let mut result = s.to_string()
+            for _ in 0..padding { result.push(fill) }
+            result
+        },
+        Alignment.Right => {
+            let mut result = string.new()
+            for _ in 0..padding { result.push(fill) }
+            result += s
+            result
+        },
+        Alignment.Center => {
+            let left = padding / 2
+            let right = padding - left
+            let mut result = string.new()
+            for _ in 0..left { result.push(fill) }
+            result += s
+            for _ in 0..right { result.push(fill) }
+            result
+        },
+    }
+}
+
+fn main() {
+    // Padding left
+    assert(pad("hi", 10, ' ', Alignment.Left) == "hi        ")
+    assert(pad("hi", 10, '-', Alignment.Left) == "hi--------")
+    print("Pad left ✓")
+
+    // Padding right
+    assert(pad("hi", 10, ' ', Alignment.Right) == "        hi")
+    assert(pad("hi", 5, '0', Alignment.Right) == "000hi")
+    print("Pad right ✓")
+
+    // Padding center
+    assert(pad("hi", 6, ' ', Alignment.Center) == "  hi  ")
+    assert(pad("hi", 7, '-', Alignment.Center) == "--hi---")
+    print("Pad center ✓")
+
+    // No padding needed
+    assert(pad("hello", 3, ' ', Alignment.Left) == "hello")
+    print("No pad needed ✓")
+
+    // Alignment enum
+    let _l = Alignment.Left
+    let _r = Alignment.Right
+    let _c = Alignment.Center
+    print("Alignment ✓")
+
+    print("Format Builders complete ✓")
+}
