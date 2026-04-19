@@ -1,0 +1,133 @@
+// std.pin - Pin and Unpin
+// Self-referential type safety for async/await.
+
+pub struct Pin<P> { pointer: P }
+
+impl<P: Deref> Pin<P> {
+    pub fn new(pointer: P) -> Pin<P> where P::Target: Unpin {
+        Pin { pointer }
+    }
+
+    pub unsafe fn new_unchecked(pointer: P) -> Pin<P> {
+        Pin { pointer }
+    }
+
+    pub fn as_ref(self) -> Pin<&P::Target> {
+        unsafe { Pin.new_unchecked(&*self.pointer) }
+    }
+
+    pub fn into_inner(self) -> P where P::Target: Unpin {
+        self.pointer
+    }
+
+    pub unsafe fn into_inner_unchecked(self) -> P {
+        self.pointer
+    }
+}
+
+impl<P: DerefMut> Pin<P> {
+    pub fn as_mut(mut self) -> Pin<&mut P::Target> {
+        unsafe { Pin.new_unchecked(&mut *self.pointer) }
+    }
+
+    pub fn set(mut self, value: P::Target) where P::Target: Sized {
+        *self.pointer = value
+    }
+}
+
+impl<T> Pin<&T> {
+    pub fn get_ref(self) -> &T { self.pointer }
+}
+
+impl<T: Unpin> Pin<&mut T> {
+    pub fn get_mut(self) -> &mut T { self.pointer }
+}
+
+impl<P: Deref> Deref for Pin<P> {
+    type Target = P::Target
+    fn deref(self) -> &P::Target { &*self.pointer }
+}
+
+impl<P: DerefMut> DerefMut for Pin<P> where P::Target: Unpin {
+    fn deref_mut(mut self) -> &mut P::Target { &mut *self.pointer }
+}
+
+// Unpin auto-trait: most types are Unpin
+pub auto trait Unpin {}
+
+// Types that are NOT Unpin (self-referential)
+pub struct PhantomPinned;
+impl !Unpin for PhantomPinned {}
+
+// Pin projection helpers
+pub fn pin_mut<T>(value: &mut T) -> Pin<&mut T> where T: Unpin {
+    Pin.new(value)
+}
+
+// Pinned box
+impl<T> Pin<Box<T>> {
+    pub fn new_box(value: T) -> Pin<Box<T>> where T: Unpin {
+        Pin.new(Box.new(value))
+    }
+
+    pub unsafe fn new_box_unchecked(value: T) -> Pin<Box<T>> {
+        Pin.new_unchecked(Box.new(value))
+    }
+}
+
+impl<T> From<Box<T>> for Pin<Box<T>> where T: Unpin {
+    fn from(boxed: Box<T>) -> Pin<Box<T>> { Pin.new(boxed) }
+}
+
+// Example self-referential struct
+struct SelfRef {
+    data: string,
+    ptr: *const string,
+    _pin: PhantomPinned,
+}
+
+impl SelfRef {
+    fn new(data: string) -> SelfRef {
+        SelfRef { data, ptr: std.ptr.null(), _pin: PhantomPinned }
+    }
+
+    fn init(self: Pin<&mut Self>) {
+        let this = unsafe { self.get_unchecked_mut() }
+        this.ptr = &this.data as *const string
+    }
+
+    fn data(self: Pin<&Self>) -> &str {
+        &self.get_ref().data
+    }
+
+    fn ptr_data(self: Pin<&Self>) -> &str {
+        unsafe { &*self.get_ref().ptr }
+    }
+}
+
+fn main() {
+    // Pin with Unpin types
+    let mut val = 42
+    let pinned = pin_mut(&mut val)
+    assert(*pinned == 42)
+    print("Pin Unpin type \u2713")
+
+    // Pin<Box<T>>
+    let boxed = Pin.new_box(String.from("hello"))
+    assert(*boxed == "hello")
+    print("Pin Box \u2713")
+
+    // Pin prevents moving
+    let mut s = SelfRef.new("test".to_string())
+    let mut pinned = unsafe { Pin.new_unchecked(&mut s) }
+    pinned.as_mut().init()
+    assert(pinned.as_ref().data() == "test")
+    assert(pinned.as_ref().ptr_data() == "test")
+    print("Self-referential Pin \u2713")
+
+    // PhantomPinned
+    let _pp = PhantomPinned
+    print("PhantomPinned \u2713")
+
+    print("Pin complete \u2713")
+}
