@@ -1,0 +1,218 @@
+// std.sync.channel — Multi-producer, single-consumer channels
+// Bounded and unbounded channels for inter-thread communication.
+
+use std.collections.VecDeque
+use std.sync.{Arc, Mutex, Condvar}
+
+// ── Errors ───────────────────────────────────────────────────────────────────
+pub enum SendError<T> { Disconnected(T) }
+pub enum RecvError { Empty, Disconnected }
+pub enum TrySendError<T> { Full(T), Disconnected(T) }
+pub enum TryRecvError { Empty, Disconnected }
+
+// ── Shared state ─────────────────────────────────────────────────────────────
+struct ChannelInner<T> {
+    queue: VecDeque<T>,
+    capacity: Option<usize>,  // none = unbounded
+    senders: u32,
+    receiver_alive: bool,
+    closed: bool,
+}
+
+struct Shared<T> {
+    inner: Mutex<ChannelInner<T>>,
+    not_empty: Condvar,
+    not_full: Condvar,
+}
+
+// ── Sender ───────────────────────────────────────────────────────────────────
+pub struct Sender<T> {
+    shared: Arc<Shared<T>>,
+}
+
+impl<T> Sender<T> {
+    pub fn send(self, value: T) -> Result<(), SendError<T>> {
+        let mut inner = self.shared.inner.lock().unwrap()
+
+        if !inner.receiver_alive { return err(SendError.Disconnected(value)) }
+
+        // Wait for space (bounded)
+        if let some(cap) = inner.capacity {
+            while inner.queue.len() >= cap && inner.receiver_alive {
+                inner = self.shared.not_full.wait(inner).unwrap()
+            }
+            if !inner.receiver_alive { return err(SendError.Disconnected(value)) }
+        }
+
+        inner.queue.push_back(value)
+        self.shared.not_empty.notify_one()
+        ok(())
+    }
+
+    pub fn try_send(self, value: T) -> Result<(), TrySendError<T>> {
+        let mut inner = self.shared.inner.lock().unwrap()
+        if !inner.receiver_alive { return err(TrySendError.Disconnected(value)) }
+        if let some(cap) = inner.capacity {
+            if inner.queue.len() >= cap { return err(TrySendError.Full(value)) }
+        }
+        inner.queue.push_back(value)
+        self.shared.not_empty.notify_one()
+        ok(())
+    }
+
+    pub fn is_disconnected(self) -> bool {
+        !self.shared.inner.lock().unwrap().receiver_alive
+    }
+}
+
+impl<T> Clone for Sender<T> {
+    fn clone(self) -> Sender<T> {
+        self.shared.inner.lock().unwrap().senders += 1
+        Sender { shared: self.shared.clone() }
+    }
+}
+
+impl<T> Drop for Sender<T> {
+    fn drop(mut self) {
+        let mut inner = self.shared.inner.lock().unwrap()
+        inner.senders -= 1
+        if inner.senders == 0 {
+            inner.closed = true
+            self.shared.not_empty.notify_all()
+        }
+    }
+}
+
+// ── Receiver ─────────────────────────────────────────────────────────────────
+pub struct Receiver<T> {
+    shared: Arc<Shared<T>>,
+}
+
+impl<T> Receiver<T> {
+    pub fn recv(self) -> Result<T, RecvError> {
+        let mut inner = self.shared.inner.lock().unwrap()
+        loop {
+            if let some(val) = inner.queue.pop_front() {
+                self.shared.not_full.notify_one()
+                return ok(val)
+            }
+            if inner.closed && inner.senders == 0 { return err(RecvError.Disconnected) }
+            inner = self.shared.not_empty.wait(inner).unwrap()
+        }
+    }
+
+    pub fn try_recv(self) -> Result<T, TryRecvError> {
+        let mut inner = self.shared.inner.lock().unwrap()
+        if let some(val) = inner.queue.pop_front() {
+            self.shared.not_full.notify_one()
+            ok(val)
+        } else if inner.closed && inner.senders == 0 {
+            err(TryRecvError.Disconnected)
+        } else {
+            err(TryRecvError.Empty)
+        }
+    }
+
+    pub fn recv_timeout(self, timeout: std.time.Duration) -> Result<T, RecvError> {
+        let mut inner = self.shared.inner.lock().unwrap()
+        let deadline = std.time.Instant.now() + timeout
+
+        loop {
+            if let some(val) = inner.queue.pop_front() {
+                self.shared.not_full.notify_one()
+                return ok(val)
+            }
+            if inner.closed && inner.senders == 0 { return err(RecvError.Disconnected) }
+
+            let remaining = deadline.saturating_duration_since(std.time.Instant.now())
+            if remaining.is_zero() { return err(RecvError.Empty) }
+
+            let (guard, timeout_result) = self.shared.not_empty.wait_timeout(inner, remaining).unwrap()
+            inner = guard
+            if timeout_result.timed_out() && inner.queue.is_empty() {
+                return err(RecvError.Empty)
+            }
+        }
+    }
+
+    pub fn iter(self) -> ChannelIter<T> { ChannelIter { receiver: self } }
+}
+
+impl<T> Drop for Receiver<T> {
+    fn drop(mut self) {
+        self.shared.inner.lock().unwrap().receiver_alive = false
+        self.shared.not_full.notify_all()
+    }
+}
+
+// ── Iterator ─────────────────────────────────────────────────────────────────
+pub struct ChannelIter<'a, T> { receiver: &'a Receiver<T> }
+
+impl<'a, T> Iterator for ChannelIter<'a, T> {
+    type Item = T
+    fn next(mut self) -> Option<T> { self.receiver.recv().ok() }
+}
+
+// ── Constructors ─────────────────────────────────────────────────────────────
+pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
+    let shared = Arc.new(Shared {
+        inner: Mutex.new(ChannelInner {
+            queue: VecDeque.new(), capacity: none,
+            senders: 1, receiver_alive: true, closed: false,
+        }),
+        not_empty: Condvar.new(), not_full: Condvar.new(),
+    })
+    (Sender { shared: shared.clone() }, Receiver { shared })
+}
+
+pub fn bounded<T>(capacity: usize) -> (Sender<T>, Receiver<T>) {
+    assert(capacity > 0, "capacity must be > 0")
+    let shared = Arc.new(Shared {
+        inner: Mutex.new(ChannelInner {
+            queue: VecDeque.with_capacity(capacity),
+            capacity: some(capacity),
+            senders: 1, receiver_alive: true, closed: false,
+        }),
+        not_empty: Condvar.new(), not_full: Condvar.new(),
+    })
+    (Sender { shared: shared.clone() }, Receiver { shared })
+}
+
+// ── Oneshot channel ──────────────────────────────────────────────────────────
+pub fn oneshot<T>() -> (OneshotSender<T>, OneshotReceiver<T>) {
+    let slot: Arc<Mutex<Option<T>>> = Arc.new(Mutex.new(none))
+    let ready = Arc.new(Condvar.new())
+    (
+        OneshotSender { slot: slot.clone(), ready: ready.clone(), sent: false },
+        OneshotReceiver { slot, ready },
+    )
+}
+
+pub struct OneshotSender<T> {
+    slot: Arc<Mutex<Option<T>>>,
+    ready: Arc<Condvar>,
+    sent: bool,
+}
+
+impl<T> OneshotSender<T> {
+    pub fn send(mut self, value: T) -> Result<(), T> {
+        if self.sent { return err(value) }
+        *self.slot.lock().unwrap() = some(value)
+        self.sent = true
+        self.ready.notify_one()
+        ok(())
+    }
+}
+
+pub struct OneshotReceiver<T> {
+    slot: Arc<Mutex<Option<T>>>,
+    ready: Arc<Condvar>,
+}
+
+impl<T> OneshotReceiver<T> {
+    pub fn recv(self) -> Result<T, RecvError> {
+        let mut guard = self.slot.lock().unwrap()
+        while guard.is_none() { guard = self.ready.wait(guard).unwrap() }
+        ok(guard.take().unwrap())
+    }
+}
