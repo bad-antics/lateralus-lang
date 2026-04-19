@@ -1,0 +1,248 @@
+// std.async.runtime — Core async runtime primitives
+// Event loop, task scheduler, I/O reactor integration.
+
+use std.collections.{HashMap, VecDeque}
+use std.sync.{Arc, Mutex, Condvar}
+use std.time.{Duration, Instant}
+
+// ── Poll type ────────────────────────────────────────────────────────────────
+pub enum Poll<T> { Ready(T), Pending }
+
+// ── Waker ────────────────────────────────────────────────────────────────────
+pub struct RawWaker {
+    data: *const (),
+    vtable: &'static RawWakerVTable,
+}
+
+pub struct RawWakerVTable {
+    clone: fn(*const ()) -> RawWaker,
+    wake: fn(*const ()),
+    wake_by_ref: fn(*const ()),
+    drop: fn(*const ()),
+}
+
+pub struct Waker { raw: RawWaker }
+
+impl Waker {
+    pub fn wake(self) { (self.raw.vtable.wake)(self.raw.data) }
+    pub fn wake_by_ref(self) { (self.raw.vtable.wake_by_ref)(self.raw.data) }
+    pub fn clone(self) -> Waker { Waker { raw: (self.raw.vtable.clone)(self.raw.data) } }
+}
+
+impl Drop for Waker {
+    fn drop(mut self) { (self.raw.vtable.drop)(self.raw.data) }
+}
+
+pub struct Context<'a> { waker: &'a Waker }
+
+impl<'a> Context<'a> {
+    pub fn from_waker(waker: &'a Waker) -> Context<'a> { Context { waker } }
+    pub fn waker(self) -> &'a Waker { self.waker }
+}
+
+// ── Future trait ─────────────────────────────────────────────────────────────
+pub trait Future {
+    type Output
+    fn poll(mut self, cx: &mut Context) -> Poll<Self.Output>
+}
+
+// ── Task ─────────────────────────────────────────────────────────────────────
+type TaskId = u64
+
+struct TaskState {
+    id: TaskId,
+    future: Box<dyn Future<Output = ()> + Send>,
+    waker: Option<Waker>,
+}
+
+// ── Reactor ──────────────────────────────────────────────────────────────────
+pub struct Reactor {
+    timers: Mutex<[(Instant, TaskId)]>,
+    io_pending: Mutex<HashMap<i32, TaskId>>,  // fd → task
+}
+
+impl Reactor {
+    pub fn new() -> Reactor {
+        Reactor { timers: Mutex.new([]), io_pending: Mutex.new(HashMap.new()) }
+    }
+
+    pub fn register_timer(self, deadline: Instant, task_id: TaskId) {
+        let mut timers = self.timers.lock().unwrap()
+        timers.push((deadline, task_id))
+        timers.sort_by_key(|(t, _)| *t)
+    }
+
+    pub fn register_io(self, fd: i32, task_id: TaskId) {
+        self.io_pending.lock().unwrap().insert(fd, task_id)
+    }
+
+    pub fn poll_events(self, timeout: Duration) -> [TaskId] {
+        let now = Instant.now()
+        let mut ready: [TaskId] = []
+
+        // Check timers
+        let mut timers = self.timers.lock().unwrap()
+        while let some(&(deadline, task_id)) = timers.first() {
+            if deadline <= now { ready.push(task_id); timers.remove(0); }
+            else { break }
+        }
+
+        ready
+    }
+
+    pub fn next_timer_deadline(self) -> Option<Instant> {
+        self.timers.lock().unwrap().first().map(|(t, _)| *t)
+    }
+}
+
+// ── Runtime ──────────────────────────────────────────────────────────────────
+pub struct Runtime {
+    tasks: HashMap<TaskId, TaskState>,
+    ready_queue: Arc<Mutex<VecDeque<TaskId>>>,
+    reactor: Arc<Reactor>,
+    next_id: TaskId,
+    park: Condvar,
+    park_mutex: Mutex<bool>,
+}
+
+impl Runtime {
+    pub fn new() -> Runtime {
+        Runtime {
+            tasks: HashMap.new(),
+            ready_queue: Arc.new(Mutex.new(VecDeque.new())),
+            reactor: Arc.new(Reactor.new()),
+            next_id: 1,
+            park: Condvar.new(),
+            park_mutex: Mutex.new(false),
+        }
+    }
+
+    pub fn spawn<F>(mut self, future: F) -> TaskId
+    where F: Future<Output = ()> + Send + 'static
+    {
+        let id = self.next_id
+        self.next_id += 1
+        self.tasks.insert(id, TaskState { id, future: Box.new(future), waker: none })
+        self.ready_queue.lock().unwrap().push_back(id)
+        id
+    }
+
+    pub fn block_on<F>(mut self, future: F) -> F.Output
+    where F: Future<Output: Send> + Send + 'static
+    {
+        let id = self.next_id
+        self.next_id += 1
+
+        let result: Arc<Mutex<Option<F.Output>>> = Arc.new(Mutex.new(none))
+        let result_clone = result.clone()
+
+        // Wrap in a task that stores result
+        let wrapper = async {
+            let val = future.await
+            *result_clone.lock().unwrap() = some(val)
+        }
+        self.tasks.insert(id, TaskState { id, future: Box.new(wrapper), waker: none })
+        self.ready_queue.lock().unwrap().push_back(id)
+
+        self.run()
+
+        Arc.try_unwrap(result).unwrap().into_inner().unwrap().unwrap()
+    }
+
+    pub fn run(mut self) {
+        loop {
+            // Process ready tasks
+            while let some(task_id) = self.ready_queue.lock().unwrap().pop_front() {
+                if let some(task) = self.tasks.get_mut(&task_id) {
+                    let waker = self.make_waker(task_id)
+                    let mut cx = Context.from_waker(&waker)
+                    match task.future.poll(&mut cx) {
+                        Poll.Ready(()) => { self.tasks.remove(&task_id); }
+                        Poll.Pending => { task.waker = some(waker); }
+                    }
+                }
+            }
+
+            if self.tasks.is_empty() { break }
+
+            // Poll reactor for I/O and timer events
+            let timeout = self.reactor.next_timer_deadline()
+                .map(|d| d.duration_since(Instant.now()))
+                .unwrap_or(Duration.from_millis(100))
+
+            let ready_tasks = self.reactor.poll_events(timeout)
+            let mut queue = self.ready_queue.lock().unwrap()
+            for task_id in ready_tasks { queue.push_back(task_id) }
+
+            if queue.is_empty() {
+                // Park thread briefly to avoid busy-spinning
+                let lock = self.park_mutex.lock().unwrap()
+                self.park.wait_timeout(lock, Duration.from_millis(1))
+            }
+        }
+    }
+
+    fn make_waker(self, task_id: TaskId) -> Waker {
+        let queue = self.ready_queue.clone()
+        let data = Box.into_raw(Box.new((task_id, queue))) as *const ()
+        Waker {
+            raw: RawWaker {
+                data,
+                vtable: &RawWakerVTable {
+                    clone: |data| {
+                        let (id, q) = unsafe { &*(data as *const (TaskId, Arc<Mutex<VecDeque<TaskId>>>)) }
+                        let new = Box.into_raw(Box.new((*id, q.clone()))) as *const ()
+                        RawWaker { data: new, vtable: /* same vtable */ todo!() }
+                    },
+                    wake: |data| {
+                        let boxed = unsafe { Box.from_raw(data as *mut (TaskId, Arc<Mutex<VecDeque<TaskId>>>)) }
+                        boxed.1.lock().unwrap().push_back(boxed.0)
+                    },
+                    wake_by_ref: |data| {
+                        let (id, q) = unsafe { &*(data as *const (TaskId, Arc<Mutex<VecDeque<TaskId>>>)) }
+                        q.lock().unwrap().push_back(*id)
+                    },
+                    drop: |data| { unsafe { drop(Box.from_raw(data as *mut (TaskId, Arc<Mutex<VecDeque<TaskId>>>))) } },
+                },
+            },
+        }
+    }
+
+    pub fn reactor(self) -> &Arc<Reactor> { &self.reactor }
+}
+
+// ── Convenience: sleep future ────────────────────────────────────────────────
+pub struct Sleep {
+    deadline: Instant,
+    registered: bool,
+    task_id: Option<TaskId>,
+}
+
+impl Future for Sleep {
+    type Output = ()
+    fn poll(mut self, cx: &mut Context) -> Poll<()> {
+        if Instant.now() >= self.deadline { return Poll.Ready(()) }
+        if !self.registered {
+            self.registered = true
+            // In real impl, register with reactor
+        }
+        Poll.Pending
+    }
+}
+
+pub fn sleep(duration: Duration) -> Sleep {
+    Sleep { deadline: Instant.now() + duration, registered: false, task_id: none }
+}
+
+// ── Convenience: yield_now ───────────────────────────────────────────────────
+pub struct YieldNow { yielded: bool }
+
+impl Future for YieldNow {
+    type Output = ()
+    fn poll(mut self, cx: &mut Context) -> Poll<()> {
+        if self.yielded { Poll.Ready(()) }
+        else { self.yielded = true; cx.waker().wake_by_ref(); Poll.Pending }
+    }
+}
+
+pub fn yield_now() -> YieldNow { YieldNow { yielded: false } }
