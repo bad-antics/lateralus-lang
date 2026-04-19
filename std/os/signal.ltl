@@ -1,0 +1,132 @@
+// std.os.signal - Signal handling
+// POSIX signals: register handlers, mask signals, sigwait.
+
+pub enum Signal {
+    Hup, Int, Quit, Ill, Trap, Abort, Bus, Fpe,
+    Kill, Usr1, Segv, Usr2, Pipe, Alarm, Term,
+    Child, Cont, Stop, Tstp, Ttin, Ttou, Urg,
+    Xcpu, Xfsz, Vtalrm, Prof, Winch, Io, Sys,
+}
+
+impl Signal {
+    pub fn number(self) -> i32 {
+        match self {
+            Signal.Hup => 1, Signal.Int => 2, Signal.Quit => 3, Signal.Ill => 4,
+            Signal.Trap => 5, Signal.Abort => 6, Signal.Bus => 7, Signal.Fpe => 8,
+            Signal.Kill => 9, Signal.Usr1 => 10, Signal.Segv => 11, Signal.Usr2 => 12,
+            Signal.Pipe => 13, Signal.Alarm => 14, Signal.Term => 15, Signal.Child => 17,
+            Signal.Cont => 18, Signal.Stop => 19, Signal.Tstp => 20, Signal.Ttin => 21,
+            Signal.Ttou => 22, Signal.Urg => 23, Signal.Xcpu => 24, Signal.Xfsz => 25,
+            Signal.Vtalrm => 26, Signal.Prof => 27, Signal.Winch => 28, Signal.Io => 29,
+            Signal.Sys => 31,
+        }
+    }
+
+    pub fn from_number(n: i32) -> Option<Signal> {
+        match n {
+            1 => some(Signal.Hup), 2 => some(Signal.Int), 3 => some(Signal.Quit),
+            4 => some(Signal.Ill), 5 => some(Signal.Trap), 6 => some(Signal.Abort),
+            7 => some(Signal.Bus), 8 => some(Signal.Fpe), 9 => some(Signal.Kill),
+            10 => some(Signal.Usr1), 11 => some(Signal.Segv), 12 => some(Signal.Usr2),
+            13 => some(Signal.Pipe), 14 => some(Signal.Alarm), 15 => some(Signal.Term),
+            17 => some(Signal.Child), 18 => some(Signal.Cont), 19 => some(Signal.Stop),
+            20 => some(Signal.Tstp), 21 => some(Signal.Ttin), 22 => some(Signal.Ttou),
+            23 => some(Signal.Urg), 24 => some(Signal.Xcpu), 25 => some(Signal.Xfsz),
+            26 => some(Signal.Vtalrm), 27 => some(Signal.Prof), 28 => some(Signal.Winch),
+            29 => some(Signal.Io), 31 => some(Signal.Sys),
+            _ => none,
+        }
+    }
+
+    pub fn name(self) -> &str {
+        match self {
+            Signal.Hup => "SIGHUP", Signal.Int => "SIGINT", Signal.Quit => "SIGQUIT",
+            Signal.Ill => "SIGILL", Signal.Trap => "SIGTRAP", Signal.Abort => "SIGABRT",
+            Signal.Bus => "SIGBUS", Signal.Fpe => "SIGFPE", Signal.Kill => "SIGKILL",
+            Signal.Usr1 => "SIGUSR1", Signal.Segv => "SIGSEGV", Signal.Usr2 => "SIGUSR2",
+            Signal.Pipe => "SIGPIPE", Signal.Alarm => "SIGALRM", Signal.Term => "SIGTERM",
+            Signal.Child => "SIGCHLD", Signal.Cont => "SIGCONT", Signal.Stop => "SIGSTOP",
+            Signal.Tstp => "SIGTSTP", Signal.Ttin => "SIGTTIN", Signal.Ttou => "SIGTTOU",
+            Signal.Urg => "SIGURG", Signal.Xcpu => "SIGXCPU", Signal.Xfsz => "SIGXFSZ",
+            Signal.Vtalrm => "SIGVTALRM", Signal.Prof => "SIGPROF", Signal.Winch => "SIGWINCH",
+            Signal.Io => "SIGIO", Signal.Sys => "SIGSYS",
+        }
+    }
+
+    pub fn is_fatal(self) -> bool {
+        match self {
+            Signal.Kill | Signal.Segv | Signal.Abort | Signal.Bus | Signal.Ill | Signal.Fpe => true,
+            _ => false,
+        }
+    }
+}
+
+pub type SignalHandler = fn(Signal)
+
+struct SignalRegistry {
+    handlers: HashMap<i32, [SignalHandler]>,
+    default_action: HashMap<i32, SignalAction>,
+}
+
+enum SignalAction { Default, Ignore, Handle }
+
+impl SignalRegistry {
+    pub fn new() -> SignalRegistry {
+        SignalRegistry { handlers: HashMap.new(), default_action: HashMap.new() }
+    }
+
+    pub fn register(mut self, signal: Signal, handler: SignalHandler) -> Result<(), string> {
+        if signal == Signal.Kill || signal == Signal.Stop {
+            return err(format!("cannot handle {}", signal.name()))
+        }
+        self.handlers.entry(signal.number()).or_insert_with(|| []).push(handler)
+        ok(())
+    }
+
+    pub fn ignore(mut self, signal: Signal) -> Result<(), string> {
+        if signal == Signal.Kill || signal == Signal.Stop {
+            return err(format!("cannot ignore {}", signal.name()))
+        }
+        self.default_action.insert(signal.number(), SignalAction.Ignore)
+        ok(())
+    }
+
+    pub fn reset(mut self, signal: Signal) {
+        self.handlers.remove(&signal.number())
+        self.default_action.insert(signal.number(), SignalAction.Default)
+    }
+
+    pub fn dispatch(self, signal: Signal) {
+        let num = signal.number()
+        if let some(handlers) = self.handlers.get(&num) {
+            for handler in handlers { handler(signal) }
+        }
+    }
+}
+
+pub struct SignalSet {
+    mask: u64,
+}
+
+impl SignalSet {
+    pub fn empty() -> SignalSet { SignalSet { mask: 0 } }
+    pub fn full() -> SignalSet { SignalSet { mask: 0xFFFF_FFFF_FFFF_FFFF } }
+    pub fn add(mut self, signal: Signal) { self.mask |= 1u64 << signal.number() }
+    pub fn remove(mut self, signal: Signal) { self.mask &= !(1u64 << signal.number()) }
+    pub fn contains(self, signal: Signal) -> bool { (self.mask & (1u64 << signal.number())) != 0 }
+    pub fn union(self, other: &SignalSet) -> SignalSet { SignalSet { mask: self.mask | other.mask } }
+    pub fn intersection(self, other: &SignalSet) -> SignalSet { SignalSet { mask: self.mask & other.mask } }
+}
+
+pub extern "C" fn raise(sig: i32) -> i32
+pub extern "C" fn kill(pid: i32, sig: i32) -> i32
+
+pub fn send_signal(pid: i32, signal: Signal) -> Result<(), string> {
+    let ret = kill(pid, signal.number())
+    if ret == 0 { ok(()) } else { err(format!("kill({}, {}) failed", pid, signal.name())) }
+}
+
+pub fn raise_signal(signal: Signal) -> Result<(), string> {
+    let ret = raise(signal.number())
+    if ret == 0 { ok(()) } else { err(format!("raise({}) failed", signal.name())) }
+}
