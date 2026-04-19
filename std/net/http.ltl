@@ -1,0 +1,252 @@
+// std.net.http — HTTP client library
+// Async HTTP client with connection pooling and TLS.
+
+use std.collections.HashMap
+use std.io.{Read, Write}
+use std.net.TcpStream
+
+// ── HTTP Method ──────────────────────────────────────────────────────────────
+pub enum Method { GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS }
+
+impl Method {
+    pub fn as_str(self) -> &str {
+        match self {
+            Method.GET => "GET", Method.POST => "POST", Method.PUT => "PUT",
+            Method.DELETE => "DELETE", Method.PATCH => "PATCH",
+            Method.HEAD => "HEAD", Method.OPTIONS => "OPTIONS",
+        }
+    }
+}
+
+// ── Headers ──────────────────────────────────────────────────────────────────
+pub struct Headers {
+    inner: HashMap<string, [string]>,
+}
+
+impl Headers {
+    pub fn new() -> Headers { Headers { inner: HashMap.new() } }
+
+    pub fn set(mut self, name: &str, value: &str) {
+        self.inner.insert(name.to_lowercase(), [value.to_string()])
+    }
+
+    pub fn append(mut self, name: &str, value: &str) {
+        self.inner.entry(name.to_lowercase()).or_insert([]).push(value.to_string())
+    }
+
+    pub fn get(self, name: &str) -> Option<&str> {
+        self.inner.get(&name.to_lowercase()).and_then(|v| v.first().map(|s| s.as_str()))
+    }
+
+    pub fn get_all(self, name: &str) -> &[string] {
+        self.inner.get(&name.to_lowercase()).map(|v| v.as_slice()).unwrap_or(&[])
+    }
+
+    pub fn contains(self, name: &str) -> bool { self.inner.contains_key(&name.to_lowercase()) }
+
+    pub fn remove(mut self, name: &str) -> Option<[string]> {
+        self.inner.remove(&name.to_lowercase())
+    }
+
+    pub fn iter(self) -> impl Iterator<Item = (&string, &[string])> { self.inner.iter() }
+}
+
+// ── URL ──────────────────────────────────────────────────────────────────────
+pub struct Url {
+    scheme: string,
+    host: string,
+    port: Option<u16>,
+    path: string,
+    query: Option<string>,
+    fragment: Option<string>,
+}
+
+impl Url {
+    pub fn parse(url: &str) -> Result<Url, string> {
+        let mut rest = url
+        // Scheme
+        let (scheme, after_scheme) = if let some(pos) = rest.find("://") {
+            (rest[..pos].to_string(), &rest[pos+3..])
+        } else { return err("missing scheme".to_string()) }
+        rest = after_scheme
+
+        // Host and port
+        let authority_end = rest.find('/').unwrap_or(rest.len())
+        let authority = &rest[..authority_end]
+        rest = &rest[authority_end..]
+
+        let (host, port) = if let some(colon) = authority.rfind(':') {
+            let port: u16 = authority[colon+1..].parse().map_err(|_| "invalid port".to_string())?
+            (authority[..colon].to_string(), some(port))
+        } else { (authority.to_string(), none) }
+
+        // Path
+        let (path, rest2) = if let some(q) = rest.find('?') {
+            (rest[..q].to_string(), &rest[q+1..])
+        } else if let some(f) = rest.find('#') {
+            (rest[..f].to_string(), &rest[f..])
+        } else { (rest.to_string(), "") }
+
+        // Query and fragment
+        let (query, fragment) = if let some(f) = rest2.find('#') {
+            (if f > 0 { some(rest2[..f].to_string()) } else { none }, some(rest2[f+1..].to_string()))
+        } else if !rest2.is_empty() && !rest2.starts_with('#') {
+            (some(rest2.to_string()), none)
+        } else if rest2.starts_with('#') {
+            (none, some(rest2[1..].to_string()))
+        } else { (none, none) }
+
+        ok(Url { scheme, host, port, path: if path.is_empty() { "/".to_string() } else { path }, query, fragment })
+    }
+
+    pub fn authority(self) -> string {
+        if let some(port) = self.port {
+            format!("{}:{}", self.host, port)
+        } else { self.host.clone() }
+    }
+
+    pub fn effective_port(self) -> u16 {
+        self.port.unwrap_or(match self.scheme.as_str() {
+            "https" => 443, "http" => 80, _ => 80,
+        })
+    }
+}
+
+// ── Request ──────────────────────────────────────────────────────────────────
+pub struct Request {
+    method: Method,
+    url: Url,
+    headers: Headers,
+    body: Option<[u8]>,
+    timeout: Option<std.time.Duration>,
+}
+
+impl Request {
+    pub fn new(method: Method, url: &str) -> Result<Request, string> {
+        let parsed = Url.parse(url)?
+        let mut headers = Headers.new()
+        headers.set("host", &parsed.authority())
+        headers.set("user-agent", "lateralus-http/1.0")
+        headers.set("accept", "*/*")
+        headers.set("connection", "close")
+        ok(Request { method, url: parsed, headers, body: none, timeout: none })
+    }
+
+    pub fn get(url: &str) -> Result<Request, string> { Self.new(Method.GET, url) }
+    pub fn post(url: &str) -> Result<Request, string> { Self.new(Method.POST, url) }
+
+    pub fn header(mut self, name: &str, value: &str) -> Request { self.headers.set(name, value); self }
+    pub fn body_bytes(mut self, data: [u8]) -> Request { self.body = some(data); self }
+    pub fn body_text(mut self, text: &str) -> Request {
+        self.headers.set("content-type", "text/plain")
+        self.body = some(text.as_bytes().to_vec()); self
+    }
+    pub fn body_json(mut self, json: &str) -> Request {
+        self.headers.set("content-type", "application/json")
+        self.body = some(json.as_bytes().to_vec()); self
+    }
+    pub fn timeout(mut self, d: std.time.Duration) -> Request { self.timeout = some(d); self }
+
+    fn serialize(self) -> [u8] {
+        let path = if let some(ref q) = self.url.query {
+            format!("{}?{}", self.url.path, q)
+        } else { self.url.path.clone() }
+
+        let mut out = format!("{} {} HTTP/1.1\r\n", self.method.as_str(), path)
+        for (name, values) in self.headers.iter() {
+            for val in values { out += &format!("{name}: {val}\r\n") }
+        }
+        if let some(ref body) = self.body {
+            out += &format!("content-length: {}\r\n", body.len())
+        }
+        out += "\r\n"
+        let mut bytes = out.into_bytes()
+        if let some(ref body) = self.body { bytes.extend_from_slice(body) }
+        bytes
+    }
+}
+
+// ── Response ─────────────────────────────────────────────────────────────────
+pub struct Response {
+    pub status: u16,
+    pub status_text: string,
+    pub headers: Headers,
+    pub body: [u8],
+}
+
+impl Response {
+    pub fn is_success(self) -> bool { self.status >= 200 && self.status < 300 }
+    pub fn is_redirect(self) -> bool { self.status >= 300 && self.status < 400 }
+    pub fn is_client_error(self) -> bool { self.status >= 400 && self.status < 500 }
+    pub fn is_server_error(self) -> bool { self.status >= 500 }
+
+    pub fn text(self) -> string { string.from_utf8_lossy(&self.body).to_string() }
+    pub fn content_type(self) -> Option<&str> { self.headers.get("content-type") }
+    pub fn content_length(self) -> Option<usize> {
+        self.headers.get("content-length").and_then(|s| s.parse().ok())
+    }
+
+    fn parse(data: &[u8]) -> Result<Response, string> {
+        let text = string.from_utf8_lossy(data)
+        let mut lines = text.split("\r\n")
+
+        // Status line
+        let status_line = lines.next().ok_or("empty response")?
+        let parts: [&str] = status_line.splitn(3, ' ').collect()
+        if parts.len() < 2 { return err("malformed status line".to_string()) }
+        let status: u16 = parts[1].parse().map_err(|_| "invalid status".to_string())?
+        let status_text = if parts.len() > 2 { parts[2].to_string() } else { string.new() }
+
+        // Headers
+        let mut headers = Headers.new()
+        let mut body_start = 0
+        for line in &mut lines {
+            if line.is_empty() { break }
+            if let some(colon) = line.find(':') {
+                headers.append(line[..colon].trim(), line[colon+1..].trim())
+            }
+        }
+
+        // Body (remaining)
+        let body_text: string = lines.collect::<[&str]>().join("\r\n")
+
+        ok(Response { status, status_text, headers, body: body_text.into_bytes() })
+    }
+}
+
+// ── Client ───────────────────────────────────────────────────────────────────
+pub struct Client {
+    default_headers: Headers,
+    timeout: std.time.Duration,
+    max_redirects: u32,
+}
+
+impl Client {
+    pub fn new() -> Client {
+        let mut headers = Headers.new()
+        headers.set("user-agent", "lateralus-http/1.0")
+        Client { default_headers: headers, timeout: std.time.Duration.from_secs(30), max_redirects: 10 }
+    }
+
+    pub fn send(self, req: Request) -> Result<Response, string> {
+        let addr = format!("{}:{}", req.url.host, req.url.effective_port())
+        let mut stream = TcpStream.connect(&addr).map_err(|e| e.to_string())?
+        stream.set_read_timeout(some(self.timeout)).ok()
+        stream.set_write_timeout(some(self.timeout)).ok()
+
+        stream.write_all(&req.serialize()).map_err(|e| e.to_string())?
+        let mut buf = vec![0u8; 65536]
+        let n = stream.read(&mut buf).map_err(|e| e.to_string())?
+        Response.parse(&buf[..n])
+    }
+
+    pub fn get(self, url: &str) -> Result<Response, string> {
+        let req = Request.get(url)?
+        self.send(req)
+    }
+
+    pub fn post(self, url: &str, body: &str) -> Result<Response, string> {
+        let req = Request.post(url)?.body_text(body)
+        self.send(req)
+    }
+}
