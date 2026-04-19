@@ -1,0 +1,188 @@
+// std.env - Environment variables and process environment
+// Access to env vars, current directory, executable path, args.
+
+use std.collections.HashMap
+use std.io.IoError
+
+pub fn var(key: &str) -> Result<string, VarError> {
+    match @intrinsic("env_var", key) {
+        some(val) => ok(val),
+        none => err(VarError.NotPresent),
+    }
+}
+
+pub fn var_os(key: &str) -> Option<string> {
+    @intrinsic("env_var", key)
+}
+
+pub fn set_var(key: &str, value: &str) {
+    @intrinsic("env_set_var", key, value)
+}
+
+pub fn remove_var(key: &str) {
+    @intrinsic("env_remove_var", key)
+}
+
+pub fn vars() -> Vars {
+    Vars { inner: @intrinsic("env_vars").into_iter() }
+}
+
+pub fn vars_os() -> VarsOs {
+    VarsOs { inner: @intrinsic("env_vars").into_iter() }
+}
+
+pub struct Vars {
+    inner: std.collections.hash_map.IntoIter<string, string>,
+}
+
+impl Iterator for Vars {
+    type Item = (string, string)
+    fn next(mut self) -> Option<(string, string)> { self.inner.next() }
+}
+
+pub struct VarsOs {
+    inner: std.collections.hash_map.IntoIter<string, string>,
+}
+
+impl Iterator for VarsOs {
+    type Item = (string, string)
+    fn next(mut self) -> Option<(string, string)> { self.inner.next() }
+}
+
+pub enum VarError {
+    NotPresent,
+    NotUnicode(string),
+}
+
+impl fmt.Display for VarError {
+    fn fmt(self, f: &mut fmt.Formatter) -> fmt.Result {
+        match self {
+            VarError.NotPresent => write!(f, "environment variable not found"),
+            VarError.NotUnicode(s) => write!(f, "environment variable was not valid unicode: {}", s),
+        }
+    }
+}
+
+pub fn current_dir() -> Result<string, IoError> {
+    @intrinsic("env_current_dir")
+}
+
+pub fn set_current_dir(path: &str) -> Result<(), IoError> {
+    @intrinsic("env_set_current_dir", path)
+}
+
+pub fn current_exe() -> Result<string, IoError> {
+    @intrinsic("env_current_exe")
+}
+
+pub fn home_dir() -> Option<string> {
+    @intrinsic("env_home_dir")
+}
+
+pub fn temp_dir() -> string {
+    @intrinsic("env_temp_dir")
+}
+
+pub fn args() -> Args {
+    Args { inner: @intrinsic("env_args").into_iter() }
+}
+
+pub struct Args {
+    inner: std.vec.IntoIter<string>,
+}
+
+impl Iterator for Args {
+    type Item = string
+    fn next(mut self) -> Option<string> { self.inner.next() }
+}
+
+impl ExactSizeIterator for Args {
+    fn len(self) -> usize { self.inner.len() }
+}
+
+pub fn args_os() -> ArgsOs {
+    ArgsOs { inner: @intrinsic("env_args").into_iter() }
+}
+
+pub struct ArgsOs {
+    inner: std.vec.IntoIter<string>,
+}
+
+impl Iterator for ArgsOs {
+    type Item = string
+    fn next(mut self) -> Option<string> { self.inner.next() }
+}
+
+pub fn consts() -> Consts {
+    Consts {
+        os: @intrinsic("env_os"),
+        arch: @intrinsic("env_arch"),
+        family: @intrinsic("env_family"),
+    }
+}
+
+pub struct Consts {
+    pub os: &'static str,
+    pub arch: &'static str,
+    pub family: &'static str,
+}
+
+pub const OS: &str = @intrinsic("env_os")
+pub const ARCH: &str = @intrinsic("env_arch")
+pub const FAMILY: &str = @intrinsic("env_family")
+
+pub fn split_paths(unparsed: &str) -> SplitPaths {
+    let sep = if OS == "windows" { ';' } else { ':' }
+    SplitPaths { inner: unparsed.split(sep) }
+}
+
+pub struct SplitPaths<'a> {
+    inner: std.str.Split<'a, char>,
+}
+
+impl<'a> Iterator for SplitPaths<'a> {
+    type Item = string
+    fn next(mut self) -> Option<string> {
+        self.inner.next().map(|s| s.to_string())
+    }
+}
+
+pub fn join_paths<I: IntoIterator<Item = string>>(paths: I) -> Result<string, JoinPathsError> {
+    let sep = if OS == "windows" { ";" } else { ":" }
+    let parts: [string] = paths.into_iter().collect()
+    ok(parts.join(sep))
+}
+
+pub struct JoinPathsError { _msg: string }
+
+impl fmt.Display for JoinPathsError {
+    fn fmt(self, f: &mut fmt.Formatter) -> fmt.Result {
+        write!(f, "{}", self._msg)
+    }
+}
+
+fn main() {
+    // VarError display
+    let err = VarError.NotPresent
+    assert(format!("{}", err).contains("not found"))
+    print("VarError display ✓")
+
+    // split_paths
+    let paths: [string] = split_paths("/usr/bin:/usr/local/bin:/bin").collect()
+    assert(paths.len() == 3)
+    assert(paths[0] == "/usr/bin")
+    assert(paths[1] == "/usr/local/bin")
+    print("Split paths ✓")
+
+    // join_paths
+    let joined = join_paths(vec!["/a".to_string(), "/b".to_string()]).unwrap()
+    assert(joined == "/a:/b")
+    print("Join paths ✓")
+
+    // temp_dir should return something
+    let tmp = temp_dir()
+    assert(!tmp.is_empty())
+    print("Temp dir ✓")
+
+    print("Env complete ✓")
+}
