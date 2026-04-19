@@ -1,0 +1,308 @@
+// std.task - Async task primitives
+// Waker, Context, RawWaker, and Poll for async runtime integration.
+
+/// Result of polling a future.
+pub enum Poll<T> {
+    Ready(T),
+    Pending,
+}
+
+impl<T> Poll<T> {
+    pub fn is_ready(self) -> bool {
+        match self { Poll.Ready(_) => true, Poll.Pending => false }
+    }
+    pub fn is_pending(self) -> bool { !self.is_ready() }
+    pub fn unwrap(self) -> T {
+        match self { Poll.Ready(v) => v, Poll.Pending => panic!("called unwrap on Pending") }
+    }
+    pub fn map<U>(self, f: fn(T) -> U) -> Poll<U> {
+        match self { Poll.Ready(v) => Poll.Ready(f(v)), Poll.Pending => Poll.Pending }
+    }
+}
+
+/// Raw waker vtable for custom executors.
+pub struct RawWakerVTable {
+    clone: fn(*const ()) -> RawWaker,
+    wake: fn(*const ()),
+    wake_by_ref: fn(*const ()),
+    drop: fn(*const ()),
+}
+
+pub struct RawWaker {
+    data: *const (),
+    vtable: &'static RawWakerVTable,
+}
+
+impl RawWaker {
+    pub fn new(data: *const (), vtable: &'static RawWakerVTable) -> RawWaker {
+        RawWaker { data, vtable }
+    }
+}
+
+/// Waker notifies the executor that a task is ready to make progress.
+pub struct Waker {
+    inner: RawWaker,
+}
+
+impl Waker {
+    pub fn from_raw(raw: RawWaker) -> Waker { Waker { inner: raw } }
+
+    pub fn wake(self) {
+        let wake_fn = self.inner.vtable.wake
+        let data = self.inner.data
+        wake_fn(data)
+    }
+
+    pub fn wake_by_ref(self) {
+        let wake_fn = self.inner.vtable.wake_by_ref
+        wake_fn(self.inner.data)
+    }
+
+    pub fn will_wake(self, other: &Waker) -> bool {
+        self.inner.data == other.inner.data
+    }
+
+    /// Create a no-op waker (useful for testing).
+    pub fn noop() -> Waker {
+        static NOOP_VTABLE: RawWakerVTable = RawWakerVTable {
+            clone: |data| RawWaker.new(data, &NOOP_VTABLE),
+            wake: |_| {},
+            wake_by_ref: |_| {},
+            drop: |_| {},
+        }
+        Waker.from_raw(RawWaker.new(std.ptr.null(), &NOOP_VTABLE))
+    }
+}
+
+impl Clone for Waker {
+    fn clone(self) -> Waker {
+        let clone_fn = self.inner.vtable.clone
+        Waker { inner: clone_fn(self.inner.data) }
+    }
+}
+
+impl Drop for Waker {
+    fn drop(mut self) {
+        let drop_fn = self.inner.vtable.drop
+        drop_fn(self.inner.data)
+    }
+}
+
+/// Context passed to Future.poll, carrying the Waker.
+pub struct Context<'a> {
+    waker: &'a Waker,
+}
+
+impl<'a> Context<'a> {
+    pub fn from_waker(waker: &'a Waker) -> Context<'a> {
+        Context { waker }
+    }
+
+    pub fn waker(self) -> &'a Waker { self.waker }
+}
+
+/// The core Future trait.
+pub trait Future {
+    type Output;
+    fn poll(mut self, cx: &mut Context) -> Poll<Self::Output>;
+}
+
+/// A future that is immediately ready with a value.
+pub struct Ready<T> { value: Option<T> }
+
+pub fn ready<T>(val: T) -> Ready<T> { Ready { value: some(val) } }
+
+impl<T> Future for Ready<T> {
+    type Output = T
+    fn poll(mut self, _cx: &mut Context) -> Poll<T> {
+        match self.value.take() {
+            some(v) => Poll.Ready(v),
+            none => panic!("Ready polled after completion"),
+        }
+    }
+}
+
+/// A future that is always pending (never resolves).
+pub struct Pending<T> { _marker: std.marker.PhantomData<T> }
+
+pub fn pending<T>() -> Pending<T> {
+    Pending { _marker: std.marker.PhantomData }
+}
+
+impl<T> Future for Pending<T> {
+    type Output = T
+    fn poll(mut self, _cx: &mut Context) -> Poll<T> { Poll.Pending }
+}
+
+/// A future that yields once then completes.
+pub struct YieldNow { yielded: bool }
+
+pub fn yield_now() -> YieldNow { YieldNow { yielded: false } }
+
+impl Future for YieldNow {
+    type Output = ()
+    fn poll(mut self, cx: &mut Context) -> Poll<()> {
+        if self.yielded {
+            Poll.Ready(())
+        } else {
+            self.yielded = true
+            cx.waker().wake_by_ref()
+            Poll.Pending
+        }
+    }
+}
+
+/// A future combinator: map the output.
+pub struct Map<F, Func> {
+    future: F,
+    func: Option<Func>,
+}
+
+pub fn map<F: Future, U, Func: FnOnce(F.Output) -> U>(future: F, func: Func) -> Map<F, Func> {
+    Map { future, func: some(func) }
+}
+
+impl<F: Future, U, Func: FnOnce(F.Output) -> U> Future for Map<F, Func> {
+    type Output = U
+    fn poll(mut self, cx: &mut Context) -> Poll<U> {
+        match self.future.poll(cx) {
+            Poll.Ready(v) => {
+                let f = self.func.take().unwrap()
+                Poll.Ready(f(v))
+            },
+            Poll.Pending => Poll.Pending,
+        }
+    }
+}
+
+/// Join two futures, completing when both are done.
+pub struct Join<A: Future, B: Future> {
+    a: Option<A>,
+    b: Option<B>,
+    a_result: Option<A.Output>,
+    b_result: Option<B.Output>,
+}
+
+pub fn join<A: Future, B: Future>(a: A, b: B) -> Join<A, B> {
+    Join { a: some(a), b: some(b), a_result: none, b_result: none }
+}
+
+impl<A: Future, B: Future> Future for Join<A, B> {
+    type Output = (A.Output, B.Output)
+    fn poll(mut self, cx: &mut Context) -> Poll<(A.Output, B.Output)> {
+        if self.a_result.is_none() {
+            if let some(ref mut a) = self.a {
+                if let Poll.Ready(v) = a.poll(cx) {
+                    self.a_result = some(v)
+                    self.a = none
+                }
+            }
+        }
+        if self.b_result.is_none() {
+            if let some(ref mut b) = self.b {
+                if let Poll.Ready(v) = b.poll(cx) {
+                    self.b_result = some(v)
+                    self.b = none
+                }
+            }
+        }
+        if self.a_result.is_some() && self.b_result.is_some() {
+            Poll.Ready((self.a_result.take().unwrap(), self.b_result.take().unwrap()))
+        } else {
+            Poll.Pending
+        }
+    }
+}
+
+/// Simple single-threaded executor for testing.
+pub struct SimpleExecutor;
+
+impl SimpleExecutor {
+    pub fn block_on<F: Future>(future: F) -> F.Output {
+        let waker = Waker.noop()
+        let mut cx = Context.from_waker(&waker)
+        let mut fut = future
+        loop {
+            match fut.poll(&mut cx) {
+                Poll.Ready(val) => return val,
+                Poll.Pending => {
+                    // In real executor: park thread, wait for wake
+                    std.thread.yield_now()
+                },
+            }
+        }
+    }
+}
+
+fn main() {
+    // Poll
+    let ready_poll: Poll<i32> = Poll.Ready(42)
+    assert(ready_poll.is_ready())
+    assert(!ready_poll.is_pending())
+    assert(ready_poll.unwrap() == 42)
+    print("Poll Ready ✓")
+
+    let pending_poll: Poll<i32> = Poll.Pending
+    assert(pending_poll.is_pending())
+    assert(!pending_poll.is_ready())
+    print("Poll Pending ✓")
+
+    // Poll map
+    let mapped = Poll.Ready(10).map(|x| x * 2)
+    assert(mapped.unwrap() == 20)
+    let mapped_pending: Poll<i32> = Poll.Pending
+    assert(mapped_pending.map(|x| x * 2).is_pending())
+    print("Poll map ✓")
+
+    // Noop waker
+    let waker = Waker.noop()
+    waker.wake_by_ref()  // should not panic
+    print("Noop waker ✓")
+
+    // Waker clone
+    let waker2 = waker.clone()
+    assert(waker.will_wake(&waker2))
+    print("Waker clone/will_wake ✓")
+
+    // Context
+    let cx = Context.from_waker(&waker)
+    let _ = cx.waker()
+    print("Context ✓")
+
+    // Ready future
+    let mut ready_fut = ready(99)
+    let mut cx2 = Context.from_waker(&waker)
+    let result = ready_fut.poll(&mut cx2)
+    assert(result.unwrap() == 99)
+    print("Ready future ✓")
+
+    // Pending future
+    let mut pend: Pending<i32> = pending()
+    assert(pend.poll(&mut cx2).is_pending())
+    print("Pending future ✓")
+
+    // YieldNow
+    let mut yn = yield_now()
+    assert(yn.poll(&mut cx2).is_pending())
+    assert(yn.poll(&mut cx2).is_ready())
+    print("YieldNow ✓")
+
+    // SimpleExecutor with ready
+    let val = SimpleExecutor.block_on(ready(42))
+    assert(val == 42)
+    print("SimpleExecutor block_on ✓")
+
+    // Map combinator
+    let mapped_future = map(ready(5), |x| x + 10)
+    let val2 = SimpleExecutor.block_on(mapped_future)
+    assert(val2 == 15)
+    print("Map combinator ✓")
+
+    // Join
+    let joined = join(ready(1), ready(2))
+    let (a, b) = SimpleExecutor.block_on(joined)
+    assert(a == 1 && b == 2)
+    print("Join ✓")
+
+    print("Task module complete ✓")
+}
