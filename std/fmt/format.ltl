@@ -1,0 +1,250 @@
+// std.fmt.format — String formatting and display traits
+
+// ── Display and Debug traits ─────────────────────────────────────────────────
+pub trait Display {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError>
+}
+
+pub trait Debug {
+    fn debug_fmt(self, f: &mut Formatter) -> Result<(), FmtError>
+}
+
+pub struct FmtError;
+
+// ── Formatter ────────────────────────────────────────────────────────────────
+pub struct Formatter {
+    buf: string,
+    precision: Option<usize>,
+    width: Option<usize>,
+    fill: char,
+    align: Alignment,
+    sign: SignMode,
+    alternate: bool,
+}
+
+pub enum Alignment { Left, Center, Right }
+pub enum SignMode { Minus, Plus, Space }
+
+impl Formatter {
+    pub fn new() -> Formatter {
+        Formatter {
+            buf: string.new(), precision: none, width: none,
+            fill: ' ', align: Alignment.Right, sign: SignMode.Minus,
+            alternate: false,
+        }
+    }
+
+    pub fn write_str(mut self, s: &str) -> Result<(), FmtError> {
+        self.buf.push_str(s); ok(())
+    }
+
+    pub fn write_char(mut self, c: char) -> Result<(), FmtError> {
+        self.buf.push(c); ok(())
+    }
+
+    pub fn write_fmt(mut self, args: &[FormatArg]) -> Result<(), FmtError> {
+        for arg in args {
+            match arg {
+                FormatArg.Literal(s) => self.write_str(s)?,
+                FormatArg.Value(v) => {
+                    let formatted = v.format(self)?
+                    self.pad(&formatted)?
+                }
+            }
+        }
+        ok(())
+    }
+
+    pub fn precision(self) -> Option<usize> { self.precision }
+    pub fn width(self) -> Option<usize> { self.width }
+
+    fn pad(mut self, s: &str) -> Result<(), FmtError> {
+        if let some(width) = self.width {
+            if s.len() >= width { return self.write_str(s) }
+            let padding = width - s.len()
+            match self.align {
+                Alignment.Left => {
+                    self.write_str(s)?
+                    for _ in 0..padding { self.write_char(self.fill)? }
+                }
+                Alignment.Right => {
+                    for _ in 0..padding { self.write_char(self.fill)? }
+                    self.write_str(s)?
+                }
+                Alignment.Center => {
+                    let left = padding / 2
+                    let right = padding - left
+                    for _ in 0..left { self.write_char(self.fill)? }
+                    self.write_str(s)?
+                    for _ in 0..right { self.write_char(self.fill)? }
+                }
+            }
+            ok(())
+        } else {
+            self.write_str(s)
+        }
+    }
+
+    pub fn finish(self) -> string { self.buf }
+}
+
+// ── Format arguments ─────────────────────────────────────────────────────────
+pub enum FormatArg {
+    Literal(string),
+    Value(Box<dyn Display>),
+}
+
+// ── FormatSpec parsing ───────────────────────────────────────────────────────
+pub struct FormatSpec {
+    fill: Option<char>,
+    align: Option<Alignment>,
+    sign: Option<SignMode>,
+    alternate: bool,
+    zero_pad: bool,
+    width: Option<usize>,
+    precision: Option<usize>,
+    format_type: Option<FormatType>,
+}
+
+pub enum FormatType { Binary, Octal, Hex, HexUpper, Exp, ExpUpper, Float, Debug, Display }
+
+impl FormatSpec {
+    pub fn parse(spec: &str) -> FormatSpec {
+        let mut fs = FormatSpec {
+            fill: none, align: none, sign: none, alternate: false,
+            zero_pad: false, width: none, precision: none, format_type: none,
+        }
+        let chars: [char] = spec.chars().collect()
+        let mut pos = 0
+
+        // Fill and align
+        if chars.len() >= 2 && matches!(chars[1], '<' | '>' | '^') {
+            fs.fill = some(chars[0])
+            fs.align = some(match chars[1] { '<' => Alignment.Left, '^' => Alignment.Center, _ => Alignment.Right })
+            pos = 2
+        } else if !chars.is_empty() && matches!(chars[0], '<' | '>' | '^') {
+            fs.align = some(match chars[0] { '<' => Alignment.Left, '^' => Alignment.Center, _ => Alignment.Right })
+            pos = 1
+        }
+
+        // Sign
+        if pos < chars.len() && matches!(chars[pos], '+' | '-' | ' ') {
+            fs.sign = some(match chars[pos] { '+' => SignMode.Plus, ' ' => SignMode.Space, _ => SignMode.Minus })
+            pos += 1
+        }
+
+        // Alternate
+        if pos < chars.len() && chars[pos] == '#' { fs.alternate = true; pos += 1 }
+
+        // Zero pad
+        if pos < chars.len() && chars[pos] == '0' { fs.zero_pad = true; pos += 1 }
+
+        // Width
+        let mut width_str = string.new()
+        while pos < chars.len() && chars[pos].is_ascii_digit() {
+            width_str.push(chars[pos]); pos += 1
+        }
+        if !width_str.is_empty() { fs.width = width_str.parse().ok() }
+
+        // Precision
+        if pos < chars.len() && chars[pos] == '.' {
+            pos += 1
+            let mut prec_str = string.new()
+            while pos < chars.len() && chars[pos].is_ascii_digit() {
+                prec_str.push(chars[pos]); pos += 1
+            }
+            fs.precision = prec_str.parse().ok()
+        }
+
+        // Type
+        if pos < chars.len() {
+            fs.format_type = some(match chars[pos] {
+                'b' => FormatType.Binary, 'o' => FormatType.Octal,
+                'x' => FormatType.Hex, 'X' => FormatType.HexUpper,
+                'e' => FormatType.Exp, 'E' => FormatType.ExpUpper,
+                'f' => FormatType.Float, '?' => FormatType.Debug,
+                _ => FormatType.Display,
+            })
+        }
+        fs
+    }
+
+    pub fn apply_to_formatter(self, f: &mut Formatter) {
+        if let some(w) = self.width { f.width = some(w) }
+        if let some(p) = self.precision { f.precision = some(p) }
+        if let some(fill) = self.fill { f.fill = fill }
+        if let some(align) = &self.align { f.align = align.clone() }
+        if let some(sign) = &self.sign { f.sign = sign.clone() }
+        f.alternate = self.alternate
+        if self.zero_pad { f.fill = '0'; f.align = Alignment.Right }
+    }
+}
+
+// ── Built-in Display implementations ─────────────────────────────────────────
+impl Display for i64 {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError> { f.write_str(&self.to_string()) }
+}
+
+impl Display for f64 {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError> {
+        let s = if let some(prec) = f.precision() {
+            format!("{:.prec$}", self, prec = prec)
+        } else { self.to_string() }
+        f.write_str(&s)
+    }
+}
+
+impl Display for bool {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError> {
+        f.write_str(if self { "true" } else { "false" })
+    }
+}
+
+impl Display for &str {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError> { f.write_str(self) }
+}
+
+impl Display for string {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError> { f.write_str(&self) }
+}
+
+impl Display for char {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError> { f.write_char(self) }
+}
+
+// ── format! macro helper ─────────────────────────────────────────────────────
+pub fn format_args(template: &str, args: &[&dyn Display]) -> string {
+    let mut result = string.new()
+    let chars: [char] = template.chars().collect()
+    let mut i = 0
+    let mut arg_idx = 0
+
+    while i < chars.len() {
+        if chars[i] == '{' {
+            if i + 1 < chars.len() && chars[i + 1] == '{' {
+                result.push('{'); i += 2; continue
+            }
+            // Find closing }
+            let start = i + 1
+            while i < chars.len() && chars[i] != '}' { i += 1 }
+            let spec_str: string = chars[start..i].iter().collect()
+
+            if arg_idx < args.len() {
+                let mut f = Formatter.new()
+                if !spec_str.is_empty() {
+                    let spec = FormatSpec.parse(&spec_str)
+                    spec.apply_to_formatter(&mut f)
+                }
+                args[arg_idx].fmt(&mut f).ok()
+                result.push_str(&f.finish())
+                arg_idx += 1
+            }
+            i += 1  // skip }
+        } else if chars[i] == '}' && i + 1 < chars.len() && chars[i + 1] == '}' {
+            result.push('}'); i += 2
+        } else {
+            result.push(chars[i]); i += 1
+        }
+    }
+    result
+}
