@@ -1,0 +1,180 @@
+// std.process - Process spawning and management
+// Command builder, Child, Output, ExitStatus, Stdio.
+
+pub struct Command {
+    program: string,
+    args: [string],
+    env: Option<HashMap<string, string>>,
+    current_dir: Option<string>,
+    stdin: Stdio,
+    stdout: Stdio,
+    stderr: Stdio,
+}
+
+impl Command {
+    pub fn new(program: &str) -> Command {
+        Command {
+            program: program.to_string(), args: [], env: none,
+            current_dir: none, stdin: Stdio.Inherit,
+            stdout: Stdio.Inherit, stderr: Stdio.Inherit,
+        }
+    }
+
+    pub fn arg(mut self, arg: &str) -> &mut Command { self.args.push(arg.to_string()); self }
+    pub fn args(mut self, args: &[&str]) -> &mut Command { for a in args { self.args.push(a.to_string()) }; self }
+    pub fn env(mut self, key: &str, val: &str) -> &mut Command {
+        self.env.get_or_insert_with(|| HashMap.new()).insert(key.to_string(), val.to_string()); self
+    }
+    pub fn env_clear(mut self) -> &mut Command { self.env = some(HashMap.new()); self }
+    pub fn current_dir(mut self, dir: &str) -> &mut Command { self.current_dir = some(dir.to_string()); self }
+    pub fn stdin(mut self, cfg: Stdio) -> &mut Command { self.stdin = cfg; self }
+    pub fn stdout(mut self, cfg: Stdio) -> &mut Command { self.stdout = cfg; self }
+    pub fn stderr(mut self, cfg: Stdio) -> &mut Command { self.stderr = cfg; self }
+
+    pub fn spawn(self) -> Result<Child, IoError> {
+        let pid = @intrinsic("process_spawn", &self.program, &self.args, &self.env, &self.current_dir, &self.stdin, &self.stdout, &self.stderr)
+        ok(Child {
+            pid, stdin: none, stdout: none, stderr: none,
+        })
+    }
+
+    pub fn output(self) -> Result<Output, IoError> {
+        let mut cmd = self
+        cmd.stdout(Stdio.Piped).stderr(Stdio.Piped)
+        let child = cmd.spawn()?
+        child.wait_with_output()
+    }
+
+    pub fn status(self) -> Result<ExitStatus, IoError> {
+        let child = self.spawn()?
+        child.wait()
+    }
+}
+
+pub enum Stdio { Inherit, Piped, Null }
+
+impl Stdio {
+    pub fn piped() -> Stdio { Stdio.Piped }
+    pub fn null() -> Stdio { Stdio.Null }
+    pub fn inherit() -> Stdio { Stdio.Inherit }
+}
+
+pub struct Child {
+    pid: u32,
+    pub stdin: Option<ChildStdin>,
+    pub stdout: Option<ChildStdout>,
+    pub stderr: Option<ChildStderr>,
+}
+
+impl Child {
+    pub fn id(self) -> u32 { self.pid }
+
+    pub fn wait(self) -> Result<ExitStatus, IoError> {
+        let code = @intrinsic("process_wait", self.pid)
+        ok(ExitStatus { code })
+    }
+
+    pub fn wait_with_output(self) -> Result<Output, IoError> {
+        let mut stdout_data: [u8] = []
+        let mut stderr_data: [u8] = []
+        if let some(mut out) = self.stdout.take() {
+            out.read_to_end(&mut stdout_data)?
+        }
+        if let some(mut err_stream) = self.stderr.take() {
+            err_stream.read_to_end(&mut stderr_data)?
+        }
+        let status = self.wait()?
+        ok(Output { status, stdout: stdout_data, stderr: stderr_data })
+    }
+
+    pub fn kill(self) -> Result<(), IoError> {
+        @intrinsic("process_kill", self.pid)
+    }
+
+    pub fn try_wait(self) -> Result<Option<ExitStatus>, IoError> {
+        let result = @intrinsic("process_try_wait", self.pid)
+        match result {
+            some(code) => ok(some(ExitStatus { code })),
+            none => ok(none),
+        }
+    }
+}
+
+pub struct ChildStdin { _fd: i32 }
+pub struct ChildStdout { _fd: i32 }
+pub struct ChildStderr { _fd: i32 }
+
+impl Write for ChildStdin {
+    fn write(mut self, buf: &[u8]) -> Result<usize, IoError> { @intrinsic("fd_write", self._fd, buf) }
+    fn flush(mut self) -> Result<(), IoError> { @intrinsic("fd_flush", self._fd) }
+}
+
+impl Read for ChildStdout {
+    fn read(mut self, buf: &mut [u8]) -> Result<usize, IoError> { @intrinsic("fd_read", self._fd, buf) }
+}
+
+impl Read for ChildStderr {
+    fn read(mut self, buf: &mut [u8]) -> Result<usize, IoError> { @intrinsic("fd_read", self._fd, buf) }
+}
+
+pub struct Output {
+    pub status: ExitStatus,
+    pub stdout: [u8],
+    pub stderr: [u8],
+}
+
+pub struct ExitStatus { code: i32 }
+
+impl ExitStatus {
+    pub fn success(self) -> bool { self.code == 0 }
+    pub fn code(self) -> Option<i32> { some(self.code) }
+}
+
+impl fmt.Display for ExitStatus {
+    fn fmt(self, f: &mut fmt.Formatter) -> fmt.Result {
+        write!(f, "exit status: {}", self.code)
+    }
+}
+
+pub fn exit(code: i32) -> ! { @intrinsic("process_exit", code) }
+
+pub fn abort() -> ! { @intrinsic("process_abort") }
+
+pub fn id() -> u32 { @intrinsic("process_id") }
+
+fn main() {
+    // Command builder
+    let mut cmd = Command.new("echo")
+    cmd.arg("hello").arg("world")
+    assert(cmd.program == "echo")
+    assert(cmd.args == ["hello", "world"])
+    print("Command builder \u2713")
+
+    // Stdio
+    let _ = Stdio.piped()
+    let _ = Stdio.null()
+    let _ = Stdio.inherit()
+    print("Stdio \u2713")
+
+    // ExitStatus
+    let success = ExitStatus { code: 0 }
+    let failure = ExitStatus { code: 1 }
+    assert(success.success())
+    assert(!failure.success())
+    assert(success.code() == some(0))
+    print("ExitStatus \u2713")
+
+    // Output
+    let out = Output { status: ExitStatus { code: 0 }, stdout: b"hello".to_vec(), stderr: [] }
+    assert(out.status.success())
+    assert(out.stdout == b"hello".to_vec())
+    print("Output \u2713")
+
+    // Chaining
+    let mut cmd2 = Command.new("ls")
+    cmd2.arg("-la").current_dir("/tmp").env("FOO", "bar").stdout(Stdio.Piped)
+    assert(cmd2.current_dir == some("/tmp".to_string()))
+    print("Command chaining \u2713")
+
+    print("Process complete \u2713")
+}
