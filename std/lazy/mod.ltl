@@ -1,0 +1,269 @@
+// Standard Library - Lazy Evaluation
+// Lazy<T> for deferred computation, OnceCell, and LazyLock for thread-safe init.
+
+use std.sync.{Mutex, Once}
+
+enum LazyState<T> {
+    Uninit,
+    Computing,
+    Ready(T),
+}
+
+struct Lazy<T, F: Fn() -> T = fn() -> T> {
+    state: LazyState<T>,
+    init: Option<F>,
+}
+
+impl<T, F: Fn() -> T> Lazy<T, F> {
+    fn new(init: F) -> Lazy<T, F> {
+        Lazy { state: LazyState.Uninit, init: some(init) }
+    }
+
+    fn force(mut self) -> &T {
+        match self.state {
+            LazyState.Ready(ref val) => val,
+            LazyState.Computing => panic("Lazy: recursive initialization"),
+            LazyState.Uninit => {
+                self.state = LazyState.Computing
+                let f = self.init.take().unwrap()
+                let val = f()
+                self.state = LazyState.Ready(val)
+                match &self.state {
+                    LazyState.Ready(ref v) => v,
+                    _ => unreachable(),
+                }
+            },
+        }
+    }
+
+    fn is_initialized(self) -> bool {
+        match self.state {
+            LazyState.Ready(_) => true,
+            _ => false,
+        }
+    }
+
+    fn get(self) -> Option<&T> {
+        match &self.state {
+            LazyState.Ready(ref val) => some(val),
+            _ => none,
+        }
+    }
+
+    fn into_inner(self) -> Option<T> {
+        match self.state {
+            LazyState.Ready(val) => some(val),
+            _ => none,
+        }
+    }
+}
+
+// OnceCell: a cell that can be written to only once
+struct OnceCell<T> {
+    value: Option<T>,
+}
+
+impl<T> OnceCell<T> {
+    fn new() -> OnceCell<T> {
+        OnceCell { value: none }
+    }
+
+    fn with_value(val: T) -> OnceCell<T> {
+        OnceCell { value: some(val) }
+    }
+
+    fn get(self) -> Option<&T> {
+        self.value.as_ref()
+    }
+
+    fn get_mut(mut self) -> Option<&mut T> {
+        self.value.as_mut()
+    }
+
+    fn set(mut self, value: T) -> Result<(), T> {
+        if self.value.is_some() {
+            return err(value)
+        }
+        self.value = some(value)
+        ok(())
+    }
+
+    fn get_or_init<F: Fn() -> T>(mut self, f: F) -> &T {
+        if self.value.is_none() {
+            self.value = some(f())
+        }
+        self.value.as_ref().unwrap()
+    }
+
+    fn get_or_try_init<E, F: Fn() -> Result<T, E>>(mut self, f: F) -> Result<&T, E> {
+        if self.value.is_none() {
+            self.value = some(f()?)
+        }
+        ok(self.value.as_ref().unwrap())
+    }
+
+    fn is_initialized(self) -> bool {
+        self.value.is_some()
+    }
+
+    fn take(mut self) -> Option<T> {
+        self.value.take()
+    }
+
+    fn into_inner(self) -> Option<T> {
+        self.value
+    }
+}
+
+// Thread-safe lazy initialization
+struct LazyLock<T, F: Fn() -> T = fn() -> T> {
+    once: Once,
+    value: Option<T>,
+    init: Option<F>,
+}
+
+impl<T, F: Fn() -> T> LazyLock<T, F> {
+    fn new(init: F) -> LazyLock<T, F> {
+        LazyLock { once: Once.new(), value: none, init: some(init) }
+    }
+
+    fn force(mut self) -> &T {
+        self.once.call_once(|| {
+            let f = self.init.take().unwrap()
+            self.value = some(f())
+        })
+        self.value.as_ref().unwrap()
+    }
+
+    fn is_initialized(self) -> bool {
+        self.once.is_completed()
+    }
+
+    fn get(self) -> Option<&T> {
+        if self.is_initialized() { self.value.as_ref() } else { none }
+    }
+}
+
+// OnceLock: thread-safe OnceCell
+struct OnceLock<T> {
+    once: Once,
+    value: Option<T>,
+}
+
+impl<T> OnceLock<T> {
+    fn new() -> OnceLock<T> {
+        OnceLock { once: Once.new(), value: none }
+    }
+
+    fn get(self) -> Option<&T> {
+        if self.once.is_completed() { self.value.as_ref() } else { none }
+    }
+
+    fn set(mut self, value: T) -> Result<(), T> {
+        let mut val = some(value)
+        self.once.call_once(|| {
+            self.value = val.take()
+        })
+        match val {
+            some(v) => err(v),
+            none => ok(()),
+        }
+    }
+
+    fn get_or_init<F: Fn() -> T>(mut self, f: F) -> &T {
+        self.once.call_once(|| {
+            self.value = some(f())
+        })
+        self.value.as_ref().unwrap()
+    }
+
+    fn is_initialized(self) -> bool {
+        self.once.is_completed()
+    }
+
+    fn into_inner(self) -> Option<T> {
+        self.value
+    }
+}
+
+fn main() {
+    // Lazy
+    let lazy = Lazy.new(|| {
+        print("computing...")
+        42
+    })
+    assert(!lazy.is_initialized())
+    assert(lazy.get().is_none())
+    let val = lazy.force()
+    assert(*val == 42)
+    assert(lazy.is_initialized())
+    assert(*lazy.get().unwrap() == 42)
+    // Second force returns same value
+    let val2 = lazy.force()
+    assert(*val2 == 42)
+    print("Lazy ✓")
+
+    // Lazy into_inner
+    let lazy2 = Lazy.new(|| "hello".to_string())
+    lazy2.force()
+    let inner = lazy2.into_inner().unwrap()
+    assert(inner == "hello")
+    print("Lazy into_inner ✓")
+
+    // OnceCell
+    let mut cell: OnceCell<i32> = OnceCell.new()
+    assert(!cell.is_initialized())
+    assert(cell.get().is_none())
+    assert(cell.set(10).is_ok())
+    assert(cell.is_initialized())
+    assert(*cell.get().unwrap() == 10)
+    // Second set fails
+    assert(cell.set(20).is_err())
+    assert(*cell.get().unwrap() == 10) // unchanged
+    print("OnceCell ✓")
+
+    // OnceCell with_value
+    let cell2 = OnceCell.with_value(99)
+    assert(cell2.is_initialized())
+    assert(*cell2.get().unwrap() == 99)
+    print("OnceCell with_value ✓")
+
+    // OnceCell get_or_init
+    let mut cell3: OnceCell<string> = OnceCell.new()
+    let val = cell3.get_or_init(|| "initialized".to_string())
+    assert(val == "initialized")
+    let val2 = cell3.get_or_init(|| "second".to_string())
+    assert(val2 == "initialized") // first value kept
+    print("OnceCell get_or_init ✓")
+
+    // OnceCell get_or_try_init
+    let mut cell4: OnceCell<i32> = OnceCell.new()
+    let result: Result<&i32, string> = cell4.get_or_try_init(|| ok(42))
+    assert(*result.unwrap() == 42)
+    let result2: Result<&i32, string> = cell4.get_or_try_init(|| err("fail".to_string()))
+    assert(*result2.unwrap() == 42) // already set, error ignored
+    print("OnceCell get_or_try_init ✓")
+
+    // OnceCell take
+    let mut cell5 = OnceCell.with_value(7)
+    let taken = cell5.take()
+    assert(taken == some(7))
+    assert(!cell5.is_initialized())
+    print("OnceCell take ✓")
+
+    // OnceCell get_mut
+    let mut cell6 = OnceCell.with_value(100)
+    if let some(v) = cell6.get_mut() {
+        *v = 200
+    }
+    assert(*cell6.get().unwrap() == 200)
+    print("OnceCell get_mut ✓")
+
+    // LazyState
+    let _uninit: LazyState<i32> = LazyState.Uninit
+    let _computing: LazyState<i32> = LazyState.Computing
+    let _ready = LazyState.Ready(42)
+    print("LazyState variants ✓")
+
+    print("Lazy Evaluation complete ✓")
+}
