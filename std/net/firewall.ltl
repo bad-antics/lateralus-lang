@@ -1,0 +1,186 @@
+// std/net/firewall.ltl — Lateralus stdlib network firewall module
+
+use std.net.{IpAddr, SocketAddr}
+use std.collections.HashMap
+use std.sync.RwLock
+
+// ── Public firewall API ──────────────────────────────────────────────────────
+pub enum Verdict { Accept, Drop, Reject, Queue(u32) }
+pub enum Hook { PreRouting, Input, Forward, Output, PostRouting }
+
+pub struct NetfilterRule {
+    pub chain:     Hook,
+    pub priority:  i32,
+    pub matcher:   PacketMatcher,
+    pub target:    Verdict,
+    pub counters:  RwLock<(u64, u64)>,  // (packets, bytes)
+}
+
+pub struct PacketMatcher {
+    pub src_addr:  Option<CidrRange>,
+    pub dst_addr:  Option<CidrRange>,
+    pub src_port:  Option<(u16, u16)>,
+    pub dst_port:  Option<(u16, u16)>,
+    pub protocol:  Option<u8>,
+    pub iface_in:  Option<string>,
+    pub iface_out: Option<string>,
+    pub state:     Option<ConntrackState>,
+    pub invert:    bool,
+}
+
+pub struct CidrRange { addr: IpAddr, prefix_len: u8 }
+
+impl CidrRange {
+    pub fn contains(self, addr: IpAddr) -> bool {
+        match (self.addr, addr) {
+            (IpAddr.V4(net), IpAddr.V4(a)) => {
+                let mask = if self.prefix_len >= 32 { u32.MAX } else { u32.MAX << (32 - self.prefix_len) }
+                (net.to_u32() & mask) == (a.to_u32() & mask)
+            }
+            (IpAddr.V6(net), IpAddr.V6(a)) => {
+                let mask = if self.prefix_len >= 128 { u128.MAX } else { u128.MAX << (128 - self.prefix_len) }
+                (net.to_u128() & mask) == (a.to_u128() & mask)
+            }
+            _ => false
+        }
+    }
+}
+
+pub enum ConntrackState { New, Established, Related, Invalid }
+
+pub struct PacketInfo {
+    pub src_addr:  IpAddr,
+    pub dst_addr:  IpAddr,
+    pub src_port:  u16,
+    pub dst_port:  u16,
+    pub protocol:  u8,
+    pub iface_in:  string,
+    pub iface_out: string,
+    pub length:    usize,
+    pub ct_state:  ConntrackState,
+}
+
+impl PacketMatcher {
+    pub fn matches(self, pkt: &PacketInfo) -> bool {
+        let mut result = true
+        if let some(ref cidr) = self.src_addr { result = result && cidr.contains(pkt.src_addr) }
+        if let some(ref cidr) = self.dst_addr { result = result && cidr.contains(pkt.dst_addr) }
+        if let some((lo, hi)) = self.src_port { result = result && pkt.src_port >= lo && pkt.src_port <= hi }
+        if let some((lo, hi)) = self.dst_port { result = result && pkt.dst_port >= lo && pkt.dst_port <= hi }
+        if let some(proto) = self.protocol { result = result && pkt.protocol == proto }
+        if let some(ref iface) = self.iface_in { result = result && pkt.iface_in == *iface }
+        if let some(ref iface) = self.iface_out { result = result && pkt.iface_out == *iface }
+        if self.invert { !result } else { result }
+    }
+}
+
+pub struct Firewall {
+    chains:  HashMap<Hook, [NetfilterRule]>,
+    default: HashMap<Hook, Verdict>,
+}
+
+impl Firewall {
+    pub fn new() -> Firewall {
+        let mut default = HashMap.new()
+        default.insert(Hook.Input, Verdict.Accept)
+        default.insert(Hook.Output, Verdict.Accept)
+        default.insert(Hook.Forward, Verdict.Drop)
+        Firewall { chains: HashMap.new(), default }
+    }
+
+    pub fn add_rule(mut self, rule: NetfilterRule) {
+        let chain = self.chains.entry(rule.chain).or_insert([])
+        chain.push(rule)
+        chain.sort_by_key(|r| r.priority)
+    }
+
+    pub fn process(self, hook: Hook, pkt: &PacketInfo) -> Verdict {
+        if let some(rules) = self.chains.get(&hook) {
+            for rule in rules {
+                if rule.matcher.matches(pkt) {
+                    let mut counters = rule.counters.write()
+                    counters.0 += 1
+                    counters.1 += pkt.length as u64
+                    return rule.target.clone()
+                }
+            }
+        }
+        self.default.get(&hook).cloned().unwrap_or(Verdict.Accept)
+    }
+
+    pub fn set_default(mut self, hook: Hook, verdict: Verdict) {
+        self.default.insert(hook, verdict)
+    }
+}
+
+// ── Builder pattern for rules ────────────────────────────────────────────────
+pub struct RuleBuilder {
+    chain: Hook, priority: i32, matcher: PacketMatcher, target: Verdict,
+}
+
+impl RuleBuilder {
+    pub fn new(chain: Hook) -> RuleBuilder {
+        RuleBuilder {
+            chain, priority: 0,
+            matcher: PacketMatcher {
+                src_addr: none, dst_addr: none, src_port: none, dst_port: none,
+                protocol: none, iface_in: none, iface_out: none, state: none, invert: false,
+            },
+            target: Verdict.Accept,
+        }
+    }
+
+    pub fn src(mut self, cidr: CidrRange) -> RuleBuilder { self.matcher.src_addr = some(cidr); self }
+    pub fn dst(mut self, cidr: CidrRange) -> RuleBuilder { self.matcher.dst_addr = some(cidr); self }
+    pub fn dport(mut self, port: u16) -> RuleBuilder { self.matcher.dst_port = some((port, port)); self }
+    pub fn dport_range(mut self, lo: u16, hi: u16) -> RuleBuilder { self.matcher.dst_port = some((lo, hi)); self }
+    pub fn proto(mut self, p: u8) -> RuleBuilder { self.matcher.protocol = some(p); self }
+    pub fn tcp(self) -> RuleBuilder { self.proto(6) }
+    pub fn udp(self) -> RuleBuilder { self.proto(17) }
+    pub fn iface(mut self, name: string) -> RuleBuilder { self.matcher.iface_in = some(name); self }
+    pub fn state(mut self, s: ConntrackState) -> RuleBuilder { self.matcher.state = some(s); self }
+    pub fn accept(mut self) -> RuleBuilder { self.target = Verdict.Accept; self }
+    pub fn drop_(mut self) -> RuleBuilder { self.target = Verdict.Drop; self }
+    pub fn reject(mut self) -> RuleBuilder { self.target = Verdict.Reject; self }
+    pub fn priority(mut self, p: i32) -> RuleBuilder { self.priority = p; self }
+
+    pub fn build(self) -> NetfilterRule {
+        NetfilterRule { chain: self.chain, priority: self.priority, matcher: self.matcher,
+                        target: self.target, counters: RwLock.new((0, 0)) }
+    }
+}
+
+fn main() {
+    let mut fw = Firewall.new()
+    fw.set_default(Hook.Input, Verdict.Drop)
+
+    // Allow established
+    fw.add_rule(RuleBuilder.new(Hook.Input).state(ConntrackState.Established).accept().priority(-100).build())
+
+    // Allow SSH
+    fw.add_rule(RuleBuilder.new(Hook.Input).tcp().dport(22).accept().priority(10).build())
+
+    // Allow HTTP/HTTPS
+    fw.add_rule(RuleBuilder.new(Hook.Input).tcp().dport_range(80, 443).accept().priority(20).build())
+
+    // Test
+    let ssh_pkt = PacketInfo {
+        src_addr: IpAddr.parse("1.2.3.4").unwrap(), dst_addr: IpAddr.parse("10.0.0.1").unwrap(),
+        src_port: 54321, dst_port: 22, protocol: 6,
+        iface_in: "eth0".to_string(), iface_out: "".to_string(), length: 64,
+        ct_state: ConntrackState.New,
+    }
+    assert(matches!(fw.process(Hook.Input, &ssh_pkt), Verdict.Accept))
+    print("SSH packet accepted ✓")
+
+    let random_pkt = PacketInfo {
+        src_addr: IpAddr.parse("5.6.7.8").unwrap(), dst_addr: IpAddr.parse("10.0.0.1").unwrap(),
+        src_port: 9999, dst_port: 9999, protocol: 17,
+        iface_in: "eth0".to_string(), iface_out: "".to_string(), length: 128,
+        ct_state: ConntrackState.New,
+    }
+    assert(matches!(fw.process(Hook.Input, &random_pkt), Verdict.Drop))
+    print("Random UDP dropped ✓")
+
+    print("std.net.firewall — all passed ✓")
+}
