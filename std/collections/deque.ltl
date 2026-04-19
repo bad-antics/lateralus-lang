@@ -1,0 +1,78 @@
+// deque.ltl — Double-ended queue (ring buffer)
+struct Deque<T> {
+    buf:   [T?],
+    head:  int,
+    tail:  int,
+    len:   int,
+}
+
+impl<T: Clone> Deque<T> {
+    fn new(capacity: int) -> Deque<T> {
+        Deque { buf: [none; capacity], head: 0, tail: 0, len: 0 }
+    }
+
+    fn push_back(mut self, v: T) {
+        self.grow_if_needed()
+        self.buf[self.tail] = some(v)
+        self.tail = (self.tail + 1) % self.buf.len()
+        self.len += 1
+    }
+
+    fn push_front(mut self, v: T) {
+        self.grow_if_needed()
+        self.head = (self.head + self.buf.len() - 1) % self.buf.len()
+        self.buf[self.head] = some(v)
+        self.len += 1
+    }
+
+    fn pop_back(mut self) -> T? {
+        if self.len == 0 { return none }
+        self.tail = (self.tail + self.buf.len() - 1) % self.buf.len()
+        let v = self.buf[self.tail].take()
+        self.len -= 1
+        v
+    }
+
+    fn pop_front(mut self) -> T? {
+        if self.len == 0 { return none }
+        let v = self.buf[self.head].take()
+        self.head = (self.head + 1) % self.buf.len()
+        self.len -= 1
+        v
+    }
+
+    fn front(self) -> T? { self.buf[self.head].clone() }
+    fn back(self)  -> T? {
+        let tail = (self.tail + self.buf.len() - 1) % self.buf.len()
+        self.buf[tail].clone()
+    }
+
+    fn len(self)     -> int  { self.len }
+    fn is_empty(self) -> bool { self.len == 0 }
+
+    fn grow_if_needed(mut self) {
+        if self.len < self.buf.len() { return }
+        let old_cap = self.buf.len()
+        let new_cap = old_cap * 2
+        let mut new_buf: [T?] = [none; new_cap]
+        for i in range(0, self.len) {
+            new_buf[i] = self.buf[(self.head + i) % old_cap].clone()
+        }
+        self.buf  = new_buf
+        self.head = 0
+        self.tail = self.len
+    }
+}
+
+fn main() {
+    mut d: Deque<int> = Deque.new(4)
+    d.push_back(1)
+    d.push_back(2)
+    d.push_front(0)
+    assert(d.front() == some(0))
+    assert(d.back()  == some(2))
+    assert(d.pop_front() == some(0))
+    assert(d.pop_back()  == some(2))
+    assert(d.len() == 1)
+    print("Deque — all assertions passed ✓")
+}
