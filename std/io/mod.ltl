@@ -1,0 +1,233 @@
+// std.io - Core I/O traits and types
+// Read, Write, Seek, BufRead, Cursor, stdin/stdout/stderr.
+
+pub trait Read {
+    fn read(mut self, buf: &mut [u8]) -> Result<usize, IoError>
+
+    fn read_exact(mut self, buf: &mut [u8]) -> Result<(), IoError> {
+        let mut offset = 0
+        while offset < buf.len() {
+            let n = self.read(&mut buf[offset..])?
+            if n == 0 { return err(IoError.new(IoErrorKind.UnexpectedEof, "unexpected EOF")) }
+            offset += n
+        }
+        ok(())
+    }
+
+    fn read_to_end(mut self, buf: &mut [u8]) -> Result<usize, IoError> {
+        let mut total = 0
+        let mut tmp = [0u8; 4096]
+        loop {
+            let n = self.read(&mut tmp)?
+            if n == 0 { break }
+            buf.extend_from_slice(&tmp[..n])
+            total += n
+        }
+        ok(total)
+    }
+
+    fn read_to_string(mut self, buf: &mut string) -> Result<usize, IoError> {
+        let mut bytes: [u8] = []
+        let n = self.read_to_end(&mut bytes)?
+        let s = string.from_utf8(bytes).map_err(|_| IoError.new(IoErrorKind.InvalidData, "invalid UTF-8"))?
+        buf.push_str(&s)
+        ok(n)
+    }
+
+    fn bytes(self) -> Bytes<Self> { Bytes { inner: self } }
+    fn chain<R: Read>(self, other: R) -> Chain<Self, R> { Chain { first: self, second: other, done_first: false } }
+    fn take(self, limit: u64) -> Take<Self> { Take { inner: self, remaining: limit } }
+}
+
+pub trait Write {
+    fn write(mut self, buf: &[u8]) -> Result<usize, IoError>
+    fn flush(mut self) -> Result<(), IoError>
+
+    fn write_all(mut self, buf: &[u8]) -> Result<(), IoError> {
+        let mut offset = 0
+        while offset < buf.len() {
+            let n = self.write(&buf[offset..])?
+            if n == 0 { return err(IoError.new(IoErrorKind.WriteZero, "write zero")) }
+            offset += n
+        }
+        ok(())
+    }
+
+    fn write_fmt(mut self, args: &str) -> Result<(), IoError> {
+        self.write_all(args.as_bytes())
+    }
+}
+
+pub enum SeekFrom {
+    Start(u64),
+    End(i64),
+    Current(i64),
+}
+
+pub trait Seek {
+    fn seek(mut self, pos: SeekFrom) -> Result<u64, IoError>
+
+    fn rewind(mut self) -> Result<(), IoError> { self.seek(SeekFrom.Start(0))?; ok(()) }
+
+    fn stream_position(mut self) -> Result<u64, IoError> { self.seek(SeekFrom.Current(0)) }
+
+    fn stream_len(mut self) -> Result<u64, IoError> {
+        let old = self.stream_position()?
+        let len = self.seek(SeekFrom.End(0))?
+        self.seek(SeekFrom.Start(old))?
+        ok(len)
+    }
+}
+
+pub trait BufRead: Read {
+    fn fill_buf(self) -> Result<&[u8], IoError>
+    fn consume(mut self, amt: usize)
+
+    fn read_line(mut self, buf: &mut string) -> Result<usize, IoError> {
+        let mut total = 0
+        loop {
+            let available = self.fill_buf()?
+            if available.is_empty() { break }
+            let newline_pos = available.iter().position(|&b| b == b'\n')
+            let consume_len = match newline_pos {
+                some(pos) => pos + 1,
+                none => available.len(),
+            }
+            let chunk = string.from_utf8_lossy(&available[..consume_len])
+            buf.push_str(&chunk)
+            total += consume_len
+            self.consume(consume_len)
+            if newline_pos.is_some() { break }
+        }
+        ok(total)
+    }
+
+    fn lines(self) -> Lines<Self> { Lines { inner: self } }
+}
+
+// Adapter types
+pub struct Bytes<R: Read> { inner: R }
+impl<R: Read> Iterator for Bytes<R> {
+    type Item = Result<u8, IoError>
+    fn next(mut self) -> Option<Result<u8, IoError>> {
+        let mut buf = [0u8; 1]
+        match self.inner.read(&mut buf) {
+            ok(0) => none,
+            ok(_) => some(ok(buf[0])),
+            err(e) => some(err(e)),
+        }
+    }
+}
+
+pub struct Chain<A: Read, B: Read> { first: A, second: B, done_first: bool }
+impl<A: Read, B: Read> Read for Chain<A, B> {
+    fn read(mut self, buf: &mut [u8]) -> Result<usize, IoError> {
+        if !self.done_first {
+            let n = self.first.read(buf)?
+            if n > 0 { return ok(n) }
+            self.done_first = true
+        }
+        self.second.read(buf)
+    }
+}
+
+pub struct Take<R: Read> { inner: R, remaining: u64 }
+impl<R: Read> Read for Take<R> {
+    fn read(mut self, buf: &mut [u8]) -> Result<usize, IoError> {
+        if self.remaining == 0 { return ok(0) }
+        let max = buf.len().min(self.remaining as usize)
+        let n = self.inner.read(&mut buf[..max])?
+        self.remaining -= n as u64
+        ok(n)
+    }
+}
+
+pub struct Lines<B: BufRead> { inner: B }
+impl<B: BufRead> Iterator for Lines<B> {
+    type Item = Result<string, IoError>
+    fn next(mut self) -> Option<Result<string, IoError>> {
+        let mut line = string.new()
+        match self.inner.read_line(&mut line) {
+            ok(0) => none,
+            ok(_) => {
+                if line.ends_with('\n') { line.pop(); }
+                if line.ends_with('\r') { line.pop(); }
+                some(ok(line))
+            }
+            err(e) => some(err(e)),
+        }
+    }
+}
+
+pub struct Cursor<T> { inner: T, pos: u64 }
+
+impl<T: AsRef<[u8]>> Cursor<T> {
+    pub fn new(inner: T) -> Cursor<T> { Cursor { inner, pos: 0 } }
+    pub fn position(self) -> u64 { self.pos }
+    pub fn set_position(mut self, pos: u64) { self.pos = pos }
+    pub fn into_inner(self) -> T { self.inner }
+    pub fn get_ref(self) -> &T { &self.inner }
+}
+
+impl<T: AsRef<[u8]>> Read for Cursor<T> {
+    fn read(mut self, buf: &mut [u8]) -> Result<usize, IoError> {
+        let data = self.inner.as_ref()
+        let start = self.pos as usize
+        if start >= data.len() { return ok(0) }
+        let available = &data[start..]
+        let n = buf.len().min(available.len())
+        buf[..n].copy_from_slice(&available[..n])
+        self.pos += n as u64
+        ok(n)
+    }
+}
+
+impl<T: AsRef<[u8]>> Seek for Cursor<T> {
+    fn seek(mut self, pos: SeekFrom) -> Result<u64, IoError> {
+        let len = self.inner.as_ref().len() as i64
+        let new_pos = match pos {
+            SeekFrom.Start(n) => n as i64,
+            SeekFrom.End(n) => len + n,
+            SeekFrom.Current(n) => self.pos as i64 + n,
+        }
+        if new_pos < 0 { return err(IoError.new(IoErrorKind.InvalidInput, "seek before start")) }
+        self.pos = new_pos as u64
+        ok(self.pos)
+    }
+}
+
+pub fn copy<R: Read, W: Write>(reader: &mut R, writer: &mut W) -> Result<u64, IoError> {
+    let mut buf = [0u8; 8192]
+    let mut total = 0u64
+    loop {
+        let n = reader.read(&mut buf)?
+        if n == 0 { break }
+        writer.write_all(&buf[..n])?
+        total += n as u64
+    }
+    ok(total)
+}
+
+pub extern "C" fn stdin() -> &'static Stdin
+pub extern "C" fn stdout() -> &'static Stdout
+pub extern "C" fn stderr() -> &'static Stderr
+
+pub struct Stdin { _priv: () }
+pub struct Stdout { _priv: () }
+pub struct Stderr { _priv: () }
+
+impl Read for Stdin {
+    fn read(mut self, buf: &mut [u8]) -> Result<usize, IoError> {
+        @intrinsic("stdin_read", buf)
+    }
+}
+
+impl Write for Stdout {
+    fn write(mut self, buf: &[u8]) -> Result<usize, IoError> { @intrinsic("stdout_write", buf) }
+    fn flush(mut self) -> Result<(), IoError> { @intrinsic("stdout_flush") }
+}
+
+impl Write for Stderr {
+    fn write(mut self, buf: &[u8]) -> Result<usize, IoError> { @intrinsic("stderr_write", buf) }
+    fn flush(mut self) -> Result<(), IoError> { @intrinsic("stderr_flush") }
+}
