@@ -1,0 +1,205 @@
+// std.collections.ringbuffer — Fixed-size circular buffer
+// O(1) push/pop from both ends, ideal for streaming and bounded queues.
+
+pub struct RingBuffer<T> {
+    data: [Option<T>],
+    head: usize,
+    tail: usize,
+    len: usize,
+    capacity: usize,
+}
+
+impl<T> RingBuffer<T> {
+    pub fn new(capacity: usize) -> RingBuffer<T> {
+        assert(capacity > 0, "capacity must be > 0")
+        let mut data: [Option<T>] = []
+        for _ in 0..capacity { data.push(none) }
+        RingBuffer { data, head: 0, tail: 0, len: 0, capacity }
+    }
+
+    pub fn push_back(mut self, item: T) -> Option<T> {
+        let evicted = if self.len == self.capacity {
+            let old = self.data[self.head].take()
+            self.head = (self.head + 1) % self.capacity
+            self.len -= 1
+            old
+        } else { none }
+
+        self.data[self.tail] = some(item)
+        self.tail = (self.tail + 1) % self.capacity
+        self.len += 1
+        evicted
+    }
+
+    pub fn push_front(mut self, item: T) -> Option<T> {
+        let evicted = if self.len == self.capacity {
+            self.tail = if self.tail == 0 { self.capacity - 1 } else { self.tail - 1 }
+            let old = self.data[self.tail].take()
+            self.len -= 1
+            old
+        } else { none }
+
+        self.head = if self.head == 0 { self.capacity - 1 } else { self.head - 1 }
+        self.data[self.head] = some(item)
+        self.len += 1
+        evicted
+    }
+
+    pub fn pop_front(mut self) -> Option<T> {
+        if self.len == 0 { return none }
+        let item = self.data[self.head].take()
+        self.head = (self.head + 1) % self.capacity
+        self.len -= 1
+        item
+    }
+
+    pub fn pop_back(mut self) -> Option<T> {
+        if self.len == 0 { return none }
+        self.tail = if self.tail == 0 { self.capacity - 1 } else { self.tail - 1 }
+        let item = self.data[self.tail].take()
+        self.len -= 1
+        item
+    }
+
+    pub fn front(self) -> Option<&T> {
+        if self.len == 0 { none } else { self.data[self.head].as_ref() }
+    }
+
+    pub fn back(self) -> Option<&T> {
+        if self.len == 0 { none }
+        else {
+            let idx = if self.tail == 0 { self.capacity - 1 } else { self.tail - 1 }
+            self.data[idx].as_ref()
+        }
+    }
+
+    pub fn get(self, index: usize) -> Option<&T> {
+        if index >= self.len { return none }
+        let actual = (self.head + index) % self.capacity
+        self.data[actual].as_ref()
+    }
+
+    pub fn get_mut(mut self, index: usize) -> Option<&mut T> {
+        if index >= self.len { return none }
+        let actual = (self.head + index) % self.capacity
+        self.data[actual].as_mut()
+    }
+
+    pub fn len(self) -> usize { self.len }
+    pub fn capacity(self) -> usize { self.capacity }
+    pub fn is_empty(self) -> bool { self.len == 0 }
+    pub fn is_full(self) -> bool { self.len == self.capacity }
+
+    pub fn clear(mut self) {
+        for i in 0..self.capacity { self.data[i] = none }
+        self.head = 0; self.tail = 0; self.len = 0
+    }
+
+    pub fn iter(self) -> RingBufferIter<T> {
+        RingBufferIter { ring: self, index: 0 }
+    }
+
+    pub fn to_vec(self) -> [T] where T: Clone {
+        let mut result: [T] = []
+        for i in 0..self.len {
+            let actual = (self.head + i) % self.capacity
+            result.push(self.data[actual].as_ref().unwrap().clone())
+        }
+        result
+    }
+
+    pub fn drain(mut self) -> [T] {
+        let mut result: [T] = []
+        while let some(item) = self.pop_front() { result.push(item) }
+        result
+    }
+
+    pub fn contains(self, item: &T) -> bool where T: PartialEq {
+        for i in 0..self.len {
+            let actual = (self.head + i) % self.capacity
+            if self.data[actual].as_ref().unwrap() == item { return true }
+        }
+        false
+    }
+
+    pub fn retain<F: Fn(&T) -> bool>(mut self, f: F) {
+        let items = self.drain()
+        for item in items {
+            if f(&item) { self.push_back(item); }
+        }
+    }
+}
+
+pub struct RingBufferIter<'a, T> {
+    ring: &'a RingBuffer<T>,
+    index: usize,
+}
+
+impl<'a, T> Iterator for RingBufferIter<'a, T> {
+    type Item = &'a T
+    fn next(mut self) -> Option<&'a T> {
+        if self.index >= self.ring.len { return none }
+        let item = self.ring.get(self.index)
+        self.index += 1
+        item
+    }
+}
+
+// ── Typed variants ───────────────────────────────────────────────────────────
+pub type ByteRing = RingBuffer<u8>
+
+impl ByteRing {
+    pub fn write_bytes(mut self, data: &[u8]) -> usize {
+        let mut written = 0
+        for byte in data {
+            if self.is_full() { break }
+            self.push_back(*byte)
+            written += 1
+        }
+        written
+    }
+
+    pub fn read_bytes(mut self, buf: &mut [u8]) -> usize {
+        let mut read = 0
+        for slot in buf.iter_mut() {
+            match self.pop_front() {
+                some(b) => { *slot = b; read += 1 }
+                none => break,
+            }
+        }
+        read
+    }
+
+    pub fn read_all(mut self) -> [u8] {
+        let mut result: [u8] = []
+        while let some(b) = self.pop_front() { result.push(b) }
+        result
+    }
+}
+
+// ── Moving average using ring buffer ─────────────────────────────────────────
+pub struct MovingAverage {
+    buffer: RingBuffer<f64>,
+    sum: f64,
+}
+
+impl MovingAverage {
+    pub fn new(window: usize) -> MovingAverage {
+        MovingAverage { buffer: RingBuffer.new(window), sum: 0.0 }
+    }
+
+    pub fn push(mut self, value: f64) {
+        if let some(evicted) = self.buffer.push_back(value) {
+            self.sum -= evicted
+        }
+        self.sum += value
+    }
+
+    pub fn average(self) -> f64 {
+        if self.buffer.is_empty() { 0.0 }
+        else { self.sum / self.buffer.len() as f64 }
+    }
+
+    pub fn count(self) -> usize { self.buffer.len() }
+    pub fn is_full(self) -> bool { self.buffer.is_full() }
+}
