@@ -1,0 +1,235 @@
+// std/sync/rwlock.ltl — Reader-writer lock with writer starvation prevention
+use std.sync.{Mutex, Condvar}
+use std.thread
+
+// ── RwLock ───────────────────────────────────────────────────────────────────
+pub struct RwLock<T> {
+    data:            UnsafeCell<T>,
+    state:           Mutex<RwLockState>,
+    readers_cv:      Condvar,
+    writers_cv:      Condvar,
+}
+
+struct RwLockState {
+    readers:         u32,
+    writer_active:   bool,
+    writers_waiting: u32,
+}
+
+pub struct ReadGuard<'a, T> {
+    lock: &'a RwLock<T>,
+}
+
+pub struct WriteGuard<'a, T> {
+    lock: &'a RwLock<T>,
+}
+
+impl<T> RwLock<T> {
+    pub fn new(value: T) -> RwLock<T> {
+        RwLock {
+            data: UnsafeCell.new(value),
+            state: Mutex.new(RwLockState { readers: 0, writer_active: false, writers_waiting: 0 }),
+            readers_cv: Condvar.new(),
+            writers_cv: Condvar.new(),
+        }
+    }
+
+    pub fn read(self) -> ReadGuard<T> {
+        let mut state = self.state.lock()
+        // Wait if writer is active or writers are waiting (prevent starvation)
+        while state.writer_active || state.writers_waiting > 0 {
+            state = self.readers_cv.wait(state)
+        }
+        state.readers += 1
+        ReadGuard { lock: self }
+    }
+
+    pub fn try_read(self) -> Option<ReadGuard<T>> {
+        let mut state = self.state.lock()
+        if state.writer_active || state.writers_waiting > 0 {
+            return none
+        }
+        state.readers += 1
+        some(ReadGuard { lock: self })
+    }
+
+    pub fn write(self) -> WriteGuard<T> {
+        let mut state = self.state.lock()
+        state.writers_waiting += 1
+        while state.writer_active || state.readers > 0 {
+            state = self.writers_cv.wait(state)
+        }
+        state.writers_waiting -= 1
+        state.writer_active = true
+        WriteGuard { lock: self }
+    }
+
+    pub fn try_write(self) -> Option<WriteGuard<T>> {
+        let mut state = self.state.lock()
+        if state.writer_active || state.readers > 0 {
+            return none
+        }
+        state.writer_active = true
+        some(WriteGuard { lock: self })
+    }
+
+    fn release_read(self) {
+        let mut state = self.state.lock()
+        state.readers -= 1
+        if state.readers == 0 {
+            // Wake one writer if waiting
+            self.writers_cv.notify_one()
+        }
+    }
+
+    fn release_write(self) {
+        let mut state = self.state.lock()
+        state.writer_active = false
+        // Prefer writers over readers to prevent starvation
+        if state.writers_waiting > 0 {
+            self.writers_cv.notify_one()
+        } else {
+            self.readers_cv.notify_all()
+        }
+    }
+
+    pub fn into_inner(self) -> T {
+        self.data.into_inner()
+    }
+}
+
+impl<'a, T> ReadGuard<'a, T> {
+    pub fn deref(self) -> &T {
+        unsafe { &*self.lock.data.get() }
+    }
+}
+
+impl<'a, T> Drop for ReadGuard<'a, T> {
+    fn drop(mut self) {
+        self.lock.release_read()
+    }
+}
+
+impl<'a, T> WriteGuard<'a, T> {
+    pub fn deref(self) -> &T {
+        unsafe { &*self.lock.data.get() }
+    }
+
+    pub fn deref_mut(self) -> &mut T {
+        unsafe { &mut *self.lock.data.get() }
+    }
+}
+
+impl<'a, T> Drop for WriteGuard<'a, T> {
+    fn drop(mut self) {
+        self.lock.release_write()
+    }
+}
+
+// ── Upgradable read lock ─────────────────────────────────────────────────────
+pub struct UpgradableReadGuard<'a, T> {
+    lock: &'a RwLock<T>,
+}
+
+impl<T> RwLock<T> {
+    pub fn upgradable_read(self) -> UpgradableReadGuard<T> {
+        let guard = self.read()
+        std.mem.forget(guard)  // prevent drop
+        UpgradableReadGuard { lock: self }
+    }
+}
+
+impl<'a, T> UpgradableReadGuard<'a, T> {
+    pub fn upgrade(self) -> WriteGuard<'a, T> {
+        let mut state = self.lock.state.lock()
+        state.readers -= 1
+        state.writers_waiting += 1
+        while state.writer_active || state.readers > 0 {
+            state = self.lock.writers_cv.wait(state)
+        }
+        state.writers_waiting -= 1
+        state.writer_active = true
+        std.mem.forget(self)
+        WriteGuard { lock: self.lock }
+    }
+
+    pub fn deref(self) -> &T {
+        unsafe { &*self.lock.data.get() }
+    }
+}
+
+impl<'a, T> Drop for UpgradableReadGuard<'a, T> {
+    fn drop(mut self) {
+        self.lock.release_read()
+    }
+}
+
+fn main() {
+    let lock = RwLock.new(42)
+
+    // Multiple readers
+    {
+        let r1 = lock.read()
+        let r2 = lock.read()
+        assert(*r1.deref() == 42)
+        assert(*r2.deref() == 42)
+        print("Multiple readers: ${*r1.deref()} ✓")
+    }
+
+    // Writer
+    {
+        let mut w = lock.write()
+        *w.deref_mut() = 100
+    }
+    {
+        let r = lock.read()
+        assert(*r.deref() == 100)
+        print("Writer updated value: ${*r.deref()} ✓")
+    }
+
+    // try_read / try_write
+    {
+        let r = lock.read()
+        assert(lock.try_write().is_none(), "can't write while reading")
+        print("try_write blocked during read ✓")
+    }
+    {
+        let w = lock.write()
+        assert(lock.try_read().is_none(), "can't read while writing")
+        print("try_read blocked during write ✓")
+    }
+
+    // Concurrent test
+    let shared = std.sync.Arc.new(RwLock.new(0))
+    let mut handles: [thread.JoinHandle<()>] = []
+
+    // Spawn 10 readers
+    for i in range(0, 10) {
+        let s = shared.clone()
+        handles.push(thread.spawn(move || {
+            for _ in range(0, 100) {
+                let r = s.read()
+                let _ = *r.deref()
+            }
+        }))
+    }
+
+    // Spawn 2 writers
+    for i in range(0, 2) {
+        let s = shared.clone()
+        handles.push(thread.spawn(move || {
+            for j in range(0, 50) {
+                let mut w = s.write()
+                *w.deref_mut() += 1
+            }
+        }))
+    }
+
+    for h in handles { h.join().unwrap() }
+
+    let final_val = *shared.read().deref()
+    assert(final_val == 100, "2 writers × 50 increments = 100")
+    print("Concurrent RwLock: final value = ${final_val} ✓")
+
+    print("RwLock — all passed ✓")
+}
