@@ -1,0 +1,349 @@
+// std.iter.adaptors — Iterator combinators and lazy adaptors
+// Provides composable, zero-cost iterator transformations.
+
+pub trait Iterator {
+    type Item
+
+    fn next(mut self) -> Option<Self.Item>
+
+    fn map<B, F: Fn(Self.Item) -> B>(self, f: F) -> Map<Self, F> {
+        Map { iter: self, f }
+    }
+
+    fn filter<P: Fn(&Self.Item) -> bool>(self, predicate: P) -> Filter<Self, P> {
+        Filter { iter: self, predicate }
+    }
+
+    fn filter_map<B, F: Fn(Self.Item) -> Option<B>>(self, f: F) -> FilterMap<Self, F> {
+        FilterMap { iter: self, f }
+    }
+
+    fn flat_map<B: IntoIterator, F: Fn(Self.Item) -> B>(self, f: F) -> FlatMap<Self, F, B.IntoIter> {
+        FlatMap { iter: self, f, inner: none }
+    }
+
+    fn enumerate(self) -> Enumerate<Self> { Enumerate { iter: self, count: 0 } }
+
+    fn take(self, n: usize) -> Take<Self> { Take { iter: self, remaining: n } }
+
+    fn skip(self, n: usize) -> Skip<Self> { Skip { iter: self, remaining: n } }
+
+    fn take_while<P: Fn(&Self.Item) -> bool>(self, predicate: P) -> TakeWhile<Self, P> {
+        TakeWhile { iter: self, predicate, done: false }
+    }
+
+    fn skip_while<P: Fn(&Self.Item) -> bool>(self, predicate: P) -> SkipWhile<Self, P> {
+        SkipWhile { iter: self, predicate, skipping: true }
+    }
+
+    fn chain<U: Iterator<Item = Self.Item>>(self, other: U) -> Chain<Self, U> {
+        Chain { a: some(self), b: other }
+    }
+
+    fn zip<U: Iterator>(self, other: U) -> Zip<Self, U> {
+        Zip { a: self, b: other }
+    }
+
+    fn peekable(self) -> Peekable<Self> {
+        Peekable { iter: self, peeked: none }
+    }
+
+    fn inspect<F: Fn(&Self.Item)>(self, f: F) -> Inspect<Self, F> {
+        Inspect { iter: self, f }
+    }
+
+    fn step_by(self, step: usize) -> StepBy<Self> {
+        assert(step > 0, "step must be positive")
+        StepBy { iter: self, step, first: true }
+    }
+
+    fn chunks(self, size: usize) -> Chunks<Self> {
+        assert(size > 0, "chunk size must be positive")
+        Chunks { iter: self, size }
+    }
+
+    fn windows(self, size: usize) -> Windows<Self> where Self.Item: Clone {
+        Windows { buffer: [], iter: self, size }
+    }
+
+    fn scan<S, F: Fn(&mut S, Self.Item) -> Option<B>, B>(self, initial: S, f: F) -> Scan<Self, S, F> {
+        Scan { iter: self, state: initial, f }
+    }
+
+    // Terminal operations
+    fn collect<C: FromIterator<Self.Item>>(self) -> C { C.from_iter(self) }
+    fn count(mut self) -> usize { let mut n = 0; while self.next().is_some() { n += 1 } n }
+    fn sum(mut self) -> Self.Item where Self.Item: Add + Default {
+        let mut acc = Self.Item.default()
+        while let some(x) = self.next() { acc = acc + x }
+        acc
+    }
+    fn product(mut self) -> Self.Item where Self.Item: Mul + Default {
+        let mut acc = Self.Item.from(1)
+        while let some(x) = self.next() { acc = acc * x }
+        acc
+    }
+    fn min(mut self) -> Option<Self.Item> where Self.Item: Ord {
+        let mut result = self.next()?
+        while let some(x) = self.next() { if x < result { result = x } }
+        some(result)
+    }
+    fn max(mut self) -> Option<Self.Item> where Self.Item: Ord {
+        let mut result = self.next()?
+        while let some(x) = self.next() { if x > result { result = x } }
+        some(result)
+    }
+    fn fold<B, F: Fn(B, Self.Item) -> B>(mut self, init: B, f: F) -> B {
+        let mut acc = init
+        while let some(x) = self.next() { acc = f(acc, x) }
+        acc
+    }
+    fn reduce<F: Fn(Self.Item, Self.Item) -> Self.Item>(mut self, f: F) -> Option<Self.Item> {
+        let mut acc = self.next()?
+        while let some(x) = self.next() { acc = f(acc, x) }
+        some(acc)
+    }
+    fn for_each<F: Fn(Self.Item)>(mut self, f: F) { while let some(x) = self.next() { f(x) } }
+    fn any<P: Fn(&Self.Item) -> bool>(mut self, p: P) -> bool {
+        while let some(ref x) = self.next() { if p(x) { return true } } false
+    }
+    fn all<P: Fn(&Self.Item) -> bool>(mut self, p: P) -> bool {
+        while let some(ref x) = self.next() { if !p(x) { return false } } true
+    }
+    fn find<P: Fn(&Self.Item) -> bool>(mut self, p: P) -> Option<Self.Item> {
+        while let some(x) = self.next() { if p(&x) { return some(x) } } none
+    }
+    fn position<P: Fn(&Self.Item) -> bool>(mut self, p: P) -> Option<usize> {
+        let mut i = 0
+        while let some(x) = self.next() { if p(&x) { return some(i) } i += 1 } none
+    }
+    fn nth(mut self, n: usize) -> Option<Self.Item> {
+        for _ in 0..n { self.next()? }
+        self.next()
+    }
+    fn last(mut self) -> Option<Self.Item> {
+        let mut last = none
+        while let some(x) = self.next() { last = some(x) }
+        last
+    }
+    fn unzip<A, B>(mut self) -> ([A], [B]) where Self.Item = (A, B) {
+        let mut as_: [A] = []; let mut bs: [B] = []
+        while let some((a, b)) = self.next() { as_.push(a); bs.push(b) }
+        (as_, bs)
+    }
+    fn partition<P: Fn(&Self.Item) -> bool>(mut self, p: P) -> ([Self.Item], [Self.Item]) {
+        let mut yes: [Self.Item] = []; let mut no: [Self.Item] = []
+        while let some(x) = self.next() { if p(&x) { yes.push(x) } else { no.push(x) } }
+        (yes, no)
+    }
+}
+
+// ── Adaptor structs ──────────────────────────────────────────────────────────
+pub struct Map<I, F> { iter: I, f: F }
+impl<B, I: Iterator, F: Fn(I.Item) -> B> Iterator for Map<I, F> {
+    type Item = B
+    fn next(mut self) -> Option<B> { self.iter.next().map(&self.f) }
+}
+
+pub struct Filter<I, P> { iter: I, predicate: P }
+impl<I: Iterator, P: Fn(&I.Item) -> bool> Iterator for Filter<I, P> {
+    type Item = I.Item
+    fn next(mut self) -> Option<I.Item> {
+        while let some(x) = self.iter.next() { if (self.predicate)(&x) { return some(x) } }
+        none
+    }
+}
+
+pub struct FilterMap<I, F> { iter: I, f: F }
+impl<B, I: Iterator, F: Fn(I.Item) -> Option<B>> Iterator for FilterMap<I, F> {
+    type Item = B
+    fn next(mut self) -> Option<B> {
+        while let some(x) = self.iter.next() { if let some(y) = (self.f)(x) { return some(y) } }
+        none
+    }
+}
+
+pub struct FlatMap<I, F, Inner> { iter: I, f: F, inner: Option<Inner> }
+impl<B: IntoIterator, I: Iterator, F: Fn(I.Item) -> B> Iterator for FlatMap<I, F, B.IntoIter> {
+    type Item = B.Item
+    fn next(mut self) -> Option<B.Item> {
+        loop {
+            if let some(ref mut inner) = self.inner {
+                if let some(x) = inner.next() { return some(x) }
+            }
+            match self.iter.next() {
+                some(x) => self.inner = some((self.f)(x).into_iter()),
+                none => return none,
+            }
+        }
+    }
+}
+
+pub struct Enumerate<I> { iter: I, count: usize }
+impl<I: Iterator> Iterator for Enumerate<I> {
+    type Item = (usize, I.Item)
+    fn next(mut self) -> Option<(usize, I.Item)> {
+        let x = self.iter.next()?
+        let i = self.count; self.count += 1
+        some((i, x))
+    }
+}
+
+pub struct Take<I> { iter: I, remaining: usize }
+impl<I: Iterator> Iterator for Take<I> {
+    type Item = I.Item
+    fn next(mut self) -> Option<I.Item> {
+        if self.remaining == 0 { return none }
+        self.remaining -= 1; self.iter.next()
+    }
+}
+
+pub struct Skip<I> { iter: I, remaining: usize }
+impl<I: Iterator> Iterator for Skip<I> {
+    type Item = I.Item
+    fn next(mut self) -> Option<I.Item> {
+        while self.remaining > 0 { self.iter.next(); self.remaining -= 1 }
+        self.iter.next()
+    }
+}
+
+pub struct TakeWhile<I, P> { iter: I, predicate: P, done: bool }
+impl<I: Iterator, P: Fn(&I.Item) -> bool> Iterator for TakeWhile<I, P> {
+    type Item = I.Item
+    fn next(mut self) -> Option<I.Item> {
+        if self.done { return none }
+        let x = self.iter.next()?
+        if (self.predicate)(&x) { some(x) } else { self.done = true; none }
+    }
+}
+
+pub struct SkipWhile<I, P> { iter: I, predicate: P, skipping: bool }
+impl<I: Iterator, P: Fn(&I.Item) -> bool> Iterator for SkipWhile<I, P> {
+    type Item = I.Item
+    fn next(mut self) -> Option<I.Item> {
+        while self.skipping {
+            let x = self.iter.next()?
+            if !(self.predicate)(&x) { self.skipping = false; return some(x) }
+        }
+        self.iter.next()
+    }
+}
+
+pub struct Chain<A, B> { a: Option<A>, b: B }
+impl<T, A: Iterator<Item = T>, B: Iterator<Item = T>> Iterator for Chain<A, B> {
+    type Item = T
+    fn next(mut self) -> Option<T> {
+        if let some(ref mut a) = self.a {
+            if let some(x) = a.next() { return some(x) }
+            self.a = none
+        }
+        self.b.next()
+    }
+}
+
+pub struct Zip<A, B> { a: A, b: B }
+impl<A: Iterator, B: Iterator> Iterator for Zip<A, B> {
+    type Item = (A.Item, B.Item)
+    fn next(mut self) -> Option<(A.Item, B.Item)> { some((self.a.next()?, self.b.next()?)) }
+}
+
+pub struct Peekable<I: Iterator> { iter: I, peeked: Option<Option<I.Item>> }
+impl<I: Iterator> Peekable<I> {
+    pub fn peek(mut self) -> Option<&I.Item> {
+        if self.peeked.is_none() { self.peeked = some(self.iter.next()) }
+        self.peeked.as_ref().unwrap().as_ref()
+    }
+    pub fn peek_mut(mut self) -> Option<&mut I.Item> {
+        if self.peeked.is_none() { self.peeked = some(self.iter.next()) }
+        self.peeked.as_mut().unwrap().as_mut()
+    }
+}
+impl<I: Iterator> Iterator for Peekable<I> {
+    type Item = I.Item
+    fn next(mut self) -> Option<I.Item> {
+        match self.peeked.take() { some(v) => v, none => self.iter.next() }
+    }
+}
+
+pub struct Inspect<I, F> { iter: I, f: F }
+impl<I: Iterator, F: Fn(&I.Item)> Iterator for Inspect<I, F> {
+    type Item = I.Item
+    fn next(mut self) -> Option<I.Item> {
+        let x = self.iter.next()?; (self.f)(&x); some(x)
+    }
+}
+
+pub struct StepBy<I> { iter: I, step: usize, first: bool }
+impl<I: Iterator> Iterator for StepBy<I> {
+    type Item = I.Item
+    fn next(mut self) -> Option<I.Item> {
+        if self.first { self.first = false; return self.iter.next() }
+        for _ in 0..self.step - 1 { self.iter.next(); }
+        self.iter.next()
+    }
+}
+
+pub struct Chunks<I> { iter: I, size: usize }
+impl<I: Iterator> Iterator for Chunks<I> {
+    type Item = [I.Item]
+    fn next(mut self) -> Option<[I.Item]> {
+        let mut chunk: [I.Item] = []
+        for _ in 0..self.size {
+            match self.iter.next() { some(x) => chunk.push(x), none => break }
+        }
+        if chunk.is_empty() { none } else { some(chunk) }
+    }
+}
+
+pub struct Windows<I: Iterator> where I.Item: Clone { buffer: [I.Item], iter: I, size: usize }
+impl<I: Iterator> Iterator for Windows<I> where I.Item: Clone {
+    type Item = [I.Item]
+    fn next(mut self) -> Option<[I.Item]> {
+        while self.buffer.len() < self.size {
+            match self.iter.next() { some(x) => self.buffer.push(x), none => return none }
+        }
+        let window = self.buffer.clone()
+        self.buffer.remove(0)
+        some(window)
+    }
+}
+
+pub struct Scan<I, S, F> { iter: I, state: S, f: F }
+impl<B, I: Iterator, S, F: Fn(&mut S, I.Item) -> Option<B>> Iterator for Scan<I, S, F> {
+    type Item = B
+    fn next(mut self) -> Option<B> {
+        let x = self.iter.next()?; (self.f)(&mut self.state, x)
+    }
+}
+
+// ── Helper: range iterator ───────────────────────────────────────────────────
+pub fn range(start: i64, end: i64) -> Range { Range { current: start, end } }
+pub struct Range { current: i64, end: i64 }
+impl Iterator for Range {
+    type Item = i64
+    fn next(mut self) -> Option<i64> {
+        if self.current >= self.end { return none }
+        let val = self.current; self.current += 1; some(val)
+    }
+}
+
+pub fn repeat<T: Clone>(value: T) -> Repeat<T> { Repeat { value } }
+pub struct Repeat<T> { value: T }
+impl<T: Clone> Iterator for Repeat<T> {
+    type Item = T
+    fn next(self) -> Option<T> { some(self.value.clone()) }
+}
+
+pub fn once<T>(value: T) -> Once<T> { Once { value: some(value) } }
+pub struct Once<T> { value: Option<T> }
+impl<T> Iterator for Once<T> {
+    type Item = T
+    fn next(mut self) -> Option<T> { self.value.take() }
+}
+
+pub fn empty<T>() -> Empty<T> { Empty {} }
+pub struct Empty<T> {}
+impl<T> Iterator for Empty<T> {
+    type Item = T
+    fn next(self) -> Option<T> { none }
+}
