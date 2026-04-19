@@ -1,0 +1,163 @@
+// std.option - Option type and methods
+// Comprehensive Option<T> implementation.
+
+pub enum Option<T> {
+    Some(T),
+    None,
+}
+
+impl<T> Option<T> {
+    pub fn is_some(self) -> bool { match self { some(_) => true, none => false } }
+    pub fn is_none(self) -> bool { !self.is_some() }
+
+    pub fn is_some_and(self, f: fn(&T) -> bool) -> bool {
+        match self { some(v) => f(v), none => false }
+    }
+
+    pub fn unwrap(self) -> T {
+        match self { some(v) => v, none => panic!("called unwrap on None") }
+    }
+
+    pub fn unwrap_or(self, default: T) -> T {
+        match self { some(v) => v, none => default }
+    }
+
+    pub fn unwrap_or_else(self, f: fn() -> T) -> T {
+        match self { some(v) => v, none => f() }
+    }
+
+    pub fn unwrap_or_default(self) -> T where T: Default {
+        match self { some(v) => v, none => T.default() }
+    }
+
+    pub fn expect(self, msg: &str) -> T {
+        match self { some(v) => v, none => panic!(msg) }
+    }
+
+    pub fn map<U>(self, f: fn(T) -> U) -> Option<U> {
+        match self { some(v) => some(f(v)), none => none }
+    }
+
+    pub fn map_or<U>(self, default: U, f: fn(T) -> U) -> U {
+        match self { some(v) => f(v), none => default }
+    }
+
+    pub fn map_or_else<U>(self, default: fn() -> U, f: fn(T) -> U) -> U {
+        match self { some(v) => f(v), none => default() }
+    }
+
+    pub fn and<U>(self, optb: Option<U>) -> Option<U> {
+        match self { some(_) => optb, none => none }
+    }
+
+    pub fn and_then<U>(self, f: fn(T) -> Option<U>) -> Option<U> {
+        match self { some(v) => f(v), none => none }
+    }
+
+    pub fn or(self, optb: Option<T>) -> Option<T> {
+        match self { some(v) => some(v), none => optb }
+    }
+
+    pub fn or_else(self, f: fn() -> Option<T>) -> Option<T> {
+        match self { some(v) => some(v), none => f() }
+    }
+
+    pub fn xor(self, optb: Option<T>) -> Option<T> {
+        match (self, optb) {
+            (some(v), none) => some(v),
+            (none, some(v)) => some(v),
+            _ => none,
+        }
+    }
+
+    pub fn filter(self, predicate: fn(&T) -> bool) -> Option<T> {
+        match self {
+            some(v) if predicate(&v) => some(v),
+            _ => none,
+        }
+    }
+
+    pub fn zip<U>(self, other: Option<U>) -> Option<(T, U)> {
+        match (self, other) { (some(a), some(b)) => some((a, b)), _ => none }
+    }
+
+    pub fn unzip<A, B>(self) -> (Option<A>, Option<B>) where T == (A, B) {
+        match self { some((a, b)) => (some(a), some(b)), none => (none, none) }
+    }
+
+    pub fn flatten(self) -> Option<T> where T == Option<U> {
+        match self { some(inner) => inner, none => none }
+    }
+
+    pub fn as_ref(self) -> Option<&T> {
+        match self { some(ref v) => some(v), none => none }
+    }
+
+    pub fn as_mut(mut self) -> Option<&mut T> {
+        match self { some(ref mut v) => some(v), none => none }
+    }
+
+    pub fn take(mut self) -> Option<T> {
+        std.mem.take(self)
+    }
+
+    pub fn replace(mut self, value: T) -> Option<T> {
+        std.mem.replace(self, some(value))
+    }
+
+    pub fn ok_or<E>(self, err: E) -> Result<T, E> {
+        match self { some(v) => ok(v), none => err(err) }
+    }
+
+    pub fn ok_or_else<E>(self, f: fn() -> E) -> Result<T, E> {
+        match self { some(v) => ok(v), none => err(f()) }
+    }
+
+    pub fn iter(self) -> OptionIter<T> {
+        OptionIter { inner: self }
+    }
+
+    pub fn inspect(self, f: fn(&T)) -> Option<T> {
+        if let some(ref v) = self { f(v) }
+        self
+    }
+
+    pub fn get_or_insert(mut self, value: T) -> &mut T {
+        if self.is_none() { *self = some(value) }
+        match self { some(ref mut v) => v, none => unreachable!() }
+    }
+
+    pub fn get_or_insert_with(mut self, f: fn() -> T) -> &mut T {
+        if self.is_none() { *self = some(f()) }
+        match self { some(ref mut v) => v, none => unreachable!() }
+    }
+}
+
+pub struct OptionIter<T> { inner: Option<T> }
+
+impl<T> Iterator for OptionIter<T> {
+    type Item = T
+    fn next(mut self) -> Option<T> { self.inner.take() }
+    fn size_hint(self) -> (usize, Option<usize>) {
+        let n = if self.inner.is_some() { 1 } else { 0 }
+        (n, some(n))
+    }
+}
+
+impl<T: Clone> Clone for Option<T> {
+    fn clone(self) -> Option<T> { self.map(|v| v.clone()) }
+}
+
+impl<T: PartialEq> PartialEq for Option<T> {
+    fn eq(self, other: &Option<T>) -> bool {
+        match (self, other) {
+            (some(a), some(b)) => a.eq(b),
+            (none, none) => true,
+            _ => false,
+        }
+    }
+}
+
+impl<T: Default> From<T> for Option<T> {
+    fn from(val: T) -> Option<T> { some(val) }
+}
