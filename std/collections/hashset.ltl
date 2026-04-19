@@ -1,0 +1,186 @@
+// std.collections.hashset — Hash set implementation
+// Unordered set with O(1) average insert/lookup/remove.
+
+use std.hash.{Hash, Hasher, BuildHasher, SipHasherBuilder}
+
+pub struct HashSet<T: Hash + Eq> {
+    buckets: [Option<[T]>],
+    len: usize,
+    capacity: usize,
+    hasher_builder: SipHasherBuilder,
+}
+
+impl<T: Hash + Eq> HashSet<T> {
+    pub fn new() -> HashSet<T> { Self.with_capacity(16) }
+
+    pub fn with_capacity(capacity: usize) -> HashSet<T> {
+        let mut buckets: [Option<[T]>] = []
+        for _ in 0..capacity { buckets.push(none) }
+        HashSet { buckets, len: 0, capacity, hasher_builder: SipHasherBuilder.new() }
+    }
+
+    fn bucket_index(self, value: &T) -> usize {
+        let mut hasher = self.hasher_builder.build_hasher()
+        value.hash(&mut hasher)
+        (hasher.finish() as usize) % self.capacity
+    }
+
+    pub fn insert(mut self, value: T) -> bool {
+        if self.len * 4 >= self.capacity * 3 { self.resize() }
+        let idx = self.bucket_index(&value)
+        match &mut self.buckets[idx] {
+            some(bucket) => {
+                if bucket.contains(&value) { return false }
+                bucket.push(value)
+            }
+            none => self.buckets[idx] = some([value]),
+        }
+        self.len += 1
+        true
+    }
+
+    pub fn contains(self, value: &T) -> bool {
+        let idx = self.bucket_index(value)
+        match &self.buckets[idx] {
+            some(bucket) => bucket.contains(value),
+            none => false,
+        }
+    }
+
+    pub fn remove(mut self, value: &T) -> bool {
+        let idx = self.bucket_index(value)
+        match &mut self.buckets[idx] {
+            some(bucket) => {
+                if let some(pos) = bucket.iter().position(|v| v == value) {
+                    bucket.swap_remove(pos)
+                    self.len -= 1
+                    true
+                } else { false }
+            }
+            none => false,
+        }
+    }
+
+    pub fn len(self) -> usize { self.len }
+    pub fn is_empty(self) -> bool { self.len == 0 }
+
+    pub fn clear(mut self) {
+        for bucket in &mut self.buckets { *bucket = none }
+        self.len = 0
+    }
+
+    fn resize(mut self) {
+        let new_capacity = self.capacity * 2
+        let mut new_set = HashSet.with_capacity(new_capacity)
+        for bucket in &self.buckets {
+            if let some(items) = bucket {
+                for item in items { new_set.insert(item.clone()) }
+            }
+        }
+        self.buckets = new_set.buckets
+        self.capacity = new_capacity
+    }
+
+    pub fn iter(self) -> HashSetIter<T> {
+        HashSetIter { set: self, bucket_idx: 0, item_idx: 0 }
+    }
+
+    // ── Set Operations ──────────────────────────────────────────────────────
+    pub fn union(self, other: &HashSet<T>) -> HashSet<T> where T: Clone {
+        let mut result = HashSet.with_capacity(self.len + other.len)
+        for item in self.iter() { result.insert(item.clone()) }
+        for item in other.iter() { result.insert(item.clone()) }
+        result
+    }
+
+    pub fn intersection(self, other: &HashSet<T>) -> HashSet<T> where T: Clone {
+        let mut result = HashSet.new()
+        for item in self.iter() {
+            if other.contains(item) { result.insert(item.clone()) }
+        }
+        result
+    }
+
+    pub fn difference(self, other: &HashSet<T>) -> HashSet<T> where T: Clone {
+        let mut result = HashSet.new()
+        for item in self.iter() {
+            if !other.contains(item) { result.insert(item.clone()) }
+        }
+        result
+    }
+
+    pub fn symmetric_difference(self, other: &HashSet<T>) -> HashSet<T> where T: Clone {
+        let mut result = HashSet.new()
+        for item in self.iter() {
+            if !other.contains(item) { result.insert(item.clone()) }
+        }
+        for item in other.iter() {
+            if !self.contains(item) { result.insert(item.clone()) }
+        }
+        result
+    }
+
+    pub fn is_subset(self, other: &HashSet<T>) -> bool {
+        self.iter().all(|item| other.contains(item))
+    }
+
+    pub fn is_superset(self, other: &HashSet<T>) -> bool { other.is_subset(self) }
+
+    pub fn is_disjoint(self, other: &HashSet<T>) -> bool {
+        self.iter().all(|item| !other.contains(item))
+    }
+
+    pub fn retain(mut self, predicate: fn(&T) -> bool) {
+        for bucket in &mut self.buckets {
+            if let some(items) = bucket {
+                let before = items.len()
+                items.retain(predicate)
+                self.len -= before - items.len()
+            }
+        }
+    }
+
+    pub fn drain(mut self) -> [T] {
+        let mut result: [T] = []
+        for bucket in &mut self.buckets {
+            if let some(items) = bucket.take() {
+                result.extend(items)
+            }
+        }
+        self.len = 0
+        result
+    }
+}
+
+pub struct HashSetIter<'a, T> {
+    set: &'a HashSet<T>,
+    bucket_idx: usize,
+    item_idx: usize,
+}
+
+impl<'a, T: Hash + Eq> Iterator for HashSetIter<'a, T> {
+    type Item = &'a T
+
+    fn next(mut self) -> Option<&'a T> {
+        while self.bucket_idx < self.set.capacity {
+            if let some(bucket) = &self.set.buckets[self.bucket_idx] {
+                if self.item_idx < bucket.len() {
+                    let item = &bucket[self.item_idx]
+                    self.item_idx += 1
+                    return some(item)
+                }
+            }
+            self.bucket_idx += 1
+            self.item_idx = 0
+        }
+        none
+    }
+}
+
+impl<T: Hash + Eq + Clone> FromIterator<T> for HashSet<T> {
+    fn from_iter<I: Iterator<Item = T>>(iter: I) -> HashSet<T> {
+        let mut set = HashSet.new()
+        for item in iter { set.insert(item) }
+        set
+    }
+}
