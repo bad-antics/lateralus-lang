@@ -1,0 +1,278 @@
+// std.crypto.noise — Noise Protocol Framework
+// XX pattern with Curve25519, ChaChaPoly, SHA-256.
+
+use std.crypto.{chacha20poly1305, x25519, sha256}
+
+const NOISE_MAX_MESSAGE: usize = 65535
+const NOISE_TAG_LEN: usize = 16
+
+pub enum NoiseError {
+    DecryptionFailed,
+    MessageTooLong,
+    InvalidState,
+    HandshakeIncomplete,
+}
+
+// ── CipherState ──────────────────────────────────────────────────────────────
+struct CipherState {
+    key: Option<[u8; 32]>,
+    nonce: u64,
+}
+
+impl CipherState {
+    fn new() -> CipherState { CipherState { key: none, nonce: 0 } }
+
+    fn init(key: [u8; 32]) -> CipherState { CipherState { key: some(key), nonce: 0 } }
+
+    fn has_key(self) -> bool { self.key.is_some() }
+
+    fn encrypt(mut self, ad: &[u8], plaintext: &[u8]) -> Result<[u8], NoiseError> {
+        if let some(ref key) = self.key {
+            let mut nonce_bytes = [0u8; 12]
+            nonce_bytes[4..].copy_from_slice(&self.nonce.to_le_bytes())
+            self.nonce += 1
+            chacha20poly1305.encrypt(key, &nonce_bytes, ad, plaintext)
+                .map_err(|_| NoiseError.DecryptionFailed)
+        } else { ok(plaintext.to_vec()) }
+    }
+
+    fn decrypt(mut self, ad: &[u8], ciphertext: &[u8]) -> Result<[u8], NoiseError> {
+        if let some(ref key) = self.key {
+            let mut nonce_bytes = [0u8; 12]
+            nonce_bytes[4..].copy_from_slice(&self.nonce.to_le_bytes())
+            self.nonce += 1
+            chacha20poly1305.decrypt(key, &nonce_bytes, ad, ciphertext)
+                .map_err(|_| NoiseError.DecryptionFailed)
+        } else { ok(ciphertext.to_vec()) }
+    }
+}
+
+// ── SymmetricState ───────────────────────────────────────────────────────────
+struct SymmetricState {
+    cipher: CipherState,
+    ck: [u8; 32],  // chaining key
+    h: [u8; 32],   // handshake hash
+}
+
+impl SymmetricState {
+    fn init(protocol_name: &str) -> SymmetricState {
+        let h = if protocol_name.len() <= 32 {
+            let mut h = [0u8; 32]
+            h[..protocol_name.len()].copy_from_slice(protocol_name.as_bytes())
+            h
+        } else { sha256.hash(protocol_name.as_bytes()) }
+
+        SymmetricState { cipher: CipherState.new(), ck: h, h }
+    }
+
+    fn mix_key(mut self, input_key_material: &[u8]) {
+        let (ck, temp_k) = hkdf(&self.ck, input_key_material)
+        self.ck = ck
+        self.cipher = CipherState.init(temp_k)
+    }
+
+    fn mix_hash(mut self, data: &[u8]) {
+        let mut combined = self.h.to_vec()
+        combined.extend_from_slice(data)
+        self.h = sha256.hash(&combined)
+    }
+
+    fn encrypt_and_hash(mut self, plaintext: &[u8]) -> Result<[u8], NoiseError> {
+        let ciphertext = self.cipher.encrypt(&self.h, plaintext)?
+        self.mix_hash(&ciphertext)
+        ok(ciphertext)
+    }
+
+    fn decrypt_and_hash(mut self, ciphertext: &[u8]) -> Result<[u8], NoiseError> {
+        let plaintext = self.cipher.decrypt(&self.h, ciphertext)?
+        self.mix_hash(ciphertext)
+        ok(plaintext)
+    }
+
+    fn split(self) -> (CipherState, CipherState) {
+        let (temp_k1, temp_k2) = hkdf(&self.ck, &[])
+        (CipherState.init(temp_k1), CipherState.init(temp_k2))
+    }
+}
+
+fn hkdf(chaining_key: &[u8; 32], input: &[u8]) -> ([u8; 32], [u8; 32]) {
+    let temp_key = hmac_sha256(chaining_key, input)
+    let out1 = hmac_sha256(&temp_key, &[0x01])
+    let mut input2 = out1.to_vec()
+    input2.push(0x02)
+    let out2 = hmac_sha256(&temp_key, &input2)
+    (out1, out2)
+}
+
+fn hmac_sha256(key: &[u8; 32], data: &[u8]) -> [u8; 32] {
+    let mut ipad = [0x36u8; 64]
+    let mut opad = [0x5Cu8; 64]
+    for i in 0..32 { ipad[i] ^= key[i]; opad[i] ^= key[i] }
+    let mut inner = ipad.to_vec()
+    inner.extend_from_slice(data)
+    let inner_hash = sha256.hash(&inner)
+    let mut outer = opad.to_vec()
+    outer.extend_from_slice(&inner_hash)
+    sha256.hash(&outer)
+}
+
+// ── HandshakeState (XX pattern) ──────────────────────────────────────────────
+pub struct NoiseHandshake {
+    symmetric: SymmetricState,
+    s: x25519.KeyPair,            // static key
+    e: Option<x25519.KeyPair>,    // ephemeral key
+    rs: Option<[u8; 32]>,         // remote static
+    re: Option<[u8; 32]>,         // remote ephemeral
+    initiator: bool,
+    message_count: u32,
+}
+
+impl NoiseHandshake {
+    pub fn initiator(static_key: x25519.KeyPair) -> NoiseHandshake {
+        let mut state = NoiseHandshake {
+            symmetric: SymmetricState.init("Noise_XX_25519_ChaChaPoly_SHA256"),
+            s: static_key, e: none, rs: none, re: none,
+            initiator: true, message_count: 0,
+        }
+        state
+    }
+
+    pub fn responder(static_key: x25519.KeyPair) -> NoiseHandshake {
+        NoiseHandshake {
+            symmetric: SymmetricState.init("Noise_XX_25519_ChaChaPoly_SHA256"),
+            s: static_key, e: none, rs: none, re: none,
+            initiator: false, message_count: 0,
+        }
+    }
+
+    pub fn write_message(mut self, payload: &[u8]) -> Result<[u8], NoiseError> {
+        if payload.len() > NOISE_MAX_MESSAGE { return err(NoiseError.MessageTooLong) }
+        let mut message: [u8] = []
+
+        match (self.initiator, self.message_count) {
+            (true, 0) => {
+                // → e
+                let e = x25519.generate_keypair()
+                message.extend_from_slice(&e.public)
+                self.symmetric.mix_hash(&e.public)
+                self.e = some(e)
+            }
+            (false, 0) => {
+                // → e, ee, s, es
+                let e = x25519.generate_keypair()
+                message.extend_from_slice(&e.public)
+                self.symmetric.mix_hash(&e.public)
+                self.e = some(e)
+
+                // ee
+                let dh_ee = x25519.diffie_hellman(&self.e.as_ref().unwrap().private, &self.re.unwrap())
+                self.symmetric.mix_key(&dh_ee)
+
+                // s
+                let encrypted_s = self.symmetric.encrypt_and_hash(&self.s.public)?
+                message.extend_from_slice(&encrypted_s)
+
+                // es
+                let dh_es = x25519.diffie_hellman(&self.s.private, &self.re.unwrap())
+                self.symmetric.mix_key(&dh_es)
+            }
+            (true, 1) => {
+                // → s, se
+                let encrypted_s = self.symmetric.encrypt_and_hash(&self.s.public)?
+                message.extend_from_slice(&encrypted_s)
+
+                let dh_se = x25519.diffie_hellman(&self.s.private, &self.re.unwrap())
+                self.symmetric.mix_key(&dh_se)
+            }
+            _ => return err(NoiseError.InvalidState),
+        }
+
+        let encrypted_payload = self.symmetric.encrypt_and_hash(payload)?
+        message.extend_from_slice(&encrypted_payload)
+        self.message_count += 1
+        ok(message)
+    }
+
+    pub fn read_message(mut self, message: &[u8]) -> Result<[u8], NoiseError> {
+        let mut offset = 0
+
+        match (self.initiator, self.message_count) {
+            (false, 0) => {
+                // ← e
+                let mut re = [0u8; 32]
+                re.copy_from_slice(&message[..32])
+                self.symmetric.mix_hash(&re)
+                self.re = some(re)
+                offset = 32
+            }
+            (true, 1) => {
+                // ← e, ee, s, es
+                let mut re = [0u8; 32]
+                re.copy_from_slice(&message[..32])
+                self.symmetric.mix_hash(&re)
+                self.re = some(re)
+                offset = 32
+
+                // ee
+                let dh_ee = x25519.diffie_hellman(&self.e.as_ref().unwrap().private, &re)
+                self.symmetric.mix_key(&dh_ee)
+
+                // s
+                let encrypted_rs = &message[offset..offset + 48]
+                let rs_bytes = self.symmetric.decrypt_and_hash(encrypted_rs)?
+                let mut rs = [0u8; 32]
+                rs.copy_from_slice(&rs_bytes)
+                self.rs = some(rs)
+                offset += 48
+
+                // es
+                let dh_es = x25519.diffie_hellman(&self.e.as_ref().unwrap().private, &rs)
+                self.symmetric.mix_key(&dh_es)
+            }
+            (false, 1) => {
+                // ← s, se
+                let encrypted_rs = &message[..48]
+                let rs_bytes = self.symmetric.decrypt_and_hash(encrypted_rs)?
+                let mut rs = [0u8; 32]
+                rs.copy_from_slice(&rs_bytes)
+                self.rs = some(rs)
+                offset = 48
+
+                let dh_se = x25519.diffie_hellman(&self.e.as_ref().unwrap().private, &rs)
+                self.symmetric.mix_key(&dh_se)
+            }
+            _ => return err(NoiseError.InvalidState),
+        }
+
+        let payload = self.symmetric.decrypt_and_hash(&message[offset..])?
+        self.message_count += 1
+        ok(payload)
+    }
+
+    pub fn finalize(self) -> Result<NoiseTransport, NoiseError> {
+        if self.message_count < 3 { return err(NoiseError.HandshakeIncomplete) }
+        let (c1, c2) = self.symmetric.split()
+        if self.initiator {
+            ok(NoiseTransport { send: c1, recv: c2, remote_static: self.rs })
+        } else {
+            ok(NoiseTransport { send: c2, recv: c1, remote_static: self.rs })
+        }
+    }
+}
+
+// ── Transport ────────────────────────────────────────────────────────────────
+pub struct NoiseTransport {
+    send: CipherState,
+    recv: CipherState,
+    pub remote_static: Option<[u8; 32]>,
+}
+
+impl NoiseTransport {
+    pub fn send(mut self, plaintext: &[u8]) -> Result<[u8], NoiseError> {
+        self.send.encrypt(&[], plaintext)
+    }
+
+    pub fn receive(mut self, ciphertext: &[u8]) -> Result<[u8], NoiseError> {
+        self.recv.decrypt(&[], ciphertext)
+    }
+}
