@@ -1,0 +1,179 @@
+// std.collections.btree — B-Tree ordered map
+// Self-balancing tree with O(log n) operations, cache-friendly.
+
+const B: usize = 6  // minimum degree (max 2B-1 keys per node)
+
+struct BTreeNode<K: Ord, V> {
+    keys: [(K, V)],
+    children: [Box<BTreeNode<K, V>>],
+    leaf: bool,
+}
+
+impl<K: Ord, V> BTreeNode<K, V> {
+    fn new_leaf() -> BTreeNode<K, V> {
+        BTreeNode { keys: [], children: [], leaf: true }
+    }
+
+    fn new_internal() -> BTreeNode<K, V> {
+        BTreeNode { keys: [], children: [], leaf: false }
+    }
+
+    fn is_full(self) -> bool { self.keys.len() >= 2 * B - 1 }
+
+    fn find_key_index(self, key: &K) -> usize {
+        let mut i = 0
+        while i < self.keys.len() && self.keys[i].0 < *key { i += 1 }
+        i
+    }
+
+    fn search(self, key: &K) -> Option<&V> {
+        let i = self.find_key_index(key)
+        if i < self.keys.len() && self.keys[i].0 == *key {
+            return some(&self.keys[i].1)
+        }
+        if self.leaf { return none }
+        self.children[i].search(key)
+    }
+
+    fn search_mut(mut self, key: &K) -> Option<&mut V> {
+        let i = self.find_key_index(key)
+        if i < self.keys.len() && self.keys[i].0 == *key {
+            return some(&mut self.keys[i].1)
+        }
+        if self.leaf { return none }
+        self.children[i].search_mut(key)
+    }
+
+    fn split_child(mut self, i: usize) {
+        let child = &mut self.children[i]
+        let mid = B - 1
+
+        let mut new_node = if child.leaf { BTreeNode.new_leaf() } else { BTreeNode.new_internal() }
+        new_node.keys = child.keys.split_off(mid + 1)
+        if !child.leaf { new_node.children = child.children.split_off(mid + 1) }
+
+        let median = child.keys.pop().unwrap()
+        self.keys.insert(i, median)
+        self.children.insert(i + 1, box new_node)
+    }
+
+    fn insert_non_full(mut self, key: K, value: V) -> Option<V> {
+        let i = self.find_key_index(&key)
+
+        if i < self.keys.len() && self.keys[i].0 == key {
+            let old = std.mem.replace(&mut self.keys[i].1, value)
+            return some(old)
+        }
+
+        if self.leaf {
+            self.keys.insert(i, (key, value))
+            return none
+        }
+
+        let child_idx = i
+        if self.children[child_idx].is_full() {
+            self.split_child(child_idx)
+            if key > self.keys[child_idx].0 {
+                return self.children[child_idx + 1].insert_non_full(key, value)
+            }
+        }
+        self.children[child_idx].insert_non_full(key, value)
+    }
+
+    fn min_key(self) -> Option<&(K, V)> {
+        if self.leaf { self.keys.first() }
+        else { self.children.first().and_then(|c| c.min_key()) }
+    }
+
+    fn max_key(self) -> Option<&(K, V)> {
+        if self.leaf { self.keys.last() }
+        else { self.children.last().and_then(|c| c.max_key()) }
+    }
+
+    fn count(self) -> usize {
+        let mut n = self.keys.len()
+        for child in &self.children { n += child.count() }
+        n
+    }
+
+    fn in_order(self, result: &mut [(K, V)]) where K: Clone, V: Clone {
+        for i in 0..self.keys.len() {
+            if !self.leaf && i < self.children.len() {
+                self.children[i].in_order(result)
+            }
+            result.push(self.keys[i].clone())
+        }
+        if !self.leaf && self.children.len() > self.keys.len() {
+            self.children.last().unwrap().in_order(result)
+        }
+    }
+
+    fn height(self) -> usize {
+        if self.leaf { 1 }
+        else { 1 + self.children[0].height() }
+    }
+}
+
+pub struct BTreeMap<K: Ord, V> {
+    root: Option<Box<BTreeNode<K, V>>>,
+    len: usize,
+}
+
+impl<K: Ord, V> BTreeMap<K, V> {
+    pub fn new() -> BTreeMap<K, V> { BTreeMap { root: none, len: 0 } }
+
+    pub fn get(self, key: &K) -> Option<&V> {
+        self.root.as_ref().and_then(|r| r.search(key))
+    }
+
+    pub fn get_mut(mut self, key: &K) -> Option<&mut V> {
+        self.root.as_mut().and_then(|r| r.search_mut(key))
+    }
+
+    pub fn insert(mut self, key: K, value: V) -> Option<V> {
+        if self.root.is_none() {
+            let mut node = BTreeNode.new_leaf()
+            node.keys.push((key, value))
+            self.root = some(box node)
+            self.len = 1
+            return none
+        }
+
+        let root = self.root.as_mut().unwrap()
+        if root.is_full() {
+            let mut new_root = BTreeNode.new_internal()
+            let old_root = self.root.take().unwrap()
+            new_root.children.push(old_root)
+            new_root.split_child(0)
+            let result = new_root.insert_non_full(key, value)
+            self.root = some(box new_root)
+            if result.is_none() { self.len += 1 }
+            result
+        } else {
+            let result = root.insert_non_full(key, value)
+            if result.is_none() { self.len += 1 }
+            result
+        }
+    }
+
+    pub fn contains_key(self, key: &K) -> bool { self.get(key).is_some() }
+    pub fn len(self) -> usize { self.len }
+    pub fn is_empty(self) -> bool { self.len == 0 }
+
+    pub fn min(self) -> Option<&(K, V)> { self.root.as_ref().and_then(|r| r.min_key()) }
+    pub fn max(self) -> Option<&(K, V)> { self.root.as_ref().and_then(|r| r.max_key()) }
+
+    pub fn height(self) -> usize {
+        self.root.as_ref().map(|r| r.height()).unwrap_or(0)
+    }
+
+    pub fn iter(self) -> [(K, V)] where K: Clone, V: Clone {
+        let mut result: [(K, V)] = []
+        if let some(ref root) = self.root { root.in_order(&mut result) }
+        result
+    }
+
+    pub fn range(self, min: &K, max: &K) -> [(K, V)] where K: Clone, V: Clone {
+        self.iter().into_iter().filter(|(k, _)| k >= min && k <= max).collect()
+    }
+}
