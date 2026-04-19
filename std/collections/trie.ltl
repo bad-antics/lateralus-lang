@@ -1,0 +1,243 @@
+// std/collections/trie.ltl — Prefix tree (trie) with compressed paths
+use std.collections.HashMap
+
+// ── Trie node ────────────────────────────────────────────────────────────────
+struct TrieNode<V> {
+    children: HashMap<u8, Box<TrieNode<V>>>,
+    value:    Option<V>,
+    prefix:   [u8],  // compressed path prefix
+}
+
+impl<V> TrieNode<V> {
+    fn new() -> TrieNode<V> {
+        TrieNode { children: HashMap.new(), value: none, prefix: [] }
+    }
+
+    fn with_prefix(prefix: [u8]) -> TrieNode<V> {
+        TrieNode { children: HashMap.new(), value: none, prefix }
+    }
+
+    fn is_leaf(self) -> bool { self.children.is_empty() }
+}
+
+// ── Trie ─────────────────────────────────────────────────────────────────────
+pub struct Trie<V> {
+    root: TrieNode<V>,
+    len:  usize,
+}
+
+impl<V: Clone> Trie<V> {
+    pub fn new() -> Trie<V> {
+        Trie { root: TrieNode.new(), len: 0 }
+    }
+
+    pub fn insert(mut self, key: &[u8], value: V) -> Option<V> {
+        let old = self.insert_recursive(&mut self.root, key, 0, value)
+        if old.is_none() { self.len += 1 }
+        old
+    }
+
+    fn insert_recursive(self, node: &mut TrieNode<V>, key: &[u8], depth: usize, value: V) -> Option<V> {
+        if depth == key.len() {
+            let old = node.value.take()
+            node.value = some(value)
+            return old
+        }
+
+        let byte = key[depth]
+        if !node.children.contains_key(&byte) {
+            let mut child = TrieNode.with_prefix(key[depth+1..].to_vec())
+            child.value = some(value)
+            node.children.insert(byte, Box.new(child))
+            return none
+        }
+
+        let child = node.children.get_mut(&byte).unwrap()
+
+        // Check compressed prefix match
+        let prefix_len = common_prefix_len(&child.prefix, &key[depth+1..])
+        if prefix_len == child.prefix.len() {
+            // Full prefix match, continue deeper
+            return self.insert_recursive(child, key, depth + 1 + prefix_len, value)
+        }
+
+        // Split node at divergence point
+        let mut new_child = TrieNode.with_prefix(child.prefix[..prefix_len].to_vec())
+        let old_suffix = child.prefix[prefix_len..].to_vec()
+        child.prefix = old_suffix
+
+        let remaining_key = key[depth + 1 + prefix_len..].to_vec()
+        if remaining_key.is_empty() {
+            new_child.value = some(value)
+        } else {
+            let mut leaf = TrieNode.with_prefix(remaining_key[1..].to_vec())
+            leaf.value = some(value)
+            new_child.children.insert(remaining_key[0], Box.new(leaf))
+        }
+
+        // Move old child under new_child
+        let old_child = node.children.remove(&byte).unwrap()
+        if !old_child.prefix.is_empty() {
+            new_child.children.insert(old_child.prefix[0], old_child)
+        }
+
+        node.children.insert(byte, Box.new(new_child))
+        none
+    }
+
+    pub fn get(self, key: &[u8]) -> Option<&V> {
+        self.get_recursive(&self.root, key, 0)
+    }
+
+    fn get_recursive(self, node: &TrieNode<V>, key: &[u8], depth: usize) -> Option<&V> {
+        if depth == key.len() { return node.value.as_ref() }
+
+        let byte = key[depth]
+        let child = node.children.get(&byte)?
+
+        let prefix_len = common_prefix_len(&child.prefix, &key[depth+1..])
+        if prefix_len < child.prefix.len() { return none }
+
+        self.get_recursive(child, key, depth + 1 + prefix_len)
+    }
+
+    pub fn contains_key(self, key: &[u8]) -> bool { self.get(key).is_some() }
+
+    pub fn remove(mut self, key: &[u8]) -> Option<V> {
+        let result = self.remove_recursive(&mut self.root, key, 0)
+        if result.is_some() { self.len -= 1 }
+        result
+    }
+
+    fn remove_recursive(self, node: &mut TrieNode<V>, key: &[u8], depth: usize) -> Option<V> {
+        if depth == key.len() { return node.value.take() }
+
+        let byte = key[depth]
+        let child = node.children.get_mut(&byte)?
+        let prefix_len = common_prefix_len(&child.prefix, &key[depth+1..])
+        if prefix_len < child.prefix.len() { return none }
+
+        let result = self.remove_recursive(child, key, depth + 1 + prefix_len)
+
+        // Clean up empty nodes
+        if child.value.is_none() && child.children.is_empty() {
+            node.children.remove(&byte)
+        }
+        result
+    }
+
+    pub fn len(self) -> usize { self.len }
+    pub fn is_empty(self) -> bool { self.len == 0 }
+
+    /// Find all keys with the given prefix
+    pub fn prefix_search(self, prefix: &[u8]) -> [([u8], &V)] {
+        let mut results: [([u8], &V)] = []
+        if let some(node) = self.find_prefix_node(&self.root, prefix, 0) {
+            self.collect_all(node, &mut prefix.to_vec(), &mut results)
+        }
+        results
+    }
+
+    fn find_prefix_node<'a>(self, node: &'a TrieNode<V>, prefix: &[u8], depth: usize) -> Option<&'a TrieNode<V>> {
+        if depth >= prefix.len() { return some(node) }
+
+        let byte = prefix[depth]
+        let child = node.children.get(&byte)?
+        let prefix_len = common_prefix_len(&child.prefix, &prefix[depth+1..])
+        if depth + 1 + prefix_len >= prefix.len() { return some(child) }
+        if prefix_len < child.prefix.len() { return none }
+        self.find_prefix_node(child, prefix, depth + 1 + prefix_len)
+    }
+
+    fn collect_all<'a>(self, node: &'a TrieNode<V>, path: &mut [u8], results: &mut [([u8], &'a V)]) {
+        if let some(ref v) = node.value {
+            results.push((path.clone(), v))
+        }
+        for (&byte, child) in &node.children {
+            path.push(byte)
+            path.extend_from_slice(&child.prefix)
+            self.collect_all(child, path, results)
+            path.truncate(path.len() - child.prefix.len() - 1)
+        }
+    }
+
+    /// Longest prefix match
+    pub fn longest_prefix(self, key: &[u8]) -> Option<([u8], &V)> {
+        let mut best: Option<([u8], &V)> = none
+        self.longest_prefix_recursive(&self.root, key, 0, &mut [], &mut best)
+        best
+    }
+
+    fn longest_prefix_recursive<'a>(
+        self, node: &'a TrieNode<V>, key: &[u8], depth: usize,
+        path: &mut [u8], best: &mut Option<([u8], &'a V)>,
+    ) {
+        if let some(ref v) = node.value {
+            *best = some((path.clone(), v))
+        }
+        if depth >= key.len() { return }
+
+        let byte = key[depth]
+        if let some(child) = node.children.get(&byte) {
+            path.push(byte)
+            path.extend_from_slice(&child.prefix)
+            let prefix_len = common_prefix_len(&child.prefix, &key[depth+1..])
+            if prefix_len == child.prefix.len() {
+                self.longest_prefix_recursive(child, key, depth + 1 + prefix_len, path, best)
+            }
+            path.truncate(path.len() - child.prefix.len() - 1)
+        }
+    }
+}
+
+fn common_prefix_len(a: &[u8], b: &[u8]) -> usize {
+    a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count()
+}
+
+fn main() {
+    let mut trie = Trie::<i32>.new()
+
+    trie.insert("hello".as_bytes(), 1)
+    trie.insert("help".as_bytes(), 2)
+    trie.insert("world".as_bytes(), 3)
+    trie.insert("helicopter".as_bytes(), 4)
+    trie.insert("he".as_bytes(), 5)
+
+    assert(trie.len() == 5)
+    print("Inserted 5 keys ✓")
+
+    assert(trie.get("hello".as_bytes()) == some(&1))
+    assert(trie.get("help".as_bytes()) == some(&2))
+    assert(trie.get("world".as_bytes()) == some(&3))
+    assert(trie.get("he".as_bytes()) == some(&5))
+    assert(trie.get("hell".as_bytes()) == none)
+    print("Exact lookups ✓")
+
+    // Prefix search
+    let hel_results = trie.prefix_search("hel".as_bytes())
+    assert(hel_results.len() >= 3, "hel* should match hello, help, helicopter")
+    print("Prefix search 'hel*': ${hel_results.len()} results ✓")
+
+    // Longest prefix
+    let (prefix, val) = trie.longest_prefix("helping".as_bytes()).unwrap()
+    assert(prefix == "help".as_bytes())
+    assert(*val == 2)
+    print("Longest prefix of 'helping' = 'help' ✓")
+
+    // Remove
+    let removed = trie.remove("help".as_bytes())
+    assert(removed == some(2))
+    assert(trie.len() == 4)
+    assert(!trie.contains_key("help".as_bytes()))
+    assert(trie.contains_key("hello".as_bytes()))
+    print("Remove 'help' ✓")
+
+    // Overwrite
+    let old = trie.insert("hello".as_bytes(), 100)
+    assert(old == some(1))
+    assert(trie.get("hello".as_bytes()) == some(&100))
+    assert(trie.len() == 4)  // no new key
+    print("Overwrite 'hello' ✓")
+
+    print("Trie — all passed ✓")
+}
