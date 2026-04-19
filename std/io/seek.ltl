@@ -1,0 +1,155 @@
+// Standard Library - IO Seek
+// Seek trait and helpers for random-access I/O.
+
+use std.io.{Result, Error}
+
+enum SeekFrom {
+    Start(u64),
+    End(i64),
+    Current(i64),
+}
+
+trait Seek {
+    fn seek(mut self, pos: SeekFrom) -> Result<u64>
+
+    fn rewind(mut self) -> Result<()> {
+        self.seek(SeekFrom.Start(0))?;
+        ok(())
+    }
+
+    fn stream_position(mut self) -> Result<u64> {
+        self.seek(SeekFrom.Current(0))
+    }
+
+    fn stream_len(mut self) -> Result<u64> {
+        let old = self.stream_position()?
+        let len = self.seek(SeekFrom.End(0))?
+        self.seek(SeekFrom.Start(old))?;
+        ok(len)
+    }
+}
+
+struct Cursor<T> {
+    inner: T,
+    pos: u64,
+}
+
+impl<T> Cursor<T> {
+    fn new(inner: T) -> Cursor<T> {
+        Cursor { inner, pos: 0 }
+    }
+
+    fn into_inner(self) -> T { self.inner }
+    fn get_ref(self) -> &T { &self.inner }
+    fn get_mut(mut self) -> &mut T { &mut self.inner }
+    fn position(self) -> u64 { self.pos }
+    fn set_position(mut self, pos: u64) { self.pos = pos }
+}
+
+impl Seek for Cursor<[u8]> {
+    fn seek(mut self, pos: SeekFrom) -> Result<u64> {
+        let new_pos: i64 = match pos {
+            SeekFrom.Start(n) => n as i64,
+            SeekFrom.End(n) => self.inner.len() as i64 + n,
+            SeekFrom.Current(n) => self.pos as i64 + n,
+        }
+        if new_pos < 0 {
+            return err(Error.new("seek before start"))
+        }
+        self.pos = new_pos as u64
+        ok(self.pos)
+    }
+}
+
+impl Seek for Cursor<string> {
+    fn seek(mut self, pos: SeekFrom) -> Result<u64> {
+        let new_pos: i64 = match pos {
+            SeekFrom.Start(n) => n as i64,
+            SeekFrom.End(n) => self.inner.len() as i64 + n,
+            SeekFrom.Current(n) => self.pos as i64 + n,
+        }
+        if new_pos < 0 {
+            return err(Error.new("seek before start"))
+        }
+        self.pos = new_pos as u64
+        ok(self.pos)
+    }
+}
+
+struct BufSeeker<S: Seek> {
+    inner: S,
+    buf_start: u64,
+    buf_len: usize,
+}
+
+impl<S: Seek> BufSeeker<S> {
+    fn new(inner: S) -> BufSeeker<S> {
+        BufSeeker { inner, buf_start: 0, buf_len: 0 }
+    }
+
+    fn seek_relative(mut self, offset: i64) -> Result<u64> {
+        self.inner.seek(SeekFrom.Current(offset))
+    }
+}
+
+fn main() {
+    // Cursor seek
+    let mut c = Cursor.new(vec![0u8; 100])
+    assert(c.position() == 0)
+
+    let pos = c.seek(SeekFrom.Start(50)).unwrap()
+    assert(pos == 50)
+    assert(c.position() == 50)
+
+    let pos2 = c.seek(SeekFrom.Current(10)).unwrap()
+    assert(pos2 == 60)
+
+    let pos3 = c.seek(SeekFrom.End(-20)).unwrap()
+    assert(pos3 == 80)
+    print("Cursor seek ✓")
+
+    // Rewind
+    c.rewind().unwrap()
+    assert(c.position() == 0)
+    print("Rewind ✓")
+
+    // Stream position
+    c.seek(SeekFrom.Start(42)).unwrap()
+    assert(c.stream_position().unwrap() == 42)
+    print("Stream position ✓")
+
+    // Stream length
+    let len = c.stream_len().unwrap()
+    assert(len == 100)
+    assert(c.position() == 42) // restored
+    print("Stream length ✓")
+
+    // Seek before start
+    let r = c.seek(SeekFrom.Start(0)).unwrap()
+    let r2 = c.seek(SeekFrom.Current(-1))
+    assert(r2.is_err())
+    print("Seek before start ✓")
+
+    // String cursor
+    let mut sc = Cursor.new("hello world".to_string())
+    sc.seek(SeekFrom.Start(5)).unwrap()
+    assert(sc.position() == 5)
+    sc.seek(SeekFrom.End(0)).unwrap()
+    assert(sc.position() == 11)
+    print("String cursor ✓")
+
+    // Into inner
+    let data = vec![1u8, 2, 3]
+    let c2 = Cursor.new(data)
+    let inner = c2.into_inner()
+    assert(inner.len() == 3)
+    print("Into inner ✓")
+
+    // SeekFrom variants
+    let sf1 = SeekFrom.Start(0)
+    let sf2 = SeekFrom.End(-1)
+    let sf3 = SeekFrom.Current(5)
+    print("SeekFrom variants ✓")
+
+    print("IO Seek complete ✓")
+}
