@@ -1,0 +1,130 @@
+// std.mem - Memory utilities
+// size_of, align_of, swap, replace, take, ManuallyDrop, MaybeUninit.
+
+pub fn size_of<T>() -> usize {
+    @intrinsic("size_of", T)
+}
+
+pub fn align_of<T>() -> usize {
+    @intrinsic("align_of", T)
+}
+
+pub fn size_of_val<T>(val: &T) -> usize {
+    @intrinsic("size_of_val", val)
+}
+
+pub fn swap<T>(a: &mut T, b: &mut T) {
+    let tmp = @intrinsic("move", a)
+    @intrinsic("move_to", b, a)
+    @intrinsic("move_to", tmp, b)
+}
+
+pub fn replace<T>(dest: &mut T, src: T) -> T {
+    let old = @intrinsic("move", dest)
+    @intrinsic("move_to", src, dest)
+    old
+}
+
+pub fn take<T: Default>(dest: &mut T) -> T {
+    replace(dest, T.default())
+}
+
+pub fn drop<T>(val: T) {
+    // val goes out of scope, destructor runs
+}
+
+pub fn forget<T>(val: T) {
+    @intrinsic("forget", val)
+}
+
+pub fn zeroed<T>() -> T {
+    @intrinsic("zeroed", T)
+}
+
+pub fn transmute<T, U>(val: T) -> U {
+    @intrinsic("transmute", val)
+}
+
+pub fn needs_drop<T>() -> bool {
+    @intrinsic("needs_drop", T)
+}
+
+pub struct ManuallyDrop<T> {
+    value: T,
+}
+
+impl<T> ManuallyDrop<T> {
+    pub fn new(value: T) -> ManuallyDrop<T> { ManuallyDrop { value } }
+
+    pub fn into_inner(self) -> T { self.value }
+
+    pub fn deref(self) -> &T { &self.value }
+    pub fn deref_mut(mut self) -> &mut T { &mut self.value }
+
+    pub unsafe fn drop(mut self) {
+        @intrinsic("drop_in_place", &mut self.value)
+    }
+}
+
+pub struct MaybeUninit<T> {
+    inner: @intrinsic("uninitialized_storage", T),
+}
+
+impl<T> MaybeUninit<T> {
+    pub fn uninit() -> MaybeUninit<T> {
+        MaybeUninit { inner: @intrinsic("uninit", T) }
+    }
+
+    pub fn new(val: T) -> MaybeUninit<T> {
+        let mut mu = MaybeUninit.uninit()
+        @intrinsic("write", &mut mu.inner, val)
+        mu
+    }
+
+    pub fn zeroed() -> MaybeUninit<T> {
+        let mut mu = MaybeUninit.uninit()
+        @intrinsic("write_bytes", &mut mu.inner, 0u8, 1)
+        mu
+    }
+
+    pub fn write(mut self, val: T) -> &mut T {
+        @intrinsic("write", &mut self.inner, val)
+        self.assume_init_mut()
+    }
+
+    pub unsafe fn assume_init(self) -> T {
+        @intrinsic("move", &self.inner)
+    }
+
+    pub unsafe fn assume_init_ref(self) -> &T {
+        @intrinsic("ref_cast", &self.inner)
+    }
+
+    pub unsafe fn assume_init_mut(mut self) -> &mut T {
+        @intrinsic("ref_cast_mut", &mut self.inner)
+    }
+
+    pub fn as_ptr(self) -> *const T {
+        @intrinsic("addr_of", &self.inner)
+    }
+
+    pub fn as_mut_ptr(mut self) -> *mut T {
+        @intrinsic("addr_of_mut", &mut self.inner)
+    }
+}
+
+pub fn copy<T: Copy>(src: &T) -> T {
+    @intrinsic("copy", src)
+}
+
+pub fn copy_nonoverlapping<T>(src: *const T, dst: *mut T, count: usize) {
+    @intrinsic("copy_nonoverlapping", src, dst, count)
+}
+
+pub fn copy_overlapping<T>(src: *const T, dst: *mut T, count: usize) {
+    @intrinsic("copy_overlapping", src, dst, count)
+}
+
+pub fn write_bytes<T>(dst: *mut T, val: u8, count: usize) {
+    @intrinsic("write_bytes", dst, val, count)
+}
