@@ -1,78 +1,200 @@
-// deque.ltl — Double-ended queue (ring buffer)
-struct Deque<T> {
-    buf:   [T?],
-    head:  int,
-    tail:  int,
-    len:   int,
+// std.collections.deque — Double-ended queue
+// Growable ring buffer with O(1) amortized push/pop on both ends.
+
+pub struct Deque<T> {
+    buf: [Option<T>],
+    head: usize,
+    tail: usize,
+    len: usize,
+    capacity: usize,
 }
 
-impl<T: Clone> Deque<T> {
-    fn new(capacity: int) -> Deque<T> {
-        Deque { buf: [none; capacity], head: 0, tail: 0, len: 0 }
+impl<T> Deque<T> {
+    pub fn new() -> Deque<T> { Self.with_capacity(16) }
+
+    pub fn with_capacity(capacity: usize) -> Deque<T> {
+        let cap = capacity.max(4).next_power_of_two()
+        let mut buf: [Option<T>] = []
+        for _ in 0..cap { buf.push(none) }
+        Deque { buf, head: 0, tail: 0, len: 0, capacity: cap }
     }
 
-    fn push_back(mut self, v: T) {
-        self.grow_if_needed()
-        self.buf[self.tail] = some(v)
-        self.tail = (self.tail + 1) % self.buf.len()
+    pub fn len(self) -> usize { self.len }
+    pub fn is_empty(self) -> bool { self.len == 0 }
+    pub fn capacity(self) -> usize { self.capacity }
+
+    fn wrap_index(self, index: usize) -> usize { index & (self.capacity - 1) }
+
+    pub fn push_back(mut self, value: T) {
+        if self.len == self.capacity { self.grow() }
+        self.buf[self.tail] = some(value)
+        self.tail = self.wrap_index(self.tail + 1)
         self.len += 1
     }
 
-    fn push_front(mut self, v: T) {
-        self.grow_if_needed()
-        self.head = (self.head + self.buf.len() - 1) % self.buf.len()
-        self.buf[self.head] = some(v)
+    pub fn push_front(mut self, value: T) {
+        if self.len == self.capacity { self.grow() }
+        self.head = self.wrap_index(self.head + self.capacity - 1)
+        self.buf[self.head] = some(value)
         self.len += 1
     }
 
-    fn pop_back(mut self) -> T? {
-        if self.len == 0 { return none }
-        self.tail = (self.tail + self.buf.len() - 1) % self.buf.len()
-        let v = self.buf[self.tail].take()
+    pub fn pop_back(mut self) -> Option<T> {
+        if self.is_empty() { return none }
+        self.tail = self.wrap_index(self.tail + self.capacity - 1)
         self.len -= 1
-        v
+        self.buf[self.tail].take()
     }
 
-    fn pop_front(mut self) -> T? {
-        if self.len == 0 { return none }
-        let v = self.buf[self.head].take()
-        self.head = (self.head + 1) % self.buf.len()
+    pub fn pop_front(mut self) -> Option<T> {
+        if self.is_empty() { return none }
+        let val = self.buf[self.head].take()
+        self.head = self.wrap_index(self.head + 1)
         self.len -= 1
-        v
+        val
     }
 
-    fn front(self) -> T? { self.buf[self.head].clone() }
-    fn back(self)  -> T? {
-        let tail = (self.tail + self.buf.len() - 1) % self.buf.len()
-        self.buf[tail].clone()
+    pub fn front(self) -> Option<&T> {
+        if self.is_empty() { none } else { self.buf[self.head].as_ref() }
     }
 
-    fn len(self)     -> int  { self.len }
-    fn is_empty(self) -> bool { self.len == 0 }
+    pub fn back(self) -> Option<&T> {
+        if self.is_empty() { none }
+        else { self.buf[self.wrap_index(self.tail + self.capacity - 1)].as_ref() }
+    }
 
-    fn grow_if_needed(mut self) {
-        if self.len < self.buf.len() { return }
-        let old_cap = self.buf.len()
-        let new_cap = old_cap * 2
-        let mut new_buf: [T?] = [none; new_cap]
-        for i in range(0, self.len) {
-            new_buf[i] = self.buf[(self.head + i) % old_cap].clone()
+    pub fn get(self, index: usize) -> Option<&T> {
+        if index >= self.len { return none }
+        let actual = self.wrap_index(self.head + index)
+        self.buf[actual].as_ref()
+    }
+
+    pub fn get_mut(mut self, index: usize) -> Option<&mut T> {
+        if index >= self.len { return none }
+        let actual = self.wrap_index(self.head + index)
+        self.buf[actual].as_mut()
+    }
+
+    pub fn clear(mut self) {
+        while self.pop_front().is_some() {}
+    }
+
+    pub fn contains(self, value: &T) -> bool where T: PartialEq {
+        for i in 0..self.len {
+            let idx = self.wrap_index(self.head + i)
+            if let some(item) = &self.buf[idx] {
+                if item == value { return true }
+            }
         }
-        self.buf  = new_buf
+        false
+    }
+
+    pub fn swap(mut self, i: usize, j: usize) {
+        let a = self.wrap_index(self.head + i)
+        let b = self.wrap_index(self.head + j)
+        self.buf.swap(a, b)
+    }
+
+    pub fn rotate_left(mut self, n: usize) {
+        if self.is_empty() { return }
+        let n = n % self.len
+        for _ in 0..n {
+            let val = self.pop_front().unwrap()
+            self.push_back(val)
+        }
+    }
+
+    pub fn rotate_right(mut self, n: usize) {
+        if self.is_empty() { return }
+        let n = n % self.len
+        for _ in 0..n {
+            let val = self.pop_back().unwrap()
+            self.push_front(val)
+        }
+    }
+
+    pub fn iter(self) -> DequeIter<T> { DequeIter { deque: self, index: 0 } }
+
+    pub fn to_vec(self) -> [T] where T: Clone {
+        let mut result: [T] = []
+        for i in 0..self.len {
+            let idx = self.wrap_index(self.head + i)
+            if let some(item) = &self.buf[idx] { result.push(item.clone()) }
+        }
+        result
+    }
+
+    fn grow(mut self) {
+        let new_capacity = self.capacity * 2
+        let mut new_buf: [Option<T>] = []
+        for _ in 0..new_capacity { new_buf.push(none) }
+
+        for i in 0..self.len {
+            let old_idx = self.wrap_index(self.head + i)
+            new_buf[i] = self.buf[old_idx].take()
+        }
+
+        self.buf = new_buf
         self.head = 0
         self.tail = self.len
+        self.capacity = new_capacity
+    }
+
+    pub fn make_contiguous(mut self) -> &[T] {
+        if self.head <= self.tail || self.is_empty() {
+            // Already contiguous
+        } else {
+            self.grow()  // grow makes it contiguous as a side-effect
+        }
+        // Return a slice view
+        unsafe { std.slice.from_raw_parts(self.buf.as_ptr().add(self.head) as *const T, self.len) }
+    }
+
+    pub fn truncate(mut self, new_len: usize) {
+        while self.len > new_len { self.pop_back(); }
+    }
+
+    pub fn retain(mut self, predicate: fn(&T) -> bool) {
+        let mut i = 0
+        while i < self.len {
+            let idx = self.wrap_index(self.head + i)
+            if let some(item) = &self.buf[idx] {
+                if predicate(item) { i += 1 }
+                else {
+                    // Remove element at position i
+                    for j in i..self.len - 1 {
+                        let from = self.wrap_index(self.head + j + 1)
+                        let to = self.wrap_index(self.head + j)
+                        self.buf.swap(from, to)
+                    }
+                    self.tail = self.wrap_index(self.tail + self.capacity - 1)
+                    self.buf[self.tail] = none
+                    self.len -= 1
+                }
+            }
+        }
     }
 }
 
-fn main() {
-    mut d: Deque<int> = Deque.new(4)
-    d.push_back(1)
-    d.push_back(2)
-    d.push_front(0)
-    assert(d.front() == some(0))
-    assert(d.back()  == some(2))
-    assert(d.pop_front() == some(0))
-    assert(d.pop_back()  == some(2))
-    assert(d.len() == 1)
-    print("Deque — all assertions passed ✓")
+pub struct DequeIter<'a, T> {
+    deque: &'a Deque<T>,
+    index: usize,
+}
+
+impl<'a, T> Iterator for DequeIter<'a, T> {
+    type Item = &'a T
+    fn next(mut self) -> Option<&'a T> {
+        if self.index >= self.deque.len { return none }
+        let result = self.deque.get(self.index)
+        self.index += 1
+        result
+    }
+}
+
+impl<T: Clone> FromIterator<T> for Deque<T> {
+    fn from_iter<I: Iterator<Item = T>>(iter: I) -> Deque<T> {
+        let mut deque = Deque.new()
+        for item in iter { deque.push_back(item) }
+        deque
+    }
 }
