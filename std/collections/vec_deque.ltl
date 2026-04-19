@@ -1,0 +1,274 @@
+// std.collections.vec_deque - Double-ended queue backed by ring buffer
+// O(1) push/pop at both ends, O(1) indexed access.
+
+pub struct VecDeque<T> {
+    buf: [T],
+    head: usize,
+    len: usize,
+}
+
+impl<T> VecDeque<T> {
+    pub fn new() -> VecDeque<T> {
+        VecDeque { buf: Vec.with_capacity(8), head: 0, len: 0 }
+    }
+
+    pub fn with_capacity(cap: usize) -> VecDeque<T> {
+        VecDeque { buf: Vec.with_capacity(cap.max(1)), head: 0, len: 0 }
+    }
+
+    pub fn len(self) -> usize { self.len }
+    pub fn is_empty(self) -> bool { self.len == 0 }
+    pub fn capacity(self) -> usize { self.buf.capacity() }
+
+    fn wrap_index(self, idx: usize) -> usize {
+        if self.buf.capacity() == 0 { 0 }
+        else { (self.head + idx) % self.buf.capacity() }
+    }
+
+    fn grow(mut self) {
+        let old_cap = self.buf.capacity()
+        let new_cap = old_cap * 2
+        self.buf.reserve(new_cap - old_cap)
+        // Unwrap the ring if head + len wraps around
+        if self.head + self.len > old_cap {
+            let wrap_count = (self.head + self.len) - old_cap
+            for i in 0..wrap_count {
+                let val = self.buf[i].clone()
+                self.buf.push(val)
+            }
+        }
+    }
+
+    pub fn push_back(mut self, value: T) {
+        if self.len == self.buf.capacity() { self.grow() }
+        let idx = self.wrap_index(self.len)
+        if idx < self.buf.len() { self.buf[idx] = value }
+        else { self.buf.push(value) }
+        self.len += 1
+    }
+
+    pub fn push_front(mut self, value: T) {
+        if self.len == self.buf.capacity() { self.grow() }
+        let cap = self.buf.capacity()
+        self.head = if self.head == 0 { cap - 1 } else { self.head - 1 }
+        if self.head < self.buf.len() { self.buf[self.head] = value }
+        else { self.buf.push(value) }
+        self.len += 1
+    }
+
+    pub fn pop_back(mut self) -> Option<T> {
+        if self.is_empty() { return none }
+        self.len -= 1
+        let idx = self.wrap_index(self.len)
+        some(self.buf[idx].clone())
+    }
+
+    pub fn pop_front(mut self) -> Option<T> {
+        if self.is_empty() { return none }
+        let idx = self.head
+        self.head = self.wrap_index(1)
+        self.len -= 1
+        some(self.buf[idx].clone())
+    }
+
+    pub fn front(self) -> Option<&T> {
+        if self.is_empty() { none } else { some(&self.buf[self.head]) }
+    }
+
+    pub fn back(self) -> Option<&T> {
+        if self.is_empty() { none }
+        else { some(&self.buf[self.wrap_index(self.len - 1)]) }
+    }
+
+    pub fn get(self, index: usize) -> Option<&T> {
+        if index >= self.len { none }
+        else { some(&self.buf[self.wrap_index(index)]) }
+    }
+
+    pub fn get_mut(mut self, index: usize) -> Option<&mut T> {
+        if index >= self.len { none }
+        else {
+            let idx = self.wrap_index(index)
+            some(&mut self.buf[idx])
+        }
+    }
+
+    pub fn clear(mut self) { self.head = 0; self.len = 0 }
+
+    pub fn contains(self, value: &T) -> bool where T: PartialEq {
+        for i in 0..self.len {
+            if self.buf[self.wrap_index(i)] == *value { return true }
+        }
+        false
+    }
+
+    pub fn iter(self) -> VecDequeIter<T> {
+        VecDequeIter { deque: self, pos: 0 }
+    }
+
+    pub fn rotate_left(mut self, n: usize) {
+        let n = n % self.len
+        self.head = self.wrap_index(n)
+    }
+
+    pub fn rotate_right(mut self, n: usize) {
+        let n = n % self.len
+        let cap = self.buf.capacity()
+        self.head = if n <= self.head { self.head - n }
+                    else { cap - (n - self.head) }
+    }
+
+    pub fn swap(mut self, i: usize, j: usize) {
+        let a = self.wrap_index(i)
+        let b = self.wrap_index(j)
+        self.buf.swap(a, b)
+    }
+
+    pub fn make_contiguous(mut self) -> &mut [T] {
+        if self.head == 0 || self.is_empty() {
+            return &mut self.buf[..self.len]
+        }
+        // Rotate elements so head is at 0
+        let mut new_buf: [T] = Vec.with_capacity(self.buf.capacity())
+        for i in 0..self.len {
+            new_buf.push(self.buf[self.wrap_index(i)].clone())
+        }
+        self.buf = new_buf
+        self.head = 0
+        &mut self.buf[..self.len]
+    }
+
+    pub fn as_slices(self) -> (&[T], &[T]) {
+        if self.is_empty() { return (&[], &[]) }
+        let cap = self.buf.len()
+        let end = self.head + self.len
+        if end <= cap {
+            (&self.buf[self.head..end], &[])
+        } else {
+            (&self.buf[self.head..cap], &self.buf[0..(end - cap)])
+        }
+    }
+
+    pub fn reserve(mut self, additional: usize) {
+        let needed = self.len + additional
+        if needed > self.buf.capacity() {
+            let new_cap = needed.next_power_of_two()
+            self.buf.reserve(new_cap - self.buf.capacity())
+        }
+    }
+}
+
+pub struct VecDequeIter<'a, T> {
+    deque: &'a VecDeque<T>,
+    pos: usize,
+}
+
+impl<'a, T> Iterator for VecDequeIter<'a, T> {
+    type Item = &'a T
+    fn next(mut self) -> Option<&'a T> {
+        if self.pos >= self.deque.len { none }
+        else {
+            let item = &self.deque.buf[self.deque.wrap_index(self.pos)]
+            self.pos += 1
+            some(item)
+        }
+    }
+    fn size_hint(self) -> (usize, Option<usize>) {
+        let rem = self.deque.len - self.pos
+        (rem, some(rem))
+    }
+}
+
+impl<T: PartialEq> PartialEq for VecDeque<T> {
+    fn eq(self, other: &VecDeque<T>) -> bool {
+        if self.len != other.len { return false }
+        for i in 0..self.len {
+            if self.buf[self.wrap_index(i)] != other.buf[other.wrap_index(i)] { return false }
+        }
+        true
+    }
+}
+
+impl<T: fmt.Debug> fmt.Debug for VecDeque<T> {
+    fn fmt(self, f: &mut fmt.Formatter) -> fmt.Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+
+impl<T> FromIterator<T> for VecDeque<T> {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> VecDeque<T> {
+        let mut deque = VecDeque.new()
+        for item in iter { deque.push_back(item) }
+        deque
+    }
+}
+
+impl<T> Index<usize> for VecDeque<T> {
+    type Output = T
+    fn index(self, idx: usize) -> &T {
+        self.get(idx).expect("index out of bounds")
+    }
+}
+
+fn main() {
+    let mut dq = VecDeque.new()
+    dq.push_back(1)
+    dq.push_back(2)
+    dq.push_back(3)
+    assert(dq.len() == 3)
+    assert(*dq.front().unwrap() == 1)
+    assert(*dq.back().unwrap() == 3)
+    print("Push back ✓")
+
+    dq.push_front(0)
+    assert(*dq.front().unwrap() == 0)
+    assert(dq.len() == 4)
+    print("Push front ✓")
+
+    assert(dq.pop_front() == some(0))
+    assert(dq.pop_back() == some(3))
+    assert(dq.len() == 2)
+    print("Pop front/back ✓")
+
+    assert(*dq.get(0).unwrap() == 1)
+    assert(*dq.get(1).unwrap() == 2)
+    print("Indexed access ✓")
+
+    assert(dq.contains(&1))
+    assert(!dq.contains(&99))
+    print("Contains ✓")
+
+    let items: [&i32] = dq.iter().collect()
+    assert(items.len() == 2)
+    print("Iter ✓")
+
+    // Rotate
+    let mut dq2 = VecDeque.new()
+    for i in 0..5 { dq2.push_back(i) }
+    dq2.rotate_left(2)
+    assert(*dq2.front().unwrap() == 2)
+    print("Rotate left ✓")
+
+    // FromIterator
+    let dq3: VecDeque<i32> = vec![10, 20, 30].into_iter().collect()
+    assert(dq3.len() == 3)
+    assert(*dq3.get(0).unwrap() == 10)
+    print("FromIterator ✓")
+
+    // Clear
+    let mut dq4 = VecDeque.new()
+    dq4.push_back(1); dq4.push_back(2)
+    dq4.clear()
+    assert(dq4.is_empty())
+    print("Clear ✓")
+
+    // Swap
+    let mut dq5 = VecDeque.new()
+    dq5.push_back(10); dq5.push_back(20); dq5.push_back(30)
+    dq5.swap(0, 2)
+    assert(*dq5.get(0).unwrap() == 30)
+    assert(*dq5.get(2).unwrap() == 10)
+    print("Swap ✓")
+
+    print("VecDeque complete ✓")
+}
