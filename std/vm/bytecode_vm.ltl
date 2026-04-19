@@ -1,0 +1,211 @@
+// bytecode_vm.ltl — Register-based bytecode VM for Lateralus IR
+// Used by the interpreter/REPL
+
+enum Opcode {
+    // Arithmetic
+    AddI, SubI, MulI, DivI, ModI,
+    AddF, SubF, MulF, DivF,
+    // Comparison
+    EqI, NeI, LtI, LeI, GtI, GeI,
+    // Logic
+    And, Or, Not,
+    // Memory
+    LoadK(int),   // load constant[k] into dst
+    LoadR(int),   // load register
+    StoreR(int),  // store into register
+    // Control flow
+    Jump(int),    // unconditional jump to pc
+    JumpIf(int),  // jump if top of stack is truthy
+    JumpNot(int),
+    // Stack
+    Push, Pop, Dup, Swap,
+    // Functions
+    Call(int, int),  // function index, arity
+    Return,
+    // I/O
+    Print,
+    // Misc
+    Halt,
+    Nop,
+}
+
+enum Value {
+    Int(int),
+    Float(float),
+    Bool(bool),
+    Str(string),
+    Null,
+}
+
+impl Value {
+    fn is_truthy(self) -> bool {
+        match self {
+            Value.Bool(b)  => b,
+            Value.Int(n)   => n != 0,
+            Value.Float(f) => f != 0.0,
+            Value.Null     => false,
+            _              => true,
+        }
+    }
+
+    fn to_display(self) -> string {
+        match self {
+            Value.Int(n)   => n.to_string(),
+            Value.Float(f) => f.to_string(),
+            Value.Bool(b)  => if b { "true" } else { "false" },
+            Value.Str(s)   => s,
+            Value.Null     => "null",
+        }
+    }
+}
+
+struct CallFrame {
+    func_idx: int,
+    pc:       int,
+    base:     int,   // stack base for this frame
+}
+
+struct VM {
+    stack:     [Value],
+    constants: [Value],
+    code:      [[Opcode]],   // code[func_idx] = instructions
+    frames:    [CallFrame],
+    globals:   dict<int, Value>,
+}
+
+impl VM {
+    fn new(code: [[Opcode]], constants: [Value]) -> VM {
+        VM { stack: [], constants, code, frames: [CallFrame { func_idx: 0, pc: 0, base: 0 }], globals: {} }
+    }
+
+    fn push(mut self, v: Value) { self.stack.push(v) }
+    fn pop(mut self)  -> Value  { self.stack.pop().unwrap_or(Value.Null) }
+    fn peek(self)     -> Value  { self.stack.last().cloned().unwrap_or(Value.Null) }
+
+    fn run(mut self) -> Result<Value, string> {
+        loop {
+            let frame = self.frames.last_mut().ok_or("no call frame")?
+            let instr = self.code[frame.func_idx].get(frame.pc).cloned().ok_or("pc out of bounds")?
+            frame.pc += 1
+
+            match instr {
+                Opcode.Halt => return ok(self.pop()),
+                Opcode.Nop  => {},
+
+                Opcode.LoadK(k) => {
+                    let v = self.constants[k].clone()
+                    self.push(v)
+                },
+
+                Opcode.AddI => {
+                    let b = self.pop(); let a = self.pop()
+                    match (a, b) {
+                        (Value.Int(x), Value.Int(y))   => self.push(Value.Int(x + y)),
+                        (Value.Float(x), Value.Float(y)) => self.push(Value.Float(x + y)),
+                        _ => return err("type error: AddI"),
+                    }
+                },
+                Opcode.MulI => {
+                    let b = self.pop(); let a = self.pop()
+                    match (a, b) {
+                        (Value.Int(x), Value.Int(y)) => self.push(Value.Int(x * y)),
+                        _ => return err("type error: MulI"),
+                    }
+                },
+                Opcode.SubI => {
+                    let b = self.pop(); let a = self.pop()
+                    match (a, b) {
+                        (Value.Int(x), Value.Int(y)) => self.push(Value.Int(x - y)),
+                        _ => return err("type error: SubI"),
+                    }
+                },
+
+                Opcode.LtI => {
+                    let b = self.pop(); let a = self.pop()
+                    match (a, b) {
+                        (Value.Int(x), Value.Int(y)) => self.push(Value.Bool(x < y)),
+                        _ => return err("type error: LtI"),
+                    }
+                },
+                Opcode.EqI => {
+                    let b = self.pop(); let a = self.pop()
+                    self.push(match (a, b) {
+                        (Value.Int(x), Value.Int(y))     => Value.Bool(x == y),
+                        (Value.Bool(x), Value.Bool(y))   => Value.Bool(x == y),
+                        (Value.Null, Value.Null)          => Value.Bool(true),
+                        _                                 => Value.Bool(false),
+                    })
+                },
+
+                Opcode.Jump(target)   => { self.frames.last_mut()?.pc = target },
+                Opcode.JumpIf(target) => {
+                    if self.pop().is_truthy() { self.frames.last_mut()?.pc = target }
+                },
+                Opcode.JumpNot(target) => {
+                    if !self.pop().is_truthy() { self.frames.last_mut()?.pc = target }
+                },
+
+                Opcode.Dup  => { let v = self.peek(); self.push(v) },
+                Opcode.Pop  => { self.pop(); },
+                Opcode.Swap => {
+                    let a = self.pop(); let b = self.pop()
+                    self.push(a); self.push(b)
+                },
+
+                Opcode.Print => {
+                    let v = self.pop()
+                    print(v.to_display())
+                    self.push(Value.Null)
+                },
+
+                Opcode.Return => {
+                    let retval = self.pop()
+                    self.frames.pop()
+                    if self.frames.is_empty() { return ok(retval) }
+                    self.push(retval)
+                },
+
+                _ => return err("unimplemented opcode: ${instr:?}"),
+            }
+        }
+    }
+}
+
+fn main() {
+    // Program: compute 3 * (4 + 5) = 27
+    let constants = [Value.Int(3), Value.Int(4), Value.Int(5)]
+    let code = [[
+        Opcode.LoadK(1),   // push 4
+        Opcode.LoadK(2),   // push 5
+        Opcode.AddI,        // 4 + 5 = 9
+        Opcode.LoadK(0),   // push 3
+        Opcode.Swap,        // 3, 9 → 9, 3
+        Opcode.MulI,        // 9 * 3 = 27
+        Opcode.Halt,
+    ]]
+    let mut vm     = VM.new(code, constants)
+    let result     = vm.run().unwrap()
+    assert(result == Value.Int(27))
+    print("VM: 3*(4+5) = ${result.to_display()} ✓")
+
+    // Program: count down from 5 to 1
+    let constants2 = [Value.Int(0), Value.Int(1), Value.Int(5)]
+    let code2 = [[
+        Opcode.LoadK(2),   // push 5
+        Opcode.Dup,         // dup top (loop condition)
+        Opcode.LoadK(0),   // push 0
+        Opcode.LtI,         // top < 0?
+        Opcode.JumpIf(9),   // if so, jump to end
+        Opcode.Dup,
+        Opcode.Print,       // print current value
+        Opcode.LoadK(1),   // push 1
+        Opcode.SubI,        // decrement
+        Opcode.Jump(1),     // loop
+        Opcode.Pop,
+        Opcode.LoadK(0),
+        Opcode.Halt,
+    ]]
+    let mut vm2 = VM.new(code2, constants2)
+    vm2.run().unwrap()
+    print("VM countdown — complete ✓")
+}
