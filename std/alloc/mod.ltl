@@ -1,0 +1,220 @@
+// std.alloc - Memory allocation
+// Global allocator, Layout, alloc/dealloc/realloc.
+
+pub struct Layout {
+    size: usize,
+    align: usize,
+}
+
+impl Layout {
+    pub fn new<T>() -> Layout {
+        Layout { size: @intrinsic("size_of", T), align: @intrinsic("align_of", T) }
+    }
+
+    pub fn from_size_align(size: usize, align: usize) -> Result<Layout, LayoutError> {
+        if !align.is_power_of_two() { return err(LayoutError) }
+        if size > usize.MAX - (align - 1) { return err(LayoutError) }
+        ok(Layout { size, align })
+    }
+
+    pub fn from_size_align_unchecked(size: usize, align: usize) -> Layout {
+        Layout { size, align }
+    }
+
+    pub fn size(self) -> usize { self.size }
+    pub fn align(self) -> usize { self.align }
+
+    pub fn pad_to_align(self) -> Layout {
+        let padded = (self.size + self.align - 1) & !(self.align - 1)
+        Layout { size: padded, align: self.align }
+    }
+
+    pub fn array<T>(n: usize) -> Result<Layout, LayoutError> {
+        let elem = Layout.new::<T>()
+        let padded = elem.pad_to_align()
+        let total = padded.size.checked_mul(n).ok_or(LayoutError)?
+        Layout.from_size_align(total, elem.align)
+    }
+
+    pub fn extend(self, next: Layout) -> Result<(Layout, usize), LayoutError> {
+        let pad = (self.size + next.align - 1) & !(next.align - 1)
+        let offset = pad
+        let total = pad.checked_add(next.size).ok_or(LayoutError)?
+        let align = self.align.max(next.align)
+        ok((Layout.from_size_align(total, align)?, offset))
+    }
+}
+
+pub struct LayoutError;
+
+impl fmt.Display for LayoutError {
+    fn fmt(self, f: &mut fmt.Formatter) -> fmt.Result { write!(f, "invalid layout") }
+}
+
+pub unsafe trait GlobalAlloc {
+    unsafe fn alloc(self, layout: Layout) -> *mut u8
+    unsafe fn dealloc(self, ptr: *mut u8, layout: Layout)
+
+    unsafe fn alloc_zeroed(self, layout: Layout) -> *mut u8 {
+        let ptr = self.alloc(layout)
+        if !ptr.is_null() {
+            std.ptr.write_bytes(ptr, 0, layout.size)
+        }
+        ptr
+    }
+
+    unsafe fn realloc(self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        let new_layout = Layout.from_size_align_unchecked(new_size, layout.align)
+        let new_ptr = self.alloc(new_layout)
+        if !new_ptr.is_null() {
+            let copy_size = layout.size.min(new_size)
+            std.ptr.copy_nonoverlapping(ptr, new_ptr, copy_size)
+            self.dealloc(ptr, layout)
+        }
+        new_ptr
+    }
+}
+
+pub unsafe trait Allocator {
+    fn allocate(self, layout: Layout) -> Result<NonNull<[u8]>, AllocError>
+    unsafe fn deallocate(self, ptr: NonNull<u8>, layout: Layout)
+
+    fn allocate_zeroed(self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        let ptr = self.allocate(layout)?
+        unsafe { std.ptr.write_bytes(ptr.as_ptr() as *mut u8, 0, layout.size) }
+        ok(ptr)
+    }
+
+    unsafe fn grow(self, ptr: NonNull<u8>, old_layout: Layout, new_layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        let new_ptr = self.allocate(new_layout)?
+        std.ptr.copy_nonoverlapping(ptr.as_ptr(), new_ptr.as_ptr() as *mut u8, old_layout.size)
+        self.deallocate(ptr, old_layout)
+        ok(new_ptr)
+    }
+
+    unsafe fn shrink(self, ptr: NonNull<u8>, old_layout: Layout, new_layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        let new_ptr = self.allocate(new_layout)?
+        std.ptr.copy_nonoverlapping(ptr.as_ptr(), new_ptr.as_ptr() as *mut u8, new_layout.size)
+        self.deallocate(ptr, old_layout)
+        ok(new_ptr)
+    }
+}
+
+pub struct AllocError;
+
+impl fmt.Display for AllocError {
+    fn fmt(self, f: &mut fmt.Formatter) -> fmt.Result { write!(f, "allocation failed") }
+}
+
+// System allocator
+pub struct System;
+
+unsafe impl GlobalAlloc for System {
+    unsafe fn alloc(self, layout: Layout) -> *mut u8 {
+        @intrinsic("malloc", layout.size, layout.align)
+    }
+
+    unsafe fn dealloc(self, ptr: *mut u8, layout: Layout) {
+        @intrinsic("free", ptr, layout.size, layout.align)
+    }
+}
+
+// Global allocator access
+pub fn alloc(layout: Layout) -> *mut u8 {
+    unsafe { @global_allocator().alloc(layout) }
+}
+
+pub fn alloc_zeroed(layout: Layout) -> *mut u8 {
+    unsafe { @global_allocator().alloc_zeroed(layout) }
+}
+
+pub fn dealloc(ptr: *mut u8, layout: Layout) {
+    unsafe { @global_allocator().dealloc(ptr, layout) }
+}
+
+pub fn realloc(ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+    unsafe { @global_allocator().realloc(ptr, layout, new_size) }
+}
+
+pub fn handle_alloc_error(layout: Layout) -> ! {
+    panic!("memory allocation of {} bytes failed", layout.size)
+}
+
+// Arena allocator
+pub struct Arena {
+    chunks: [*mut u8],
+    chunk_size: usize,
+    current: *mut u8,
+    remaining: usize,
+}
+
+impl Arena {
+    pub fn new(chunk_size: usize) -> Arena {
+        let chunk = alloc(Layout.from_size_align(chunk_size, 8).unwrap())
+        Arena { chunks: [chunk], chunk_size, current: chunk, remaining: chunk_size }
+    }
+
+    pub fn alloc<T>(mut self, value: T) -> &mut T {
+        let layout = Layout.new::<T>()
+        let aligned = (self.current as usize + layout.align - 1) & !(layout.align - 1)
+        let padding = aligned - self.current as usize
+
+        if padding + layout.size > self.remaining {
+            let new_chunk = alloc(Layout.from_size_align(self.chunk_size, 8).unwrap())
+            self.chunks.push(new_chunk)
+            self.current = new_chunk
+            self.remaining = self.chunk_size
+            return self.alloc(value)
+        }
+
+        let ptr = aligned as *mut T
+        unsafe { std.ptr.write(ptr, value) }
+        self.current = (aligned + layout.size) as *mut u8
+        self.remaining -= padding + layout.size
+        unsafe { &mut *ptr }
+    }
+}
+
+impl Drop for Arena {
+    fn drop(mut self) {
+        for chunk in &self.chunks {
+            dealloc(*chunk, Layout.from_size_align(self.chunk_size, 8).unwrap())
+        }
+    }
+}
+
+fn main() {
+    // Layout
+    let layout = Layout.from_size_align(16, 8).unwrap()
+    assert(layout.size() == 16)
+    assert(layout.align() == 8)
+    print("Layout \u2713")
+
+    // Padding
+    let l = Layout.from_size_align(5, 4).unwrap()
+    let padded = l.pad_to_align()
+    assert(padded.size() == 8)
+    print("Pad to align \u2713")
+
+    // Invalid layout
+    assert(Layout.from_size_align(16, 3).is_err())
+    assert(Layout.from_size_align(16, 0).is_err())
+    print("Invalid layout \u2713")
+
+    // Array layout
+    let arr_layout = Layout.from_size_align(4, 4).unwrap()
+    // 10 elements of 4 bytes each
+    let extended = Layout.from_size_align(40, 4).unwrap()
+    assert(extended.size() == 40)
+    print("Array layout \u2713")
+
+    // Extend
+    let a = Layout.from_size_align(4, 4).unwrap()
+    let b = Layout.from_size_align(8, 8).unwrap()
+    let (combined, offset) = a.extend(b).unwrap()
+    assert(offset == 8)  // 4 bytes padded to 8-byte alignment
+    assert(combined.align() == 8)
+    print("Extend \u2713")
+
+    print("Alloc complete \u2713")
+}
