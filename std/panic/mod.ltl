@@ -1,0 +1,137 @@
+// std.panic - Panic handling and recovery
+// catch_unwind, resume_unwind, set_hook, PanicInfo, Location.
+
+pub struct PanicInfo<'a> {
+    message: &'a str,
+    location: Option<&'a Location<'a>>,
+}
+
+impl<'a> PanicInfo<'a> {
+    pub fn message(self) -> &str { self.message }
+    pub fn location(self) -> Option<&Location> { self.location }
+    pub fn payload(self) -> &dyn Any { @intrinsic("panic_payload", self) }
+}
+
+impl<'a> fmt.Display for PanicInfo<'a> {
+    fn fmt(self, f: &mut fmt.Formatter) -> fmt.Result {
+        write!(f, "panicked at '{}'", self.message)?
+        if let some(loc) = self.location {
+            write!(f, ", {}:{}:{}", loc.file, loc.line, loc.col)?
+        }
+        ok(())
+    }
+}
+
+pub struct Location<'a> {
+    file: &'a str,
+    line: u32,
+    col: u32,
+}
+
+impl<'a> Location<'a> {
+    pub fn caller() -> &'static Location<'static> { @intrinsic("caller_location") }
+    pub fn file(self) -> &str { self.file }
+    pub fn line(self) -> u32 { self.line }
+    pub fn column(self) -> u32 { self.col }
+}
+
+impl<'a> fmt.Display for Location<'a> {
+    fn fmt(self, f: &mut fmt.Formatter) -> fmt.Result {
+        write!(f, "{}:{}:{}", self.file, self.line, self.col)
+    }
+}
+
+pub type PanicHook = fn(&PanicInfo)
+
+static mut PANIC_HOOK: Option<PanicHook> = none
+
+pub fn set_hook(hook: PanicHook) {
+    unsafe { PANIC_HOOK = some(hook) }
+}
+
+pub fn take_hook() -> PanicHook {
+    unsafe { PANIC_HOOK.take().unwrap_or(default_hook) }
+}
+
+fn default_hook(info: &PanicInfo) {
+    eprintln!("thread panicked: {}", info)
+}
+
+pub fn catch_unwind<F: FnOnce() -> R + UnwindSafe, R>(f: F) -> Result<R, Box<dyn Any + Send>> {
+    @intrinsic("catch_unwind", f)
+}
+
+pub fn resume_unwind(payload: Box<dyn Any + Send>) -> ! {
+    @intrinsic("resume_unwind", payload)
+}
+
+// UnwindSafe markers
+pub auto trait UnwindSafe {}
+pub auto trait RefUnwindSafe {}
+
+impl<T> !UnwindSafe for &mut T {}
+impl<T> UnwindSafe for &T where T: RefUnwindSafe {}
+impl<T> UnwindSafe for Mutex<T> {}
+impl<T> UnwindSafe for std.sync.RwLock<T> {}
+
+pub struct AssertUnwindSafe<T>(pub T)
+
+impl<T> UnwindSafe for AssertUnwindSafe<T> {}
+impl<T> RefUnwindSafe for AssertUnwindSafe<T> {}
+
+impl<T> Deref for AssertUnwindSafe<T> {
+    type Target = T
+    fn deref(self) -> &T { &self.0 }
+}
+
+impl<T> DerefMut for AssertUnwindSafe<T> {
+    fn deref_mut(mut self) -> &mut T { &mut self.0 }
+}
+
+impl<F: FnOnce() -> R, R> FnOnce() for AssertUnwindSafe<F> {
+    type Output = R
+    fn call_once(self) -> R { (self.0)() }
+}
+
+// Abort on double panic
+pub fn always_abort() {
+    @intrinsic("set_abort_on_panic")
+}
+
+fn main() {
+    // Location
+    let loc = Location.caller()
+    assert(loc.line() > 0)
+    assert(!loc.file().is_empty())
+    print("Location \u2713")
+
+    // catch_unwind
+    let result = catch_unwind(|| 42)
+    assert(result == ok(42))
+    print("Catch normal \u2713")
+
+    let result2 = catch_unwind(|| { panic!("test panic") })
+    assert(result2.is_err())
+    print("Catch panic \u2713")
+
+    // PanicInfo display
+    let loc = Location { file: "test.ltl", line: 10, col: 5 }
+    let info = PanicInfo { message: "oh no", location: some(&loc) }
+    let s = format!("{}", info)
+    assert(s.contains("oh no"))
+    assert(s.contains("test.ltl"))
+    print("PanicInfo display \u2713")
+
+    // AssertUnwindSafe
+    let mut counter = 0
+    let wrapped = AssertUnwindSafe(&mut counter)
+    let _ = catch_unwind(|| { *wrapped += 1; })
+    print("AssertUnwindSafe \u2713")
+
+    // set_hook
+    let mut hooked = false
+    set_hook(|info| { hooked = true })
+    print("Set hook \u2713")
+
+    print("Panic complete \u2713")
+}
