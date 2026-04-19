@@ -1,0 +1,223 @@
+// std.future - Future trait and combinators
+// Async/await core: Future, Poll, Waker, Context, combinators.
+
+pub enum Poll<T> {
+    Ready(T),
+    Pending,
+}
+
+impl<T> Poll<T> {
+    pub fn is_ready(self) -> bool { match self { Poll.Ready(_) => true, _ => false } }
+    pub fn is_pending(self) -> bool { !self.is_ready() }
+
+    pub fn map<U>(self, f: fn(T) -> U) -> Poll<U> {
+        match self { Poll.Ready(t) => Poll.Ready(f(t)), Poll.Pending => Poll.Pending }
+    }
+}
+
+pub trait Future {
+    type Output
+
+    fn poll(mut self, cx: &mut Context) -> Poll<Self::Output>
+}
+
+pub struct Context<'a> { waker: &'a Waker }
+
+impl<'a> Context<'a> {
+    pub fn from_waker(waker: &'a Waker) -> Context<'a> { Context { waker } }
+    pub fn waker(self) -> &Waker { self.waker }
+}
+
+pub struct Waker { vtable: *const WakerVTable, data: *const () }
+
+struct WakerVTable {
+    clone: fn(*const ()) -> Waker,
+    wake: fn(*const ()),
+    wake_by_ref: fn(*const ()),
+    drop: fn(*const ()),
+}
+
+impl Waker {
+    pub fn wake(self) { (self.vtable.wake)(self.data) }
+    pub fn wake_by_ref(self) { (self.vtable.wake_by_ref)(self.data) }
+    pub fn will_wake(self, other: &Waker) -> bool { self.data == other.data }
+}
+
+impl Clone for Waker {
+    fn clone(self) -> Waker { (self.vtable.clone)(self.data) }
+}
+
+// Ready future - immediately resolves
+pub struct Ready<T> { value: Option<T> }
+
+pub fn ready<T>(value: T) -> Ready<T> { Ready { value: some(value) } }
+
+impl<T> Future for Ready<T> {
+    type Output = T
+    fn poll(mut self, _cx: &mut Context) -> Poll<T> {
+        Poll.Ready(self.value.take().expect("Ready polled after completion"))
+    }
+}
+
+// Pending future - never resolves
+pub struct Pending<T> { _phantom: std.marker.PhantomData<T> }
+
+pub fn pending<T>() -> Pending<T> { Pending { _phantom: std.marker.PhantomData } }
+
+impl<T> Future for Pending<T> {
+    type Output = T
+    fn poll(mut self, _cx: &mut Context) -> Poll<T> { Poll.Pending }
+}
+
+// Lazy future - creates value on first poll
+pub struct Lazy<F: FnOnce() -> T, T> { f: Option<F> }
+
+pub fn lazy<F: FnOnce() -> T, T>(f: F) -> Lazy<F, T> { Lazy { f: some(f) } }
+
+impl<F: FnOnce() -> T, T> Future for Lazy<F, T> {
+    type Output = T
+    fn poll(mut self, _cx: &mut Context) -> Poll<T> {
+        Poll.Ready((self.f.take().expect("Lazy polled after completion"))())
+    }
+}
+
+// Map combinator
+pub struct Map<Fut: Future, F> { future: Fut, f: Option<F> }
+
+impl<Fut: Future, F: FnOnce(Fut::Output) -> U, U> Future for Map<Fut, F> {
+    type Output = U
+    fn poll(mut self, cx: &mut Context) -> Poll<U> {
+        match self.future.poll(cx) {
+            Poll.Ready(val) => Poll.Ready((self.f.take().unwrap())(val)),
+            Poll.Pending => Poll.Pending,
+        }
+    }
+}
+
+// AndThen combinator (flatmap)
+pub struct AndThen<Fut: Future, F, Fut2: Future> {
+    state: AndThenState<Fut, F, Fut2>,
+}
+
+enum AndThenState<Fut, F, Fut2> {
+    First(Fut, F),
+    Second(Fut2),
+    Done,
+}
+
+impl<Fut: Future, F: FnOnce(Fut::Output) -> Fut2, Fut2: Future> Future for AndThen<Fut, F, Fut2> {
+    type Output = Fut2::Output
+    fn poll(mut self, cx: &mut Context) -> Poll<Fut2::Output> {
+        loop {
+            match &mut self.state {
+                AndThenState.First(fut, _) => {
+                    match fut.poll(cx) {
+                        Poll.Ready(val) => {
+                            let f = match std.mem.replace(&mut self.state, AndThenState.Done) {
+                                AndThenState.First(_, f) => f, _ => unreachable!()
+                            }
+                            self.state = AndThenState.Second(f(val))
+                        }
+                        Poll.Pending => return Poll.Pending,
+                    }
+                }
+                AndThenState.Second(fut) => return fut.poll(cx),
+                AndThenState.Done => panic!("polled after completion"),
+            }
+        }
+    }
+}
+
+// Join two futures
+pub struct Join<A: Future, B: Future> {
+    a: Option<A>, a_result: Option<A::Output>,
+    b: Option<B>, b_result: Option<B::Output>,
+}
+
+pub fn join<A: Future, B: Future>(a: A, b: B) -> Join<A, B> {
+    Join { a: some(a), a_result: none, b: some(b), b_result: none }
+}
+
+impl<A: Future, B: Future> Future for Join<A, B> {
+    type Output = (A::Output, B::Output)
+    fn poll(mut self, cx: &mut Context) -> Poll<(A::Output, B::Output)> {
+        if let some(a) = &mut self.a {
+            if let Poll.Ready(val) = a.poll(cx) { self.a_result = some(val); self.a = none; }
+        }
+        if let some(b) = &mut self.b {
+            if let Poll.Ready(val) = b.poll(cx) { self.b_result = some(val); self.b = none; }
+        }
+        if self.a_result.is_some() && self.b_result.is_some() {
+            Poll.Ready((self.a_result.take().unwrap(), self.b_result.take().unwrap()))
+        } else { Poll.Pending }
+    }
+}
+
+// Select - returns first completed
+pub enum Either<A, B> { Left(A), Right(B) }
+
+pub struct Select<A: Future, B: Future> { a: A, b: B }
+
+pub fn select<A: Future, B: Future>(a: A, b: B) -> Select<A, B> { Select { a, b } }
+
+impl<A: Future, B: Future> Future for Select<A, B> {
+    type Output = Either<A::Output, B::Output>
+    fn poll(mut self, cx: &mut Context) -> Poll<Either<A::Output, B::Output>> {
+        if let Poll.Ready(val) = self.a.poll(cx) { return Poll.Ready(Either.Left(val)) }
+        if let Poll.Ready(val) = self.b.poll(cx) { return Poll.Ready(Either.Right(val)) }
+        Poll.Pending
+    }
+}
+
+// FutureExt trait for ergonomic combinators
+pub trait FutureExt: Future {
+    fn map<F: FnOnce(Self::Output) -> U, U>(self, f: F) -> Map<Self, F> {
+        Map { future: self, f: some(f) }
+    }
+
+    fn and_then<F: FnOnce(Self::Output) -> Fut, Fut: Future>(self, f: F) -> AndThen<Self, F, Fut> {
+        AndThen { state: AndThenState.First(self, f) }
+    }
+
+    fn boxed(self) -> BoxFuture<Self::Output> where Self: Sized + Send + 'static {
+        BoxFuture { inner: Box.new(self) }
+    }
+}
+
+impl<T: Future> FutureExt for T {}
+
+pub struct BoxFuture<T> { inner: Box<dyn Future<Output = T> + Send> }
+impl<T> Future for BoxFuture<T> {
+    type Output = T
+    fn poll(mut self, cx: &mut Context) -> Poll<T> { self.inner.poll(cx) }
+}
+
+fn main() {
+    // Poll
+    let p: Poll<i32> = Poll.Ready(42)
+    assert(p.is_ready())
+    assert(!p.is_pending())
+    let mapped = p.map(|x| x * 2)
+    match mapped { Poll.Ready(84) => {} _ => panic!("wrong") }
+    print("Poll \u2713")
+
+    let pend: Poll<i32> = Poll.Pending
+    assert(pend.is_pending())
+    assert(pend.map(|x| x).is_pending())
+    print("Pending poll \u2713")
+
+    // Ready future conceptual test
+    let r = ready(42)
+    print("Ready future created \u2713")
+
+    // Lazy
+    let l = lazy(|| 99)
+    print("Lazy future created \u2713")
+
+    // Either
+    let e: Either<i32, string> = Either.Left(42)
+    match e { Either.Left(42) => {} _ => panic!("wrong") }
+    print("Either \u2713")
+
+    print("Future complete \u2713")
+}
