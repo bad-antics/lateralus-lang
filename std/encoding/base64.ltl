@@ -1,0 +1,61 @@
+// base64.ltl — RFC 4648 Base64 encode/decode
+const ALPHABET: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+const URL_ALPHABET: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+fn encode_with(data: [u8], alpha: string, pad: bool) -> string {
+    let mut out = ""
+    let mut i   = 0
+    while i < data.len() {
+        let b0 = data[i]
+        let b1 = if i+1 < data.len() { data[i+1] } else { 0 }
+        let b2 = if i+2 < data.len() { data[i+2] } else { 0 }
+        out += alpha[(b0 >> 2) as usize].to_string()
+        out += alpha[((b0 & 3) << 4 | b1 >> 4) as usize].to_string()
+        out += if i+1 < data.len() { alpha[((b1 & 0xF) << 2 | b2 >> 6) as usize].to_string() } else if pad { "=" } else { "" }
+        out += if i+2 < data.len() { alpha[(b2 & 0x3F) as usize].to_string() }                 else if pad { "=" } else { "" }
+        i += 3
+    }
+    out
+}
+
+fn decode_with(s: string, alpha: string) -> Result<[u8], string> {
+    let mut table: dict<char, u8> = {}
+    for (i, c) in alpha.chars().enumerate() { table[c] = i as u8 }
+    let clean = s.chars() |> filter(|c| c != '=') |> collect_string()
+    if clean.len() % 4 == 1 { return err("invalid base64 length") }
+    let mut out = []
+    let mut i   = 0
+    while i < clean.len() {
+        let a = table.get(clean[i])   .ok_or("invalid char")?
+        let b = table.get(clean[i+1]) .ok_or("invalid char")?
+        out.push((a << 2) | (b >> 4))
+        if i+2 < clean.len() {
+            let c = table.get(clean[i+2]).ok_or("invalid char")?
+            out.push((b << 4) | (c >> 2))
+        }
+        if i+3 < clean.len() {
+            let d = table.get(clean[i+3]).ok_or("invalid char")?
+            out.push((c << 6) | d)
+        }
+        i += 4
+    }
+    ok(out)
+}
+
+pub fn encode(data: [u8])       -> string { encode_with(data, ALPHABET, true) }
+pub fn encode_nopad(data: [u8]) -> string { encode_with(data, ALPHABET, false) }
+pub fn encode_url(data: [u8])   -> string { encode_with(data, URL_ALPHABET, false) }
+pub fn decode(s: string)        -> Result<[u8], string> { decode_with(s, ALPHABET) }
+pub fn decode_url(s: string)    -> Result<[u8], string> { decode_with(s, URL_ALPHABET) }
+
+fn main() {
+    assert(encode("Man".as_bytes()) == "TWFu")
+    assert(encode("Ma".as_bytes())  == "TWE=")
+    assert(encode("M".as_bytes())   == "TQ==")
+    assert(decode("TWFu").unwrap() == "Man".as_bytes())
+    assert(decode("TWE=").unwrap() == "Ma".as_bytes())
+    assert(decode("TQ==").unwrap() == "M".as_bytes())
+    let s = "Hello, Lateralus!"
+    assert(decode(encode(s.as_bytes())).unwrap() == s.as_bytes())
+    print("base64 — all round-trip tests passed ✓")
+}
