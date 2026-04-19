@@ -1,0 +1,214 @@
+// std.os.fd - File descriptor utilities (Unix)
+// Raw file descriptor management and ownership types.
+
+/// Raw file descriptor type (Unix: i32).
+pub type RawFd = i32
+
+pub const STDIN_FD: RawFd = 0
+pub const STDOUT_FD: RawFd = 1
+pub const STDERR_FD: RawFd = 2
+
+/// Trait for types that can lend a file descriptor.
+pub trait AsRawFd {
+    fn as_raw_fd(self) -> RawFd;
+}
+
+/// Trait for types that can be created from a raw fd.
+pub trait FromRawFd {
+    unsafe fn from_raw_fd(fd: RawFd) -> Self;
+}
+
+/// Trait for types that consume ownership of a raw fd.
+pub trait IntoRawFd {
+    fn into_raw_fd(self) -> RawFd;
+}
+
+/// Owned file descriptor. Closes on drop.
+pub struct OwnedFd {
+    fd: RawFd,
+}
+
+impl OwnedFd {
+    pub fn new(fd: RawFd) -> OwnedFd { OwnedFd { fd } }
+
+    pub fn try_clone(self) -> Result<OwnedFd, string> {
+        let new_fd = unsafe { libc.dup(self.fd) }
+        if new_fd < 0 { return err("dup failed".to_string()) }
+        ok(OwnedFd { fd: new_fd })
+    }
+}
+
+impl AsRawFd for OwnedFd {
+    fn as_raw_fd(self) -> RawFd { self.fd }
+}
+
+impl IntoRawFd for OwnedFd {
+    fn into_raw_fd(self) -> RawFd {
+        let fd = self.fd
+        std.mem.forget(self)
+        fd
+    }
+}
+
+impl FromRawFd for OwnedFd {
+    unsafe fn from_raw_fd(fd: RawFd) -> OwnedFd { OwnedFd { fd } }
+}
+
+impl Drop for OwnedFd {
+    fn drop(mut self) {
+        if self.fd >= 0 {
+            unsafe { libc.close(self.fd); }
+        }
+    }
+}
+
+/// Borrowed file descriptor (does not close on drop).
+#[derive(Copy, Clone)]
+pub struct BorrowedFd<'a> {
+    fd: RawFd,
+    _phantom: std.marker.PhantomData<&'a OwnedFd>,
+}
+
+impl<'a> BorrowedFd<'a> {
+    pub unsafe fn borrow_raw(fd: RawFd) -> BorrowedFd<'a> {
+        BorrowedFd { fd, _phantom: std.marker.PhantomData }
+    }
+
+    pub fn try_clone_to_owned(self) -> Result<OwnedFd, string> {
+        let new_fd = unsafe { libc.dup(self.fd) }
+        if new_fd < 0 { return err("dup failed".to_string()) }
+        ok(OwnedFd { fd: new_fd })
+    }
+}
+
+impl<'a> AsRawFd for BorrowedFd<'a> {
+    fn as_raw_fd(self) -> RawFd { self.fd }
+}
+
+/// File descriptor flags (fcntl).
+pub struct FdFlags {
+    bits: i32,
+}
+
+impl FdFlags {
+    pub const CLOEXEC: FdFlags = FdFlags { bits: 1 }
+    pub const NONBLOCK: FdFlags = FdFlags { bits: 2048 }
+    pub const APPEND: FdFlags = FdFlags { bits: 1024 }
+    pub const SYNC: FdFlags = FdFlags { bits: 4096 }
+    pub const DSYNC: FdFlags = FdFlags { bits: 4096 }
+
+    pub fn empty() -> FdFlags { FdFlags { bits: 0 } }
+
+    pub fn contains(self, flag: FdFlags) -> bool {
+        self.bits & flag.bits != 0
+    }
+
+    pub fn insert(mut self, flag: FdFlags) {
+        self.bits |= flag.bits
+    }
+
+    pub fn remove(mut self, flag: FdFlags) {
+        self.bits &= !flag.bits
+    }
+
+    pub fn union(self, other: FdFlags) -> FdFlags {
+        FdFlags { bits: self.bits | other.bits }
+    }
+
+    pub fn bits(self) -> i32 { self.bits }
+}
+
+/// Set file descriptor flags.
+pub fn set_fd_flags(fd: RawFd, flags: FdFlags) -> Result<(), string> {
+    let ret = unsafe { libc.fcntl(fd, libc.F_SETFL, flags.bits) }
+    if ret < 0 { err("fcntl failed".to_string()) }
+    else { ok(()) }
+}
+
+/// Get file descriptor flags.
+pub fn get_fd_flags(fd: RawFd) -> Result<FdFlags, string> {
+    let ret = unsafe { libc.fcntl(fd, libc.F_GETFL) }
+    if ret < 0 { err("fcntl failed".to_string()) }
+    else { ok(FdFlags { bits: ret }) }
+}
+
+/// Duplicate a file descriptor.
+pub fn dup(fd: RawFd) -> Result<OwnedFd, string> {
+    let new_fd = unsafe { libc.dup(fd) }
+    if new_fd < 0 { err("dup failed".to_string()) }
+    else { ok(OwnedFd { fd: new_fd }) }
+}
+
+/// Duplicate fd to a specific target fd number.
+pub fn dup2(fd: RawFd, target: RawFd) -> Result<OwnedFd, string> {
+    let new_fd = unsafe { libc.dup2(fd, target) }
+    if new_fd < 0 { err("dup2 failed".to_string()) }
+    else { ok(OwnedFd { fd: new_fd }) }
+}
+
+/// Create a pipe, returning (read_end, write_end).
+pub fn pipe() -> Result<(OwnedFd, OwnedFd), string> {
+    let mut fds = [0i32; 2]
+    let ret = unsafe { libc.pipe(fds.as_mut_ptr()) }
+    if ret < 0 { err("pipe failed".to_string()) }
+    else { ok((OwnedFd { fd: fds[0] }, OwnedFd { fd: fds[1] })) }
+}
+
+fn main() {
+    // Constants
+    assert(STDIN_FD == 0)
+    assert(STDOUT_FD == 1)
+    assert(STDERR_FD == 2)
+    print("Constants ✓")
+
+    // OwnedFd
+    let owned = OwnedFd.new(10)
+    assert(owned.as_raw_fd() == 10)
+    print("OwnedFd new ✓")
+
+    // FdFlags
+    let mut flags = FdFlags.empty()
+    assert(flags.bits() == 0)
+    assert(!flags.contains(FdFlags.CLOEXEC))
+    print("FdFlags empty ✓")
+
+    flags.insert(FdFlags.CLOEXEC)
+    assert(flags.contains(FdFlags.CLOEXEC))
+    print("FdFlags insert ✓")
+
+    flags.insert(FdFlags.NONBLOCK)
+    assert(flags.contains(FdFlags.NONBLOCK))
+    assert(flags.contains(FdFlags.CLOEXEC))
+    print("FdFlags multiple ✓")
+
+    flags.remove(FdFlags.CLOEXEC)
+    assert(!flags.contains(FdFlags.CLOEXEC))
+    assert(flags.contains(FdFlags.NONBLOCK))
+    print("FdFlags remove ✓")
+
+    // Union
+    let f1 = FdFlags.CLOEXEC
+    let f2 = FdFlags.NONBLOCK
+    let combined = f1.union(f2)
+    assert(combined.contains(FdFlags.CLOEXEC))
+    assert(combined.contains(FdFlags.NONBLOCK))
+    print("FdFlags union ✓")
+
+    // BorrowedFd
+    let borrowed = unsafe { BorrowedFd.borrow_raw(5) }
+    assert(borrowed.as_raw_fd() == 5)
+    print("BorrowedFd ✓")
+
+    // IntoRawFd
+    let owned2 = OwnedFd.new(42)
+    let raw = owned2.into_raw_fd()
+    assert(raw == 42)
+    print("IntoRawFd ✓")
+
+    // FromRawFd
+    let owned3 = unsafe { OwnedFd.from_raw_fd(99) }
+    assert(owned3.as_raw_fd() == 99)
+    print("FromRawFd ✓")
+
+    print("OS fd complete ✓")
+}
