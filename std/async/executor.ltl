@@ -1,0 +1,135 @@
+// executor.ltl — Single-threaded async executor (event loop)
+use std.time.Instant
+use std.sync.{Arc, Mutex}
+
+// A minimal future trait
+trait Future {
+    type Output
+    fn poll(mut self, cx: Context) -> Poll<Self.Output>
+}
+
+enum Poll<T> { Ready(T), Pending }
+
+struct Context { waker: Waker }
+
+struct Waker { task_id: int, queue: Arc<Mutex<[int]>> }
+
+impl Waker {
+    fn wake(self) {
+        self.queue.lock().push(self.task_id)
+    }
+}
+
+// Task slot
+struct Task {
+    id:     int,
+    future: Box<dyn Future<Output = ()>>,
+}
+
+struct Executor {
+    tasks:   dict<int, Task>,
+    queue:   Arc<Mutex<[int]>>,
+    next_id: int,
+}
+
+impl Executor {
+    fn new() -> Executor {
+        Executor { tasks: {}, queue: Arc.new(Mutex.new([])), next_id: 0 }
+    }
+
+    fn spawn<F: Future<Output = ()> + 'static>(mut self, fut: F) -> int {
+        let id = self.next_id
+        self.next_id += 1
+        self.tasks[id] = Task { id, future: Box.new(fut) }
+        self.queue.lock().push(id)
+        id
+    }
+
+    fn run(mut self) {
+        loop {
+            let mut ready = []
+            {
+                let mut q = self.queue.lock()
+                std.mem.swap(q, mut ready)
+            }
+            if ready.is_empty() && self.tasks.is_empty() { break }
+            for id in ready {
+                if let some(mut task) = self.tasks.remove(id) {
+                    let waker = Waker { task_id: id, queue: self.queue.clone() }
+                    let cx    = Context { waker }
+                    match task.future.poll(mut cx) {
+                        Poll.Ready(()) => {},   // task complete
+                        Poll.Pending   => { self.tasks[id] = task }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Timer future — yields Pending until elapsed
+struct Timer { deadline: Instant }
+
+impl Timer {
+    fn new(ms: int) -> Timer {
+        Timer { deadline: Instant.now().add_ms(ms) }
+    }
+}
+
+impl Future for Timer {
+    type Output = ()
+    fn poll(self, cx: Context) -> Poll<()> {
+        if Instant.now() >= self.deadline {
+            Poll.Ready(())
+        } else {
+            cx.waker.wake()
+            Poll.Pending
+        }
+    }
+}
+
+// Join future — wait for two futures concurrently
+struct Join<A: Future, B: Future> {
+    a:      A,
+    b:      B,
+    a_done: bool,
+    b_done: bool,
+}
+
+impl<A: Future<Output=()>, B: Future<Output=()>> Future for Join<A, B> {
+    type Output = ()
+    fn poll(mut self, cx: Context) -> Poll<()> {
+        if !self.a_done {
+            if let Poll.Ready(()) = self.a.poll(cx) { self.a_done = true }
+        }
+        if !self.b_done {
+            if let Poll.Ready(()) = self.b.poll(cx) { self.b_done = true }
+        }
+        if self.a_done && self.b_done { Poll.Ready(()) } else { Poll.Pending }
+    }
+}
+
+fn join<A: Future<Output=()>, B: Future<Output=()>>(a: A, b: B) -> Join<A,B> {
+    Join { a, b, a_done: false, b_done: false }
+}
+
+fn main() {
+    let mut exec = Executor.new()
+    let start    = Instant.now()
+
+    exec.spawn(async {
+        Timer.new(10).await
+        print("  task A done after ~10ms")
+    })
+    exec.spawn(async {
+        Timer.new(5).await
+        print("  task B done after ~5ms")
+    })
+    exec.spawn(async {
+        join(Timer.new(15), Timer.new(20)).await
+        print("  join task done after ~20ms")
+    })
+
+    exec.run()
+    print("Executor: all tasks completed in ${start.elapsed_ms()}ms ✓")
+}
