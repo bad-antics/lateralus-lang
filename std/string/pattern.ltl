@@ -1,0 +1,252 @@
+// std.string.pattern — String searching and pattern matching
+// Boyer-Moore-Horspool, KMP, and character-class matching.
+
+// ── Pattern trait ────────────────────────────────────────────────────────────
+pub trait Pattern {
+    fn find_in(self, haystack: &str) -> Option<usize>
+    fn find_all_in(self, haystack: &str) -> [usize]
+    fn is_match(self, haystack: &str) -> bool { self.find_in(haystack).is_some() }
+}
+
+// ── Literal string search (Boyer-Moore-Horspool) ────────────────────────────
+pub struct StringPattern {
+    needle: string,
+    bad_char: [usize; 256],
+}
+
+impl StringPattern {
+    pub fn new(needle: &str) -> StringPattern {
+        let mut bad_char = [needle.len(); 256]
+        for i in 0..needle.len() - 1 {
+            bad_char[needle.as_bytes()[i] as usize] = needle.len() - 1 - i
+        }
+        StringPattern { needle: needle.to_string(), bad_char }
+    }
+}
+
+impl Pattern for StringPattern {
+    fn find_in(self, haystack: &str) -> Option<usize> {
+        let n = haystack.len()
+        let m = self.needle.len()
+        if m == 0 { return some(0) }
+        if m > n { return none }
+
+        let h = haystack.as_bytes()
+        let p = self.needle.as_bytes()
+        let mut i = m - 1
+
+        while i < n {
+            let mut j = m - 1
+            let mut k = i
+            while j < m && h[k] == p[j] {  // j < m handles underflow via wrapping
+                if j == 0 { return some(k) }
+                j -= 1
+                k -= 1
+            }
+            i += self.bad_char[h[i] as usize]
+        }
+        none
+    }
+
+    fn find_all_in(self, haystack: &str) -> [usize] {
+        let mut results: [usize] = []
+        let mut start = 0
+        while start <= haystack.len().saturating_sub(self.needle.len()) {
+            match self.find_in(&haystack[start..]) {
+                some(pos) => {
+                    results.push(start + pos)
+                    start += pos + 1
+                }
+                none => break,
+            }
+        }
+        results
+    }
+}
+
+// ── KMP (Knuth-Morris-Pratt) ─────────────────────────────────────────────────
+pub struct KmpPattern {
+    needle: string,
+    failure: [usize],
+}
+
+impl KmpPattern {
+    pub fn new(needle: &str) -> KmpPattern {
+        let bytes = needle.as_bytes()
+        let m = bytes.len()
+        let mut failure = vec![0usize; m]
+
+        let mut k = 0
+        for i in 1..m {
+            while k > 0 && bytes[k] != bytes[i] { k = failure[k - 1] }
+            if bytes[k] == bytes[i] { k += 1 }
+            failure[i] = k
+        }
+
+        KmpPattern { needle: needle.to_string(), failure }
+    }
+}
+
+impl Pattern for KmpPattern {
+    fn find_in(self, haystack: &str) -> Option<usize> {
+        let h = haystack.as_bytes()
+        let p = self.needle.as_bytes()
+        let n = h.len(); let m = p.len()
+        if m == 0 { return some(0) }
+
+        let mut j = 0
+        for i in 0..n {
+            while j > 0 && p[j] != h[i] { j = self.failure[j - 1] }
+            if p[j] == h[i] { j += 1 }
+            if j == m { return some(i + 1 - m) }
+        }
+        none
+    }
+
+    fn find_all_in(self, haystack: &str) -> [usize] {
+        let h = haystack.as_bytes()
+        let p = self.needle.as_bytes()
+        let n = h.len(); let m = p.len()
+        let mut results: [usize] = []
+        if m == 0 { return results }
+
+        let mut j = 0
+        for i in 0..n {
+            while j > 0 && p[j] != h[i] { j = self.failure[j - 1] }
+            if p[j] == h[i] { j += 1 }
+            if j == m {
+                results.push(i + 1 - m)
+                j = self.failure[j - 1]
+            }
+        }
+        results
+    }
+}
+
+// ── Character class pattern ──────────────────────────────────────────────────
+pub enum CharClass {
+    Any,                    // .
+    Literal(char),          // exact char
+    Range(char, char),      // a-z
+    Digit,                  // \d
+    Word,                   // \w (alphanumeric + _)
+    Whitespace,             // \s
+    OneOf([char]),           // [abc]
+    NoneOf([char]),          // [^abc]
+}
+
+impl CharClass {
+    pub fn matches(self, c: char) -> bool {
+        match self {
+            CharClass.Any => true,
+            CharClass.Literal(expected) => c == *expected,
+            CharClass.Range(lo, hi) => c >= *lo && c <= *hi,
+            CharClass.Digit => c.is_ascii_digit(),
+            CharClass.Word => c.is_ascii_alphanumeric() || c == '_',
+            CharClass.Whitespace => c == ' ' || c == '\t' || c == '\n' || c == '\r',
+            CharClass.OneOf(chars) => chars.contains(&c),
+            CharClass.NoneOf(chars) => !chars.contains(&c),
+        }
+    }
+}
+
+// ── Glob pattern ─────────────────────────────────────────────────────────────
+pub struct GlobPattern {
+    pattern: string,
+}
+
+impl GlobPattern {
+    pub fn new(pattern: &str) -> GlobPattern { GlobPattern { pattern: pattern.to_string() } }
+
+    pub fn matches(self, text: &str) -> bool {
+        self.matches_recursive(self.pattern.as_bytes(), text.as_bytes())
+    }
+
+    fn matches_recursive(self, pattern: &[u8], text: &[u8]) -> bool {
+        if pattern.is_empty() { return text.is_empty() }
+
+        match pattern[0] {
+            b'*' => {
+                // Try matching * with 0 chars, then 1, then 2, etc.
+                for i in 0..=text.len() {
+                    if self.matches_recursive(&pattern[1..], &text[i..]) { return true }
+                }
+                false
+            }
+            b'?' => {
+                if text.is_empty() { false }
+                else { self.matches_recursive(&pattern[1..], &text[1..]) }
+            }
+            b'[' => {
+                if text.is_empty() { return false }
+                let mut i = 1
+                let negate = i < pattern.len() && pattern[i] == b'^'
+                if negate { i += 1 }
+
+                let mut matched = false
+                while i < pattern.len() && pattern[i] != b']' {
+                    if i + 2 < pattern.len() && pattern[i + 1] == b'-' {
+                        if text[0] >= pattern[i] && text[0] <= pattern[i + 2] { matched = true }
+                        i += 3
+                    } else {
+                        if text[0] == pattern[i] { matched = true }
+                        i += 1
+                    }
+                }
+
+                if negate { matched = !matched }
+                if matched && i < pattern.len() {
+                    self.matches_recursive(&pattern[i + 1..], &text[1..])
+                } else { false }
+            }
+            ch => {
+                if text.is_empty() || text[0] != ch { false }
+                else { self.matches_recursive(&pattern[1..], &text[1..]) }
+            }
+        }
+    }
+}
+
+impl Pattern for GlobPattern {
+    fn find_in(self, haystack: &str) -> Option<usize> {
+        if self.matches(haystack) { some(0) } else { none }
+    }
+
+    fn find_all_in(self, haystack: &str) -> [usize] {
+        if self.matches(haystack) { [0] } else { [] }
+    }
+}
+
+// ── String extension methods ─────────────────────────────────────────────────
+pub fn contains_pattern(haystack: &str, pattern: &impl Pattern) -> bool {
+    pattern.find_in(haystack).is_some()
+}
+
+pub fn split_pattern(haystack: &str, needle: &str) -> [string] {
+    let pat = StringPattern.new(needle)
+    let positions = pat.find_all_in(haystack)
+    let mut result: [string] = []
+    let mut start = 0
+    for pos in &positions {
+        result.push(haystack[start..*pos].to_string())
+        start = *pos + needle.len()
+    }
+    result.push(haystack[start..].to_string())
+    result
+}
+
+pub fn replace_pattern(haystack: &str, needle: &str, replacement: &str) -> string {
+    let pat = StringPattern.new(needle)
+    let positions = pat.find_all_in(haystack)
+    if positions.is_empty() { return haystack.to_string() }
+
+    let mut result = string.new()
+    let mut start = 0
+    for pos in &positions {
+        result.push_str(&haystack[start..*pos])
+        result.push_str(replacement)
+        start = *pos + needle.len()
+    }
+    result.push_str(&haystack[start..])
+    result
+}
