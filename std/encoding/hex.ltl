@@ -1,0 +1,50 @@
+// hex.ltl — Hexadecimal encode/decode
+const HEX_CHARS: string = "0123456789abcdef"
+
+pub fn encode(data: [u8]) -> string {
+    data |> flat_map(|b| [HEX_CHARS[(b >> 4) as usize], HEX_CHARS[(b & 0xF) as usize]]) |> collect_string()
+}
+
+pub fn encode_upper(data: [u8]) -> string {
+    encode(data).to_uppercase()
+}
+
+fn hex_nibble(c: char) -> Result<u8, string> {
+    match c {
+        '0'..='9' => ok((c as u8) - b'0'),
+        'a'..='f' => ok((c as u8) - b'a' + 10),
+        'A'..='F' => ok((c as u8) - b'A' + 10),
+        _ => err("invalid hex character: '${c}'"),
+    }
+}
+
+pub fn decode(s: string) -> Result<[u8], string> {
+    if s.len() % 2 != 0 { return err("hex string must have even length") }
+    let chars = s.chars() |> collect()
+    let mut out = []
+    let mut i   = 0
+    while i < chars.len() {
+        let hi = hex_nibble(chars[i])?
+        let lo = hex_nibble(chars[i+1])?
+        out.push((hi << 4) | lo)
+        i += 2
+    }
+    ok(out)
+}
+
+pub fn encode_sep(data: [u8], sep: string) -> string {
+    data |> map(|b| encode([b])) |> join(sep)
+}
+
+fn main() {
+    assert(encode([0xDE, 0xAD, 0xBE, 0xEF]) == "deadbeef")
+    assert(encode_upper([0xDE, 0xAD])        == "DEAD")
+    assert(decode("deadbeef").unwrap() == [0xDE, 0xAD, 0xBE, 0xEF])
+    assert(decode("DEADBEEF").unwrap() == [0xDE, 0xAD, 0xBE, 0xEF])
+    assert(decode("zz").is_err())
+    assert(decode("abc").is_err())   // odd length
+
+    let data = [0x01u8, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF]
+    assert(decode(encode(data)).unwrap() == data)
+    print("hex — all round-trip tests passed ✓")
+}
