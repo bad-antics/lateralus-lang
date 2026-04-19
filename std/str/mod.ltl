@@ -1,0 +1,300 @@
+// std.str - String slice utilities
+// Pattern matching, splitting, trimming, case conversion, searching.
+
+impl str {
+    pub fn len(self) -> usize { @intrinsic("str_len", self) }
+    pub fn is_empty(self) -> bool { self.len() == 0 }
+    pub fn as_bytes(self) -> &[u8] { @intrinsic("str_as_bytes", self) }
+
+    pub fn contains(self, pattern: &str) -> bool { self.find(pattern).is_some() }
+
+    pub fn starts_with(self, prefix: &str) -> bool {
+        if prefix.len() > self.len() { return false }
+        &self[..prefix.len()] == prefix
+    }
+
+    pub fn ends_with(self, suffix: &str) -> bool {
+        if suffix.len() > self.len() { return false }
+        &self[self.len() - suffix.len()..] == suffix
+    }
+
+    pub fn find(self, pattern: &str) -> Option<usize> {
+        if pattern.len() > self.len() { return none }
+        let bytes = self.as_bytes()
+        let pat = pattern.as_bytes()
+        for i in 0..=(self.len() - pattern.len()) {
+            if &bytes[i..i+pat.len()] == pat { return some(i) }
+        }
+        none
+    }
+
+    pub fn rfind(self, pattern: &str) -> Option<usize> {
+        if pattern.len() > self.len() { return none }
+        let bytes = self.as_bytes()
+        let pat = pattern.as_bytes()
+        let mut i = self.len() - pattern.len()
+        loop {
+            if &bytes[i..i+pat.len()] == pat { return some(i) }
+            if i == 0 { break }
+            i -= 1
+        }
+        none
+    }
+
+    pub fn split(self, delimiter: &str) -> Split {
+        Split { remaining: self, delimiter, done: false }
+    }
+
+    pub fn splitn(self, n: usize, delimiter: &str) -> SplitN {
+        SplitN { remaining: self, delimiter, count: n, done: false }
+    }
+
+    pub fn lines(self) -> Lines { Lines { remaining: self } }
+
+    pub fn trim(self) -> &str {
+        self.trim_start().trim_end()
+    }
+
+    pub fn trim_start(self) -> &str {
+        let bytes = self.as_bytes()
+        let mut start = 0
+        while start < bytes.len() && bytes[start].is_ascii_whitespace() { start += 1 }
+        &self[start..]
+    }
+
+    pub fn trim_end(self) -> &str {
+        let bytes = self.as_bytes()
+        let mut end = bytes.len()
+        while end > 0 && bytes[end - 1].is_ascii_whitespace() { end -= 1 }
+        &self[..end]
+    }
+
+    pub fn to_uppercase(self) -> string {
+        self.chars().map(|c| c.to_uppercase()).collect()
+    }
+
+    pub fn to_lowercase(self) -> string {
+        self.chars().map(|c| c.to_lowercase()).collect()
+    }
+
+    pub fn replace(self, from: &str, to: &str) -> string {
+        let mut result = string.new()
+        let mut remaining = self
+        while let some(pos) = remaining.find(from) {
+            result.push_str(&remaining[..pos])
+            result.push_str(to)
+            remaining = &remaining[pos + from.len()..]
+        }
+        result.push_str(remaining)
+        result
+    }
+
+    pub fn repeat(self, n: usize) -> string {
+        let mut result = string.with_capacity(self.len() * n)
+        for _ in 0..n { result.push_str(self) }
+        result
+    }
+
+    pub fn chars(self) -> Chars { Chars { bytes: self.as_bytes(), pos: 0 } }
+
+    pub fn char_indices(self) -> CharIndices { CharIndices { chars: self.chars(), offset: 0 } }
+
+    pub fn bytes(self) -> impl Iterator<Item = u8> { self.as_bytes().iter().copied() }
+
+    pub fn to_string(self) -> string { string.from(self) }
+
+    pub fn parse<T: FromStr>(self) -> Result<T, T::Err> { T.from_str(self) }
+
+    pub fn strip_prefix(self, prefix: &str) -> Option<&str> {
+        if self.starts_with(prefix) { some(&self[prefix.len()..]) } else { none }
+    }
+
+    pub fn strip_suffix(self, suffix: &str) -> Option<&str> {
+        if self.ends_with(suffix) { some(&self[..self.len() - suffix.len()]) } else { none }
+    }
+
+    pub fn matches(self, pattern: &str) -> Matches { Matches { haystack: self, pattern, pos: 0 } }
+
+    pub fn match_indices(self, pattern: &str) -> MatchIndices { MatchIndices { haystack: self, pattern, pos: 0 } }
+
+    pub fn is_ascii(self) -> bool { self.as_bytes().iter().all(|b| b.is_ascii()) }
+
+    pub fn eq_ignore_ascii_case(self, other: &str) -> bool {
+        if self.len() != other.len() { return false }
+        self.as_bytes().iter().zip(other.as_bytes().iter())
+            .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
+    }
+
+    pub fn encode_utf16(self) -> [u16] {
+        let mut result: [u16] = []
+        for c in self.chars() {
+            let cp = c as u32
+            if cp < 0x10000 { result.push(cp as u16) }
+            else {
+                let adjusted = cp - 0x10000
+                result.push((0xD800 + (adjusted >> 10)) as u16)
+                result.push((0xDC00 + (adjusted & 0x3FF)) as u16)
+            }
+        }
+        result
+    }
+}
+
+pub struct Split<'a> { remaining: &'a str, delimiter: &'a str, done: bool }
+impl<'a> Iterator for Split<'a> {
+    type Item = &'a str
+    fn next(mut self) -> Option<&'a str> {
+        if self.done { return none }
+        match self.remaining.find(self.delimiter) {
+            some(pos) => {
+                let part = &self.remaining[..pos]
+                self.remaining = &self.remaining[pos + self.delimiter.len()..]
+                some(part)
+            }
+            none => { self.done = true; some(self.remaining) }
+        }
+    }
+}
+
+pub struct SplitN<'a> { remaining: &'a str, delimiter: &'a str, count: usize, done: bool }
+impl<'a> Iterator for SplitN<'a> {
+    type Item = &'a str
+    fn next(mut self) -> Option<&'a str> {
+        if self.done || self.count == 0 { return none }
+        self.count -= 1
+        if self.count == 0 { self.done = true; return some(self.remaining) }
+        match self.remaining.find(self.delimiter) {
+            some(pos) => {
+                let part = &self.remaining[..pos]
+                self.remaining = &self.remaining[pos + self.delimiter.len()..]
+                some(part)
+            }
+            none => { self.done = true; some(self.remaining) }
+        }
+    }
+}
+
+pub struct Lines<'a> { remaining: &'a str }
+impl<'a> Iterator for Lines<'a> {
+    type Item = &'a str
+    fn next(mut self) -> Option<&'a str> {
+        if self.remaining.is_empty() { return none }
+        match self.remaining.find("\n") {
+            some(pos) => {
+                let mut end = pos
+                if end > 0 && self.remaining.as_bytes()[end - 1] == b'\r' { end -= 1 }
+                let line = &self.remaining[..end]
+                self.remaining = &self.remaining[pos + 1..]
+                some(line)
+            }
+            none => { let line = self.remaining; self.remaining = ""; some(line) }
+        }
+    }
+}
+
+pub struct Chars<'a> { bytes: &'a [u8], pos: usize }
+impl<'a> Iterator for Chars<'a> {
+    type Item = char
+    fn next(mut self) -> Option<char> {
+        if self.pos >= self.bytes.len() { return none }
+        let b = self.bytes[self.pos]
+        let (ch, size) = if b < 0x80 { (b as u32, 1) }
+        else if b < 0xE0 {
+            let c = ((b as u32 & 0x1F) << 6) | (self.bytes[self.pos+1] as u32 & 0x3F)
+            (c, 2)
+        } else if b < 0xF0 {
+            let c = ((b as u32 & 0x0F) << 12) | ((self.bytes[self.pos+1] as u32 & 0x3F) << 6) | (self.bytes[self.pos+2] as u32 & 0x3F)
+            (c, 3)
+        } else {
+            let c = ((b as u32 & 0x07) << 18) | ((self.bytes[self.pos+1] as u32 & 0x3F) << 12) | ((self.bytes[self.pos+2] as u32 & 0x3F) << 6) | (self.bytes[self.pos+3] as u32 & 0x3F)
+            (c, 4)
+        }
+        self.pos += size
+        some(char.from_u32(ch).unwrap_or('\u{FFFD}'))
+    }
+}
+
+pub struct CharIndices<'a> { chars: Chars<'a>, offset: usize }
+impl<'a> Iterator for CharIndices<'a> {
+    type Item = (usize, char)
+    fn next(mut self) -> Option<(usize, char)> {
+        let idx = self.chars.pos
+        self.chars.next().map(|c| (idx, c))
+    }
+}
+
+pub struct Matches<'a> { haystack: &'a str, pattern: &'a str, pos: usize }
+impl<'a> Iterator for Matches<'a> {
+    type Item = &'a str
+    fn next(mut self) -> Option<&'a str> {
+        let remaining = &self.haystack[self.pos..]
+        match remaining.find(self.pattern) {
+            some(idx) => { self.pos += idx + self.pattern.len(); some(self.pattern) }
+            none => none,
+        }
+    }
+}
+
+pub struct MatchIndices<'a> { haystack: &'a str, pattern: &'a str, pos: usize }
+impl<'a> Iterator for MatchIndices<'a> {
+    type Item = (usize, &'a str)
+    fn next(mut self) -> Option<(usize, &'a str)> {
+        let remaining = &self.haystack[self.pos..]
+        match remaining.find(self.pattern) {
+            some(idx) => { let abs = self.pos + idx; self.pos = abs + self.pattern.len(); some((abs, self.pattern)) }
+            none => none,
+        }
+    }
+}
+
+fn main() {
+    let s = "hello world"
+    assert(s.len() == 11)
+    assert(!s.is_empty())
+    assert(s.contains("world"))
+    assert(!s.contains("xyz"))
+    print("Basic \u2713")
+
+    assert(s.starts_with("hello"))
+    assert(s.ends_with("world"))
+    assert(s.find("world") == some(6))
+    assert(s.rfind("o") == some(7))
+    print("Find \u2713")
+
+    let parts: [&str] = "a,b,c".split(",").collect()
+    assert(parts == ["a", "b", "c"])
+    let parts2: [&str] = "a,b,c".splitn(2, ",").collect()
+    assert(parts2 == ["a", "b,c"])
+    print("Split \u2713")
+
+    assert("  hello  ".trim() == "hello")
+    assert("  hello".trim_start() == "hello")
+    assert("hello  ".trim_end() == "hello")
+    print("Trim \u2713")
+
+    assert("hello".to_uppercase() == "HELLO")
+    assert("HELLO".to_lowercase() == "hello")
+    print("Case \u2713")
+
+    assert("foo bar".replace("bar", "baz") == "foo baz")
+    assert("ha".repeat(3) == "hahaha")
+    print("Replace/repeat \u2713")
+
+    let lines: [&str] = "a\nb\nc".lines().collect()
+    assert(lines == ["a", "b", "c"])
+    print("Lines \u2713")
+
+    assert("hello".strip_prefix("hel") == some("lo"))
+    assert("hello".strip_suffix("llo") == some("he"))
+    print("Strip \u2713")
+
+    assert("Hello".eq_ignore_ascii_case("hELLO"))
+    assert("abc".is_ascii())
+    print("ASCII \u2713")
+
+    let chars: [char] = "hi".chars().collect()
+    assert(chars == ['h', 'i'])
+    print("Chars \u2713")
+
+    print("Str complete \u2713")
+}
