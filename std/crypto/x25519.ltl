@@ -1,0 +1,333 @@
+// std.crypto.x25519 - X25519 Diffie-Hellman key exchange
+// Elliptic curve Diffie-Hellman over Curve25519.
+
+use std.crypto.chacha20.{constant_time_eq}
+
+const CURVE25519_BASEPOINT: [u8; 32] = [
+    9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+]
+
+// Field element in GF(2^255 - 19), represented as 5 limbs of 51 bits
+struct FieldElement {
+    limbs: [u64; 5],
+}
+
+impl FieldElement {
+    fn zero() -> FieldElement { FieldElement { limbs: [0; 5] } }
+    fn one() -> FieldElement { FieldElement { limbs: [1, 0, 0, 0, 0] } }
+
+    fn from_bytes(bytes: &[u8; 32]) -> FieldElement {
+        let mut limbs = [0u64; 5]
+        limbs[0] = load_u64_le(&bytes[0..8]) & 0x7ffffffffffff
+        limbs[1] = (load_u64_le(&bytes[6..14]) >> 3) & 0x7ffffffffffff
+        limbs[2] = (load_u64_le(&bytes[12..20]) >> 6) & 0x7ffffffffffff
+        limbs[3] = (load_u64_le(&bytes[19..27]) >> 1) & 0x7ffffffffffff
+        limbs[4] = (load_u64_le(&bytes[24..32]) >> 12) & 0x7ffffffffffff
+        FieldElement { limbs }
+    }
+
+    fn to_bytes(self) -> [u8; 32] {
+        let mut h = self.reduce()
+        let mut s = [0u8; 32]
+        store_u64_le(&mut s[0..8], h.limbs[0] | (h.limbs[1] << 51))
+        store_u64_le(&mut s[8..16], (h.limbs[1] >> 13) | (h.limbs[2] << 38))
+        store_u64_le(&mut s[16..24], (h.limbs[2] >> 26) | (h.limbs[3] << 25))
+        store_u64_le(&mut s[24..32], (h.limbs[3] >> 39) | (h.limbs[4] << 12))
+        s
+    }
+
+    fn add(self, rhs: &FieldElement) -> FieldElement {
+        let mut out = [0u64; 5]
+        for i in 0..5 { out[i] = self.limbs[i] + rhs.limbs[i] }
+        FieldElement { limbs: out }
+    }
+
+    fn sub(self, rhs: &FieldElement) -> FieldElement {
+        // Add 2p to avoid underflow
+        let two_p: [u64; 5] = [
+            0xfffffffffffda, 0xffffffffffffe, 0xffffffffffffe,
+            0xffffffffffffe, 0xffffffffffffe,
+        ]
+        let mut out = [0u64; 5]
+        for i in 0..5 { out[i] = self.limbs[i] + two_p[i] - rhs.limbs[i] }
+        FieldElement { limbs: out }
+    }
+
+    fn mul(self, rhs: &FieldElement) -> FieldElement {
+        let a = &self.limbs
+        let b = &rhs.limbs
+        // Schoolbook multiplication with reduction modulo 2^255-19
+        let mut t = [0u128; 5]
+        for i in 0..5 {
+            for j in 0..5 {
+                let idx = (i + j) % 5
+                let factor: u128 = if i + j >= 5 { 19 } else { 1 }
+                t[idx] += (a[i] as u128) * (b[j] as u128) * factor
+            }
+        }
+        let mut out = [0u64; 5]
+        let mut carry: u128 = 0
+        for i in 0..5 {
+            t[i] += carry
+            out[i] = (t[i] & 0x7ffffffffffff) as u64
+            carry = t[i] >> 51
+        }
+        out[0] += (carry as u64) * 19
+        FieldElement { limbs: out }
+    }
+
+    fn square(self) -> FieldElement { self.mul(&self) }
+
+    fn pow25519(self, exp: &[u8; 32]) -> FieldElement {
+        let mut result = FieldElement.one()
+        let mut base = self
+        for byte_idx in 0..32 {
+            for bit in 0..8 {
+                if (exp[byte_idx] >> bit) & 1 == 1 {
+                    result = result.mul(&base)
+                }
+                base = base.square()
+            }
+        }
+        result
+    }
+
+    fn invert(self) -> FieldElement {
+        // a^(p-2) where p = 2^255 - 19
+        let mut exp = [0u8; 32]
+        // p-2 = 2^255 - 21
+        for i in 0..32 { exp[i] = 0xff }
+        exp[31] = 0x7f  // clear top bit
+        exp[0] = 0xeb   // subtract 20 more (0xff - 20 = 0xeb)
+        self.pow25519(&exp)
+    }
+
+    fn reduce(mut self) -> FieldElement {
+        let mut carry: u64 = 0
+        for i in 0..5 {
+            self.limbs[i] += carry
+            carry = self.limbs[i] >> 51
+            self.limbs[i] &= 0x7ffffffffffff
+        }
+        self.limbs[0] += carry * 19
+        self
+    }
+
+    fn conditional_swap(a: &mut FieldElement, b: &mut FieldElement, swap: u64) {
+        let mask = 0u64.wrapping_sub(swap)
+        for i in 0..5 {
+            let t = mask & (a.limbs[i] ^ b.limbs[i])
+            a.limbs[i] ^= t
+            b.limbs[i] ^= t
+        }
+    }
+}
+
+fn load_u64_le(bytes: &[u8]) -> u64 {
+    let mut val: u64 = 0
+    for i in 0..bytes.len().min(8) {
+        val |= (bytes[i] as u64) << (i * 8)
+    }
+    val
+}
+
+fn store_u64_le(dst: &mut [u8], val: u64) {
+    for i in 0..dst.len().min(8) {
+        dst[i] = ((val >> (i * 8)) & 0xff) as u8
+    }
+}
+
+// Montgomery ladder scalar multiplication
+fn scalar_mult(scalar: &[u8; 32], point: &[u8; 32]) -> [u8; 32] {
+    let mut clamped = *scalar
+    clamped[0] &= 248
+    clamped[31] &= 127
+    clamped[31] |= 64
+
+    let u = FieldElement.from_bytes(point)
+    let mut x_1 = u
+    let mut x_2 = FieldElement.one()
+    let mut z_2 = FieldElement.zero()
+    let mut x_3 = u
+    let mut z_3 = FieldElement.one()
+    let mut swap: u64 = 0
+
+    for pos in (0..255).rev() {
+        let byte_idx = pos / 8
+        let bit_idx = pos % 8
+        let bit = ((clamped[byte_idx] >> bit_idx) & 1) as u64
+
+        swap ^= bit
+        FieldElement.conditional_swap(&mut x_2, &mut x_3, swap)
+        FieldElement.conditional_swap(&mut z_2, &mut z_3, swap)
+        swap = bit
+
+        let a = x_2.add(&z_2)
+        let aa = a.square()
+        let b = x_2.sub(&z_2)
+        let bb = b.square()
+        let e = aa.sub(&bb)
+        let c = x_3.add(&z_3)
+        let d = x_3.sub(&z_3)
+        let da = d.mul(&a)
+        let cb = c.mul(&b)
+        x_3 = da.add(&cb).square()
+        z_3 = da.sub(&cb).square().mul(&x_1)
+        x_2 = aa.mul(&bb)
+
+        let a121665 = FieldElement { limbs: [121665, 0, 0, 0, 0] }
+        z_2 = e.mul(&aa.add(&a121665.mul(&e)))
+    }
+
+    FieldElement.conditional_swap(&mut x_2, &mut x_3, swap)
+    FieldElement.conditional_swap(&mut z_2, &mut z_3, swap)
+
+    x_2.mul(&z_2.invert()).to_bytes()
+}
+
+pub struct StaticSecret {
+    bytes: [u8; 32],
+}
+
+impl StaticSecret {
+    pub fn random() -> StaticSecret {
+        let mut bytes = [0u8; 32]
+        @intrinsic("getrandom", &mut bytes)
+        StaticSecret { bytes }
+    }
+
+    pub fn from_bytes(bytes: [u8; 32]) -> StaticSecret {
+        StaticSecret { bytes }
+    }
+
+    pub fn to_bytes(self) -> [u8; 32] { self.bytes }
+
+    pub fn diffie_hellman(self, their_public: &PublicKey) -> SharedSecret {
+        let result = scalar_mult(&self.bytes, &their_public.bytes)
+        SharedSecret { bytes: result }
+    }
+}
+
+pub struct PublicKey {
+    bytes: [u8; 32],
+}
+
+impl PublicKey {
+    pub fn from(secret: &StaticSecret) -> PublicKey {
+        let bytes = scalar_mult(&secret.bytes, &CURVE25519_BASEPOINT)
+        PublicKey { bytes }
+    }
+
+    pub fn from_bytes(bytes: [u8; 32]) -> PublicKey {
+        PublicKey { bytes }
+    }
+
+    pub fn as_bytes(self) -> &[u8; 32] { &self.bytes }
+    pub fn to_bytes(self) -> [u8; 32] { self.bytes }
+}
+
+pub struct SharedSecret {
+    bytes: [u8; 32],
+}
+
+impl SharedSecret {
+    pub fn as_bytes(self) -> &[u8; 32] { &self.bytes }
+    pub fn to_bytes(self) -> [u8; 32] { self.bytes }
+
+    pub fn was_contributory(self) -> bool {
+        // Check shared secret is not all zeros (low-order point)
+        !self.bytes.iter().all(|&b| b == 0)
+    }
+}
+
+pub struct EphemeralSecret {
+    bytes: [u8; 32],
+}
+
+impl EphemeralSecret {
+    pub fn random() -> EphemeralSecret {
+        let mut bytes = [0u8; 32]
+        @intrinsic("getrandom", &mut bytes)
+        EphemeralSecret { bytes }
+    }
+
+    pub fn diffie_hellman(self, their_public: &PublicKey) -> SharedSecret {
+        let result = scalar_mult(&self.bytes, &their_public.bytes)
+        SharedSecret { bytes: result }
+    }
+
+    pub fn public_key(self) -> PublicKey {
+        let bytes = scalar_mult(&self.bytes, &CURVE25519_BASEPOINT)
+        PublicKey { bytes }
+    }
+}
+
+fn main() {
+    // FieldElement basics
+    let zero = FieldElement.zero()
+    let one = FieldElement.one()
+    assert(zero.limbs[0] == 0)
+    assert(one.limbs[0] == 1)
+    print("FieldElement basics ✓")
+
+    // Addition
+    let two = one.add(&one)
+    assert(two.limbs[0] == 2)
+    print("Field add ✓")
+
+    // Subtraction
+    let back = two.sub(&one).reduce()
+    assert(back.limbs[0] == 1)
+    print("Field sub ✓")
+
+    // Multiplication
+    let three = FieldElement { limbs: [3, 0, 0, 0, 0] }
+    let nine = three.mul(&three).reduce()
+    assert(nine.limbs[0] == 9)
+    print("Field mul ✓")
+
+    // Roundtrip bytes
+    let mut test_bytes = [0u8; 32]
+    test_bytes[0] = 42
+    let fe = FieldElement.from_bytes(&test_bytes)
+    let rt = fe.to_bytes()
+    assert(rt[0] == 42)
+    print("Field bytes roundtrip ✓")
+
+    // Basepoint
+    assert(CURVE25519_BASEPOINT[0] == 9)
+    print("Basepoint ✓")
+
+    // Key pair
+    let secret = StaticSecret.from_bytes([1u8; 32])
+    let public = PublicKey.from(&secret)
+    assert(public.to_bytes() != [0u8; 32])
+    print("Key generation ✓")
+
+    // DH exchange
+    let alice_secret = StaticSecret.from_bytes([2u8; 32])
+    let alice_public = PublicKey.from(&alice_secret)
+    let bob_secret = StaticSecret.from_bytes([3u8; 32])
+    let bob_public = PublicKey.from(&bob_secret)
+    let alice_shared = alice_secret.diffie_hellman(&bob_public)
+    let bob_shared = bob_secret.diffie_hellman(&alice_public)
+    assert(alice_shared.to_bytes() == bob_shared.to_bytes())
+    assert(alice_shared.was_contributory())
+    print("DH exchange ✓")
+
+    // SharedSecret non-zero
+    assert(alice_shared.was_contributory())
+    print("Contributory check ✓")
+
+    // load/store
+    let bytes = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
+    let val = load_u64_le(&bytes)
+    assert(val == 0x0807060504030201)
+    let mut out = [0u8; 8]
+    store_u64_le(&mut out, val)
+    assert(out == bytes)
+    print("Load/store ✓")
+
+    print("X25519 complete ✓")
+}
