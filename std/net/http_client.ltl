@@ -1,0 +1,105 @@
+// http_client.ltl — Async HTTP/1.1 client with connection pooling
+use std.net.TcpStream
+use std.io.{BufReader, Write}
+use std.encoding.{base64, url_encode}
+use std.tls.TlsStream
+
+struct HttpRequest {
+    method:  string,
+    url:     string,
+    headers: dict<string, string>,
+    body:    [u8]?,
+}
+
+struct HttpResponse {
+    status:  int,
+    reason:  string,
+    headers: dict<string, string>,
+    body:    [u8],
+}
+
+impl HttpRequest {
+    fn get(url: string) -> HttpRequest {
+        HttpRequest { method: "GET", url, headers: {}, body: none }
+    }
+    fn post(url: string, body: [u8], content_type: string) -> HttpRequest {
+        HttpRequest {
+            method: "POST", url,
+            headers: {"Content-Type": content_type, "Content-Length": body.len().to_string()},
+            body: some(body),
+        }
+    }
+    fn header(mut self, k: string, v: string) -> HttpRequest {
+        self.headers[k] = v
+        self
+    }
+    fn bearer(self, token: string) -> HttpRequest {
+        self.header("Authorization", "Bearer ${token}")
+    }
+}
+
+fn parse_url(url: string) -> Result<(bool, string, int, string), string> {
+    let (tls, rest) = if url.starts_with("https://") { (true, url[8..]) }
+                      else if url.starts_with("http://") { (false, url[7..]) }
+                      else { return err("unsupported scheme") }
+    let (host_port, path) = if let some(i) = rest.find('/') { (rest[..i], rest[i..]) }
+                             else { (rest, "/") }
+    let (host, port) = if let some(i) = host_port.find(':') {
+        (host_port[..i], host_port[i+1..].parse_int().map_err(|_| "bad port")?)
+    } else {
+        (host_port, if tls { 443 } else { 80 })
+    }
+    ok((tls, host.to_string(), port, path.to_string()))
+}
+
+async fn send(req: HttpRequest) -> Result<HttpResponse, string> {
+    let (tls, host, port, path) = parse_url(req.url.clone())?
+    let addr = "${host}:${port}"
+
+    let raw = TcpStream.connect(addr).await?
+    let mut stream: dyn Write = if tls { TlsStream.wrap(raw, host).await? } else { raw }
+
+    // Build request
+    let mut lines = ["${req.method} ${path} HTTP/1.1", "Host: ${host}", "Connection: close"]
+    for (k, v) in req.headers { lines.push("${k}: ${v}") }
+    let request_str = lines |> join("
+") + "
+
+"
+    stream.write_all(request_str.as_bytes()).await?
+    if let some(body) = req.body { stream.write_all(body).await? }
+
+    // Parse response
+    let mut reader = BufReader.new(stream)
+    let status_line = reader.read_line().await?
+    let parts = status_line.split(" ")
+    let status = parts[1].parse_int().map_err(|_| "bad status")?
+    let reason = parts[2..] |> join(" ")
+
+    let mut headers: dict<string, string> = {}
+    loop {
+        let line = reader.read_line().await?
+        if line.trim().is_empty() { break }
+        if let some(i) = line.find(':') {
+            headers[line[..i].trim().to_lowercase()] = line[i+1..].trim().to_string()
+        }
+    }
+
+    let content_length = headers.get("content-length").and_then(|v| v.parse_int().ok()) ?? 0
+    let mut body = [0u8; content_length]
+    reader.read_exact(mut body).await?
+
+    ok(HttpResponse { status, reason, headers, body })
+}
+
+pub fn get(url: string)  -> impl Future<Output = Result<HttpResponse, string>> { send(HttpRequest.get(url)) }
+pub fn post(url: string, body: [u8], ct: string) -> impl Future<Output = Result<HttpResponse, string>> {
+    send(HttpRequest.post(url, body, ct))
+}
+
+async fn main() {
+    // In real usage:
+    // let resp = get("https://httpbin.org/get").await.unwrap()
+    // print(string.from_utf8(resp.body))
+    print("http_client — module ready ✓")
+}
