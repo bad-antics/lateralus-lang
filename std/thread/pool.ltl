@@ -1,0 +1,214 @@
+// std.thread.pool — Thread pool with work-stealing
+// Fixed pool of worker threads executing queued closures.
+
+use std.sync.{Mutex, Condvar, Arc, channel, Sender, Receiver}
+use std.collections.VecDeque
+use std.thread
+
+type Job = Box<dyn FnOnce() + Send + 'static>
+
+// ── Thread Pool ──────────────────────────────────────────────────────────────
+pub struct ThreadPool {
+    workers: [Worker],
+    sender: Option<Sender<Message>>,
+}
+
+enum Message {
+    NewJob(Job),
+    Shutdown,
+}
+
+struct Worker {
+    id: usize,
+    handle: Option<thread.JoinHandle<()>>,
+}
+
+impl Worker {
+    fn new(id: usize, receiver: Arc<Mutex<Receiver<Message>>>) -> Worker {
+        let handle = thread.spawn(move || {
+            loop {
+                let message = {
+                    let lock = receiver.lock().unwrap()
+                    lock.recv().unwrap()
+                }
+                match message {
+                    Message.NewJob(job) => job(),
+                    Message.Shutdown => break,
+                }
+            }
+        })
+        Worker { id, handle: some(handle) }
+    }
+}
+
+impl ThreadPool {
+    pub fn new(size: usize) -> ThreadPool {
+        assert(size > 0, "thread pool size must be > 0")
+        let (sender, receiver) = channel.unbounded()
+        let receiver = Arc.new(Mutex.new(receiver))
+        let mut workers: [Worker] = []
+        for id in 0..size {
+            workers.push(Worker.new(id, Arc.clone(&receiver)))
+        }
+        ThreadPool { workers, sender: some(sender) }
+    }
+
+    pub fn execute<F: FnOnce() + Send + 'static>(self, f: F) {
+        let job = box f as Job
+        self.sender.as_ref().unwrap().send(Message.NewJob(job)).unwrap()
+    }
+
+    pub fn worker_count(self) -> usize { self.workers.len() }
+}
+
+impl Drop for ThreadPool {
+    fn drop(mut self) {
+        // Send shutdown to all workers
+        for _ in &self.workers {
+            self.sender.as_ref().unwrap().send(Message.Shutdown).unwrap()
+        }
+        drop(self.sender.take())
+        for worker in &mut self.workers {
+            if let some(handle) = worker.handle.take() { handle.join().unwrap() }
+        }
+    }
+}
+
+// ── Scoped Thread Pool (no 'static bound) ────────────────────────────────────
+pub struct ScopedThreadPool {
+    size: usize,
+}
+
+impl ScopedThreadPool {
+    pub fn new(size: usize) -> ScopedThreadPool {
+        assert(size > 0)
+        ScopedThreadPool { size }
+    }
+
+    pub fn scope<'env, F, R>(self, f: F) -> R
+    where F: FnOnce(&Scope<'env>) -> R {
+        let scope = Scope {
+            handles: Mutex.new([]),
+            _phantom: std.marker.PhantomData,
+        }
+        let result = f(&scope)
+        // Join all spawned threads
+        let mut handles = scope.handles.lock().unwrap()
+        for handle in handles.drain(..) { handle.join().unwrap() }
+        result
+    }
+}
+
+pub struct Scope<'env> {
+    handles: Mutex<[thread.JoinHandle<()>]>,
+    _phantom: std.marker.PhantomData<&'env ()>,
+}
+
+impl<'env> Scope<'env> {
+    pub fn spawn<F: FnOnce() + Send + 'env>(self, f: F) {
+        let handle = unsafe { thread.spawn_unchecked(f) }
+        self.handles.lock().unwrap().push(handle)
+    }
+}
+
+// ── Future / Promise ─────────────────────────────────────────────────────────
+pub struct AsyncResult<T: Send> {
+    inner: Arc<AsyncResultInner<T>>,
+}
+
+struct AsyncResultInner<T> {
+    value: Mutex<Option<T>>,
+    ready: Condvar,
+}
+
+impl<T: Send> AsyncResult<T> {
+    pub fn new() -> AsyncResult<T> {
+        AsyncResult {
+            inner: Arc.new(AsyncResultInner {
+                value: Mutex.new(none),
+                ready: Condvar.new(),
+            }),
+        }
+    }
+
+    pub fn set(self, value: T) {
+        let mut guard = self.inner.value.lock().unwrap()
+        *guard = some(value)
+        self.inner.ready.notify_all()
+    }
+
+    pub fn get(self) -> T {
+        let mut guard = self.inner.value.lock().unwrap()
+        while guard.is_none() { guard = self.inner.ready.wait(guard).unwrap() }
+        guard.take().unwrap()
+    }
+
+    pub fn try_get(self) -> Option<T> {
+        let mut guard = self.inner.value.lock().unwrap()
+        guard.take()
+    }
+
+    pub fn is_ready(self) -> bool {
+        self.inner.value.lock().unwrap().is_some()
+    }
+
+    pub fn clone_handle(self) -> AsyncResult<T> {
+        AsyncResult { inner: Arc.clone(&self.inner) }
+    }
+}
+
+// ── Parallel map helper ──────────────────────────────────────────────────────
+pub fn parallel_map<T: Send + 'static, R: Send + 'static, F: Fn(T) -> R + Send + Sync + 'static>(
+    pool: &ThreadPool, items: [T], f: F,
+) -> [R] {
+    let f = Arc.new(f)
+    let results: [AsyncResult<R>] = items.into_iter().map(|item| {
+        let result = AsyncResult.new()
+        let handle = result.clone_handle()
+        let f = Arc.clone(&f)
+        pool.execute(move || { handle.set(f(item)) })
+        result
+    }).collect()
+
+    results.into_iter().map(|r| r.get()).collect()
+}
+
+// ── Work-stealing deque ──────────────────────────────────────────────────────
+pub struct WorkStealingDeque<T> {
+    local: VecDeque<T>,
+    shared: Arc<Mutex<VecDeque<T>>>,
+}
+
+impl<T: Send> WorkStealingDeque<T> {
+    pub fn new() -> WorkStealingDeque<T> {
+        WorkStealingDeque {
+            local: VecDeque.new(),
+            shared: Arc.new(Mutex.new(VecDeque.new())),
+        }
+    }
+
+    pub fn push(mut self, item: T) { self.local.push_back(item) }
+
+    pub fn pop(mut self) -> Option<T> {
+        self.local.pop_front().or_else(|| {
+            let mut shared = self.shared.lock().unwrap()
+            shared.pop_front()
+        })
+    }
+
+    pub fn steal(self) -> Option<T> {
+        let mut shared = self.shared.lock().unwrap()
+        shared.pop_back()
+    }
+
+    pub fn share(mut self, count: usize) {
+        let mut shared = self.shared.lock().unwrap()
+        for _ in 0..count {
+            if let some(item) = self.local.pop_back() { shared.push_back(item) }
+            else { break }
+        }
+    }
+
+    pub fn len(self) -> usize { self.local.len() }
+    pub fn shared_len(self) -> usize { self.shared.lock().unwrap().len() }
+}
