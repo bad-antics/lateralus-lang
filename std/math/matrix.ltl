@@ -1,0 +1,218 @@
+// std.math.matrix — Matrix and linear algebra operations
+// Dense matrix with BLAS-like operations.
+
+use std.math.{sqrt, abs}
+
+pub struct Matrix {
+    rows: usize,
+    cols: usize,
+    data: [f64],  // row-major
+}
+
+impl Matrix {
+    pub fn new(rows: usize, cols: usize) -> Matrix {
+        Matrix { rows, cols, data: vec![0.0; rows * cols] }
+    }
+
+    pub fn from_slice(rows: usize, cols: usize, data: &[f64]) -> Matrix {
+        assert(data.len() == rows * cols, "data length mismatch")
+        Matrix { rows, cols, data: data.to_vec() }
+    }
+
+    pub fn identity(n: usize) -> Matrix {
+        let mut m = Matrix.new(n, n)
+        for i in 0..n { m.data[i * n + i] = 1.0 }
+        m
+    }
+
+    pub fn zeros(rows: usize, cols: usize) -> Matrix { Matrix.new(rows, cols) }
+
+    pub fn ones(rows: usize, cols: usize) -> Matrix {
+        Matrix { rows, cols, data: vec![1.0; rows * cols] }
+    }
+
+    pub fn get(self, row: usize, col: usize) -> f64 { self.data[row * self.cols + col] }
+    pub fn set(mut self, row: usize, col: usize, val: f64) { self.data[row * self.cols + col] = val }
+
+    pub fn shape(self) -> (usize, usize) { (self.rows, self.cols) }
+    pub fn is_square(self) -> bool { self.rows == self.cols }
+
+    // ── Arithmetic ───────────────────────────────────────────────────────────
+    pub fn add(self, other: &Matrix) -> Matrix {
+        assert(self.rows == other.rows && self.cols == other.cols)
+        let data: [f64] = self.data.iter().zip(&other.data).map(|(a, b)| a + b).collect()
+        Matrix { rows: self.rows, cols: self.cols, data }
+    }
+
+    pub fn sub(self, other: &Matrix) -> Matrix {
+        assert(self.rows == other.rows && self.cols == other.cols)
+        let data: [f64] = self.data.iter().zip(&other.data).map(|(a, b)| a - b).collect()
+        Matrix { rows: self.rows, cols: self.cols, data }
+    }
+
+    pub fn mul(self, other: &Matrix) -> Matrix {
+        assert(self.cols == other.rows, "dimension mismatch for multiplication")
+        let mut result = Matrix.new(self.rows, other.cols)
+        for i in 0..self.rows {
+            for k in 0..self.cols {
+                let a = self.get(i, k)
+                for j in 0..other.cols {
+                    result.data[i * other.cols + j] += a * other.get(k, j)
+                }
+            }
+        }
+        result
+    }
+
+    pub fn scale(self, scalar: f64) -> Matrix {
+        let data: [f64] = self.data.iter().map(|&x| x * scalar).collect()
+        Matrix { rows: self.rows, cols: self.cols, data }
+    }
+
+    pub fn transpose(self) -> Matrix {
+        let mut result = Matrix.new(self.cols, self.rows)
+        for i in 0..self.rows {
+            for j in 0..self.cols { result.set(j, i, self.get(i, j)) }
+        }
+        result
+    }
+
+    // ── Norms ────────────────────────────────────────────────────────────────
+    pub fn frobenius_norm(self) -> f64 {
+        sqrt(self.data.iter().map(|x| x * x).sum())
+    }
+
+    pub fn max_norm(self) -> f64 {
+        self.data.iter().map(|x| abs(*x)).fold(0.0, f64.max)
+    }
+
+    // ── Trace and determinant ────────────────────────────────────────────────
+    pub fn trace(self) -> f64 {
+        assert(self.is_square())
+        (0..self.rows).map(|i| self.get(i, i)).sum()
+    }
+
+    pub fn determinant(self) -> f64 {
+        assert(self.is_square())
+        let n = self.rows
+        if n == 1 { return self.data[0] }
+        if n == 2 { return self.data[0] * self.data[3] - self.data[1] * self.data[2] }
+
+        // LU decomposition based
+        let (lu, parity) = self.lu_decompose()
+        let mut det = parity as f64
+        for i in 0..n { det *= lu.get(i, i) }
+        det
+    }
+
+    // ── LU Decomposition ────────────────────────────────────────────────────
+    pub fn lu_decompose(self) -> (Matrix, i32) {
+        assert(self.is_square())
+        let n = self.rows
+        let mut lu = self.clone()
+        let mut parity: i32 = 1
+
+        for col in 0..n {
+            // Partial pivoting
+            let mut max_val = abs(lu.get(col, col))
+            let mut max_row = col
+            for row in col+1..n {
+                let val = abs(lu.get(row, col))
+                if val > max_val { max_val = val; max_row = row }
+            }
+            if max_row != col {
+                for j in 0..n {
+                    let tmp = lu.get(col, j)
+                    lu.set(col, j, lu.get(max_row, j))
+                    lu.set(max_row, j, tmp)
+                }
+                parity *= -1
+            }
+
+            let pivot = lu.get(col, col)
+            if abs(pivot) < 1e-12 { continue }
+
+            for row in col+1..n {
+                let factor = lu.get(row, col) / pivot
+                lu.set(row, col, factor)
+                for j in col+1..n {
+                    let val = lu.get(row, j) - factor * lu.get(col, j)
+                    lu.set(row, j, val)
+                }
+            }
+        }
+        (lu, parity)
+    }
+
+    // ── Inverse ──────────────────────────────────────────────────────────────
+    pub fn inverse(self) -> Option<Matrix> {
+        assert(self.is_square())
+        let n = self.rows
+        let mut augmented = Matrix.new(n, 2 * n)
+        for i in 0..n {
+            for j in 0..n { augmented.set(i, j, self.get(i, j)) }
+            augmented.set(i, n + i, 1.0)
+        }
+
+        // Gauss-Jordan
+        for col in 0..n {
+            let mut max_row = col
+            for row in col+1..n {
+                if abs(augmented.get(row, col)) > abs(augmented.get(max_row, col)) { max_row = row }
+            }
+            if abs(augmented.get(max_row, col)) < 1e-12 { return none }
+
+            for j in 0..2*n {
+                let tmp = augmented.get(col, j)
+                augmented.set(col, j, augmented.get(max_row, j))
+                augmented.set(max_row, j, tmp)
+            }
+
+            let pivot = augmented.get(col, col)
+            for j in 0..2*n { augmented.set(col, j, augmented.get(col, j) / pivot) }
+
+            for row in 0..n {
+                if row == col { continue }
+                let factor = augmented.get(row, col)
+                for j in 0..2*n {
+                    let val = augmented.get(row, j) - factor * augmented.get(col, j)
+                    augmented.set(row, j, val)
+                }
+            }
+        }
+
+        let mut result = Matrix.new(n, n)
+        for i in 0..n {
+            for j in 0..n { result.set(i, j, augmented.get(i, n + j)) }
+        }
+        some(result)
+    }
+
+    // ── Eigenvalue (power iteration for dominant) ────────────────────────────
+    pub fn dominant_eigenvalue(self, iterations: usize) -> (f64, [f64]) {
+        assert(self.is_square())
+        let n = self.rows
+        let mut v = Matrix.from_slice(n, 1, &vec![1.0; n])
+        let mut eigenvalue = 0.0
+
+        for _ in 0..iterations {
+            let av = self.mul(&v)
+            eigenvalue = av.data.iter().map(|x| abs(*x)).fold(0.0, f64.max)
+            if eigenvalue < 1e-12 { break }
+            v = av.scale(1.0 / eigenvalue)
+        }
+        (eigenvalue, v.data)
+    }
+
+    // ── Row operations ───────────────────────────────────────────────────────
+    pub fn row(self, i: usize) -> [f64] { self.data[i*self.cols..(i+1)*self.cols].to_vec() }
+    pub fn col(self, j: usize) -> [f64] { (0..self.rows).map(|i| self.get(i, j)).collect() }
+
+    pub fn dot_product(a: &[f64], b: &[f64]) -> f64 {
+        a.iter().zip(b).map(|(x, y)| x * y).sum()
+    }
+
+    pub fn clone(self) -> Matrix {
+        Matrix { rows: self.rows, cols: self.cols, data: self.data.clone() }
+    }
+}
