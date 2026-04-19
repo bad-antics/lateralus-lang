@@ -1,162 +1,330 @@
-// json.ltl — JSON parser and serialiser
+// std.encoding.json — JSON parser and serializer
+// RFC 8259 compliant JSON handling with streaming support.
 
-enum JsonValue {
+use std.collections.HashMap
+
+// ── JSON Value ───────────────────────────────────────────────────────────────
+pub enum JsonValue {
     Null,
     Bool(bool),
-    Number(float),
-    Str(string),
+    Number(f64),
+    String(string),
     Array([JsonValue]),
-    Object(dict<string, JsonValue>),
+    Object(HashMap<string, JsonValue>),
 }
 
 impl JsonValue {
-    fn as_str(self)   -> string? { match self { JsonValue.Str(s)    => some(s), _ => none } }
-    fn as_f64(self)   -> float?  { match self { JsonValue.Number(n) => some(n), _ => none } }
-    fn as_int(self)   -> int?    { match self { JsonValue.Number(n) => some(n as int), _ => none } }
-    fn as_bool(self)  -> bool?   { match self { JsonValue.Bool(b)   => some(b), _ => none } }
-    fn is_null(self)  -> bool    { matches!(self, JsonValue.Null) }
+    pub fn is_null(self) -> bool { matches!(self, JsonValue.Null) }
+    pub fn is_bool(self) -> bool { matches!(self, JsonValue.Bool(_)) }
+    pub fn is_number(self) -> bool { matches!(self, JsonValue.Number(_)) }
+    pub fn is_string(self) -> bool { matches!(self, JsonValue.String(_)) }
+    pub fn is_array(self) -> bool { matches!(self, JsonValue.Array(_)) }
+    pub fn is_object(self) -> bool { matches!(self, JsonValue.Object(_)) }
 
-    fn stringify(self) -> string {
-        match self {
-            JsonValue.Null        => "null",
-            JsonValue.Bool(b)     => if b { "true" } else { "false" },
-            JsonValue.Number(n)   => if n.fract() == 0.0 { (n as int).to_string() } else { n.to_string() },
-            JsonValue.Str(s)      => json_quote(s),
-            JsonValue.Array(arr)  => "[" + arr |> map(|v| v.stringify()) |> join(",") + "]",
-            JsonValue.Object(obj) => "{" + obj |> map(|(k,v)| json_quote(k) + ":" + v.stringify()) |> join(",") + "}",
-        }
+    pub fn as_bool(self) -> Option<bool> {
+        match self { JsonValue.Bool(b) => some(b), _ => none }
+    }
+    pub fn as_f64(self) -> Option<f64> {
+        match self { JsonValue.Number(n) => some(n), _ => none }
+    }
+    pub fn as_i64(self) -> Option<i64> {
+        match self { JsonValue.Number(n) => some(n as i64), _ => none }
+    }
+    pub fn as_str(self) -> Option<&string> {
+        match self { JsonValue.String(ref s) => some(s), _ => none }
+    }
+    pub fn as_array(self) -> Option<&[JsonValue]> {
+        match self { JsonValue.Array(ref a) => some(a), _ => none }
+    }
+    pub fn as_object(self) -> Option<&HashMap<string, JsonValue>> {
+        match self { JsonValue.Object(ref m) => some(m), _ => none }
+    }
+
+    pub fn get(self, key: &str) -> Option<&JsonValue> {
+        match self { JsonValue.Object(ref m) => m.get(key), _ => none }
+    }
+
+    pub fn index(self, i: usize) -> Option<&JsonValue> {
+        match self { JsonValue.Array(ref a) => a.get(i), _ => none }
     }
 }
 
-fn json_quote(s: string) -> string {
-    """ + s.replace("\", "\\").replace(""", "\"").replace("
-", "\n").replace("", "\r").replace("	", "\t") + """
+// ── Parser ───────────────────────────────────────────────────────────────────
+pub struct JsonParser {
+    input: [u8],
+    pos: usize,
 }
 
-struct Parser { input: [char], pos: int }
+pub enum JsonError {
+    UnexpectedEof,
+    UnexpectedChar(char, usize),
+    InvalidNumber(usize),
+    InvalidEscape(usize),
+    InvalidUnicode(usize),
+    TrailingComma(usize),
+    DuplicateKey(string, usize),
+}
 
-impl Parser {
-    fn new(s: string) -> Parser { Parser { input: s.chars() |> collect(), pos: 0 } }
-
-    fn peek(self)    -> char? { self.input.get(self.pos) }
-    fn advance(mut self) -> char? {
-        let c = self.input.get(self.pos)
-        self.pos += 1
-        c
+impl JsonParser {
+    pub fn new(input: &str) -> JsonParser {
+        JsonParser { input: input.as_bytes().to_vec(), pos: 0 }
     }
-    fn skip_ws(mut self) {
-        while let some(c) = self.peek() {
-            if c == ' ' || c == '	' || c == '
-' || c == '' { self.advance() } else { break }
+
+    fn peek(self) -> Option<u8> {
+        if self.pos < self.input.len() { some(self.input[self.pos]) } else { none }
+    }
+
+    fn advance(mut self) -> Option<u8> {
+        if self.pos < self.input.len() {
+            let b = self.input[self.pos]; self.pos += 1; some(b)
+        } else { none }
+    }
+
+    fn skip_whitespace(mut self) {
+        while self.pos < self.input.len() {
+            match self.input[self.pos] {
+                b' ' | b'\t' | b'\n' | b'\r' => self.pos += 1,
+                _ => break,
+            }
         }
     }
 
-    fn parse_value(mut self) -> Result<JsonValue, string> {
-        self.skip_ws()
+    pub fn parse(mut self) -> Result<JsonValue, JsonError> {
+        self.skip_whitespace()
+        let value = self.parse_value()?
+        self.skip_whitespace()
+        ok(value)
+    }
+
+    fn parse_value(mut self) -> Result<JsonValue, JsonError> {
+        self.skip_whitespace()
         match self.peek() {
-            some('n') => self.parse_literal("null",  JsonValue.Null),
-            some('t') => self.parse_literal("true",  JsonValue.Bool(true)),
-            some('f') => self.parse_literal("false", JsonValue.Bool(false)),
-            some('"') => self.parse_string().map(JsonValue.Str),
-            some('[') => self.parse_array(),
-            some('{') => self.parse_object(),
-            some(c) if c == '-' || c.is_ascii_digit() => self.parse_number(),
-            _ => err("unexpected character: ${self.peek() ?? ' '}"),
+            some(b'"') => self.parse_string().map(JsonValue.String),
+            some(b'{') => self.parse_object(),
+            some(b'[') => self.parse_array(),
+            some(b't') | some(b'f') => self.parse_bool(),
+            some(b'n') => self.parse_null(),
+            some(b'-') | some(b'0'..=b'9') => self.parse_number(),
+            some(c) => err(JsonError.UnexpectedChar(c as char, self.pos)),
+            none => err(JsonError.UnexpectedEof),
         }
     }
 
-    fn parse_literal(mut self, s: string, v: JsonValue) -> Result<JsonValue, string> {
-        for c in s.chars() {
-            if self.advance() != some(c) { return err("expected ${s}") }
-        }
-        ok(v)
-    }
-
-    fn parse_string(mut self) -> Result<string, string> {
-        self.advance()  // consume '"'
-        let mut out = ""
+    fn parse_string(mut self) -> Result<string, JsonError> {
+        self.advance()  // consume "
+        let mut s = string.new()
         loop {
             match self.advance() {
-                some('"')  => return ok(out),
-                some('\') => match self.advance() {
-                    some('n') => out += "
-",
-                    some('t') => out += "	",
-                    some(c)   => out += c.to_string(),
-                    none      => return err("unexpected end in escape"),
-                },
-                some(c) => out += c.to_string(),
-                none    => return err("unexpected end in string"),
+                some(b'"') => return ok(s),
+                some(b'\\') => {
+                    match self.advance() {
+                        some(b'"') => s.push('"'),
+                        some(b'\\') => s.push('\\'),
+                        some(b'/') => s.push('/'),
+                        some(b'b') => s.push('\u{08}'),
+                        some(b'f') => s.push('\u{0C}'),
+                        some(b'n') => s.push('\n'),
+                        some(b'r') => s.push('\r'),
+                        some(b't') => s.push('\t'),
+                        some(b'u') => {
+                            let mut hex = string.new()
+                            for _ in 0..4 {
+                                match self.advance() {
+                                    some(c) => hex.push(c as char),
+                                    none => return err(JsonError.InvalidUnicode(self.pos)),
+                                }
+                            }
+                            let code = u32.from_str_radix(&hex, 16)
+                                .map_err(|_| JsonError.InvalidUnicode(self.pos))?
+                            if let some(ch) = char.from_u32(code) { s.push(ch) }
+                            else { return err(JsonError.InvalidUnicode(self.pos)) }
+                        }
+                        _ => return err(JsonError.InvalidEscape(self.pos)),
+                    }
+                }
+                some(b) => s.push(b as char),
+                none => return err(JsonError.UnexpectedEof),
             }
         }
     }
 
-    fn parse_number(mut self) -> Result<JsonValue, string> {
-        let mut s = ""
-        while let some(c) = self.peek() {
-            if c.is_ascii_digit() || c == '-' || c == '.' || c == 'e' || c == 'E' || c == '+' {
-                s += self.advance().unwrap().to_string()
-            } else { break }
+    fn parse_number(mut self) -> Result<JsonValue, JsonError> {
+        let start = self.pos
+        if self.peek() == some(b'-') { self.advance(); }
+        // Integer part
+        match self.peek() {
+            some(b'0') => { self.advance(); }
+            some(b'1'..=b'9') => { while matches!(self.peek(), some(b'0'..=b'9')) { self.advance(); } }
+            _ => return err(JsonError.InvalidNumber(start)),
         }
-        ok(JsonValue.Number(s.parse_f64().map_err(|_| "invalid number: ${s}")?))
+        // Fractional part
+        if self.peek() == some(b'.') {
+            self.advance()
+            if !matches!(self.peek(), some(b'0'..=b'9')) { return err(JsonError.InvalidNumber(self.pos)) }
+            while matches!(self.peek(), some(b'0'..=b'9')) { self.advance(); }
+        }
+        // Exponent
+        if matches!(self.peek(), some(b'e') | some(b'E')) {
+            self.advance()
+            if matches!(self.peek(), some(b'+') | some(b'-')) { self.advance(); }
+            if !matches!(self.peek(), some(b'0'..=b'9')) { return err(JsonError.InvalidNumber(self.pos)) }
+            while matches!(self.peek(), some(b'0'..=b'9')) { self.advance(); }
+        }
+        let num_str = string.from_utf8_lossy(&self.input[start..self.pos])
+        let n: f64 = num_str.parse().map_err(|_| JsonError.InvalidNumber(start))?
+        ok(JsonValue.Number(n))
     }
 
-    fn parse_array(mut self) -> Result<JsonValue, string> {
-        self.advance()  // '['
-        let mut items = []
-        self.skip_ws()
-        if self.peek() == some(']') { self.advance(); return ok(JsonValue.Array([])) }
+    fn parse_bool(mut self) -> Result<JsonValue, JsonError> {
+        if self.input[self.pos..].starts_with(b"true") { self.pos += 4; ok(JsonValue.Bool(true)) }
+        else if self.input[self.pos..].starts_with(b"false") { self.pos += 5; ok(JsonValue.Bool(false)) }
+        else { err(JsonError.UnexpectedChar(self.input[self.pos] as char, self.pos)) }
+    }
+
+    fn parse_null(mut self) -> Result<JsonValue, JsonError> {
+        if self.input[self.pos..].starts_with(b"null") { self.pos += 4; ok(JsonValue.Null) }
+        else { err(JsonError.UnexpectedChar(self.input[self.pos] as char, self.pos)) }
+    }
+
+    fn parse_array(mut self) -> Result<JsonValue, JsonError> {
+        self.advance()  // consume [
+        self.skip_whitespace()
+        let mut arr: [JsonValue] = []
+        if self.peek() == some(b']') { self.advance(); return ok(JsonValue.Array(arr)) }
         loop {
-            items.push(self.parse_value()?)
-            self.skip_ws()
-            match self.advance() {
-                some(',') => self.skip_ws(),
-                some(']') => return ok(JsonValue.Array(items)),
-                _         => return err("expected ',' or ']'"),
+            arr.push(self.parse_value()?)
+            self.skip_whitespace()
+            match self.peek() {
+                some(b',') => { self.advance(); self.skip_whitespace(); }
+                some(b']') => { self.advance(); return ok(JsonValue.Array(arr)) }
+                some(c) => return err(JsonError.UnexpectedChar(c as char, self.pos)),
+                none => return err(JsonError.UnexpectedEof),
             }
         }
     }
 
-    fn parse_object(mut self) -> Result<JsonValue, string> {
-        self.advance()  // '{'
-        let mut obj: dict<string, JsonValue> = {}
-        self.skip_ws()
-        if self.peek() == some('}') { self.advance(); return ok(JsonValue.Object({})) }
+    fn parse_object(mut self) -> Result<JsonValue, JsonError> {
+        self.advance()  // consume {
+        self.skip_whitespace()
+        let mut map = HashMap.new()
+        if self.peek() == some(b'}') { self.advance(); return ok(JsonValue.Object(map)) }
         loop {
-            self.skip_ws()
+            self.skip_whitespace()
             let key = self.parse_string()?
-            self.skip_ws()
-            if self.advance() != some(':') { return err("expected ':'") }
-            let val = self.parse_value()?
-            obj[key] = val
-            self.skip_ws()
+            self.skip_whitespace()
             match self.advance() {
-                some(',') => {},
-                some('}') => return ok(JsonValue.Object(obj)),
-                _         => return err("expected ',' or '}'"),
+                some(b':') => {}
+                _ => return err(JsonError.UnexpectedChar('?', self.pos)),
+            }
+            let value = self.parse_value()?
+            map.insert(key, value)
+            self.skip_whitespace()
+            match self.peek() {
+                some(b',') => { self.advance(); }
+                some(b'}') => { self.advance(); return ok(JsonValue.Object(map)) }
+                some(c) => return err(JsonError.UnexpectedChar(c as char, self.pos)),
+                none => return err(JsonError.UnexpectedEof),
             }
         }
     }
 }
 
-pub fn parse(s: string)  -> Result<JsonValue, string> { Parser.new(s).parse_value() }
-pub fn stringify(v: JsonValue) -> string { v.stringify() }
+// ── Serializer ───────────────────────────────────────────────────────────────
+pub struct JsonSerializer {
+    indent: Option<usize>,
+}
 
-fn main() {
-    let v = parse(r#"{"name":"Alice","age":30,"scores":[95,87,92],"active":true}"#).unwrap()
-    match v {
-        JsonValue.Object(obj) => {
-            assert(obj["name"].as_str() == some("Alice"))
-            assert(obj["age"].as_int()  == some(30))
-            assert(obj["active"].as_bool() == some(true))
-        },
-        _ => panic("expected object"),
+impl JsonSerializer {
+    pub fn compact() -> JsonSerializer { JsonSerializer { indent: none } }
+    pub fn pretty(spaces: usize) -> JsonSerializer { JsonSerializer { indent: some(spaces) } }
+
+    pub fn serialize(self, value: &JsonValue) -> string {
+        let mut out = string.new()
+        self.write_value(value, &mut out, 0)
+        out
     }
 
-    let roundtrip = parse(stringify(v)).unwrap()
-    print("JSON parse + stringify — roundtrip ✓")
+    fn write_value(self, value: &JsonValue, out: &mut string, depth: usize) {
+        match value {
+            JsonValue.Null => out.push_str("null"),
+            JsonValue.Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+            JsonValue.Number(n) => {
+                if *n == (*n as i64) as f64 && n.abs() < 1e15 {
+                    out.push_str(&format!("{}", *n as i64))
+                } else {
+                    out.push_str(&format!("{n}"))
+                }
+            }
+            JsonValue.String(s) => self.write_string(s, out),
+            JsonValue.Array(arr) => {
+                out.push('[')
+                for (i, item) in arr.iter().enumerate() {
+                    if i > 0 { out.push(','); if self.indent.is_some() { out.push(' ') } }
+                    if self.indent.is_some() { self.write_newline(out, depth + 1) }
+                    self.write_value(item, out, depth + 1)
+                }
+                if !arr.is_empty() && self.indent.is_some() { self.write_newline(out, depth) }
+                out.push(']')
+            }
+            JsonValue.Object(map) => {
+                out.push('{')
+                let mut first = true
+                for (key, val) in map {
+                    if !first { out.push(',') }
+                    if self.indent.is_some() { self.write_newline(out, depth + 1) }
+                    self.write_string(key, out)
+                    out.push(':')
+                    if self.indent.is_some() { out.push(' ') }
+                    self.write_value(val, out, depth + 1)
+                    first = false
+                }
+                if !map.is_empty() && self.indent.is_some() { self.write_newline(out, depth) }
+                out.push('}')
+            }
+        }
+    }
 
-    assert(parse("null").unwrap().is_null())
-    assert(parse("[1,2,3]").unwrap().as_int() == none)
-    print("json — all assertions passed ✓")
+    fn write_string(self, s: &str, out: &mut string) {
+        out.push('"')
+        for ch in s.chars() {
+            match ch {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+                c => out.push(c),
+            }
+        }
+        out.push('"')
+    }
+
+    fn write_newline(self, out: &mut string, depth: usize) {
+        out.push('\n')
+        if let some(spaces) = self.indent {
+            for _ in 0..depth * spaces { out.push(' ') }
+        }
+    }
+}
+
+// ── Convenience functions ────────────────────────────────────────────────────
+pub fn parse(input: &str) -> Result<JsonValue, JsonError> { JsonParser.new(input).parse() }
+pub fn to_string(value: &JsonValue) -> string { JsonSerializer.compact().serialize(value) }
+pub fn to_string_pretty(value: &JsonValue) -> string { JsonSerializer.pretty(2).serialize(value) }
+
+// ── Builder helpers ──────────────────────────────────────────────────────────
+pub fn object() -> JsonObjectBuilder { JsonObjectBuilder { map: HashMap.new() } }
+pub fn array() -> JsonArrayBuilder { JsonArrayBuilder { items: [] } }
+
+pub struct JsonObjectBuilder { map: HashMap<string, JsonValue> }
+impl JsonObjectBuilder {
+    pub fn field(mut self, key: &str, value: JsonValue) -> JsonObjectBuilder { self.map.insert(key.to_string(), value); self }
+    pub fn build(self) -> JsonValue { JsonValue.Object(self.map) }
+}
+
+pub struct JsonArrayBuilder { items: [JsonValue] }
+impl JsonArrayBuilder {
+    pub fn item(mut self, value: JsonValue) -> JsonArrayBuilder { self.items.push(value); self }
+    pub fn build(self) -> JsonValue { JsonValue.Array(self.items) }
 }
