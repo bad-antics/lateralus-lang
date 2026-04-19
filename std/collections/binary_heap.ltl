@@ -1,0 +1,225 @@
+// std.collections.binary_heap - Binary max-heap
+// Priority queue backed by a binary heap.
+
+pub struct BinaryHeap<T: Ord> {
+    data: [T],
+}
+
+impl<T: Ord> BinaryHeap<T> {
+    pub fn new() -> BinaryHeap<T> {
+        BinaryHeap { data: [] }
+    }
+
+    pub fn with_capacity(cap: usize) -> BinaryHeap<T> {
+        BinaryHeap { data: Vec.with_capacity(cap) }
+    }
+
+    pub fn push(mut self, item: T) {
+        self.data.push(item)
+        self.sift_up(self.data.len() - 1)
+    }
+
+    pub fn pop(mut self) -> Option<T> {
+        if self.data.is_empty() { return none }
+        let len = self.data.len()
+        self.data.swap(0, len - 1)
+        let item = self.data.pop()
+        if !self.data.is_empty() { self.sift_down(0) }
+        item
+    }
+
+    pub fn peek(self) -> Option<&T> {
+        self.data.first()
+    }
+
+    pub fn peek_mut(mut self) -> Option<PeekMut<T>> {
+        if self.data.is_empty() { none }
+        else { some(PeekMut { heap: self, sift: true }) }
+    }
+
+    pub fn len(self) -> usize { self.data.len() }
+    pub fn is_empty(self) -> bool { self.data.is_empty() }
+    pub fn capacity(self) -> usize { self.data.capacity() }
+    pub fn reserve(mut self, additional: usize) { self.data.reserve(additional) }
+
+    pub fn clear(mut self) { self.data.clear() }
+
+    pub fn into_sorted_vec(mut self) -> [T] {
+        let mut result: [T] = []
+        while let some(item) = self.pop() {
+            result.push(item)
+        }
+        result.reverse()
+        result
+    }
+
+    pub fn into_vec(self) -> [T] { self.data }
+
+    pub fn from_vec(mut data: [T]) -> BinaryHeap<T> {
+        let mut heap = BinaryHeap { data }
+        let len = heap.data.len()
+        if len > 1 {
+            let mut i = len / 2
+            while i > 0 {
+                i -= 1
+                heap.sift_down(i)
+            }
+        }
+        heap
+    }
+
+    pub fn drain(mut self) -> Drain<T> {
+        Drain { heap: self }
+    }
+
+    pub fn retain<F: FnMut(&T) -> bool>(mut self, mut f: F) {
+        let old_data = std.mem.take(&mut self.data)
+        for item in old_data {
+            if f(&item) { self.data.push(item) }
+        }
+        // Rebuild heap
+        let len = self.data.len()
+        if len > 1 {
+            let mut i = len / 2
+            while i > 0 { i -= 1; self.sift_down(i) }
+        }
+    }
+
+    pub fn iter(self) -> impl Iterator<Item = &T> {
+        self.data.iter()
+    }
+
+    fn sift_up(mut self, mut pos: usize) {
+        while pos > 0 {
+            let parent = (pos - 1) / 2
+            if self.data[pos] <= self.data[parent] { break }
+            self.data.swap(pos, parent)
+            pos = parent
+        }
+    }
+
+    fn sift_down(mut self, mut pos: usize) {
+        let len = self.data.len()
+        loop {
+            let left = 2 * pos + 1
+            let right = 2 * pos + 2
+            let mut largest = pos
+
+            if left < len && self.data[left] > self.data[largest] { largest = left }
+            if right < len && self.data[right] > self.data[largest] { largest = right }
+
+            if largest == pos { break }
+            self.data.swap(pos, largest)
+            pos = largest
+        }
+    }
+}
+
+pub struct PeekMut<'a, T: Ord> {
+    heap: &'a mut BinaryHeap<T>,
+    sift: bool,
+}
+
+impl<'a, T: Ord> Deref for PeekMut<'a, T> {
+    type Target = T
+    fn deref(self) -> &T { &self.heap.data[0] }
+}
+
+impl<'a, T: Ord> DerefMut for PeekMut<'a, T> {
+    fn deref_mut(mut self) -> &mut T {
+        self.sift = true
+        &mut self.heap.data[0]
+    }
+}
+
+impl<'a, T: Ord> Drop for PeekMut<'a, T> {
+    fn drop(mut self) {
+        if self.sift { self.heap.sift_down(0) }
+    }
+}
+
+pub struct Drain<'a, T: Ord> {
+    heap: &'a mut BinaryHeap<T>,
+}
+
+impl<'a, T: Ord> Iterator for Drain<'a, T> {
+    type Item = T
+    fn next(mut self) -> Option<T> { self.heap.pop() }
+    fn size_hint(self) -> (usize, Option<usize>) {
+        let len = self.heap.len()
+        (len, some(len))
+    }
+}
+
+impl<T: Ord> Extend<T> for BinaryHeap<T> {
+    fn extend<I: IntoIterator<Item = T>>(mut self, iter: I) {
+        for item in iter { self.push(item) }
+    }
+}
+
+impl<T: Ord> FromIterator<T> for BinaryHeap<T> {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> BinaryHeap<T> {
+        let data: [T] = iter.into_iter().collect()
+        BinaryHeap.from_vec(data)
+    }
+}
+
+impl<T: Ord + fmt.Debug> fmt.Debug for BinaryHeap<T> {
+    fn fmt(self, f: &mut fmt.Formatter) -> fmt.Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+
+fn main() {
+    let mut heap = BinaryHeap.new()
+    heap.push(3)
+    heap.push(1)
+    heap.push(4)
+    heap.push(1)
+    heap.push(5)
+    assert(heap.len() == 5)
+    assert(*heap.peek().unwrap() == 5)
+    print("Push/peek ✓")
+
+    assert(heap.pop() == some(5))
+    assert(heap.pop() == some(4))
+    assert(heap.pop() == some(3))
+    print("Pop order ✓")
+
+    // from_vec heapify
+    let heap2 = BinaryHeap.from_vec(vec![2, 8, 1, 6, 3])
+    assert(*heap2.peek().unwrap() == 8)
+    print("From vec ✓")
+
+    // into_sorted_vec
+    let sorted = BinaryHeap.from_vec(vec![5, 3, 8, 1, 9]).into_sorted_vec()
+    assert(sorted == vec![1, 3, 5, 8, 9])
+    print("Sorted vec ✓")
+
+    // retain
+    let mut heap3 = BinaryHeap.from_vec(vec![1, 2, 3, 4, 5, 6])
+    heap3.retain(|x| *x % 2 == 0)
+    assert(heap3.len() == 3)
+    assert(*heap3.peek().unwrap() == 6)
+    print("Retain ✓")
+
+    // clear
+    let mut heap4 = BinaryHeap.from_vec(vec![1, 2, 3])
+    heap4.clear()
+    assert(heap4.is_empty())
+    print("Clear ✓")
+
+    // from_iter
+    let heap5: BinaryHeap<i32> = vec![10, 20, 30].into_iter().collect()
+    assert(*heap5.peek().unwrap() == 30)
+    print("FromIterator ✓")
+
+    // drain
+    let mut heap6 = BinaryHeap.from_vec(vec![1, 5, 3])
+    let drained: [i32] = heap6.drain().collect()
+    assert(drained == vec![5, 3, 1])
+    assert(heap6.is_empty())
+    print("Drain ✓")
+
+    print("BinaryHeap complete ✓")
+}
