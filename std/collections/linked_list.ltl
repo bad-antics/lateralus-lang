@@ -1,0 +1,272 @@
+// std.collections.linked_list - Doubly-linked list
+// O(1) push/pop at both ends, O(n) indexing.
+
+use std.ptr.NonNull
+use std.marker.PhantomData
+
+struct Node<T> {
+    elem: T,
+    prev: Option<NonNull<Node<T>>>,
+    next: Option<NonNull<Node<T>>>,
+}
+
+pub struct LinkedList<T> {
+    head: Option<NonNull<Node<T>>>,
+    tail: Option<NonNull<Node<T>>>,
+    len: usize,
+    _marker: PhantomData<Box<Node<T>>>,
+}
+
+impl<T> LinkedList<T> {
+    pub fn new() -> LinkedList<T> {
+        LinkedList { head: none, tail: none, len: 0, _marker: PhantomData }
+    }
+
+    pub fn len(self) -> usize { self.len }
+    pub fn is_empty(self) -> bool { self.len == 0 }
+
+    pub fn push_front(mut self, elem: T) {
+        let mut node = Box.new(Node { elem, prev: none, next: self.head })
+        let node_ptr = NonNull.from(Box.leak(node))
+        match self.head {
+            some(mut head) => unsafe { head.as_mut().prev = some(node_ptr) },
+            none => self.tail = some(node_ptr),
+        }
+        self.head = some(node_ptr)
+        self.len += 1
+    }
+
+    pub fn push_back(mut self, elem: T) {
+        let node = Box.new(Node { elem, prev: self.tail, next: none })
+        let node_ptr = NonNull.from(Box.leak(node))
+        match self.tail {
+            some(mut tail) => unsafe { tail.as_mut().next = some(node_ptr) },
+            none => self.head = some(node_ptr),
+        }
+        self.tail = some(node_ptr)
+        self.len += 1
+    }
+
+    pub fn pop_front(mut self) -> Option<T> {
+        self.head.map(|node_ptr| unsafe {
+            let node = Box.from_raw(node_ptr.as_ptr())
+            self.head = node.next
+            match self.head {
+                some(mut new_head) => new_head.as_mut().prev = none,
+                none => self.tail = none,
+            }
+            self.len -= 1
+            node.elem
+        })
+    }
+
+    pub fn pop_back(mut self) -> Option<T> {
+        self.tail.map(|node_ptr| unsafe {
+            let node = Box.from_raw(node_ptr.as_ptr())
+            self.tail = node.prev
+            match self.tail {
+                some(mut new_tail) => new_tail.as_mut().next = none,
+                none => self.head = none,
+            }
+            self.len -= 1
+            node.elem
+        })
+    }
+
+    pub fn front(self) -> Option<&T> {
+        self.head.map(|ptr| unsafe { &(*ptr.as_ptr()).elem })
+    }
+
+    pub fn front_mut(mut self) -> Option<&mut T> {
+        self.head.map(|ptr| unsafe { &mut (*ptr.as_ptr()).elem })
+    }
+
+    pub fn back(self) -> Option<&T> {
+        self.tail.map(|ptr| unsafe { &(*ptr.as_ptr()).elem })
+    }
+
+    pub fn back_mut(mut self) -> Option<&mut T> {
+        self.tail.map(|ptr| unsafe { &mut (*ptr.as_ptr()).elem })
+    }
+
+    pub fn clear(mut self) {
+        while self.pop_front().is_some() {}
+    }
+
+    pub fn contains(self, x: &T) -> bool where T: PartialEq {
+        self.iter().any(|elem| elem == x)
+    }
+
+    pub fn iter(self) -> Iter<T> {
+        Iter { current: self.head, len: self.len, _marker: PhantomData }
+    }
+
+    pub fn iter_mut(mut self) -> IterMut<T> {
+        IterMut { current: self.head, len: self.len, _marker: PhantomData }
+    }
+
+    pub fn append(mut self, other: &mut LinkedList<T>) {
+        if other.is_empty() { return }
+        match self.tail {
+            some(mut tail) => {
+                unsafe { tail.as_mut().next = other.head }
+                if let some(mut other_head) = other.head {
+                    unsafe { other_head.as_mut().prev = some(tail) }
+                }
+            },
+            none => self.head = other.head,
+        }
+        self.tail = other.tail
+        self.len += other.len
+        other.head = none
+        other.tail = none
+        other.len = 0
+    }
+
+    pub fn split_off(mut self, at: usize) -> LinkedList<T> {
+        assert(at <= self.len, "index out of bounds")
+        if at == self.len { return LinkedList.new() }
+        if at == 0 {
+            let mut result = LinkedList.new()
+            std.mem.swap(self, &mut result)
+            return result
+        }
+        let mut current = self.head
+        for _ in 0..at { current = unsafe { current.unwrap().as_ref().next } }
+        let split_node = current.unwrap()
+        let mut prev = unsafe { split_node.as_ref().prev }
+        unsafe {
+            if let some(mut p) = prev { p.as_mut().next = none }
+            (*split_node.as_ptr()).prev = none
+        }
+        let new_tail = prev
+        let new_len = self.len - at
+        let result = LinkedList { head: current, tail: self.tail, len: new_len, _marker: PhantomData }
+        self.tail = new_tail
+        self.len = at
+        result
+    }
+}
+
+impl<T> Drop for LinkedList<T> {
+    fn drop(mut self) { self.clear() }
+}
+
+pub struct Iter<'a, T> {
+    current: Option<NonNull<Node<T>>>,
+    len: usize,
+    _marker: PhantomData<&'a T>,
+}
+
+impl<'a, T> Iterator for Iter<'a, T> {
+    type Item = &'a T
+    fn next(mut self) -> Option<&'a T> {
+        self.current.map(|ptr| unsafe {
+            let node = &*ptr.as_ptr()
+            self.current = node.next
+            self.len -= 1
+            &node.elem
+        })
+    }
+    fn size_hint(self) -> (usize, Option<usize>) { (self.len, some(self.len)) }
+}
+
+pub struct IterMut<'a, T> {
+    current: Option<NonNull<Node<T>>>,
+    len: usize,
+    _marker: PhantomData<&'a mut T>,
+}
+
+impl<'a, T> Iterator for IterMut<'a, T> {
+    type Item = &'a mut T
+    fn next(mut self) -> Option<&'a mut T> {
+        self.current.map(|ptr| unsafe {
+            let node = &mut *ptr.as_ptr()
+            self.current = node.next
+            self.len -= 1
+            &mut node.elem
+        })
+    }
+}
+
+impl<T: PartialEq> PartialEq for LinkedList<T> {
+    fn eq(self, other: &LinkedList<T>) -> bool {
+        self.len == other.len && self.iter().zip(other.iter()).all(|(a, b)| a == b)
+    }
+}
+
+impl<T: fmt.Debug> fmt.Debug for LinkedList<T> {
+    fn fmt(self, f: &mut fmt.Formatter) -> fmt.Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+
+impl<T> FromIterator<T> for LinkedList<T> {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> LinkedList<T> {
+        let mut list = LinkedList.new()
+        for item in iter { list.push_back(item) }
+        list
+    }
+}
+
+fn main() {
+    let mut list = LinkedList.new()
+    list.push_back(1)
+    list.push_back(2)
+    list.push_back(3)
+    assert(list.len() == 3)
+    assert(*list.front().unwrap() == 1)
+    assert(*list.back().unwrap() == 3)
+    print("Push back ✓")
+
+    list.push_front(0)
+    assert(*list.front().unwrap() == 0)
+    assert(list.len() == 4)
+    print("Push front ✓")
+
+    assert(list.pop_front() == some(0))
+    assert(list.pop_back() == some(3))
+    assert(list.len() == 2)
+    print("Pop front/back ✓")
+
+    assert(list.contains(&1))
+    assert(!list.contains(&99))
+    print("Contains ✓")
+
+    let items: [&i32] = list.iter().collect()
+    assert(*items[0] == 1)
+    assert(*items[1] == 2)
+    print("Iter ✓")
+
+    // Append
+    let mut a = LinkedList.new()
+    a.push_back(1); a.push_back(2)
+    let mut b = LinkedList.new()
+    b.push_back(3); b.push_back(4)
+    a.append(&mut b)
+    assert(a.len() == 4)
+    assert(b.is_empty())
+    print("Append ✓")
+
+    // Split
+    let mut c = LinkedList.new()
+    for i in 0..5 { c.push_back(i) }
+    let d = c.split_off(3)
+    assert(c.len() == 3)
+    assert(d.len() == 2)
+    print("Split off ✓")
+
+    // FromIterator
+    let list2: LinkedList<i32> = vec![10, 20, 30].into_iter().collect()
+    assert(list2.len() == 3)
+    print("FromIterator ✓")
+
+    // Clear
+    let mut list3 = LinkedList.new()
+    list3.push_back(1); list3.push_back(2)
+    list3.clear()
+    assert(list3.is_empty())
+    print("Clear ✓")
+
+    print("LinkedList complete ✓")
+}
