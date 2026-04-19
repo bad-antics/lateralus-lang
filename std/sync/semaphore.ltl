@@ -1,0 +1,209 @@
+// std.sync.semaphore — Counting semaphore and async semaphore
+// Limits concurrent access to a resource pool.
+
+use std.sync.{Mutex, Condvar, Arc}
+use std.collections.VecDeque
+
+// ── Counting Semaphore ───────────────────────────────────────────────────────
+pub struct Semaphore {
+    inner: Arc<SemaphoreInner>,
+}
+
+struct SemaphoreInner {
+    state: Mutex<SemaphoreState>,
+    cond: Condvar,
+}
+
+struct SemaphoreState {
+    permits: usize,
+    max_permits: usize,
+    waiters: usize,
+}
+
+impl Semaphore {
+    pub fn new(permits: usize) -> Semaphore {
+        Semaphore {
+            inner: Arc.new(SemaphoreInner {
+                state: Mutex.new(SemaphoreState { permits, max_permits: permits, waiters: 0 }),
+                cond: Condvar.new(),
+            }),
+        }
+    }
+
+    pub fn acquire(self) {
+        let mut guard = self.inner.state.lock().unwrap()
+        guard.waiters += 1
+        while guard.permits == 0 {
+            guard = self.inner.cond.wait(guard).unwrap()
+        }
+        guard.waiters -= 1
+        guard.permits -= 1
+    }
+
+    pub fn try_acquire(self) -> bool {
+        let mut guard = self.inner.state.lock().unwrap()
+        if guard.permits > 0 { guard.permits -= 1; true }
+        else { false }
+    }
+
+    pub fn acquire_many(self, n: usize) {
+        let mut guard = self.inner.state.lock().unwrap()
+        guard.waiters += 1
+        while guard.permits < n {
+            guard = self.inner.cond.wait(guard).unwrap()
+        }
+        guard.waiters -= 1
+        guard.permits -= n
+    }
+
+    pub fn release(self) {
+        let mut guard = self.inner.state.lock().unwrap()
+        guard.permits += 1
+        assert(guard.permits <= guard.max_permits, "released more permits than allowed")
+        self.inner.cond.notify_one()
+    }
+
+    pub fn release_many(self, n: usize) {
+        let mut guard = self.inner.state.lock().unwrap()
+        guard.permits += n
+        assert(guard.permits <= guard.max_permits)
+        self.inner.cond.notify_all()
+    }
+
+    pub fn available_permits(self) -> usize {
+        self.inner.state.lock().unwrap().permits
+    }
+
+    pub fn waiter_count(self) -> usize {
+        self.inner.state.lock().unwrap().waiters
+    }
+
+    pub fn guard(self) -> SemaphoreGuard {
+        self.acquire()
+        SemaphoreGuard { semaphore: self.clone() }
+    }
+}
+
+impl Clone for Semaphore {
+    fn clone(self) -> Semaphore { Semaphore { inner: Arc.clone(&self.inner) } }
+}
+
+pub struct SemaphoreGuard {
+    semaphore: Semaphore,
+}
+
+impl Drop for SemaphoreGuard {
+    fn drop(self) { self.semaphore.release() }
+}
+
+// ── Binary Semaphore (Mutex-like) ────────────────────────────────────────────
+pub struct BinarySemaphore {
+    inner: Semaphore,
+}
+
+impl BinarySemaphore {
+    pub fn new() -> BinarySemaphore { BinarySemaphore { inner: Semaphore.new(1) } }
+    pub fn new_acquired() -> BinarySemaphore {
+        BinarySemaphore { inner: Semaphore.new(0) }
+    }
+    pub fn acquire(self) { self.inner.acquire() }
+    pub fn release(self) { self.inner.release() }
+    pub fn try_acquire(self) -> bool { self.inner.try_acquire() }
+}
+
+// ── Async Semaphore ──────────────────────────────────────────────────────────
+pub struct AsyncSemaphore {
+    permits: usize,
+    max_permits: usize,
+    waiters: VecDeque<Waker>,
+}
+
+struct Waker {
+    wake_fn: Box<dyn FnOnce() + Send>,
+}
+
+impl AsyncSemaphore {
+    pub fn new(permits: usize) -> AsyncSemaphore {
+        AsyncSemaphore { permits, max_permits: permits, waiters: VecDeque.new() }
+    }
+
+    pub async fn acquire(mut self) -> AsyncSemaphoreGuard {
+        while self.permits == 0 {
+            // Suspend until a permit is available
+            let (tx, rx) = std.sync.channel.oneshot()
+            self.waiters.push_back(Waker { wake_fn: box move || { tx.send(()).unwrap() } })
+            rx.recv_async().await.unwrap()
+        }
+        self.permits -= 1
+        AsyncSemaphoreGuard { semaphore: self }
+    }
+
+    pub fn try_acquire(mut self) -> Option<AsyncSemaphoreGuard> {
+        if self.permits > 0 {
+            self.permits -= 1
+            some(AsyncSemaphoreGuard { semaphore: self })
+        } else { none }
+    }
+
+    fn release_one(mut self) {
+        self.permits += 1
+        if let some(waker) = self.waiters.pop_front() {
+            (waker.wake_fn)()
+        }
+    }
+
+    pub fn available(self) -> usize { self.permits }
+}
+
+pub struct AsyncSemaphoreGuard<'a> {
+    semaphore: &'a mut AsyncSemaphore,
+}
+
+impl<'a> Drop for AsyncSemaphoreGuard<'a> {
+    fn drop(self) { self.semaphore.release_one() }
+}
+
+// ── Rate Limiter (built on semaphore) ────────────────────────────────────────
+pub struct RateLimiter {
+    semaphore: Semaphore,
+    window_ms: u64,
+    refill_amount: usize,
+}
+
+impl RateLimiter {
+    pub fn new(max_requests: usize, window_ms: u64) -> RateLimiter {
+        RateLimiter {
+            semaphore: Semaphore.new(max_requests),
+            window_ms,
+            refill_amount: max_requests,
+        }
+    }
+
+    pub fn try_acquire(self) -> bool { self.semaphore.try_acquire() }
+
+    pub fn acquire(self) { self.semaphore.acquire() }
+
+    pub fn refill(self) { self.semaphore.release_many(self.refill_amount) }
+
+    pub fn remaining(self) -> usize { self.semaphore.available_permits() }
+}
+
+// ── Read-Write Semaphore ─────────────────────────────────────────────────────
+pub struct RwSemaphore {
+    inner: Semaphore,
+    max_readers: usize,
+}
+
+impl RwSemaphore {
+    pub fn new(max_readers: usize) -> RwSemaphore {
+        RwSemaphore { inner: Semaphore.new(max_readers), max_readers }
+    }
+
+    pub fn acquire_read(self) { self.inner.acquire() }
+    pub fn release_read(self) { self.inner.release() }
+
+    pub fn acquire_write(self) { self.inner.acquire_many(self.max_readers) }
+    pub fn release_write(self) { self.inner.release_many(self.max_readers) }
+
+    pub fn try_acquire_read(self) -> bool { self.inner.try_acquire() }
+}
