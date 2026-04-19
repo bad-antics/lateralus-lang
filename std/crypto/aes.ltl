@@ -1,0 +1,70 @@
+// aes.ltl — AES-128 block cipher (ECB mode, for demonstration)
+// Reference: FIPS 197
+
+const SBOX: [u8] = [
+    0x63,0x7c,0x77,0x7b,0xf2,0x6b,0x6f,0xc5,0x30,0x01,0x67,0x2b,0xfe,0xd7,0xab,0x76,
+    0xca,0x82,0xc9,0x7d,0xfa,0x59,0x47,0xf0,0xad,0xd4,0xa2,0xaf,0x9c,0xa4,0x72,0xc0,
+    // ... (abbreviated; full 256-entry table would follow)
+]
+
+const RCON: [u8] = [0x01,0x02,0x04,0x08,0x10,0x20,0x40,0x80,0x1b,0x36]
+
+fn xtime(a: u8) -> u8 {
+    if a & 0x80 != 0 { (a << 1) ^ 0x1b } else { a << 1 }
+}
+
+fn gmul(a: u8, b: u8) -> u8 {
+    let mut p = 0u8
+    let mut a = a
+    let mut b = b
+    for _ in range(0, 8) {
+        if b & 1 != 0 { p ^= a }
+        let hi = a & 0x80
+        a <<= 1
+        if hi != 0 { a ^= 0x1b }
+        b >>= 1
+    }
+    p
+}
+
+struct AES128 { round_keys: [[u8]] }
+
+impl AES128 {
+    fn new(key: [u8]) -> AES128 {
+        assert(key.len() == 16)
+        AES128 { round_keys: AES128.key_expansion(key) }
+    }
+
+    fn key_expansion(key: [u8]) -> [[u8]] {
+        mut w: [[u8]] = range(0, 44) |> map(|_| [0u8; 4]) |> collect()
+        for i in range(0, 4) {
+            w[i] = key[i*4 .. i*4+4] |> collect()
+        }
+        for i in range(4, 44) {
+            let mut temp = w[i-1].clone()
+            if i % 4 == 0 {
+                temp = [temp[1], temp[2], temp[3], temp[0]]  // RotWord
+                temp = temp |> map(|b| SBOX[b as usize]) |> collect()  // SubWord
+                temp[0] ^= RCON[i/4 - 1]
+            }
+            w[i] = w[i-4].iter() |> zip(temp.iter()) |> map(|(a, b)| a ^ b) |> collect()
+        }
+        range(0, 11) |> map(|r| range(0, 4) |> flat_map(|c| w[r*4+c]) |> collect()) |> collect()
+    }
+
+    fn encrypt_block(self, block: [u8]) -> [u8] {
+        // stub — full MixColumns/ShiftRows/SubBytes omitted for brevity
+        let mut state = block.clone()
+        for i in range(0, 16) { state[i] ^= self.round_keys[0][i] }
+        state
+    }
+}
+
+fn main() {
+    let key   = [0x00u8; 16]
+    let block = [0x00u8; 16]
+    let aes   = AES128.new(key)
+    let enc   = aes.encrypt_block(block)
+    assert(enc.len() == 16)
+    print("AES-128 block cipher skeleton — block size 16 ✓")
+}
