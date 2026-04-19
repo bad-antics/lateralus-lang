@@ -1,0 +1,162 @@
+// json.ltl — JSON parser and serialiser
+
+enum JsonValue {
+    Null,
+    Bool(bool),
+    Number(float),
+    Str(string),
+    Array([JsonValue]),
+    Object(dict<string, JsonValue>),
+}
+
+impl JsonValue {
+    fn as_str(self)   -> string? { match self { JsonValue.Str(s)    => some(s), _ => none } }
+    fn as_f64(self)   -> float?  { match self { JsonValue.Number(n) => some(n), _ => none } }
+    fn as_int(self)   -> int?    { match self { JsonValue.Number(n) => some(n as int), _ => none } }
+    fn as_bool(self)  -> bool?   { match self { JsonValue.Bool(b)   => some(b), _ => none } }
+    fn is_null(self)  -> bool    { matches!(self, JsonValue.Null) }
+
+    fn stringify(self) -> string {
+        match self {
+            JsonValue.Null        => "null",
+            JsonValue.Bool(b)     => if b { "true" } else { "false" },
+            JsonValue.Number(n)   => if n.fract() == 0.0 { (n as int).to_string() } else { n.to_string() },
+            JsonValue.Str(s)      => json_quote(s),
+            JsonValue.Array(arr)  => "[" + arr |> map(|v| v.stringify()) |> join(",") + "]",
+            JsonValue.Object(obj) => "{" + obj |> map(|(k,v)| json_quote(k) + ":" + v.stringify()) |> join(",") + "}",
+        }
+    }
+}
+
+fn json_quote(s: string) -> string {
+    """ + s.replace("\", "\\").replace(""", "\"").replace("
+", "\n").replace("", "\r").replace("	", "\t") + """
+}
+
+struct Parser { input: [char], pos: int }
+
+impl Parser {
+    fn new(s: string) -> Parser { Parser { input: s.chars() |> collect(), pos: 0 } }
+
+    fn peek(self)    -> char? { self.input.get(self.pos) }
+    fn advance(mut self) -> char? {
+        let c = self.input.get(self.pos)
+        self.pos += 1
+        c
+    }
+    fn skip_ws(mut self) {
+        while let some(c) = self.peek() {
+            if c == ' ' || c == '	' || c == '
+' || c == '' { self.advance() } else { break }
+        }
+    }
+
+    fn parse_value(mut self) -> Result<JsonValue, string> {
+        self.skip_ws()
+        match self.peek() {
+            some('n') => self.parse_literal("null",  JsonValue.Null),
+            some('t') => self.parse_literal("true",  JsonValue.Bool(true)),
+            some('f') => self.parse_literal("false", JsonValue.Bool(false)),
+            some('"') => self.parse_string().map(JsonValue.Str),
+            some('[') => self.parse_array(),
+            some('{') => self.parse_object(),
+            some(c) if c == '-' || c.is_ascii_digit() => self.parse_number(),
+            _ => err("unexpected character: ${self.peek() ?? ' '}"),
+        }
+    }
+
+    fn parse_literal(mut self, s: string, v: JsonValue) -> Result<JsonValue, string> {
+        for c in s.chars() {
+            if self.advance() != some(c) { return err("expected ${s}") }
+        }
+        ok(v)
+    }
+
+    fn parse_string(mut self) -> Result<string, string> {
+        self.advance()  // consume '"'
+        let mut out = ""
+        loop {
+            match self.advance() {
+                some('"')  => return ok(out),
+                some('\') => match self.advance() {
+                    some('n') => out += "
+",
+                    some('t') => out += "	",
+                    some(c)   => out += c.to_string(),
+                    none      => return err("unexpected end in escape"),
+                },
+                some(c) => out += c.to_string(),
+                none    => return err("unexpected end in string"),
+            }
+        }
+    }
+
+    fn parse_number(mut self) -> Result<JsonValue, string> {
+        let mut s = ""
+        while let some(c) = self.peek() {
+            if c.is_ascii_digit() || c == '-' || c == '.' || c == 'e' || c == 'E' || c == '+' {
+                s += self.advance().unwrap().to_string()
+            } else { break }
+        }
+        ok(JsonValue.Number(s.parse_f64().map_err(|_| "invalid number: ${s}")?))
+    }
+
+    fn parse_array(mut self) -> Result<JsonValue, string> {
+        self.advance()  // '['
+        let mut items = []
+        self.skip_ws()
+        if self.peek() == some(']') { self.advance(); return ok(JsonValue.Array([])) }
+        loop {
+            items.push(self.parse_value()?)
+            self.skip_ws()
+            match self.advance() {
+                some(',') => self.skip_ws(),
+                some(']') => return ok(JsonValue.Array(items)),
+                _         => return err("expected ',' or ']'"),
+            }
+        }
+    }
+
+    fn parse_object(mut self) -> Result<JsonValue, string> {
+        self.advance()  // '{'
+        let mut obj: dict<string, JsonValue> = {}
+        self.skip_ws()
+        if self.peek() == some('}') { self.advance(); return ok(JsonValue.Object({})) }
+        loop {
+            self.skip_ws()
+            let key = self.parse_string()?
+            self.skip_ws()
+            if self.advance() != some(':') { return err("expected ':'") }
+            let val = self.parse_value()?
+            obj[key] = val
+            self.skip_ws()
+            match self.advance() {
+                some(',') => {},
+                some('}') => return ok(JsonValue.Object(obj)),
+                _         => return err("expected ',' or '}'"),
+            }
+        }
+    }
+}
+
+pub fn parse(s: string)  -> Result<JsonValue, string> { Parser.new(s).parse_value() }
+pub fn stringify(v: JsonValue) -> string { v.stringify() }
+
+fn main() {
+    let v = parse(r#"{"name":"Alice","age":30,"scores":[95,87,92],"active":true}"#).unwrap()
+    match v {
+        JsonValue.Object(obj) => {
+            assert(obj["name"].as_str() == some("Alice"))
+            assert(obj["age"].as_int()  == some(30))
+            assert(obj["active"].as_bool() == some(true))
+        },
+        _ => panic("expected object"),
+    }
+
+    let roundtrip = parse(stringify(v)).unwrap()
+    print("JSON parse + stringify — roundtrip ✓")
+
+    assert(parse("null").unwrap().is_null())
+    assert(parse("[1,2,3]").unwrap().as_int() == none)
+    print("json — all assertions passed ✓")
+}
