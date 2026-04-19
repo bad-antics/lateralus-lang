@@ -1,0 +1,273 @@
+// std.ffi.c_str - C-compatible string types
+// Safe wrappers around null-terminated C strings for FFI.
+
+use std.ptr
+use std.mem
+use std.alloc.{alloc, dealloc, Layout}
+
+/// Borrowed reference to a null-terminated C string (like &CStr).
+pub struct CStr {
+    inner: *const u8,
+}
+
+/// Owned null-terminated C string (like CString).
+pub struct CString {
+    inner: *mut u8,
+    len: usize,  // length excluding null terminator
+}
+
+#[derive(Debug)]
+pub enum CStringError {
+    NulError(usize),       // interior null byte at position
+    NotNulTerminated,
+    InvalidUtf8,
+}
+
+impl CStr {
+    /// Create from a raw C pointer. UNSAFE: pointer must be valid, null-terminated.
+    pub unsafe fn from_ptr(ptr: *const u8) -> &CStr {
+        &CStr { inner: ptr }
+    }
+
+    /// Create from a byte slice with null terminator.
+    pub fn from_bytes_with_nul(bytes: &[u8]) -> Result<&CStr, CStringError> {
+        if bytes.is_empty() || bytes[bytes.len() - 1] != 0 {
+            return err(CStringError.NotNulTerminated)
+        }
+        // Check no interior null bytes
+        for i in 0..bytes.len() - 1 {
+            if bytes[i] == 0 {
+                return err(CStringError.NulError(i))
+            }
+        }
+        ok(unsafe { &CStr { inner: bytes.as_ptr() } })
+    }
+
+    pub fn as_ptr(self) -> *const u8 { self.inner }
+
+    pub fn to_bytes(self) -> &[u8] {
+        let len = self.len()
+        unsafe { std.slice.from_raw_parts(self.inner, len) }
+    }
+
+    pub fn to_bytes_with_nul(self) -> &[u8] {
+        let len = self.len() + 1
+        unsafe { std.slice.from_raw_parts(self.inner, len) }
+    }
+
+    pub fn to_str(self) -> Result<&str, CStringError> {
+        let bytes = self.to_bytes()
+        std.str.from_utf8(bytes).map_err(|_| CStringError.InvalidUtf8)
+    }
+
+    pub fn len(self) -> usize {
+        let mut i = 0
+        unsafe {
+            while *self.inner.add(i) != 0 { i += 1 }
+        }
+        i
+    }
+
+    pub fn is_empty(self) -> bool { self.len() == 0 }
+
+    pub fn to_string_lossy(self) -> string {
+        match self.to_str() {
+            ok(s) => s.to_string(),
+            err(_) => {
+                let bytes = self.to_bytes()
+                let mut s = string.new()
+                for b in bytes {
+                    if *b < 128 { s.push(*b as char) }
+                    else { s.push('\u{FFFD}') }
+                }
+                s
+            }
+        }
+    }
+}
+
+impl CString {
+    /// Create from a Lateralus string. Adds null terminator.
+    pub fn new(s: &str) -> Result<CString, CStringError> {
+        // Check for interior null bytes
+        for (i, b) in s.bytes().enumerate() {
+            if b == 0 { return err(CStringError.NulError(i)) }
+        }
+        let len = s.len()
+        let layout = Layout.from_size_align(len + 1, 1).unwrap()
+        let ptr = unsafe { alloc(layout) as *mut u8 }
+        if ptr.is_null() { panic!("allocation failed") }
+        unsafe {
+            ptr.copy_from(s.as_ptr(), len)
+            *ptr.add(len) = 0  // null terminator
+        }
+        ok(CString { inner: ptr, len })
+    }
+
+    /// Create from raw bytes (no interior nulls allowed).
+    pub fn from_vec(mut bytes: [u8]) -> Result<CString, CStringError> {
+        for (i, b) in bytes.iter().enumerate() {
+            if *b == 0 { return err(CStringError.NulError(i)) }
+        }
+        bytes.push(0)
+        let len = bytes.len() - 1
+        let layout = Layout.from_size_align(bytes.len(), 1).unwrap()
+        let ptr = unsafe { alloc(layout) as *mut u8 }
+        unsafe { ptr.copy_from(bytes.as_ptr(), bytes.len()) }
+        ok(CString { inner: ptr, len })
+    }
+
+    /// Consume and return raw pointer. Caller must free.
+    pub fn into_raw(self) -> *mut u8 {
+        let ptr = self.inner
+        mem.forget(self)
+        ptr
+    }
+
+    /// Reconstruct from raw pointer. UNSAFE.
+    pub unsafe fn from_raw(ptr: *mut u8) -> CString {
+        let mut len = 0
+        while *ptr.add(len) != 0 { len += 1 }
+        CString { inner: ptr, len }
+    }
+
+    pub fn as_c_str(self) -> &CStr {
+        unsafe { CStr.from_ptr(self.inner as *const u8) }
+    }
+
+    pub fn as_ptr(self) -> *const u8 { self.inner as *const u8 }
+    pub fn len(self) -> usize { self.len }
+    pub fn is_empty(self) -> bool { self.len == 0 }
+
+    pub fn as_bytes(self) -> &[u8] {
+        unsafe { std.slice.from_raw_parts(self.inner as *const u8, self.len) }
+    }
+
+    pub fn as_bytes_with_nul(self) -> &[u8] {
+        unsafe { std.slice.from_raw_parts(self.inner as *const u8, self.len + 1) }
+    }
+
+    pub fn to_str(self) -> Result<&str, CStringError> {
+        self.as_c_str().to_str()
+    }
+
+    pub fn to_string(self) -> string {
+        self.as_c_str().to_string_lossy()
+    }
+}
+
+impl Drop for CString {
+    fn drop(mut self) {
+        if !self.inner.is_null() {
+            let layout = Layout.from_size_align(self.len + 1, 1).unwrap()
+            unsafe { dealloc(self.inner as *mut u8, layout) }
+        }
+    }
+}
+
+impl Clone for CString {
+    fn clone(self) -> CString {
+        CString.new(&self.to_string()).unwrap()
+    }
+}
+
+// Helper: convert &str literal to CStr at compile time
+macro_rules! c_str {
+    ($s:literal) => {
+        CStr.from_bytes_with_nul(concat!($s, "\0").as_bytes()).unwrap()
+    }
+}
+
+fn main() {
+    // CString creation
+    let cs = CString.new("hello").unwrap()
+    assert(cs.len() == 5)
+    assert(!cs.is_empty())
+    print("CString new ✓")
+
+    // As bytes
+    assert(cs.as_bytes() == [104, 101, 108, 108, 111])
+    assert(cs.as_bytes_with_nul().len() == 6)
+    assert(cs.as_bytes_with_nul()[5] == 0)
+    print("CString bytes ✓")
+
+    // To string
+    assert(cs.to_string() == "hello")
+    print("CString to_string ✓")
+
+    // To str
+    assert(cs.to_str().unwrap() == "hello")
+    print("CString to_str ✓")
+
+    // Interior null rejected
+    let bad = CString.new("hel\0lo")
+    assert(bad.is_err())
+    match bad.unwrap_err() {
+        CStringError.NulError(pos) => assert(pos == 3),
+        _ => panic!("wrong error"),
+    }
+    print("Interior null rejected ✓")
+
+    // CStr from bytes
+    let bytes: [u8] = [72, 105, 0]  // "Hi\0"
+    let cstr = CStr.from_bytes_with_nul(&bytes).unwrap()
+    assert(cstr.len() == 2)
+    assert(cstr.to_str().unwrap() == "Hi")
+    print("CStr from_bytes_with_nul ✓")
+
+    // Not null terminated
+    let bad2 = CStr.from_bytes_with_nul(&[72, 105])
+    assert(bad2.is_err())
+    print("Not null terminated rejected ✓")
+
+    // Empty CString
+    let empty = CString.new("").unwrap()
+    assert(empty.len() == 0)
+    assert(empty.is_empty())
+    assert(empty.as_bytes_with_nul() == [0])
+    print("Empty CString ✓")
+
+    // Clone
+    let cloned = cs.clone()
+    assert(cloned.to_string() == "hello")
+    assert(cloned.len() == 5)
+    print("Clone ✓")
+
+    // from_vec
+    let v: [u8] = vec![65, 66, 67]  // "ABC"
+    let from_v = CString.from_vec(v).unwrap()
+    assert(from_v.to_string() == "ABC")
+    assert(from_v.len() == 3)
+    print("from_vec ✓")
+
+    // from_vec with null
+    let bad_v: [u8] = vec![65, 0, 67]
+    assert(CString.from_vec(bad_v).is_err())
+    print("from_vec null rejected ✓")
+
+    // as_c_str round trip
+    let cstr2 = cs.as_c_str()
+    assert(cstr2.len() == 5)
+    assert(cstr2.to_str().unwrap() == "hello")
+    print("as_c_str ✓")
+
+    // into_raw / from_raw
+    let cs2 = CString.new("raw").unwrap()
+    let raw_ptr = cs2.into_raw()
+    let recovered = unsafe { CString.from_raw(raw_ptr) }
+    assert(recovered.to_string() == "raw")
+    print("into_raw/from_raw ✓")
+
+    // to_string_lossy
+    let valid = CStr.from_bytes_with_nul(&[104, 105, 0]).unwrap()
+    assert(valid.to_string_lossy() == "hi")
+    print("to_string_lossy ✓")
+
+    // c_str! macro
+    let literal = c_str!("world")
+    assert(literal.len() == 5)
+    assert(literal.to_str().unwrap() == "world")
+    print("c_str! macro ✓")
+
+    print("FFI CStr complete ✓")
+}
