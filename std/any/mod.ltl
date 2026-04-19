@@ -1,0 +1,132 @@
+// std.any - Runtime type identification
+// TypeId, Any trait, downcasting.
+
+pub struct TypeId { id: u64 }
+
+impl TypeId {
+    pub fn of<T: 'static>() -> TypeId {
+        TypeId { id: @intrinsic("type_id", T) }
+    }
+}
+
+impl PartialEq for TypeId {
+    fn eq(self, other: &TypeId) -> bool { self.id == other.id }
+}
+impl Eq for TypeId {}
+
+impl Hash for TypeId {
+    fn hash<H: Hasher>(self, state: &mut H) { self.id.hash(state) }
+}
+
+impl fmt.Debug for TypeId {
+    fn fmt(self, f: &mut fmt.Formatter) -> fmt.Result {
+        write!(f, "TypeId({})", self.id)
+    }
+}
+
+pub trait Any: 'static {
+    fn type_id(self) -> TypeId
+
+    fn type_name(self) -> &'static str
+}
+
+impl<T: 'static> Any for T {
+    fn type_id(self) -> TypeId { TypeId.of::<T>() }
+
+    fn type_name(self) -> &'static str { @intrinsic("type_name", T) }
+}
+
+impl dyn Any {
+    pub fn is<T: Any>(self) -> bool {
+        self.type_id() == TypeId.of::<T>()
+    }
+
+    pub fn downcast_ref<T: Any>(self) -> Option<&T> {
+        if self.is::<T>() {
+            some(unsafe { &*(self as *const dyn Any as *const T) })
+        } else { none }
+    }
+
+    pub fn downcast_mut<T: Any>(mut self) -> Option<&mut T> {
+        if self.is::<T>() {
+            some(unsafe { &mut *(self as *mut dyn Any as *mut T) })
+        } else { none }
+    }
+}
+
+impl dyn Any + Send {
+    pub fn is<T: Any>(self) -> bool { (self as &dyn Any).is::<T>() }
+    pub fn downcast_ref<T: Any>(self) -> Option<&T> { (self as &dyn Any).downcast_ref::<T>() }
+    pub fn downcast_mut<T: Any>(mut self) -> Option<&mut T> { (self as &mut dyn Any).downcast_mut::<T>() }
+}
+
+impl dyn Any + Send + Sync {
+    pub fn is<T: Any>(self) -> bool { (self as &dyn Any).is::<T>() }
+    pub fn downcast_ref<T: Any>(self) -> Option<&T> { (self as &dyn Any).downcast_ref::<T>() }
+}
+
+// Box<dyn Any> downcasting
+impl Box<dyn Any> {
+    pub fn downcast<T: Any>(self) -> Result<Box<T>, Box<dyn Any>> {
+        if self.is::<T>() {
+            let raw = Box.into_raw(self) as *mut T
+            ok(unsafe { Box.from_raw(raw) })
+        } else { err(self) }
+    }
+}
+
+impl Box<dyn Any + Send> {
+    pub fn downcast<T: Any>(self) -> Result<Box<T>, Box<dyn Any + Send>> {
+        if self.is::<T>() {
+            let raw = Box.into_raw(self) as *mut T
+            ok(unsafe { Box.from_raw(raw) })
+        } else { err(self) }
+    }
+}
+
+// Type name utility
+pub fn type_name<T>() -> &'static str {
+    @intrinsic("type_name", T)
+}
+
+pub fn type_name_of_val<T>(_val: &T) -> &'static str {
+    type_name::<T>()
+}
+
+fn main() {
+    // TypeId
+    let id1 = TypeId.of::<i32>()
+    let id2 = TypeId.of::<i32>()
+    let id3 = TypeId.of::<string>()
+    assert(id1 == id2)
+    assert(id1 != id3)
+    print("TypeId \u2713")
+
+    // Any downcasting
+    let val: Box<dyn Any> = Box.new(42i32)
+    assert(val.is::<i32>())
+    assert(!val.is::<string>())
+    let num = val.downcast_ref::<i32>().unwrap()
+    assert(*num == 42)
+    print("Downcast ref \u2713")
+
+    // Box downcast
+    let boxed: Box<dyn Any> = Box.new("hello".to_string())
+    let result = boxed.downcast::<string>()
+    assert(result.is_ok())
+    assert(*result.unwrap() == "hello")
+    print("Box downcast \u2713")
+
+    // Failed downcast
+    let val2: Box<dyn Any> = Box.new(3.14f64)
+    assert(val2.downcast_ref::<i32>().is_none())
+    assert(val2.downcast_ref::<f64>().is_some())
+    print("Failed downcast \u2713")
+
+    // type_name
+    let name = type_name::<Vec<i32>>()
+    assert(name.contains("Vec"))
+    print("Type name \u2713")
+
+    print("Any complete \u2713")
+}
