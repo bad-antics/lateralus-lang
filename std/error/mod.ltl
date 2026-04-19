@@ -1,0 +1,208 @@
+// std.error - Error handling traits and types
+// Structured error chains, downcasting, context, and formatting.
+
+// -- Error Trait --
+pub trait Error: Display {
+    fn source(self) -> Option<&dyn Error> { none }
+
+    fn chain(self) -> ErrorChain { ErrorChain { current: some(self as &dyn Error) } }
+
+    fn root_cause(self) -> &dyn Error {
+        let mut err: &dyn Error = self
+        while let some(source) = err.source() { err = source }
+        err
+    }
+}
+
+pub struct ErrorChain<'a> { current: Option<&'a dyn Error> }
+
+impl<'a> Iterator for ErrorChain<'a> {
+    type Item = &'a dyn Error
+    fn next(mut self) -> Option<&'a dyn Error> {
+        let current = self.current?
+        self.current = current.source()
+        some(current)
+    }
+}
+
+// -- Standard Error Types --
+pub struct IoError {
+    kind: IoErrorKind,
+    message: string,
+    source: Option<Box<dyn Error>>,
+}
+
+pub enum IoErrorKind {
+    NotFound, PermissionDenied, ConnectionRefused, ConnectionReset,
+    ConnectionAborted, NotConnected, AddrInUse, AddrNotAvailable,
+    BrokenPipe, AlreadyExists, WouldBlock, InvalidInput,
+    InvalidData, TimedOut, WriteZero, Interrupted,
+    UnexpectedEof, OutOfMemory, Other,
+}
+
+impl IoError {
+    pub fn new(kind: IoErrorKind, message: &str) -> IoError {
+        IoError { kind, message: message.to_string(), source: none }
+    }
+
+    pub fn with_source(kind: IoErrorKind, message: &str, source: Box<dyn Error>) -> IoError {
+        IoError { kind, message: message.to_string(), source: some(source) }
+    }
+
+    pub fn kind(self) -> &IoErrorKind { &self.kind }
+
+    pub fn kind_name(self) -> &str {
+        match self.kind {
+            IoErrorKind.NotFound => "not found",
+            IoErrorKind.PermissionDenied => "permission denied",
+            IoErrorKind.ConnectionRefused => "connection refused",
+            IoErrorKind.ConnectionReset => "connection reset",
+            IoErrorKind.TimedOut => "timed out",
+            IoErrorKind.WouldBlock => "would block",
+            IoErrorKind.InvalidInput => "invalid input",
+            IoErrorKind.InvalidData => "invalid data",
+            IoErrorKind.UnexpectedEof => "unexpected EOF",
+            IoErrorKind.OutOfMemory => "out of memory",
+            _ => "other",
+        }
+    }
+}
+
+impl Display for IoError {
+    fn fmt(self, f: &mut Formatter) -> Result<(), string> {
+        write!(f, "{}: {}", self.kind_name(), self.message)
+    }
+}
+
+impl Error for IoError {
+    fn source(self) -> Option<&dyn Error> {
+        self.source.as_ref().map(|s| s.as_ref())
+    }
+}
+
+// -- Parse Error --
+pub struct ParseError {
+    message: string,
+    line: Option<usize>,
+    column: Option<usize>,
+}
+
+impl ParseError {
+    pub fn new(message: &str) -> ParseError {
+        ParseError { message: message.to_string(), line: none, column: none }
+    }
+
+    pub fn at(message: &str, line: usize, column: usize) -> ParseError {
+        ParseError { message: message.to_string(), line: some(line), column: some(column) }
+    }
+}
+
+impl Display for ParseError {
+    fn fmt(self, f: &mut Formatter) -> Result<(), string> {
+        match (self.line, self.column) {
+            (some(l), some(c)) => write!(f, "parse error at {}:{}: {}", l, c, self.message),
+            (some(l), none) => write!(f, "parse error at line {}: {}", l, self.message),
+            _ => write!(f, "parse error: {}", self.message),
+        }
+    }
+}
+
+impl Error for ParseError {}
+
+// -- Context Extension --
+pub struct ContextError {
+    context: string,
+    source: Box<dyn Error>,
+}
+
+impl Display for ContextError {
+    fn fmt(self, f: &mut Formatter) -> Result<(), string> {
+        write!(f, "{}", self.context)
+    }
+}
+
+impl Error for ContextError {
+    fn source(self) -> Option<&dyn Error> { some(self.source.as_ref()) }
+}
+
+pub trait ResultExt<T, E: Error> {
+    fn context(self, msg: &str) -> Result<T, ContextError>
+    fn with_context(self, f: fn() -> string) -> Result<T, ContextError>
+}
+
+impl<T, E: Error> ResultExt<T, E> for Result<T, E> {
+    fn context(self, msg: &str) -> Result<T, ContextError> {
+        self.map_err(|e| ContextError {
+            context: msg.to_string(),
+            source: Box.new(e),
+        })
+    }
+
+    fn with_context(self, f: fn() -> string) -> Result<T, ContextError> {
+        self.map_err(|e| ContextError {
+            context: f(),
+            source: Box.new(e),
+        })
+    }
+}
+
+// -- AnyError --
+pub struct AnyError {
+    inner: Box<dyn Error>,
+}
+
+impl AnyError {
+    pub fn new(err: impl Error + 'static) -> AnyError {
+        AnyError { inner: Box.new(err) }
+    }
+
+    pub fn msg(message: &str) -> AnyError {
+        AnyError { inner: Box.new(StringError(message.to_string())) }
+    }
+
+    pub fn context(self, msg: &str) -> AnyError {
+        AnyError { inner: Box.new(ContextError {
+            context: msg.to_string(),
+            source: self.inner,
+        })}
+    }
+}
+
+impl Display for AnyError {
+    fn fmt(self, f: &mut Formatter) -> Result<(), string> {
+        write!(f, "{}", self.inner)
+    }
+}
+
+impl Error for AnyError {
+    fn source(self) -> Option<&dyn Error> { self.inner.source() }
+}
+
+struct StringError(string)
+impl Display for StringError {
+    fn fmt(self, f: &mut Formatter) -> Result<(), string> { write!(f, "{}", self.0) }
+}
+impl Error for StringError {}
+
+macro_rules! bail {
+    ($msg:expr) => { return err(AnyError.msg($msg)) };
+    ($fmt:expr, $($arg:tt)*) => { return err(AnyError.msg(&format!($fmt, $($arg)*))) };
+}
+
+macro_rules! ensure {
+    ($cond:expr, $msg:expr) => {
+        if !$cond { bail!($msg) }
+    };
+}
+
+pub fn format_error_chain(err: &dyn Error) -> string {
+    let mut out = format!("Error: {}", err)
+    let mut source = err.source()
+    let mut depth = 0
+    while let some(cause) = source {
+        depth += 1
+        out.push_str(&format!("\n  Caused by ({depth}): {cause}"))
+        source = cause.source()
+    }
+    out
+}
