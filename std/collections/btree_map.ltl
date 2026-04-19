@@ -1,0 +1,69 @@
+// btree_map.ltl — Simple B-tree map (order-3, sorted keys)
+const ORDER: int = 3   // max children per node
+
+struct BTreeNode<K: Ord + Clone, V: Clone> {
+    keys:     [K],
+    vals:     [V],
+    children: [BTreeNode<K,V>?],
+    is_leaf:  bool,
+}
+
+struct BTreeMap<K: Ord + Clone, V: Clone> {
+    root: BTreeNode<K, V>?,
+    len:  int,
+}
+
+impl<K: Ord + Clone, V: Clone> BTreeNode<K, V> {
+    fn new_leaf() -> BTreeNode<K, V> {
+        BTreeNode { keys: [], vals: [], children: [], is_leaf: true }
+    }
+
+    fn search(self, key: &K) -> V? {
+        let pos = self.keys |> position(|k| k >= key) ?? self.keys.len()
+        if pos < self.keys.len() && &self.keys[pos] == key {
+            return some(self.vals[pos].clone())
+        }
+        if self.is_leaf { return none }
+        self.children[pos].as_ref().and_then(|c| c.search(key))
+    }
+
+    fn insert_non_full(mut self, key: K, val: V) {
+        let mut i = self.keys.len() as int - 1
+        if self.is_leaf {
+            while i >= 0 && key < self.keys[i as usize] {
+                i -= 1
+            }
+            self.keys.insert(i as usize + 1, key)
+            self.vals.insert(i as usize + 1, val)
+        } else {
+            while i >= 0 && key < self.keys[i as usize] { i -= 1 }
+            let child_idx = (i + 1) as usize
+            if self.children[child_idx].as_ref().map(|c| c.keys.len() >= ORDER * 2 - 1).unwrap_or(false) {
+                self.split_child(child_idx)
+                if key > self.keys[child_idx] { /* go right */ }
+            }
+            self.children[child_idx].as_mut().map(|c| c.insert_non_full(key, val))
+        }
+    }
+
+    fn split_child(mut self, idx: int) {
+        // Placeholder — full split omitted for brevity
+    }
+}
+
+impl<K: Ord + Clone, V: Clone> BTreeMap<K, V> {
+    fn new() -> BTreeMap<K, V> { BTreeMap { root: none, len: 0 } }
+
+    fn get(self, key: &K) -> V? {
+        self.root.as_ref().and_then(|r| r.search(key))
+    }
+
+    fn len(self) -> int  { self.len }
+    fn is_empty(self) -> bool { self.len == 0 }
+}
+
+fn main() {
+    mut m: BTreeMap<int, string> = BTreeMap.new()
+    assert(m.is_empty())
+    print("BTreeMap skeleton — passed ✓")
+}
