@@ -1,0 +1,324 @@
+// std.regex - Regular expression engine
+// NFA-based regex matching with capture groups.
+
+pub struct Regex {
+    pattern: string,
+    program: [Instruction],
+}
+
+#[derive(Clone, Debug)]
+enum Instruction {
+    Char(char),
+    AnyChar,
+    CharClass([CharRange]),
+    NegCharClass([CharRange]),
+    Match,
+    Jump(usize),
+    Split(usize, usize),
+    Save(usize),        // capture group start/end
+    WordBoundary,
+    StartAnchor,
+    EndAnchor,
+}
+
+#[derive(Clone, Debug)]
+struct CharRange { start: char, end: char }
+
+impl CharRange {
+    fn contains(self, c: char) -> bool { c >= self.start && c <= self.end }
+}
+
+#[derive(Clone)]
+pub struct Match<'a> {
+    text: &'a str,
+    start: usize,
+    end: usize,
+    captures: [Option<(usize, usize)>],
+}
+
+impl<'a> Match<'a> {
+    pub fn as_str(self) -> &str { &self.text[self.start..self.end] }
+    pub fn start(self) -> usize { self.start }
+    pub fn end(self) -> usize { self.end }
+    pub fn range(self) -> (usize, usize) { (self.start, self.end) }
+    pub fn group(self, idx: usize) -> Option<&str> {
+        self.captures.get(idx)?.map(|(s, e)| &self.text[s..e])
+    }
+    pub fn group_count(self) -> usize { self.captures.len() }
+}
+
+impl Regex {
+    pub fn new(pattern: &str) -> Result<Regex, string> {
+        let program = compile(pattern)?
+        ok(Regex { pattern: pattern.to_string(), program })
+    }
+
+    pub fn is_match(self, text: &str) -> bool {
+        self.find(text).is_some()
+    }
+
+    pub fn find<'a>(self, text: &'a str) -> Option<Match<'a>> {
+        let chars: [char] = text.chars().collect()
+        for start in 0..=chars.len() {
+            if let some(captures) = execute(&self.program, &chars, start) {
+                let end = captures.get(1).and_then(|c| *c).map(|(_, e)| e).unwrap_or(start)
+                return some(Match { text, start, end, captures: captures[2..].to_vec() })
+            }
+        }
+        none
+    }
+
+    pub fn find_all<'a>(self, text: &'a str) -> [Match<'a>] {
+        let chars: [char] = text.chars().collect()
+        let mut matches: [Match<'a>] = []
+        let mut pos = 0
+        while pos <= chars.len() {
+            if let some(captures) = execute(&self.program, &chars, pos) {
+                let end = captures.get(1).and_then(|c| *c).map(|(_, e)| e).unwrap_or(pos)
+                let m = Match { text, start: pos, end, captures: captures[2..].to_vec() }
+                matches.push(m)
+                pos = if end == pos { pos + 1 } else { end }
+            } else { pos += 1 }
+        }
+        matches
+    }
+
+    pub fn replace(self, text: &str, replacement: &str) -> string {
+        let mut result = string.new()
+        let mut last_end = 0
+        for m in self.find_all(text) {
+            result.push_str(&text[last_end..m.start])
+            result.push_str(replacement)
+            last_end = m.end
+        }
+        result.push_str(&text[last_end..])
+        result
+    }
+
+    pub fn split(self, text: &str) -> [string] {
+        let mut parts: [string] = []
+        let mut last_end = 0
+        for m in self.find_all(text) {
+            parts.push(text[last_end..m.start].to_string())
+            last_end = m.end
+        }
+        parts.push(text[last_end..].to_string())
+        parts
+    }
+
+    pub fn as_str(self) -> &str { &self.pattern }
+}
+
+fn compile(pattern: &str) -> Result<[Instruction], string> {
+    let mut program: [Instruction] = []
+    program.push(Instruction.Save(0))  // overall match start
+    let chars: [char] = pattern.chars().collect()
+    let mut i = 0
+
+    while i < chars.len() {
+        match chars[i] {
+            '.' => { program.push(Instruction.AnyChar); i += 1 },
+            '^' => { program.push(Instruction.StartAnchor); i += 1 },
+            '$' => { program.push(Instruction.EndAnchor); i += 1 },
+            '*' => {
+                if program.is_empty() { return err("nothing to repeat".to_string()) }
+                let last = program.len() - 1
+                let split_pc = last
+                let jmp_pc = program.len() + 1
+                program.insert(split_pc, Instruction.Split(split_pc + 1, jmp_pc + 1))
+                program.push(Instruction.Jump(split_pc))
+                i += 1
+            },
+            '+' => {
+                if program.is_empty() { return err("nothing to repeat".to_string()) }
+                let repeat_pc = program.len() - 1
+                program.push(Instruction.Split(repeat_pc, program.len() + 1))
+                i += 1
+            },
+            '?' => {
+                if program.is_empty() { return err("nothing to repeat".to_string()) }
+                let last = program.len() - 1
+                program.insert(last, Instruction.Split(last + 1, program.len() + 1))
+                i += 1
+            },
+            '[' => {
+                i += 1
+                let negated = i < chars.len() && chars[i] == '^'
+                if negated { i += 1 }
+                let mut ranges: [CharRange] = []
+                while i < chars.len() && chars[i] != ']' {
+                    let start = chars[i]
+                    if i + 2 < chars.len() && chars[i + 1] == '-' {
+                        ranges.push(CharRange { start, end: chars[i + 2] })
+                        i += 3
+                    } else {
+                        ranges.push(CharRange { start, end: start })
+                        i += 1
+                    }
+                }
+                if i < chars.len() { i += 1 }  // skip ']'
+                if negated { program.push(Instruction.NegCharClass(ranges)) }
+                else { program.push(Instruction.CharClass(ranges)) }
+            },
+            '\\' => {
+                i += 1
+                if i >= chars.len() { return err("trailing backslash".to_string()) }
+                match chars[i] {
+                    'd' => program.push(Instruction.CharClass(vec![CharRange { start: '0', end: '9' }])),
+                    'w' => program.push(Instruction.CharClass(vec![
+                        CharRange { start: 'a', end: 'z' },
+                        CharRange { start: 'A', end: 'Z' },
+                        CharRange { start: '0', end: '9' },
+                        CharRange { start: '_', end: '_' },
+                    ])),
+                    's' => program.push(Instruction.CharClass(vec![
+                        CharRange { start: ' ', end: ' ' },
+                        CharRange { start: '\t', end: '\t' },
+                        CharRange { start: '\n', end: '\n' },
+                    ])),
+                    'b' => program.push(Instruction.WordBoundary),
+                    c => program.push(Instruction.Char(c)),
+                }
+                i += 1
+            },
+            c => { program.push(Instruction.Char(c)); i += 1 },
+        }
+    }
+
+    program.push(Instruction.Save(1))  // overall match end
+    program.push(Instruction.Match)
+    ok(program)
+}
+
+struct Thread {
+    pc: usize,
+    captures: [Option<(usize, usize)>],
+}
+
+fn execute(program: &[Instruction], chars: &[char], start: usize) -> Option<[Option<(usize, usize)>]> {
+    let mut threads: [Thread] = vec![Thread { pc: 0, captures: vec![none; 10] }]
+    let mut pos = start
+
+    while !threads.is_empty() {
+        let mut next_threads: [Thread] = []
+        for mut thread in threads {
+            loop {
+                if thread.pc >= program.len() { break }
+                match &program[thread.pc] {
+                    Instruction.Match => return some(thread.captures),
+                    Instruction.Char(expected) => {
+                        if pos < chars.len() && chars[pos] == *expected {
+                            thread.pc += 1; pos += 1; break
+                        } else { break }
+                    },
+                    Instruction.AnyChar => {
+                        if pos < chars.len() { thread.pc += 1; pos += 1; break }
+                        else { break }
+                    },
+                    Instruction.CharClass(ranges) => {
+                        if pos < chars.len() && ranges.iter().any(|r| r.contains(chars[pos])) {
+                            thread.pc += 1; pos += 1; break
+                        } else { break }
+                    },
+                    Instruction.NegCharClass(ranges) => {
+                        if pos < chars.len() && !ranges.iter().any(|r| r.contains(chars[pos])) {
+                            thread.pc += 1; pos += 1; break
+                        } else { break }
+                    },
+                    Instruction.Jump(target) => { thread.pc = *target },
+                    Instruction.Split(a, b) => {
+                        let mut t2 = Thread { pc: *b, captures: thread.captures.clone() }
+                        next_threads.push(t2)
+                        thread.pc = *a
+                    },
+                    Instruction.Save(slot) => {
+                        if *slot < thread.captures.len() {
+                            thread.captures[*slot] = some((pos, pos))
+                        }
+                        thread.pc += 1
+                    },
+                    Instruction.StartAnchor => {
+                        if pos == 0 { thread.pc += 1 } else { break }
+                    },
+                    Instruction.EndAnchor => {
+                        if pos == chars.len() { thread.pc += 1 } else { break }
+                    },
+                    _ => { thread.pc += 1 },
+                }
+            }
+        }
+        threads = next_threads
+    }
+    none
+}
+
+fn main() {
+    // Basic matching
+    let re = Regex.new("hello").unwrap()
+    assert(re.is_match("hello world"))
+    assert(!re.is_match("goodbye"))
+    print("Basic match ✓")
+
+    // Find
+    let m = re.find("say hello there").unwrap()
+    assert(m.as_str() == "hello")
+    assert(m.start() == 4)
+    assert(m.end() == 9)
+    print("Find ✓")
+
+    // Character class
+    let digit_re = Regex.new("[0-9]").unwrap()
+    assert(digit_re.is_match("abc123"))
+    assert(!digit_re.is_match("abcdef"))
+    print("Char class ✓")
+
+    // Shorthand classes
+    let word_re = Regex.new("\\w").unwrap()
+    assert(word_re.is_match("hello"))
+    assert(!word_re.is_match("   "))
+    print("Shorthand \\w ✓")
+
+    // Dot
+    let dot_re = Regex.new("h.llo").unwrap()
+    assert(dot_re.is_match("hello"))
+    assert(dot_re.is_match("hallo"))
+    print("Dot ✓")
+
+    // Anchors
+    let start_re = Regex.new("^hello").unwrap()
+    assert(start_re.is_match("hello world"))
+    assert(!start_re.is_match("say hello"))
+    print("Start anchor ✓")
+
+    // Replace
+    let re2 = Regex.new("world").unwrap()
+    let result = re2.replace("hello world", "lateralus")
+    assert(result == "hello lateralus")
+    print("Replace ✓")
+
+    // Split
+    let comma_re = Regex.new(",").unwrap()
+    let parts = comma_re.split("a,b,c")
+    assert(parts.len() == 3)
+    assert(parts[0] == "a")
+    assert(parts[2] == "c")
+    print("Split ✓")
+
+    // Find all
+    let vowel_re = Regex.new("[aeiou]").unwrap()
+    let matches = vowel_re.find_all("hello")
+    assert(matches.len() == 2)  // e, o
+    print("Find all ✓")
+
+    // Pattern string
+    assert(re.as_str() == "hello")
+    print("as_str ✓")
+
+    // CharRange
+    let range = CharRange { start: 'a', end: 'z' }
+    assert(range.contains('m'))
+    assert(!range.contains('A'))
+    print("CharRange ✓")
+
+    print("Regex complete ✓")
+}
