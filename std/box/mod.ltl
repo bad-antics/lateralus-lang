@@ -1,0 +1,112 @@
+// std.box - Heap allocation smart pointer
+// Box<T> for single ownership heap allocation.
+
+use std.ops.{Deref, DerefMut, Drop}
+use std.ptr
+use std.mem
+
+pub struct Box<T: ?Sized> {
+    ptr: ptr.NonNull<T>,
+}
+
+impl<T> Box<T> {
+    pub fn new(value: T) -> Box<T> {
+        let layout = @alloc_layout(T, 1)
+        let raw = @alloc(layout) as *mut T
+        unsafe { ptr.write(raw, value) }
+        Box { ptr: ptr.NonNull.new(raw).unwrap() }
+    }
+
+    pub fn into_raw(self) -> *mut T {
+        let p = self.ptr.as_ptr()
+        mem.forget(self)
+        p
+    }
+
+    pub unsafe fn from_raw(raw: *mut T) -> Box<T> {
+        Box { ptr: ptr.NonNull.new(raw).unwrap() }
+    }
+
+    pub fn into_inner(self) -> T {
+        unsafe {
+            let val = ptr.read(self.ptr.as_ptr())
+            let layout = @alloc_layout(T, 1)
+            @dealloc(self.ptr.as_ptr() as *mut u8, layout)
+            mem.forget(self)
+            val
+        }
+    }
+
+    pub fn leak(self) -> &mut T {
+        let raw = Box.into_raw(self)
+        unsafe { &mut *raw }
+    }
+
+    pub fn as_ref(self) -> &T { unsafe { self.ptr.as_ref() } }
+    pub fn as_mut(mut self) -> &mut T { unsafe { self.ptr.as_mut() } }
+}
+
+impl<T: ?Sized> Deref for Box<T> {
+    type Target = T
+    fn deref(self) -> &T { unsafe { self.ptr.as_ref() } }
+}
+
+impl<T: ?Sized> DerefMut for Box<T> {
+    fn deref_mut(mut self) -> &mut T { unsafe { self.ptr.as_mut() } }
+}
+
+impl<T: ?Sized> Drop for Box<T> {
+    fn drop(mut self) {
+        unsafe {
+            ptr.drop_in_place(self.ptr.as_ptr())
+            @dealloc(self.ptr.as_ptr() as *mut u8, @alloc_layout_for_val(&*self.ptr.as_ptr()))
+        }
+    }
+}
+
+impl<T: Clone> Clone for Box<T> {
+    fn clone(self) -> Box<T> { Box.new(self.as_ref().clone()) }
+}
+
+impl<T: PartialEq> PartialEq for Box<T> {
+    fn eq(self, other: &Box<T>) -> bool { self.as_ref().eq(other.as_ref()) }
+}
+
+impl<T: Eq> Eq for Box<T> {}
+
+impl<T: PartialOrd> PartialOrd for Box<T> {
+    fn partial_cmp(self, other: &Box<T>) -> Option<Ordering> { self.as_ref().partial_cmp(other.as_ref()) }
+}
+
+impl<T: Ord> Ord for Box<T> {
+    fn cmp(self, other: &Box<T>) -> Ordering { self.as_ref().cmp(other.as_ref()) }
+}
+
+impl<T: Display> Display for Box<T> {
+    fn fmt(self, f: &mut Formatter) -> Result<(), string> { self.as_ref().fmt(f) }
+}
+
+impl<T: Default> Default for Box<T> {
+    fn default() -> Box<T> { Box.new(T.default()) }
+}
+
+impl<T> From<T> for Box<T> {
+    fn from(val: T) -> Box<T> { Box.new(val) }
+}
+
+impl From<&str> for Box<str> {
+    fn from(s: &str) -> Box<str> {
+        let len = s.len()
+        let layout = @alloc_layout(u8, len)
+        let raw = @alloc(layout) as *mut u8
+        unsafe { ptr.copy_nonoverlapping(s.as_ptr(), raw, len) }
+        unsafe { Box.from_raw(ptr.slice_from_raw_parts_mut(raw, len) as *mut str) }
+    }
+}
+
+impl<T> From<Vec<T>> for Box<[T]> {
+    fn from(v: Vec<T>) -> Box<[T]> {
+        let (ptr, len) = v.into_raw_parts()
+        unsafe { Box.from_raw(std.ptr.slice_from_raw_parts_mut(ptr, len)) }
+    }
+}
