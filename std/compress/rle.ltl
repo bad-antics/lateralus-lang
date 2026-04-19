@@ -1,0 +1,53 @@
+// rle.ltl — Run-Length Encoding (simple lossless compression)
+
+fn encode_rle(data: [u8]) -> [u8] {
+    if data.is_empty() { return [] }
+    let mut out = []
+    let mut i   = 0
+    while i < data.len() {
+        let byte = data[i]
+        let mut run = 1
+        while i + run < data.len() && data[i + run] == byte && run < 255 {
+            run += 1
+        }
+        out.push(run as u8)
+        out.push(byte)
+        i += run
+    }
+    out
+}
+
+fn decode_rle(data: [u8]) -> Result<[u8], string> {
+    if data.len() % 2 != 0 { return err("invalid RLE data: odd length") }
+    let mut out = []
+    let mut i   = 0
+    while i < data.len() {
+        let count = data[i] as int
+        let byte  = data[i+1]
+        for _ in range(0, count) { out.push(byte) }
+        i += 2
+    }
+    ok(out)
+}
+
+fn compression_ratio(original: [u8], compressed: [u8]) -> float {
+    1.0 - (compressed.len() as float / original.len() as float)
+}
+
+fn main() {
+    let input    = [0xAAu8; 10]
+    let encoded  = encode_rle(input)
+    let decoded  = decode_rle(encoded).unwrap()
+    assert(decoded == input)
+    assert(encoded.len() == 2)
+    let ratio = compression_ratio(input, encoded)
+    print("RLE 10x0xAA: ${encoded.len()} bytes (ratio ${ratio:.1})")
+
+    let mixed  = [1u8, 1, 2, 3, 3, 3, 4]
+    let enc2   = encode_rle(mixed)
+    let dec2   = decode_rle(enc2).unwrap()
+    assert(dec2 == mixed)
+    print("RLE mixed data roundtrip ✓")
+
+    print("rle — all assertions passed ✓")
+}
