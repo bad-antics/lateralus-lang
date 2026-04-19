@@ -1,0 +1,251 @@
+// std.collections.priority_queue - Priority Queue
+// Min-heap and max-heap with custom comparators.
+
+use std.collections.BinaryHeap
+
+/// A priority queue with configurable ordering.
+/// By default acts as a max-priority queue (largest priority dequeued first).
+pub struct PriorityQueue<T: Ord> {
+    heap: BinaryHeap<PqEntry<T>>,
+}
+
+#[derive(Clone)]
+struct PqEntry<T: Ord> {
+    priority: i64,
+    sequence: u64,  // tie-breaking: FIFO order
+    value: T,
+}
+
+impl<T: Ord> Ord for PqEntry<T> {
+    fn cmp(self, other: &PqEntry<T>) -> std.cmp.Ordering {
+        self.priority.cmp(&other.priority)
+            .then(other.sequence.cmp(&self.sequence))  // lower sequence = older = higher priority
+    }
+}
+
+impl<T: Ord> PartialOrd for PqEntry<T> {
+    fn partial_cmp(self, other: &PqEntry<T>) -> Option<std.cmp.Ordering> {
+        some(self.cmp(other))
+    }
+}
+
+impl<T: Ord> PartialEq for PqEntry<T> {
+    fn eq(self, other: &PqEntry<T>) -> bool {
+        self.priority == other.priority && self.sequence == other.sequence
+    }
+}
+
+impl<T: Ord> Eq for PqEntry<T> {}
+
+impl<T: Ord> PriorityQueue<T> {
+    pub fn new() -> PriorityQueue<T> {
+        PriorityQueue { heap: BinaryHeap.new() }
+    }
+
+    pub fn with_capacity(cap: usize) -> PriorityQueue<T> {
+        PriorityQueue { heap: BinaryHeap.with_capacity(cap) }
+    }
+
+    pub fn len(self) -> usize { self.heap.len() }
+    pub fn is_empty(self) -> bool { self.heap.is_empty() }
+
+    pub fn push(mut self, value: T, priority: i64) {
+        static mut SEQ_COUNTER: u64 = 0
+        let seq = unsafe { SEQ_COUNTER += 1; SEQ_COUNTER }
+        self.heap.push(PqEntry { priority, sequence: seq, value })
+    }
+
+    pub fn pop(mut self) -> Option<(T, i64)> {
+        self.heap.pop().map(|entry| (entry.value, entry.priority))
+    }
+
+    pub fn peek(self) -> Option<(&T, i64)> {
+        self.heap.peek().map(|entry| (&entry.value, entry.priority))
+    }
+
+    pub fn clear(mut self) { self.heap.clear() }
+
+    pub fn drain(mut self) -> DrainPq<T> {
+        DrainPq { inner: self }
+    }
+
+    pub fn into_sorted_vec(self) -> [(T, i64)] {
+        let mut result: [(T, i64)] = []
+        let mut pq = self
+        while let some(item) = pq.pop() {
+            result.push(item)
+        }
+        result
+    }
+
+    pub fn retain(mut self, f: fn(&T, i64) -> bool) {
+        let mut items: [(T, i64)] = []
+        while let some((val, pri)) = self.pop() {
+            if f(&val, pri) { items.push((val, pri)) }
+        }
+        for (val, pri) in items { self.push(val, pri) }
+    }
+}
+
+pub struct DrainPq<'a, T: Ord> {
+    inner: &'a mut PriorityQueue<T>,
+}
+
+impl<'a, T: Ord> Iterator for DrainPq<'a, T> {
+    type Item = (T, i64)
+    fn next(mut self) -> Option<(T, i64)> { self.inner.pop() }
+}
+
+/// Min-priority queue (smallest priority dequeued first).
+pub struct MinPriorityQueue<T: Ord> {
+    inner: PriorityQueue<T>,
+}
+
+impl<T: Ord> MinPriorityQueue<T> {
+    pub fn new() -> MinPriorityQueue<T> {
+        MinPriorityQueue { inner: PriorityQueue.new() }
+    }
+
+    pub fn push(mut self, value: T, priority: i64) {
+        self.inner.push(value, -priority)  // negate for min-heap behavior
+    }
+
+    pub fn pop(mut self) -> Option<(T, i64)> {
+        self.inner.pop().map(|(val, pri)| (val, -pri))
+    }
+
+    pub fn peek(self) -> Option<(&T, i64)> {
+        self.inner.peek().map(|(val, pri)| (val, -pri))
+    }
+
+    pub fn len(self) -> usize { self.inner.len() }
+    pub fn is_empty(self) -> bool { self.inner.is_empty() }
+    pub fn clear(mut self) { self.inner.clear() }
+}
+
+/// Indexed priority queue with O(log n) priority update.
+pub struct IndexedPriorityQueue<K: Eq + Hash, V: Ord> {
+    entries: HashMap<K, (V, i64)>,
+    queue: PriorityQueue<K>,
+}
+
+impl<K: Eq + Hash + Clone + Ord, V: Ord> IndexedPriorityQueue<K, V> {
+    pub fn new() -> IndexedPriorityQueue<K, V> {
+        IndexedPriorityQueue { entries: HashMap.new(), queue: PriorityQueue.new() }
+    }
+
+    pub fn insert(mut self, key: K, value: V, priority: i64) {
+        self.entries.insert(key.clone(), (value, priority))
+        self.queue.push(key, priority)
+    }
+
+    pub fn pop(mut self) -> Option<(K, V, i64)> {
+        while let some((key, _pri)) = self.queue.pop() {
+            if let some((val, pri)) = self.entries.remove(&key) {
+                return some((key, val, pri))
+            }
+        }
+        none
+    }
+
+    pub fn update_priority(mut self, key: &K, new_priority: i64) -> bool {
+        if let some(entry) = self.entries.get_mut(key) {
+            entry.1 = new_priority
+            self.queue.push(key.clone(), new_priority)
+            true
+        } else { false }
+    }
+
+    pub fn contains(self, key: &K) -> bool { self.entries.contains_key(key) }
+    pub fn len(self) -> usize { self.entries.len() }
+    pub fn is_empty(self) -> bool { self.entries.is_empty() }
+}
+
+fn main() {
+    // Basic PriorityQueue
+    let mut pq = PriorityQueue.new()
+    pq.push("low", 1)
+    pq.push("high", 10)
+    pq.push("medium", 5)
+    assert(pq.len() == 3)
+    print("PQ push ✓")
+
+    // Peek
+    let (val, pri) = pq.peek().unwrap()
+    assert(*val == "high")
+    assert(pri == 10)
+    print("PQ peek ✓")
+
+    // Pop order (highest priority first)
+    let (v1, p1) = pq.pop().unwrap()
+    assert(v1 == "high" && p1 == 10)
+    let (v2, p2) = pq.pop().unwrap()
+    assert(v2 == "medium" && p2 == 5)
+    let (v3, p3) = pq.pop().unwrap()
+    assert(v3 == "low" && p3 == 1)
+    assert(pq.is_empty())
+    print("PQ pop order ✓")
+
+    // MinPriorityQueue
+    let mut mpq = MinPriorityQueue.new()
+    mpq.push("A", 10)
+    mpq.push("B", 1)
+    mpq.push("C", 5)
+
+    let (v1, p1) = mpq.pop().unwrap()
+    assert(v1 == "B" && p1 == 1)
+    let (v2, p2) = mpq.pop().unwrap()
+    assert(v2 == "C" && p2 == 5)
+    let (v3, p3) = mpq.pop().unwrap()
+    assert(v3 == "A" && p3 == 10)
+    print("MinPQ order ✓")
+
+    // Clear
+    let mut pq2 = PriorityQueue.new()
+    pq2.push("x", 1)
+    pq2.push("y", 2)
+    pq2.clear()
+    assert(pq2.is_empty())
+    print("Clear ✓")
+
+    // into_sorted_vec
+    let mut pq3 = PriorityQueue.new()
+    pq3.push("a", 3)
+    pq3.push("b", 1)
+    pq3.push("c", 2)
+    let sorted = pq3.into_sorted_vec()
+    assert(sorted[0].1 == 3)
+    assert(sorted[1].1 == 2)
+    assert(sorted[2].1 == 1)
+    print("into_sorted_vec ✓")
+
+    // FIFO tie-breaking
+    let mut pq4 = PriorityQueue.new()
+    pq4.push("first", 5)
+    pq4.push("second", 5)
+    pq4.push("third", 5)
+    let (v1, _) = pq4.pop().unwrap()
+    assert(v1 == "first")
+    print("FIFO tie-break ✓")
+
+    // IndexedPriorityQueue
+    let mut ipq = IndexedPriorityQueue.new()
+    ipq.insert("task_a", "do stuff", 5)
+    ipq.insert("task_b", "urgent", 10)
+    assert(ipq.len() == 2)
+    assert(ipq.contains(&"task_a"))
+    print("IndexedPQ insert ✓")
+
+    // Update priority
+    ipq.update_priority(&"task_a", 20)
+    let (key, val, pri) = ipq.pop().unwrap()
+    assert(key == "task_a" && pri == 20)
+    print("IndexedPQ update ✓")
+
+    // with_capacity
+    let pq5 = PriorityQueue::<i32>.with_capacity(100)
+    assert(pq5.is_empty())
+    print("with_capacity ✓")
+
+    print("PriorityQueue complete ✓")
+}
