@@ -1,0 +1,276 @@
+// Standard Library - Global Allocator
+// Memory allocation traits, global allocator, and layout management.
+
+use std.ptr
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Layout {
+    size: usize,
+    align: usize,
+}
+
+impl Layout {
+    fn new(size: usize, align: usize) -> Result<Layout, LayoutError> {
+        if !align.is_power_of_two() || size > usize.MAX - (align - 1) {
+            return err(LayoutError)
+        }
+        ok(Layout { size, align })
+    }
+
+    fn from_size_align_unchecked(size: usize, align: usize) -> Layout {
+        Layout { size, align }
+    }
+
+    fn for_type<T>() -> Layout {
+        Layout {
+            size: std.mem.size_of::<T>(),
+            align: std.mem.align_of::<T>(),
+        }
+    }
+
+    fn array<T>(n: usize) -> Result<Layout, LayoutError> {
+        let elem = Self.for_type::<T>()
+        let size = elem.size.checked_mul(n).ok_or(LayoutError)?
+        Self.new(size, elem.align)
+    }
+
+    fn size(self) -> usize { self.size }
+    fn align(self) -> usize { self.align }
+
+    fn padding_needed_for(self, align: usize) -> usize {
+        let len = self.size
+        let rounded = (len + align - 1) & !(align - 1)
+        rounded - len
+    }
+
+    fn pad_to_align(self) -> Layout {
+        let pad = self.padding_needed_for(self.align)
+        Layout { size: self.size + pad, align: self.align }
+    }
+
+    fn extend(self, next: Layout) -> Result<(Layout, usize), LayoutError> {
+        let pad = self.padding_needed_for(next.align)
+        let offset = self.size.checked_add(pad).ok_or(LayoutError)?
+        let new_size = offset.checked_add(next.size).ok_or(LayoutError)?
+        let align = self.align.max(next.align)
+        ok((Layout.new(new_size, align)?, offset))
+    }
+
+    fn repeat(self, n: usize) -> Result<(Layout, usize), LayoutError> {
+        let padded = self.pad_to_align()
+        let total = padded.size.checked_mul(n).ok_or(LayoutError)?
+        ok((Layout.new(total, self.align)?, padded.size))
+    }
+
+    fn dangling(self) -> *mut u8 {
+        self.align as *mut u8
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct LayoutError;
+
+trait Allocator {
+    fn allocate(self, layout: Layout) -> Result<*mut u8, AllocError>
+    fn deallocate(self, ptr: *mut u8, layout: Layout)
+
+    fn allocate_zeroed(self, layout: Layout) -> Result<*mut u8, AllocError> {
+        let ptr = self.allocate(layout)?
+        unsafe { ptr.write_bytes(0, layout.size) }
+        ok(ptr)
+    }
+
+    fn grow(self, ptr: *mut u8, old_layout: Layout, new_layout: Layout) -> Result<*mut u8, AllocError> {
+        let new_ptr = self.allocate(new_layout)?
+        unsafe { ptr.copy_to_nonoverlapping(new_ptr, old_layout.size) }
+        self.deallocate(ptr, old_layout)
+        ok(new_ptr)
+    }
+
+    fn shrink(self, ptr: *mut u8, old_layout: Layout, new_layout: Layout) -> Result<*mut u8, AllocError> {
+        let new_ptr = self.allocate(new_layout)?
+        unsafe { ptr.copy_to_nonoverlapping(new_ptr, new_layout.size) }
+        self.deallocate(ptr, old_layout)
+        ok(new_ptr)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AllocError;
+
+struct GlobalAlloc;
+
+impl Allocator for GlobalAlloc {
+    fn allocate(self, layout: Layout) -> Result<*mut u8, AllocError> {
+        if layout.size == 0 {
+            return ok(layout.dangling())
+        }
+        let ptr = unsafe { extern_alloc(layout.size, layout.align) }
+        if ptr.is_null() { err(AllocError) } else { ok(ptr) }
+    }
+
+    fn deallocate(self, ptr: *mut u8, layout: Layout) {
+        if layout.size != 0 && ptr != layout.dangling() {
+            unsafe { extern_dealloc(ptr, layout.size, layout.align) }
+        }
+    }
+}
+
+// Bump allocator for arena-style allocation
+struct BumpAllocator {
+    arena: *mut u8,
+    capacity: usize,
+    offset: usize,
+    allocations: usize,
+}
+
+impl BumpAllocator {
+    fn new(capacity: usize) -> BumpAllocator {
+        let layout = Layout.from_size_align_unchecked(capacity, 16)
+        let arena = GlobalAlloc.allocate(layout).unwrap()
+        BumpAllocator { arena, capacity, offset: 0, allocations: 0 }
+    }
+
+    fn remaining(self) -> usize {
+        self.capacity - self.offset
+    }
+
+    fn reset(mut self) {
+        self.offset = 0
+        self.allocations = 0
+    }
+}
+
+impl Allocator for BumpAllocator {
+    fn allocate(mut self, layout: Layout) -> Result<*mut u8, AllocError> {
+        let aligned_offset = (self.offset + layout.align - 1) & !(layout.align - 1)
+        let end = aligned_offset + layout.size
+        if end > self.capacity { return err(AllocError) }
+        let ptr = unsafe { self.arena.add(aligned_offset) }
+        self.offset = end
+        self.allocations += 1
+        ok(ptr)
+    }
+
+    fn deallocate(self, _ptr: *mut u8, _layout: Layout) {
+        // Bump allocator doesn't free individual allocations
+    }
+}
+
+// Tracking allocator wrapper
+struct TrackingAllocator<A: Allocator> {
+    inner: A,
+    current_bytes: usize,
+    peak_bytes: usize,
+    total_allocations: usize,
+    total_deallocations: usize,
+}
+
+impl<A: Allocator> TrackingAllocator<A> {
+    fn new(inner: A) -> TrackingAllocator<A> {
+        TrackingAllocator {
+            inner, current_bytes: 0, peak_bytes: 0,
+            total_allocations: 0, total_deallocations: 0,
+        }
+    }
+
+    fn stats(self) -> (usize, usize, usize, usize) {
+        (self.current_bytes, self.peak_bytes, self.total_allocations, self.total_deallocations)
+    }
+}
+
+impl<A: Allocator> Allocator for TrackingAllocator<A> {
+    fn allocate(mut self, layout: Layout) -> Result<*mut u8, AllocError> {
+        let ptr = self.inner.allocate(layout)?
+        self.current_bytes += layout.size
+        if self.current_bytes > self.peak_bytes {
+            self.peak_bytes = self.current_bytes
+        }
+        self.total_allocations += 1
+        ok(ptr)
+    }
+
+    fn deallocate(mut self, ptr: *mut u8, layout: Layout) {
+        self.inner.deallocate(ptr, layout)
+        self.current_bytes -= layout.size
+        self.total_deallocations += 1
+    }
+}
+
+extern fn extern_alloc(size: usize, align: usize) -> *mut u8
+extern fn extern_dealloc(ptr: *mut u8, size: usize, align: usize)
+
+fn main() {
+    // Layout
+    let layout = Layout.new(64, 8).unwrap()
+    assert(layout.size() == 64)
+    assert(layout.align() == 8)
+    print("Layout ✓")
+
+    // Invalid layout
+    assert(Layout.new(10, 3).is_err()) // 3 not power of 2
+    print("Invalid layout ✓")
+
+    // Padding
+    let l1 = Layout.new(5, 4).unwrap()
+    assert(l1.padding_needed_for(4) == 3)
+    let padded = l1.pad_to_align()
+    assert(padded.size == 8)
+    print("Padding ✓")
+
+    // Extend
+    let a = Layout.new(4, 4).unwrap()
+    let b = Layout.new(8, 8).unwrap()
+    let (combined, offset) = a.extend(b).unwrap()
+    assert(offset == 8) // 4 + 4 padding
+    assert(combined.size == 16)
+    assert(combined.align == 8)
+    print("Extend ✓")
+
+    // Repeat
+    let elem = Layout.new(12, 4).unwrap()
+    let (repeated, stride) = elem.repeat(10).unwrap()
+    assert(stride == 12)
+    assert(repeated.size == 120)
+    print("Repeat ✓")
+
+    // Dangling pointer
+    let d = Layout.new(0, 8).unwrap()
+    assert(d.dangling() == 8 as *mut u8)
+    print("Dangling ✓")
+
+    // BumpAllocator
+    let mut bump = BumpAllocator.new(1024)
+    assert(bump.remaining() == 1024)
+    assert(bump.allocations == 0)
+
+    let l = Layout.new(64, 8).unwrap()
+    let ptr1 = bump.allocate(l).unwrap()
+    assert(!ptr1.is_null())
+    assert(bump.remaining() < 1024)
+    assert(bump.allocations == 1)
+    print("Bump alloc ✓")
+
+    // Multiple bump allocs
+    let ptr2 = bump.allocate(Layout.new(128, 16).unwrap()).unwrap()
+    assert(bump.allocations == 2)
+    print("Multiple bump allocs ✓")
+
+    // Bump overflow
+    let big = Layout.new(2048, 8).unwrap()
+    assert(bump.allocate(big).is_err())
+    print("Bump overflow ✓")
+
+    // Reset
+    bump.reset()
+    assert(bump.remaining() == 1024)
+    assert(bump.allocations == 0)
+    print("Bump reset ✓")
+
+    // LayoutError
+    let _e = LayoutError
+    let _ae = AllocError
+    print("Error types ✓")
+
+    print("Global Allocator complete ✓")
+}
