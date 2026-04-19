@@ -1,0 +1,199 @@
+// std.sync.mutex - Mutex and MutexGuard
+// Thread-safe mutual exclusion with RAII guard.
+
+use std.sync.atomic.{AtomicBool, AtomicU32, Ordering}
+use std.cell.UnsafeCell
+
+pub struct Mutex<T> {
+    data: UnsafeCell<T>,
+    locked: AtomicBool,
+    poison: AtomicBool,
+}
+
+unsafe impl<T: Send> Send for Mutex<T> {}
+unsafe impl<T: Send> Sync for Mutex<T> {}
+
+impl<T> Mutex<T> {
+    pub fn new(data: T) -> Mutex<T> {
+        Mutex { data: UnsafeCell.new(data), locked: AtomicBool.new(false), poison: AtomicBool.new(false) }
+    }
+
+    pub fn lock(self) -> Result<MutexGuard<T>, PoisonError<MutexGuard<T>>> {
+        // Spin then park
+        let mut spin_count = 0u32
+        loop {
+            if self.locked.compare_exchange(false, true, Ordering.Acquire, Ordering.Relaxed).is_ok() {
+                break
+            }
+            spin_count += 1
+            if spin_count < 100 { @intrinsic("spin_hint") }
+            else { @intrinsic("thread_yield"); spin_count = 0 }
+        }
+
+        let guard = MutexGuard { mutex: self }
+        if self.poison.load(Ordering.Relaxed) {
+            err(PoisonError.new(guard))
+        } else { ok(guard) }
+    }
+
+    pub fn try_lock(self) -> Result<MutexGuard<T>, TryLockError<MutexGuard<T>>> {
+        if self.locked.compare_exchange(false, true, Ordering.Acquire, Ordering.Relaxed).is_ok() {
+            let guard = MutexGuard { mutex: self }
+            if self.poison.load(Ordering.Relaxed) {
+                err(TryLockError.Poisoned(PoisonError.new(guard)))
+            } else { ok(guard) }
+        } else { err(TryLockError.WouldBlock) }
+    }
+
+    pub fn is_poisoned(self) -> bool { self.poison.load(Ordering.Relaxed) }
+
+    pub fn into_inner(self) -> Result<T, PoisonError<T>> {
+        let data = self.data.into_inner()
+        if self.is_poisoned() { err(PoisonError.new(data)) } else { ok(data) }
+    }
+
+    pub fn get_mut(mut self) -> Result<&mut T, PoisonError<&mut T>> {
+        let data = unsafe { &mut *self.data.get() }
+        if self.is_poisoned() { err(PoisonError.new(data)) } else { ok(data) }
+    }
+
+    fn unlock(self) { self.locked.store(false, Ordering.Release) }
+}
+
+pub struct MutexGuard<'a, T> { mutex: &'a Mutex<T> }
+
+impl<'a, T> Deref for MutexGuard<'a, T> {
+    type Target = T
+    fn deref(self) -> &T { unsafe { &*self.mutex.data.get() } }
+}
+
+impl<'a, T> DerefMut for MutexGuard<'a, T> {
+    fn deref_mut(mut self) -> &mut T { unsafe { &mut *self.mutex.data.get() } }
+}
+
+impl<'a, T> Drop for MutexGuard<'a, T> {
+    fn drop(mut self) {
+        if @intrinsic("thread_panicking") { self.mutex.poison.store(true, Ordering.Relaxed) }
+        self.mutex.unlock()
+    }
+}
+
+pub struct PoisonError<T> { guard: T }
+
+impl<T> PoisonError<T> {
+    pub fn new(guard: T) -> PoisonError<T> { PoisonError { guard } }
+    pub fn into_inner(self) -> T { self.guard }
+    pub fn get_ref(self) -> &T { &self.guard }
+    pub fn get_mut(mut self) -> &mut T { &mut self.guard }
+}
+
+impl<T> fmt.Display for PoisonError<T> {
+    fn fmt(self, f: &mut fmt.Formatter) -> fmt.Result { write!(f, "poisoned lock") }
+}
+
+pub enum TryLockError<T> {
+    Poisoned(PoisonError<T>),
+    WouldBlock,
+}
+
+impl<T> fmt.Display for TryLockError<T> {
+    fn fmt(self, f: &mut fmt.Formatter) -> fmt.Result {
+        match self {
+            TryLockError.Poisoned(_) => write!(f, "poisoned lock"),
+            TryLockError.WouldBlock => write!(f, "would block"),
+        }
+    }
+}
+
+// Condvar
+pub struct Condvar { waiters: AtomicU32 }
+
+impl Condvar {
+    pub fn new() -> Condvar { Condvar { waiters: AtomicU32.new(0) } }
+
+    pub fn wait<T>(self, guard: MutexGuard<T>) -> Result<MutexGuard<T>, PoisonError<MutexGuard<T>>> {
+        self.waiters.fetch_add(1, Ordering.Relaxed)
+        let mutex = guard.mutex
+        drop(guard)  // release lock
+        @intrinsic("futex_wait", &self.waiters, 0)
+        self.waiters.fetch_sub(1, Ordering.Relaxed)
+        mutex.lock()
+    }
+
+    pub fn notify_one(self) {
+        if self.waiters.load(Ordering.Relaxed) > 0 {
+            @intrinsic("futex_wake", &self.waiters, 1)
+        }
+    }
+
+    pub fn notify_all(self) {
+        let n = self.waiters.load(Ordering.Relaxed)
+        if n > 0 { @intrinsic("futex_wake", &self.waiters, n) }
+    }
+}
+
+// Once - initialization primitive
+pub struct Once { state: AtomicU32 }
+const ONCE_INCOMPLETE: u32 = 0
+const ONCE_RUNNING: u32 = 1
+const ONCE_COMPLETE: u32 = 2
+
+impl Once {
+    pub fn new() -> Once { Once { state: AtomicU32.new(ONCE_INCOMPLETE) } }
+
+    pub fn call_once<F: FnOnce()>(self, f: F) {
+        if self.state.load(Ordering.Acquire) == ONCE_COMPLETE { return }
+        if self.state.compare_exchange(ONCE_INCOMPLETE, ONCE_RUNNING, Ordering.AcqRel, Ordering.Acquire).is_ok() {
+            f()
+            self.state.store(ONCE_COMPLETE, Ordering.Release)
+        } else {
+            while self.state.load(Ordering.Acquire) != ONCE_COMPLETE {
+                @intrinsic("spin_hint")
+            }
+        }
+    }
+
+    pub fn is_completed(self) -> bool { self.state.load(Ordering.Acquire) == ONCE_COMPLETE }
+}
+
+fn main() {
+    let m = Mutex.new(42)
+    {
+        let mut guard = m.lock().unwrap()
+        assert(*guard == 42)
+        *guard = 99
+    }
+    {
+        let guard = m.lock().unwrap()
+        assert(*guard == 99)
+    }
+    print("Mutex lock/unlock \u2713")
+
+    let m2 = Mutex.new(0)
+    assert(m2.try_lock().is_ok())
+    print("Try lock \u2713")
+
+    assert(!m.is_poisoned())
+    print("Poison check \u2713")
+
+    let m3 = Mutex.new(vec![1, 2, 3])
+    let inner = m3.into_inner().unwrap()
+    assert(inner == vec![1, 2, 3])
+    print("Into inner \u2713")
+
+    // Once
+    let once = Once.new()
+    let mut called = 0
+    once.call_once(|| { called += 1 })
+    once.call_once(|| { called += 1 })
+    assert(called == 1)
+    assert(once.is_completed())
+    print("Once \u2713")
+
+    // Condvar
+    let cv = Condvar.new()
+    cv.notify_one()  // no-op when no waiters
+    print("Condvar \u2713")
+
+    print("Mutex complete \u2713")
+}
