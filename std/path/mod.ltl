@@ -1,0 +1,320 @@
+// std.path - Cross-platform path manipulation
+// Path, PathBuf, Components, file_name, extension, parent, join.
+
+/// Borrowed path slice (like &str for paths).
+pub struct Path {
+    inner: str,
+}
+
+impl Path {
+    pub fn new(s: &str) -> &Path {
+        unsafe { &*(s as *const str as *const Path) }
+    }
+
+    pub fn as_str(self) -> &str { &self.inner }
+
+    pub fn to_path_buf(self) -> PathBuf {
+        PathBuf { inner: self.inner.to_string() }
+    }
+
+    pub fn is_absolute(self) -> bool {
+        self.inner.starts_with('/') || self.has_windows_root()
+    }
+
+    pub fn is_relative(self) -> bool { !self.is_absolute() }
+
+    fn has_windows_root(self) -> bool {
+        let bytes = self.inner.as_bytes()
+        bytes.len() >= 3 && bytes[1] == b':' && (bytes[2] == b'\\' || bytes[2] == b'/')
+            && bytes[0].is_ascii_alphabetic()
+    }
+
+    pub fn parent(self) -> Option<&Path> {
+        let s = self.inner.trim_end_matches('/')
+        if s.is_empty() { return none }
+        match s.rfind('/') {
+            some(0) => some(Path.new("/")),
+            some(idx) => some(Path.new(&self.inner[..idx])),
+            none => some(Path.new("")),
+        }
+    }
+
+    pub fn file_name(self) -> Option<&str> {
+        let s = self.inner.trim_end_matches('/')
+        if s.is_empty() { return none }
+        match s.rfind('/') {
+            some(idx) => {
+                let name = &s[idx + 1..]
+                if name.is_empty() { none } else { some(name) }
+            },
+            none => some(s),
+        }
+    }
+
+    pub fn file_stem(self) -> Option<&str> {
+        self.file_name().map(|name| {
+            match name.rfind('.') {
+                some(0) | none => name,
+                some(idx) => &name[..idx],
+            }
+        })
+    }
+
+    pub fn extension(self) -> Option<&str> {
+        self.file_name().and_then(|name| {
+            match name.rfind('.') {
+                some(0) | none => none,
+                some(idx) => some(&name[idx + 1..]),
+            }
+        })
+    }
+
+    pub fn join(self, other: &str) -> PathBuf {
+        let other_path = Path.new(other)
+        if other_path.is_absolute() { return other_path.to_path_buf() }
+        let mut buf = self.to_path_buf()
+        if !buf.inner.ends_with('/') && !buf.inner.is_empty() {
+            buf.inner.push('/')
+        }
+        buf.inner.push_str(other)
+        buf
+    }
+
+    pub fn starts_with(self, prefix: &str) -> bool {
+        self.inner.starts_with(prefix)
+    }
+
+    pub fn ends_with(self, suffix: &str) -> bool {
+        self.inner.ends_with(suffix)
+    }
+
+    pub fn components(self) -> Components {
+        Components { path: &self.inner, pos: 0 }
+    }
+
+    pub fn has_root(self) -> bool { self.inner.starts_with('/') }
+
+    pub fn exists(self) -> bool { std.fs.metadata(&self.inner).is_ok() }
+    pub fn is_file(self) -> bool { std.fs.metadata(&self.inner).map(|m| m.is_file()).unwrap_or(false) }
+    pub fn is_dir(self) -> bool { std.fs.metadata(&self.inner).map(|m| m.is_dir()).unwrap_or(false) }
+
+    pub fn strip_prefix(self, base: &str) -> Option<&Path> {
+        if self.inner.starts_with(base) {
+            let rest = &self.inner[base.len()..]
+            let rest = rest.trim_start_matches('/')
+            some(Path.new(rest))
+        } else { none }
+    }
+
+    pub fn with_extension(self, ext: &str) -> PathBuf {
+        let mut buf = match self.file_stem() {
+            some(_) => {
+                let parent = self.parent().map(|p| p.as_str()).unwrap_or("")
+                let stem = self.file_stem().unwrap()
+                if parent.is_empty() { PathBuf.from(stem) }
+                else { PathBuf.from(&format!("{}/{}", parent, stem)) }
+            },
+            none => self.to_path_buf(),
+        }
+        if !ext.is_empty() {
+            buf.inner.push('.')
+            buf.inner.push_str(ext)
+        }
+        buf
+    }
+
+    pub fn with_file_name(self, name: &str) -> PathBuf {
+        let parent = self.parent().map(|p| p.as_str()).unwrap_or("")
+        if parent.is_empty() { PathBuf.from(name) }
+        else { PathBuf.from(&format!("{}/{}", parent, name)) }
+    }
+}
+
+impl fmt.Display for Path {
+    fn fmt(self, f: &mut fmt.Formatter) -> fmt.Result {
+        write!(f, "{}", self.inner)
+    }
+}
+
+/// Owned, mutable path (like String for paths).
+pub struct PathBuf {
+    inner: string,
+}
+
+impl PathBuf {
+    pub fn new() -> PathBuf { PathBuf { inner: string.new() } }
+
+    pub fn from(s: &str) -> PathBuf { PathBuf { inner: s.to_string() } }
+
+    pub fn as_path(self) -> &Path { Path.new(&self.inner) }
+
+    pub fn push(mut self, component: &str) {
+        let p = Path.new(component)
+        if p.is_absolute() {
+            self.inner = component.to_string()
+        } else {
+            if !self.inner.ends_with('/') && !self.inner.is_empty() {
+                self.inner.push('/')
+            }
+            self.inner.push_str(component)
+        }
+    }
+
+    pub fn pop(mut self) -> bool {
+        if let some(parent) = self.as_path().parent() {
+            self.inner = parent.as_str().to_string()
+            true
+        } else { false }
+    }
+
+    pub fn set_extension(mut self, ext: &str) -> bool {
+        let new = self.as_path().with_extension(ext)
+        self.inner = new.inner
+        true
+    }
+
+    pub fn set_file_name(mut self, name: &str) {
+        let new = self.as_path().with_file_name(name)
+        self.inner = new.inner
+    }
+
+    pub fn to_string(self) -> string { self.inner.clone() }
+}
+
+impl Deref for PathBuf {
+    type Target = Path
+    fn deref(self) -> &Path { Path.new(&self.inner) }
+}
+
+impl fmt.Display for PathBuf {
+    fn fmt(self, f: &mut fmt.Formatter) -> fmt.Result {
+        write!(f, "{}", self.inner)
+    }
+}
+
+impl Clone for PathBuf {
+    fn clone(self) -> PathBuf { PathBuf { inner: self.inner.clone() } }
+}
+
+/// Path component iterator
+pub struct Components<'a> {
+    path: &'a str,
+    pos: usize,
+}
+
+impl<'a> Iterator for Components<'a> {
+    type Item = &'a str
+    fn next(mut self) -> Option<&'a str> {
+        while self.pos < self.path.len() && self.path.as_bytes()[self.pos] == b'/' {
+            self.pos += 1
+        }
+        if self.pos >= self.path.len() { return none }
+        let start = self.pos
+        while self.pos < self.path.len() && self.path.as_bytes()[self.pos] != b'/' {
+            self.pos += 1
+        }
+        some(&self.path[start..self.pos])
+    }
+}
+
+fn main() {
+    // Path basics
+    let p = Path.new("/home/user/file.txt")
+    assert(p.as_str() == "/home/user/file.txt")
+    print("Path new ✓")
+
+    // file_name
+    assert(p.file_name() == some("file.txt"))
+    assert(Path.new("/").file_name().is_none())
+    assert(Path.new("foo.rs").file_name() == some("foo.rs"))
+    print("file_name ✓")
+
+    // file_stem
+    assert(p.file_stem() == some("file"))
+    assert(Path.new(".hidden").file_stem() == some(".hidden"))
+    print("file_stem ✓")
+
+    // extension
+    assert(p.extension() == some("txt"))
+    assert(Path.new("Makefile").extension().is_none())
+    assert(Path.new(".gitignore").extension().is_none())
+    assert(Path.new("archive.tar.gz").extension() == some("gz"))
+    print("extension ✓")
+
+    // parent
+    assert(p.parent().unwrap().as_str() == "/home/user")
+    assert(Path.new("/").parent().unwrap().as_str() == "/")
+    assert(Path.new("foo").parent().unwrap().as_str() == "")
+    print("parent ✓")
+
+    // is_absolute / is_relative
+    assert(p.is_absolute())
+    assert(Path.new("relative/path").is_relative())
+    print("absolute/relative ✓")
+
+    // join
+    let joined = Path.new("/home").join("user/file.txt")
+    assert(joined.to_string() == "/home/user/file.txt")
+    let abs_join = Path.new("/home").join("/etc/config")
+    assert(abs_join.to_string() == "/etc/config")
+    print("join ✓")
+
+    // components
+    let comps: [&str] = Path.new("/usr/local/bin").components().collect()
+    assert(comps == ["usr", "local", "bin"])
+    print("components ✓")
+
+    // PathBuf
+    let mut buf = PathBuf.new()
+    buf.push("/home")
+    buf.push("user")
+    buf.push("docs")
+    assert(buf.to_string() == "/home/user/docs")
+    print("PathBuf push ✓")
+
+    buf.pop()
+    assert(buf.to_string() == "/home/user")
+    print("PathBuf pop ✓")
+
+    // with_extension
+    let new_ext = Path.new("/home/file.txt").with_extension("md")
+    assert(new_ext.to_string() == "/home/file.md")
+    print("with_extension ✓")
+
+    let no_ext = Path.new("/home/file.txt").with_extension("")
+    assert(no_ext.to_string() == "/home/file")
+    print("with_extension empty ✓")
+
+    // with_file_name
+    let new_name = Path.new("/home/old.txt").with_file_name("new.rs")
+    assert(new_name.to_string() == "/home/new.rs")
+    print("with_file_name ✓")
+
+    // strip_prefix
+    let stripped = Path.new("/home/user/file").strip_prefix("/home").unwrap()
+    assert(stripped.as_str() == "user/file")
+    assert(Path.new("/other").strip_prefix("/home").is_none())
+    print("strip_prefix ✓")
+
+    // starts_with / ends_with
+    assert(Path.new("/home/user").starts_with("/home"))
+    assert(Path.new("file.ltl").ends_with(".ltl"))
+    print("starts/ends_with ✓")
+
+    // has_root
+    assert(Path.new("/usr").has_root())
+    assert(!Path.new("relative").has_root())
+    print("has_root ✓")
+
+    // Clone
+    let buf2 = PathBuf.from("/tmp/test")
+    let buf3 = buf2.clone()
+    assert(buf3.to_string() == "/tmp/test")
+    print("Clone ✓")
+
+    // Display
+    assert(format!("{}", Path.new("/a/b")) == "/a/b")
+    print("Display ✓")
+
+    print("Path module complete ✓")
+}
