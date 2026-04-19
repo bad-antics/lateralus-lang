@@ -1,0 +1,106 @@
+// std.result - Result type and methods
+// Comprehensive Result<T, E> implementation.
+
+pub enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
+
+impl<T, E> Result<T, E> {
+    pub fn is_ok(self) -> bool { match self { ok(_) => true, err(_) => false } }
+    pub fn is_err(self) -> bool { !self.is_ok() }
+
+    pub fn is_ok_and(self, f: fn(&T) -> bool) -> bool {
+        match self { ok(v) => f(v), err(_) => false }
+    }
+    pub fn is_err_and(self, f: fn(&E) -> bool) -> bool {
+        match self { err(e) => f(e), ok(_) => false }
+    }
+
+    pub fn ok(self) -> Option<T> { match self { ok(v) => some(v), err(_) => none } }
+    pub fn err(self) -> Option<E> { match self { err(e) => some(e), ok(_) => none } }
+
+    pub fn unwrap(self) -> T where E: Display {
+        match self { ok(v) => v, err(e) => panic!("called unwrap on Err: {}", e) }
+    }
+    pub fn unwrap_err(self) -> E where T: Display {
+        match self { err(e) => e, ok(v) => panic!("called unwrap_err on Ok: {}", v) }
+    }
+    pub fn unwrap_or(self, default: T) -> T { match self { ok(v) => v, err(_) => default } }
+    pub fn unwrap_or_else(self, f: fn(E) -> T) -> T { match self { ok(v) => v, err(e) => f(e) } }
+    pub fn unwrap_or_default(self) -> T where T: Default { match self { ok(v) => v, err(_) => T.default() } }
+    pub fn expect(self, msg: &str) -> T { match self { ok(v) => v, err(_) => panic!(msg) } }
+    pub fn expect_err(self, msg: &str) -> E { match self { err(e) => e, ok(_) => panic!(msg) } }
+
+    pub fn map<U>(self, f: fn(T) -> U) -> Result<U, E> {
+        match self { ok(v) => ok(f(v)), err(e) => err(e) }
+    }
+    pub fn map_err<F>(self, f: fn(E) -> F) -> Result<T, F> {
+        match self { ok(v) => ok(v), err(e) => err(f(e)) }
+    }
+    pub fn map_or<U>(self, default: U, f: fn(T) -> U) -> U {
+        match self { ok(v) => f(v), err(_) => default }
+    }
+    pub fn map_or_else<U>(self, default: fn(E) -> U, f: fn(T) -> U) -> U {
+        match self { ok(v) => f(v), err(e) => default(e) }
+    }
+
+    pub fn and<U>(self, res: Result<U, E>) -> Result<U, E> {
+        match self { ok(_) => res, err(e) => err(e) }
+    }
+    pub fn and_then<U>(self, f: fn(T) -> Result<U, E>) -> Result<U, E> {
+        match self { ok(v) => f(v), err(e) => err(e) }
+    }
+    pub fn or<F>(self, res: Result<T, F>) -> Result<T, F> {
+        match self { ok(v) => ok(v), err(_) => res }
+    }
+    pub fn or_else<F>(self, f: fn(E) -> Result<T, F>) -> Result<T, F> {
+        match self { ok(v) => ok(v), err(e) => f(e) }
+    }
+
+    pub fn as_ref(self) -> Result<&T, &E> {
+        match self { ok(ref v) => ok(v), err(ref e) => err(e) }
+    }
+    pub fn as_mut(mut self) -> Result<&mut T, &mut E> {
+        match self { ok(ref mut v) => ok(v), err(ref mut e) => err(e) }
+    }
+
+    pub fn inspect(self, f: fn(&T)) -> Result<T, E> {
+        if let ok(ref v) = self { f(v) }
+        self
+    }
+    pub fn inspect_err(self, f: fn(&E)) -> Result<T, E> {
+        if let err(ref e) = self { f(e) }
+        self
+    }
+
+    pub fn flatten(self) -> Result<T, E> where T == Result<U, E> {
+        match self { ok(inner) => inner, err(e) => err(e) }
+    }
+
+    pub fn transpose(self) -> Option<Result<T, E>> where T == Option<U> {
+        match self {
+            ok(some(v)) => some(ok(v)),
+            ok(none) => none,
+            err(e) => some(err(e)),
+        }
+    }
+
+    pub fn iter(self) -> ResultIter<T> {
+        ResultIter { inner: self.ok() }
+    }
+}
+
+pub struct ResultIter<T> { inner: Option<T> }
+impl<T> Iterator for ResultIter<T> {
+    type Item = T
+    fn next(mut self) -> Option<T> { self.inner.take() }
+}
+
+pub fn collect_results<T, E>(results: &[Result<T, E>]) -> Result<[T], E> where T: Clone, E: Clone {
+    let mut out: [T] = []
+    for r in results {
+        match r { ok(v) => out.push(v.clone()), err(e) => return err(e.clone()) }
+    }
+    ok(out)
+}
