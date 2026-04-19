@@ -1,0 +1,223 @@
+// std.net.unix - Unix domain sockets
+// Local inter-process communication via filesystem sockets.
+
+use std.io.{Read, Write, IoError}
+use std.os.fd.{RawFd, AsRawFd, FromRawFd}
+
+pub struct UnixStream {
+    fd: RawFd,
+}
+
+impl UnixStream {
+    pub fn connect(path: &str) -> Result<UnixStream, IoError> {
+        let fd = @intrinsic("unix_socket_connect", path)
+        ok(UnixStream { fd })
+    }
+
+    pub fn pair() -> Result<(UnixStream, UnixStream), IoError> {
+        let (fd1, fd2) = @intrinsic("unix_socketpair")
+        ok((UnixStream { fd: fd1 }, UnixStream { fd: fd2 }))
+    }
+
+    pub fn local_addr(self) -> Result<UnixAddr, IoError> {
+        @intrinsic("unix_local_addr", self.fd)
+    }
+
+    pub fn peer_addr(self) -> Result<UnixAddr, IoError> {
+        @intrinsic("unix_peer_addr", self.fd)
+    }
+
+    pub fn set_nonblocking(self, nonblocking: bool) -> Result<(), IoError> {
+        @intrinsic("fd_set_nonblocking", self.fd, nonblocking)
+    }
+
+    pub fn shutdown(self, how: Shutdown) -> Result<(), IoError> {
+        @intrinsic("unix_shutdown", self.fd, how)
+    }
+
+    pub fn try_clone(self) -> Result<UnixStream, IoError> {
+        let new_fd = @intrinsic("fd_dup", self.fd)
+        ok(UnixStream { fd: new_fd })
+    }
+
+    pub fn peek(self, buf: &mut [u8]) -> Result<usize, IoError> {
+        @intrinsic("unix_peek", self.fd, buf)
+    }
+}
+
+impl Read for UnixStream {
+    fn read(mut self, buf: &mut [u8]) -> Result<usize, IoError> {
+        @intrinsic("fd_read", self.fd, buf)
+    }
+}
+
+impl Write for UnixStream {
+    fn write(mut self, buf: &[u8]) -> Result<usize, IoError> {
+        @intrinsic("fd_write", self.fd, buf)
+    }
+    fn flush(mut self) -> Result<(), IoError> { ok(()) }
+}
+
+impl AsRawFd for UnixStream {
+    fn as_raw_fd(self) -> RawFd { self.fd }
+}
+
+impl Drop for UnixStream {
+    fn drop(mut self) { @intrinsic("fd_close", self.fd) }
+}
+
+pub struct UnixListener {
+    fd: RawFd,
+}
+
+impl UnixListener {
+    pub fn bind(path: &str) -> Result<UnixListener, IoError> {
+        let fd = @intrinsic("unix_socket_bind", path)
+        @intrinsic("unix_listen", fd, 128)
+        ok(UnixListener { fd })
+    }
+
+    pub fn accept(self) -> Result<(UnixStream, UnixAddr), IoError> {
+        let (client_fd, addr) = @intrinsic("unix_accept", self.fd)
+        ok((UnixStream { fd: client_fd }, addr))
+    }
+
+    pub fn local_addr(self) -> Result<UnixAddr, IoError> {
+        @intrinsic("unix_local_addr", self.fd)
+    }
+
+    pub fn set_nonblocking(self, nonblocking: bool) -> Result<(), IoError> {
+        @intrinsic("fd_set_nonblocking", self.fd, nonblocking)
+    }
+
+    pub fn incoming(self) -> Incoming {
+        Incoming { listener: self }
+    }
+}
+
+impl AsRawFd for UnixListener {
+    fn as_raw_fd(self) -> RawFd { self.fd }
+}
+
+impl Drop for UnixListener {
+    fn drop(mut self) { @intrinsic("fd_close", self.fd) }
+}
+
+pub struct Incoming<'a> {
+    listener: &'a UnixListener,
+}
+
+impl<'a> Iterator for Incoming<'a> {
+    type Item = Result<UnixStream, IoError>
+    fn next(mut self) -> Option<Result<UnixStream, IoError>> {
+        some(self.listener.accept().map(|(stream, _)| stream))
+    }
+}
+
+pub struct UnixDatagram {
+    fd: RawFd,
+}
+
+impl UnixDatagram {
+    pub fn bind(path: &str) -> Result<UnixDatagram, IoError> {
+        let fd = @intrinsic("unix_dgram_bind", path)
+        ok(UnixDatagram { fd })
+    }
+
+    pub fn unbound() -> Result<UnixDatagram, IoError> {
+        let fd = @intrinsic("unix_dgram_create")
+        ok(UnixDatagram { fd })
+    }
+
+    pub fn pair() -> Result<(UnixDatagram, UnixDatagram), IoError> {
+        let (fd1, fd2) = @intrinsic("unix_dgram_pair")
+        ok((UnixDatagram { fd: fd1 }, UnixDatagram { fd: fd2 }))
+    }
+
+    pub fn connect(mut self, path: &str) -> Result<(), IoError> {
+        @intrinsic("unix_dgram_connect", self.fd, path)
+    }
+
+    pub fn send(self, buf: &[u8]) -> Result<usize, IoError> {
+        @intrinsic("unix_dgram_send", self.fd, buf)
+    }
+
+    pub fn send_to(self, buf: &[u8], path: &str) -> Result<usize, IoError> {
+        @intrinsic("unix_dgram_send_to", self.fd, buf, path)
+    }
+
+    pub fn recv(self, buf: &mut [u8]) -> Result<usize, IoError> {
+        @intrinsic("unix_dgram_recv", self.fd, buf)
+    }
+
+    pub fn recv_from(self, buf: &mut [u8]) -> Result<(usize, UnixAddr), IoError> {
+        @intrinsic("unix_dgram_recv_from", self.fd, buf)
+    }
+
+    pub fn set_nonblocking(self, nonblocking: bool) -> Result<(), IoError> {
+        @intrinsic("fd_set_nonblocking", self.fd, nonblocking)
+    }
+}
+
+impl AsRawFd for UnixDatagram {
+    fn as_raw_fd(self) -> RawFd { self.fd }
+}
+
+impl Drop for UnixDatagram {
+    fn drop(mut self) { @intrinsic("fd_close", self.fd) }
+}
+
+pub struct UnixAddr {
+    path: Option<string>,
+    unnamed: bool,
+}
+
+impl UnixAddr {
+    pub fn from_path(path: &str) -> UnixAddr {
+        UnixAddr { path: some(path.to_string()), unnamed: false }
+    }
+
+    pub fn unnamed() -> UnixAddr {
+        UnixAddr { path: none, unnamed: true }
+    }
+
+    pub fn as_pathname(self) -> Option<&str> {
+        self.path.as_deref()
+    }
+
+    pub fn is_unnamed(self) -> bool { self.unnamed }
+}
+
+impl fmt.Display for UnixAddr {
+    fn fmt(self, f: &mut fmt.Formatter) -> fmt.Result {
+        match &self.path {
+            some(p) => write!(f, "{}", p),
+            none => write!(f, "(unnamed)"),
+        }
+    }
+}
+
+pub enum Shutdown { Read, Write, Both }
+
+fn main() {
+    // UnixAddr
+    let addr = UnixAddr.from_path("/tmp/test.sock")
+    assert(addr.as_pathname() == some("/tmp/test.sock"))
+    assert(!addr.is_unnamed())
+    print("UnixAddr path ✓")
+
+    let unnamed = UnixAddr.unnamed()
+    assert(unnamed.is_unnamed())
+    assert(unnamed.as_pathname().is_none())
+    print("UnixAddr unnamed ✓")
+
+    let s = format!("{}", addr)
+    assert(s == "/tmp/test.sock")
+    print("UnixAddr display ✓")
+
+    // Shutdown enum
+    match Shutdown.Both { Shutdown.Both => {} _ => panic!("wrong") }
+    print("Shutdown enum ✓")
+
+    print("Unix sockets complete ✓")
+}
