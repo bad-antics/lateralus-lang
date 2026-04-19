@@ -1,0 +1,123 @@
+// websocket.ltl — WebSocket client (RFC 6455)
+use std.net.TcpStream
+use std.tls.TlsStream
+use std.encoding.{base64, sha1}
+use std.random.rand_bytes
+use std.io.{BufReader, Write}
+
+const WS_MAGIC: string = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+enum OpCode { Continuation=0, Text=1, Binary=2, Close=8, Ping=9, Pong=10 }
+
+struct WsFrame {
+    fin:     bool,
+    opcode:  OpCode,
+    payload: [u8],
+}
+
+fn encode_frame(payload: [u8], opcode: OpCode, mask: bool) -> [u8] {
+    let mut out = []
+    out.push(0x80 | opcode as u8)  // FIN + opcode
+    let len = payload.len()
+    let mask_bit = if mask { 0x80u8 } else { 0u8 }
+    if len <= 125 {
+        out.push(mask_bit | len as u8)
+    } else if len <= 65535 {
+        out.push(mask_bit | 126)
+        out.push((len >> 8) as u8)
+        out.push((len & 0xFF) as u8)
+    } else {
+        out.push(mask_bit | 127)
+        for i in range(0, 8) { out.push(((len >> ((7-i)*8)) & 0xFF) as u8) }
+    }
+    if mask {
+        let key = rand_bytes(4)
+        out.extend(key)
+        out.extend(payload.iter().enumerate().map(|(i, &b)| b ^ key[i % 4]))
+    } else {
+        out.extend(payload)
+    }
+    out
+}
+
+fn decode_frame(buf: [u8]) -> Result<(WsFrame, int), string> {
+    if buf.len() < 2 { return err("frame too short") }
+    let fin    = buf[0] & 0x80 != 0
+    let opcode = buf[0] & 0x0F
+    let masked = buf[1] & 0x80 != 0
+    let mut len = (buf[1] & 0x7F) as int
+    let mut pos = 2
+    if len == 126 {
+        if buf.len() < 4 { return err("short") }
+        len = ((buf[2] as int) << 8) | buf[3] as int
+        pos = 4
+    } else if len == 127 {
+        if buf.len() < 10 { return err("short") }
+        len = range(0, 8) |> fold(0, |a, i| (a << 8) | buf[2+i] as int)
+        pos = 10
+    }
+    let mask_key: [u8] = if masked { buf[pos..pos+4] |> collect(); pos += 4; } else { [] }
+    if buf.len() < pos + len { return err("incomplete payload") }
+    let mut payload = buf[pos..pos+len] |> collect()
+    if masked { payload = payload.iter().enumerate().map(|(i, &b)| b ^ mask_key[i%4]).collect() }
+    let op = match opcode { 0=>OpCode.Continuation, 1=>OpCode.Text, 2=>OpCode.Binary, 8=>OpCode.Close, 9=>OpCode.Ping, 10=>OpCode.Pong, _=>OpCode.Text }
+    ok((WsFrame { fin, opcode: op, payload }, pos + len))
+}
+
+struct WebSocket { stream: dyn Write }
+
+impl WebSocket {
+    async fn connect(url: string) -> Result<WebSocket, string> {
+        let key     = base64.encode(rand_bytes(16))
+        let host    = url.split("/")[2]
+        let path    = "/" + url.split("/")[3..] |> join("/")
+        let handshake = "GET ${path} HTTP/1.1
+Host: ${host}
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Key: ${key}
+Sec-WebSocket-Version: 13
+
+"
+        let stream  = TcpStream.connect("${host}:80").await?
+        stream.write_all(handshake.as_bytes()).await?
+        let mut reader = BufReader.new(stream.clone())
+        let status = reader.read_line().await?
+        if !status.contains("101") { return err("handshake failed: ${status}") }
+        ok(WebSocket { stream })
+    }
+
+    async fn send_text(self, msg: string) -> Result<(), string> {
+        self.stream.write_all(encode_frame(msg.as_bytes(), OpCode.Text, true)).await
+    }
+
+    async fn send_binary(self, data: [u8]) -> Result<(), string> {
+        self.stream.write_all(encode_frame(data, OpCode.Binary, true)).await
+    }
+
+    async fn send_ping(self) -> Result<(), string> {
+        self.stream.write_all(encode_frame([], OpCode.Ping, true)).await
+    }
+
+    async fn close(self) -> Result<(), string> {
+        self.stream.write_all(encode_frame([0x03, 0xE8], OpCode.Close, true)).await
+    }
+}
+
+fn main() {
+    // Frame encode/decode round-trip test
+    let payload = "Hello, WebSocket!".as_bytes()
+    let frame   = encode_frame(payload, OpCode.Text, false)
+    let (ws_frame, _) = decode_frame(frame).unwrap()
+    assert(ws_frame.payload == payload)
+    assert(matches!(ws_frame.opcode, OpCode.Text))
+    assert(ws_frame.fin)
+    print("WebSocket frame encode/decode ✓")
+
+    // Large payload (126 length encoding)
+    let big = [0xAAu8; 200]
+    let big_frame = encode_frame(big, OpCode.Binary, false)
+    let (bf, _) = decode_frame(big_frame).unwrap()
+    assert(bf.payload == big)
+    print("WebSocket large frame ✓")
+}
