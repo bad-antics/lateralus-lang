@@ -1,0 +1,201 @@
+// std.rc - Reference counting smart pointers
+// Rc, Weak, Arc (atomic reference counted).
+
+use std.cell.{Cell, RefCell}
+use std.ops.{Deref, Drop}
+use std.marker.{Send, Sync}
+
+struct RcInner<T> {
+    value: T,
+    strong: Cell<usize>,
+    weak: Cell<usize>,
+}
+
+pub struct Rc<T> {
+    inner: *mut RcInner<T>,
+}
+
+impl<T> Rc<T> {
+    pub fn new(value: T) -> Rc<T> {
+        let inner = Box.into_raw(Box.new(RcInner {
+            value, strong: Cell.new(1), weak: Cell.new(1),
+        }))
+        Rc { inner }
+    }
+
+    pub fn strong_count(self) -> usize {
+        unsafe { (*self.inner).strong.get() }
+    }
+
+    pub fn weak_count(self) -> usize {
+        unsafe { (*self.inner).weak.get() - 1 }
+    }
+
+    pub fn clone(self) -> Rc<T> {
+        unsafe { (*self.inner).strong.set((*self.inner).strong.get() + 1) }
+        Rc { inner: self.inner }
+    }
+
+    pub fn downgrade(self) -> Weak<T> {
+        unsafe { (*self.inner).weak.set((*self.inner).weak.get() + 1) }
+        Weak { inner: self.inner }
+    }
+
+    pub fn try_unwrap(self) -> Result<T, Rc<T>> {
+        if self.strong_count() == 1 {
+            unsafe {
+                (*self.inner).strong.set(0)
+                let val = std.ptr.read(&(*self.inner).value)
+                ok(val)
+            }
+        } else { err(self) }
+    }
+
+    pub fn ptr_eq(self, other: &Rc<T>) -> bool { self.inner == other.inner }
+}
+
+impl<T> Deref for Rc<T> {
+    type Target = T
+    fn deref(self) -> &T { unsafe { &(*self.inner).value } }
+}
+
+impl<T> Drop for Rc<T> {
+    fn drop(mut self) {
+        unsafe {
+            let strong = (*self.inner).strong.get() - 1
+            (*self.inner).strong.set(strong)
+            if strong == 0 {
+                std.ptr.drop_in_place(&mut (*self.inner).value)
+                let weak = (*self.inner).weak.get() - 1
+                (*self.inner).weak.set(weak)
+                if weak == 0 { Box.from_raw(self.inner) }
+            }
+        }
+    }
+}
+
+pub struct Weak<T> {
+    inner: *mut RcInner<T>,
+}
+
+impl<T> Weak<T> {
+    pub fn new() -> Weak<T> { Weak { inner: std.ptr.null_mut() } }
+
+    pub fn upgrade(self) -> Option<Rc<T>> {
+        if self.inner.is_null() { return none }
+        unsafe {
+            let strong = (*self.inner).strong.get()
+            if strong == 0 { none }
+            else {
+                (*self.inner).strong.set(strong + 1)
+                some(Rc { inner: self.inner })
+            }
+        }
+    }
+
+    pub fn strong_count(self) -> usize {
+        if self.inner.is_null() { 0 }
+        else { unsafe { (*self.inner).strong.get() } }
+    }
+}
+
+impl<T> Clone for Weak<T> {
+    fn clone(self) -> Weak<T> {
+        if !self.inner.is_null() {
+            unsafe { (*self.inner).weak.set((*self.inner).weak.get() + 1) }
+        }
+        Weak { inner: self.inner }
+    }
+}
+
+impl<T> Drop for Weak<T> {
+    fn drop(mut self) {
+        if !self.inner.is_null() {
+            unsafe {
+                let weak = (*self.inner).weak.get() - 1
+                (*self.inner).weak.set(weak)
+                if weak == 0 { Box.from_raw(self.inner) }
+            }
+        }
+    }
+}
+
+// Arc - atomic reference counted
+struct ArcInner<T> {
+    value: T,
+    strong: @atomic(usize),
+    weak: @atomic(usize),
+}
+
+pub struct Arc<T: Send + Sync> {
+    inner: *mut ArcInner<T>,
+}
+
+impl<T: Send + Sync> Arc<T> {
+    pub fn new(value: T) -> Arc<T> {
+        let inner = Box.into_raw(Box.new(ArcInner {
+            value, strong: @atomic(1), weak: @atomic(1),
+        }))
+        Arc { inner }
+    }
+
+    pub fn strong_count(self) -> usize {
+        unsafe { (*self.inner).strong.load(Ordering.SeqCst) }
+    }
+
+    pub fn weak_count(self) -> usize {
+        unsafe { (*self.inner).weak.load(Ordering.SeqCst) - 1 }
+    }
+
+    pub fn clone(self) -> Arc<T> {
+        unsafe { (*self.inner).strong.fetch_add(1, Ordering.Relaxed) }
+        Arc { inner: self.inner }
+    }
+
+    pub fn downgrade(self) -> AWeak<T> {
+        unsafe { (*self.inner).weak.fetch_add(1, Ordering.Relaxed) }
+        AWeak { inner: self.inner }
+    }
+}
+
+impl<T: Send + Sync> Deref for Arc<T> {
+    type Target = T
+    fn deref(self) -> &T { unsafe { &(*self.inner).value } }
+}
+
+impl<T: Send + Sync> Drop for Arc<T> {
+    fn drop(mut self) {
+        unsafe {
+            if (*self.inner).strong.fetch_sub(1, Ordering.Release) == 1 {
+                @fence(Ordering.Acquire)
+                std.ptr.drop_in_place(&mut (*self.inner).value)
+                if (*self.inner).weak.fetch_sub(1, Ordering.Release) == 1 {
+                    Box.from_raw(self.inner)
+                }
+            }
+        }
+    }
+}
+
+unsafe impl<T: Send + Sync> Send for Arc<T> {}
+unsafe impl<T: Send + Sync> Sync for Arc<T> {}
+
+pub struct AWeak<T: Send + Sync> {
+    inner: *mut ArcInner<T>,
+}
+
+impl<T: Send + Sync> AWeak<T> {
+    pub fn upgrade(self) -> Option<Arc<T>> {
+        if self.inner.is_null() { return none }
+        unsafe {
+            let mut strong = (*self.inner).strong.load(Ordering.Relaxed)
+            loop {
+                if strong == 0 { return none }
+                match (*self.inner).strong.compare_exchange_weak(strong, strong + 1, Ordering.Acquire, Ordering.Relaxed) {
+                    ok(_) => return some(Arc { inner: self.inner }),
+                    err(s) => strong = s,
+                }
+            }
+        }
+    }
+}
