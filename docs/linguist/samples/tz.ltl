@@ -1,0 +1,153 @@
+// stdlib/time/tz.ltl
+//
+// Timezone-aware datetime primitives.
+//
+// Wraps std::time's monotonic Unix-second core with an IANA tz database
+// lookup. All arithmetic happens in UTC; formatting/parsing performs
+// the wall-clock conversion at the boundary.
+//
+// Batch 76 / gap-fill: timezone-aware datetime.
+
+import std::time::{UnixTime, Duration}
+import std::collections::Map
+import std::fs
+import std::bin
+
+pub struct Tz {
+    name:        String,
+    transitions: [Transition],
+    rules:       [Rule],            // POSIX TZ fallback for dates past the table
+}
+
+struct Transition {
+    at:           UnixTime,         // instant the rule change takes effect
+    utc_offset:   Int,              // seconds east of UTC
+    is_dst:       Bool,
+    abbreviation: String,           // e.g. "PST", "PDT"
+}
+
+struct Rule {
+    month:        Int,              // 1..12
+    week:         Int,              // -1..5 ; -1 = last
+    weekday:      Int,              // 0..6, Sunday=0
+    time_of_day:  Int,              // seconds after midnight wall clock
+    utc_offset:   Int,
+    is_dst:       Bool,
+    abbreviation: String,
+}
+
+pub struct ZonedDateTime {
+    instant:  UnixTime,
+    tz:       Tz,
+}
+
+pub enum TzError {
+    NotFound(String),
+    Malformed(String),
+    Ambiguous,     // wall-clock falls in the "fall back" overlap
+    Missing,       // wall-clock falls in the "spring forward" gap
+}
+
+/// Load a zone by IANA name, e.g. "America/Los_Angeles".
+pub fn load(name: String) -> Result<Tz, TzError> {
+    let path = "/usr/share/zoneinfo/{name}"
+    let bytes = fs::read(path) |> map_err(|_| TzError::NotFound(name))?
+    parse_tzif(name, bytes)
+}
+
+/// Current time in the given zone.
+pub fn now_in(tz: Tz) -> ZonedDateTime {
+    ZonedDateTime { instant: std::time::unix_now() |> UnixTime::from_secs(), tz }
+}
+
+/// Attach a zone to a UTC instant. Always succeeds.
+pub fn at(instant: UnixTime, tz: Tz) -> ZonedDateTime {
+    ZonedDateTime { instant, tz }
+}
+
+impl ZonedDateTime {
+    /// Seconds east of UTC that were in effect at `self.instant`.
+    pub fn utc_offset(self) -> Int {
+        self.tz |> active_transition(self.instant) |> .utc_offset
+    }
+
+    pub fn abbreviation(self) -> String {
+        self.tz |> active_transition(self.instant) |> .abbreviation
+    }
+
+    /// Format as ISO-8601 with offset, e.g. "2026-04-20T09:00:00-07:00".
+    pub fn to_iso8601(self) -> String {
+        let offset = self.utc_offset()
+        let wall   = UnixTime::from_secs(self.instant.secs + offset)
+        let ymdhms = wall |> break_down_utc()
+        "{pad4(ymdhms.year)}-{pad2(ymdhms.month)}-{pad2(ymdhms.day)}"
+        + "T{pad2(ymdhms.hour)}:{pad2(ymdhms.minute)}:{pad2(ymdhms.second)}"
+        + format_offset(offset)
+    }
+
+    pub fn shift(self, d: Duration) -> ZonedDateTime {
+        ZonedDateTime { instant: self.instant |> .shift(d), tz: self.tz }
+    }
+
+    /// Convert to a different zone without changing the instant.
+    pub fn in_zone(self, other: Tz) -> ZonedDateTime {
+        ZonedDateTime { instant: self.instant, tz: other }
+    }
+}
+
+/// Build a `ZonedDateTime` from wall-clock fields, resolving gaps/ambiguities.
+pub fn from_wall(year: Int, month: Int, day: Int,
+                 hour: Int, minute: Int, second: Int,
+                 tz: Tz, resolve: AmbiguityPolicy) -> Result<ZonedDateTime, TzError> {
+    let naive_utc = UnixTime::from_ymd_hms(year, month, day, hour, minute, second)
+    let candidates = tz |> wall_clock_candidates(naive_utc)
+    match (candidates, resolve) {
+        ([],           _)                     => Err(TzError::Missing),
+        ([only],       _)                     => Ok(at(only, tz)),
+        ([earlier, _], AmbiguityPolicy::Earliest) => Ok(at(earlier, tz)),
+        ([_, later],   AmbiguityPolicy::Latest)   => Ok(at(later,   tz)),
+        _                                     => Err(TzError::Ambiguous),
+    }
+}
+
+pub enum AmbiguityPolicy { Earliest, Latest, Reject }
+
+fn active_transition(tz: Tz, instant: UnixTime) -> Transition {
+    tz.transitions
+        |> take_while(|t| t.at.secs <= instant.secs)
+        |> last()
+        |> unwrap_or(tz.transitions[0])
+}
+
+fn wall_clock_candidates(tz: Tz, naive_utc: UnixTime) -> [UnixTime] {
+    // A wall-clock instant `naive_utc` corresponds to real UTC instants
+    // `naive_utc - offset` for each offset that was active at that local time.
+    tz.transitions
+        |> map(|t| UnixTime::from_secs(naive_utc.secs - t.utc_offset))
+        |> filter(|utc| active_transition(tz, utc).utc_offset
+                         == (naive_utc.secs - utc.secs))
+        |> dedup()
+}
+
+fn parse_tzif(name: String, bytes: [Byte]) -> Result<Tz, TzError> {
+    // TZif v2 header: "TZif", version, 15 reserved bytes, six 4-byte counts.
+    if len(bytes) < 44 || bytes[0..4] != "TZif" |> as_bytes() {
+        return Err(TzError::Malformed(name))
+    }
+    // Full parse omitted in this example; see stdlib/time/tzif_reader.ltl.
+    Ok(Tz { name, transitions: [], rules: [] })
+}
+
+fn format_offset(secs: Int) -> String {
+    let sign = if secs >= 0 { "+" } else { "-" }
+    let abs  = if secs >= 0 { secs } else { 0 - secs }
+    "{sign}{pad2(abs / 3600)}:{pad2((abs % 3600) / 60)}"
+}
+
+fn pad2(n: Int) -> String { if n < 10 { "0{n}" } else { "{n}" } }
+fn pad4(n: Int) -> String {
+    if n < 10    { "000{n}" }
+    else if n < 100  { "00{n}"  }
+    else if n < 1000 { "0{n}"   }
+    else             { "{n}"    }
+}

@@ -1,0 +1,198 @@
+// examples/niche/lora_mesh_packet.ltl
+//
+// LoRa mesh packet layer for low-power, long-range radio networks.
+//
+// Builds on top of raw LoRa PHY layers (SX1262, RFM95, etc.) and adds:
+//   - 12-byte mesh header (hop count, source/dest, packet id, flags)
+//   - Store-and-forward with duplicate suppression (32-entry LRU)
+//   - Optional AES-CCM authenticated encryption per channel key
+//   - Pipeline-style decode/encode for easy instrumentation
+//
+// Batch 78 / hardware niche, meshtastic-adjacent.
+
+import std::bin
+import std::crypto::{aes, ccm, sha256}
+import std::collections::{Map, Deque}
+import std::time
+
+pub type NodeId = Int           // 32-bit
+pub type PacketId = Int         // 32-bit, set by originator
+
+pub const HEADER_LEN: Int = 12
+pub const MAX_PAYLOAD: Int = 255 - HEADER_LEN - 8   // 8 = CCM tag
+
+pub struct Header {
+    source:     NodeId,
+    dest:       NodeId,          // 0xFFFFFFFF = broadcast
+    packet_id:  PacketId,
+    hop_limit:  Int,             // 4 bits
+    hop_count:  Int,             // 4 bits
+    flags:      Flags,
+}
+
+pub struct Flags {
+    want_ack:     Bool,
+    is_ack:       Bool,
+    encrypted:    Bool,
+    fragment:     Bool,
+    priority:     Int,           // 0..3
+}
+
+pub struct Packet {
+    header:   Header,
+    payload:  [Byte],            // may be ciphertext when encrypted
+}
+
+pub enum DecodeError {
+    TooShort(Int),
+    BadVersion(Byte),
+    BadMac,
+    DecryptFailed,
+}
+
+// -- Wire format -------------------------------------------------------------
+//
+// byte 0           : version (0x01) | reserved nybble
+// bytes 1..4       : source
+// bytes 5..8       : dest
+// bytes 9..12      : packet_id (4 bytes)
+// byte 12          : hop_limit (hi nybble) | hop_count (lo nybble)
+// byte 13          : flags (packed)
+// bytes 14..       : payload (may be AES-CCM encrypted with 8-byte tag at end)
+
+pub fn encode(p: Packet, key: Option<[Byte]>) -> Result<[Byte], String> {
+    let mut body: [Byte] = []
+    body |> extend_mut([0x10 as Byte])                 // version 1
+    body |> extend_mut(bin::write_be_u32(p.header.source))
+    body |> extend_mut(bin::write_be_u32(p.header.dest))
+    body |> extend_mut(bin::write_be_u32(p.header.packet_id))
+    let hop = ((p.header.hop_limit & 0x0F) << 4)
+            | (p.header.hop_count & 0x0F)
+    body |> extend_mut([hop as Byte])
+    body |> extend_mut([pack_flags(p.header.flags)])
+
+    match (p.header.flags.encrypted, key) {
+        (false, _) => { body |> extend_mut(p.payload); Ok(body) },
+        (true, Some(k)) => {
+            let nonce = nonce_from(p.header)
+            let (ct, tag) = ccm::encrypt(k, nonce, body, p.payload, 8)?
+            body |> extend_mut(ct)
+            body |> extend_mut(tag)
+            Ok(body)
+        },
+        (true, None) => Err("encrypted flag set but no key provided"),
+    }
+}
+
+pub fn decode(bytes: [Byte], key: Option<[Byte]>) -> Result<Packet, DecodeError> {
+    if len(bytes) < HEADER_LEN + 2 { return Err(DecodeError::TooShort(len(bytes))) }
+    let version = bytes[0] >> 4
+    if version != 0x1 { return Err(DecodeError::BadVersion(bytes[0])) }
+
+    let header = Header {
+        source:    bin::read_be_u32(bytes[1..5]),
+        dest:      bin::read_be_u32(bytes[5..9]),
+        packet_id: bin::read_be_u32(bytes[9..13]),
+        hop_limit: ((bytes[13] as Int) >> 4) & 0x0F,
+        hop_count:  (bytes[13] as Int)       & 0x0F,
+        flags:     unpack_flags(bytes[14]),
+    }
+
+    let body = bytes[15..]
+    let payload = match (header.flags.encrypted, key) {
+        (false, _)        => body,
+        (true, Some(k))   => {
+            let n = len(body)
+            if n < 8 { return Err(DecodeError::TooShort(n)) }
+            let ct     = body[0..(n - 8)]
+            let tag    = body[(n - 8)..]
+            let nonce  = nonce_from(header)
+            let header_bytes = bytes[0..15]
+            ccm::decrypt(k, nonce, header_bytes, ct, tag)
+                |> map_err(|_| DecodeError::DecryptFailed)?
+        },
+        (true, None)      => return Err(DecodeError::DecryptFailed),
+    }
+
+    Ok(Packet { header, payload })
+}
+
+fn nonce_from(h: Header) -> [Byte] {
+    // 13-byte CCM nonce: source (4) || packet_id (4) || dest_lo (2) || counter (3=0)
+    let mut out = bin::write_be_u32(h.source)
+    out |> extend_mut(bin::write_be_u32(h.packet_id))
+    out |> extend_mut(bin::write_be_u16(h.dest & 0xFFFF))
+    out |> extend_mut([0 as Byte, 0, 0])
+    out
+}
+
+fn pack_flags(f: Flags) -> Byte {
+    let mut b: Int = 0
+    if f.want_ack  { b = b | 0x80 }
+    if f.is_ack    { b = b | 0x40 }
+    if f.encrypted { b = b | 0x20 }
+    if f.fragment  { b = b | 0x10 }
+    b = b | (f.priority & 0x03)
+    b as Byte
+}
+
+fn unpack_flags(b: Byte) -> Flags {
+    Flags {
+        want_ack:  (b & 0x80) != 0,
+        is_ack:    (b & 0x40) != 0,
+        encrypted: (b & 0x20) != 0,
+        fragment:  (b & 0x10) != 0,
+        priority:  (b as Int) & 0x03,
+    }
+}
+
+// -- Duplicate suppression / store-and-forward ------------------------------
+
+pub struct MeshState {
+    self_id:    NodeId,
+    seen:       Deque<(NodeId, PacketId, time::UnixTime)>,
+    seen_cap:   Int,
+    radio_send: fn([Byte]) -> Result<(), String>,
+}
+
+pub fn new_state(id: NodeId, send: fn([Byte]) -> Result<(), String>) -> MeshState {
+    MeshState { self_id: id, seen: Deque::empty(), seen_cap: 32, radio_send: send }
+}
+
+/// Handle an incoming packet: decide whether to deliver locally, forward, or drop.
+pub fn handle_rx(s: &mut MeshState, p: Packet) -> Disposition {
+    let dup_key = (p.header.source, p.header.packet_id)
+    if s.seen |> Deque::any(|(src, id, _)| (src, id) == dup_key) {
+        return Disposition::Dropped("duplicate")
+    }
+    s.seen |> Deque::push_back_mut((p.header.source, p.header.packet_id, time::unix_now()))
+    if s.seen |> Deque::len() > s.seen_cap {
+        let _ = s.seen |> Deque::pop_front_mut()
+    }
+
+    if p.header.dest == s.self_id || p.header.dest == 0xFFFFFFFF {
+        return Disposition::Delivered(p.payload)
+    }
+
+    if p.header.hop_count + 1 > p.header.hop_limit {
+        return Disposition::Dropped("hop_limit_exceeded")
+    }
+
+    let forwarded = Packet {
+        header:  Header { hop_count: p.header.hop_count + 1, ..p.header },
+        payload: p.payload,
+    }
+    match encode(forwarded, None) {
+        Ok(bytes)  => match (s.radio_send)(bytes) {
+            Ok(())  => Disposition::Forwarded,
+            Err(e)  => Disposition::Dropped("tx_err: {e}"),
+        },
+        Err(e)     => Disposition::Dropped("encode_err: {e}"),
+    }
+}
+
+pub enum Disposition {
+    Delivered([Byte]),
+    Forwarded,
+    Dropped(String),
+}

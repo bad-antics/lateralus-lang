@@ -1,0 +1,324 @@
+// examples/niche/postscript_interpreter.ltl
+//
+// A tiny PostScript Level-1 interpreter, ~300 lines.
+//
+// PostScript is a stack-based, PDL-turned-programming-language designed
+// for Apple LaserWriters in 1984. Its genius is that it's still the
+// cleanest stack language ever shipped in consumer hardware. This file
+// implements enough of the core operators to render a "hello world"
+// program's drawing commands to an SVG-like event stream.
+//
+// Batch 79 / retro interpreter niche. First PostScript in the ecosystem.
+
+import std::collections::{List, Map}
+import std::io
+
+pub enum Value {
+    Num(Float),
+    Bool(Bool),
+    Str(String),
+    Name(String),             // /foo literal name
+    Op(String),               // executable name resolved at call time
+    Array([Value]),
+    Proc([Token]),            // { ... } executable procedure
+    Mark,                     // array/dict builder sentinel
+    Null,
+}
+
+pub enum Token {
+    Literal(Value),
+    ExecName(String),         // bare word, resolved against dict stack
+    BeginProc,
+    EndProc,
+    BeginArray,
+    EndArray,
+}
+
+pub struct State {
+    operand_stack: [Value],
+    dict_stack:    [Map<String, Value>],
+    graphics:      Graphics,
+    events:        [DrawEvent],
+}
+
+pub struct Graphics {
+    x:       Float,
+    y:       Float,
+    path:    [PathSeg],
+    line_w:  Float,
+    font:    String,
+}
+
+pub enum PathSeg {
+    MoveTo(Float, Float),
+    LineTo(Float, Float),
+    CurveTo(Float, Float, Float, Float, Float, Float),
+    ClosePath,
+}
+
+pub enum DrawEvent {
+    Stroke([PathSeg], Float),                    // path, line-width
+    Fill([PathSeg]),
+    ShowText { x: Float, y: Float, text: String, font: String },
+}
+
+pub enum InterpError {
+    StackUnderflow,
+    TypeError { expected: String, got: String },
+    UnknownName(String),
+    DivZero,
+}
+
+// -- Tokenizer --------------------------------------------------------------
+
+pub fn tokenize(src: String) -> [Token] {
+    let mut out: [Token] = []
+    let mut i: Int = 0
+    let n = len(src)
+    while i < n {
+        let c = src[i]
+        match c {
+            ' ' | '\t' | '\n' | '\r' => { i = i + 1 },
+            '%' => { while i < n && src[i] != '\n' { i = i + 1 } },
+            '{' => { out |> push_mut(Token::BeginProc); i = i + 1 },
+            '}' => { out |> push_mut(Token::EndProc);   i = i + 1 },
+            '[' => { out |> push_mut(Token::BeginArray); i = i + 1 },
+            ']' => { out |> push_mut(Token::EndArray);   i = i + 1 },
+            '/' => {
+                let j = scan_word(src, i + 1)
+                out |> push_mut(Token::Literal(Value::Name(src[(i+1)..j])))
+                i = j
+            },
+            '(' => {
+                let (s, j) = scan_string(src, i + 1)
+                out |> push_mut(Token::Literal(Value::Str(s)))
+                i = j
+            },
+            _ => {
+                let j = scan_word(src, i)
+                let word = src[i..j]
+                i = j
+                match parse_num(word) {
+                    Some(f) => out |> push_mut(Token::Literal(Value::Num(f))),
+                    None    => out |> push_mut(Token::ExecName(word)),
+                }
+            },
+        }
+    }
+    out
+}
+
+fn scan_word(s: String, start: Int) -> Int {
+    let mut i = start
+    while i < len(s) && not (s[i] |> is_ps_delim()) { i = i + 1 }
+    i
+}
+
+fn scan_string(s: String, start: Int) -> (String, Int) {
+    let mut i = start
+    let mut depth = 1
+    let mut out = ""
+    while i < len(s) && depth > 0 {
+        match s[i] {
+            '(' => { depth = depth + 1; out = out + "(" },
+            ')' => { depth = depth - 1; if depth > 0 { out = out + ")" } },
+            '\\' => {
+                i = i + 1
+                if i < len(s) { out = out + s[i..(i+1)] }
+            },
+            c => { out = out + s[i..(i+1)] },
+        }
+        i = i + 1
+    }
+    (out, i)
+}
+
+fn is_ps_delim(c: Char) -> Bool {
+    c == ' ' || c == '\t' || c == '\n' || c == '\r'
+        || c == '{' || c == '}' || c == '[' || c == ']'
+        || c == '(' || c == ')' || c == '/' || c == '%'
+}
+
+// -- Interpreter ------------------------------------------------------------
+
+pub fn new_state() -> State {
+    State {
+        operand_stack: [],
+        dict_stack:    [default_systemdict(), Map::empty()],
+        graphics:      Graphics { x: 0.0, y: 0.0, path: [], line_w: 1.0, font: "Times-Roman" },
+        events:        [],
+    }
+}
+
+pub fn exec(s: &mut State, tokens: [Token]) -> Result<(), InterpError> {
+    let mut i = 0
+    while i < len(tokens) {
+        match tokens[i] {
+            Token::Literal(v)  => { s.operand_stack |> push_mut(v); i = i + 1 },
+            Token::BeginProc   => { let (proc, adv) = collect_proc(tokens, i + 1)
+                                    s.operand_stack |> push_mut(Value::Proc(proc))
+                                    i = adv + 1 },
+            Token::BeginArray  => { s.operand_stack |> push_mut(Value::Mark); i = i + 1 },
+            Token::EndArray    => { build_array(s)?; i = i + 1 },
+            Token::ExecName(n) => { exec_name(s, n)?; i = i + 1 },
+            Token::EndProc     => return Err(InterpError::TypeError {
+                                       expected: "no stray `}`", got: "}" }),
+        }
+    }
+    Ok(())
+}
+
+fn collect_proc(tokens: [Token], start: Int) -> ([Token], Int) {
+    let mut depth = 1
+    let mut j = start
+    while j < len(tokens) && depth > 0 {
+        match tokens[j] {
+            Token::BeginProc => depth = depth + 1,
+            Token::EndProc   => depth = depth - 1,
+            _ => (),
+        }
+        j = j + 1
+    }
+    (tokens[start..(j - 1)], j)
+}
+
+fn exec_name(s: &mut State, name: String) -> Result<(), InterpError> {
+    for d in s.dict_stack |> reverse() {
+        match d |> get(name) {
+            Some(Value::Op(op)) => return apply_builtin(s, op),
+            Some(Value::Proc(body)) => return exec(s, body),
+            Some(v) => { s.operand_stack |> push_mut(v); return Ok(()) },
+            None => (),
+        }
+    }
+    Err(InterpError::UnknownName(name))
+}
+
+fn apply_builtin(s: &mut State, op: String) -> Result<(), InterpError> {
+    match op {
+        "add" => bin_num(s, |a, b| a + b),
+        "sub" => bin_num(s, |a, b| a - b),
+        "mul" => bin_num(s, |a, b| a * b),
+        "div" => bin_num_checked(s, |a, b| if b == 0.0 { Err(InterpError::DivZero) }
+                                           else { Ok(a / b) }),
+        "dup" => { let v = peek(s)?; s.operand_stack |> push_mut(v); Ok(()) },
+        "pop" => { pop(s)?; Ok(()) },
+        "exch" => { let b = pop(s)?; let a = pop(s)?;
+                    s.operand_stack |> push_mut(b); s.operand_stack |> push_mut(a); Ok(()) },
+        "def" => {
+            let v = pop(s)?
+            let k = pop_name(s)?
+            let top = s.dict_stack |> last_mut()
+            top |> set_mut(k, v)
+            Ok(())
+        },
+        "moveto" => {
+            let y = pop_num(s)?; let x = pop_num(s)?
+            s.graphics.path |> push_mut(PathSeg::MoveTo(x, y))
+            s.graphics.x = x; s.graphics.y = y
+            Ok(())
+        },
+        "lineto" => {
+            let y = pop_num(s)?; let x = pop_num(s)?
+            s.graphics.path |> push_mut(PathSeg::LineTo(x, y))
+            s.graphics.x = x; s.graphics.y = y
+            Ok(())
+        },
+        "closepath" => { s.graphics.path |> push_mut(PathSeg::ClosePath); Ok(()) },
+        "stroke" => {
+            s.events |> push_mut(DrawEvent::Stroke(s.graphics.path, s.graphics.line_w))
+            s.graphics.path = []
+            Ok(())
+        },
+        "fill" => {
+            s.events |> push_mut(DrawEvent::Fill(s.graphics.path))
+            s.graphics.path = []
+            Ok(())
+        },
+        "setlinewidth" => { s.graphics.line_w = pop_num(s)?; Ok(()) },
+        "findfont"     => { let _ = pop(s)?; Ok(()) },
+        "scalefont"    => { let _ = pop(s)?; Ok(()) },
+        "setfont"      => { Ok(()) },
+        "show" => {
+            let text = pop_str(s)?
+            s.events |> push_mut(DrawEvent::ShowText {
+                x: s.graphics.x, y: s.graphics.y,
+                text, font: s.graphics.font,
+            })
+            Ok(())
+        },
+        "showpage" => { Ok(()) },      // end-of-page is implicit in events
+        _ => Err(InterpError::UnknownName(op)),
+    }
+}
+
+// -- Stack helpers ----------------------------------------------------------
+
+fn pop(s: &mut State) -> Result<Value, InterpError> {
+    match s.operand_stack |> pop_mut() {
+        Some(v) => Ok(v),
+        None    => Err(InterpError::StackUnderflow),
+    }
+}
+fn peek(s: &State) -> Result<Value, InterpError> {
+    match s.operand_stack |> last() {
+        Some(v) => Ok(v),
+        None    => Err(InterpError::StackUnderflow),
+    }
+}
+fn pop_num(s: &mut State) -> Result<Float, InterpError> {
+    match pop(s)? {
+        Value::Num(f) => Ok(f),
+        v => Err(InterpError::TypeError { expected: "num", got: "{v}" }),
+    }
+}
+fn pop_str(s: &mut State) -> Result<String, InterpError> {
+    match pop(s)? {
+        Value::Str(t) => Ok(t),
+        v => Err(InterpError::TypeError { expected: "string", got: "{v}" }),
+    }
+}
+fn pop_name(s: &mut State) -> Result<String, InterpError> {
+    match pop(s)? {
+        Value::Name(n) => Ok(n),
+        v => Err(InterpError::TypeError { expected: "name", got: "{v}" }),
+    }
+}
+fn bin_num(s: &mut State, f: fn(Float, Float) -> Float) -> Result<(), InterpError> {
+    let b = pop_num(s)?; let a = pop_num(s)?
+    s.operand_stack |> push_mut(Value::Num(f(a, b)))
+    Ok(())
+}
+fn bin_num_checked(s: &mut State,
+                   f: fn(Float, Float) -> Result<Float, InterpError>)
+                   -> Result<(), InterpError> {
+    let b = pop_num(s)?; let a = pop_num(s)?
+    s.operand_stack |> push_mut(Value::Num(f(a, b)?))
+    Ok(())
+}
+
+fn build_array(s: &mut State) -> Result<(), InterpError> {
+    let mut buf: [Value] = []
+    loop {
+        match pop(s)? {
+            Value::Mark => { buf |> reverse(); s.operand_stack |> push_mut(Value::Array(buf)); return Ok(()) },
+            v           => buf |> push_mut(v),
+        }
+    }
+}
+
+fn parse_num(w: String) -> Option<Float> { w |> parse_float() }
+
+fn default_systemdict() -> Map<String, Value> {
+    ["add","sub","mul","div","dup","pop","exch","def",
+     "moveto","lineto","closepath","stroke","fill",
+     "setlinewidth","findfont","scalefont","setfont","show","showpage"]
+        |> fold(Map::empty(), |acc, op| acc |> set(op, Value::Op(op)))
+}
+
+// Example:
+//   let src  = "72 72 moveto (Hello, world!) show showpage"
+//   let toks = tokenize(src)
+//   let mut s = new_state()
+//   exec(&mut s, toks)?
+//   for e in s.events { println("{e}") }

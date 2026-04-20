@@ -1,0 +1,197 @@
+// bio/fasta.ltl
+//
+// Streaming FASTA parser + minimal sequence operations.
+//
+// FASTA is the lingua franca of bioinformatics. A record is one header
+// line starting with `>` followed by any number of sequence lines
+// until the next header or EOF. Real-world files run into tens of
+// gigabytes; we therefore expose the parser as an iterator, never
+// materializing more than one record at a time.
+//
+// Batch 78 / scientific-computing niche.
+
+import std::io
+import std::collections::Map
+
+pub struct Record {
+    id:          String,          // first whitespace-delimited token after `>`
+    description: String,          // rest of header line
+    sequence:    String,          // concatenated sequence, uppercase
+}
+
+pub enum ParseError {
+    BadHeader(Int),       // line number
+    OrphanSequence(Int),  // sequence line with no preceding header
+    Io(String),
+}
+
+/// Lazy record iterator over a file path.
+pub fn read_file(path: String) -> Result<impl Iterator<Record>, ParseError> {
+    let reader = io::open_line_reader(path) |> map_err(|e| ParseError::Io(e))?
+    Ok(parse_lines(reader))
+}
+
+/// Core streaming parser. Consumes a line iterator, yields records.
+pub fn parse_lines(lines: impl Iterator<String>) -> impl Iterator<Record> {
+    let mut state: ParseState = ParseState::Idle
+    let mut lineno: Int = 0
+
+    Iterator::from_fn(|| {
+        loop {
+            let line = match lines |> next() {
+                None       => return flush(&mut state),
+                Some(l)    => { lineno = lineno + 1; l },
+            }
+
+            let trimmed = line |> strip_trailing_nl()
+            if trimmed == "" || trimmed |> starts_with(";") {
+                continue        // FASTA allows comment lines starting with ';'
+            }
+
+            if trimmed |> starts_with(">") {
+                let (id, desc) = split_header(trimmed[1..])
+                let prev = flush(&mut state)
+                state = ParseState::InRecord { id, description: desc, buf: "" }
+                match prev { Some(r) => return Some(r), None => continue }
+            }
+
+            match state {
+                ParseState::Idle => {
+                    // Sequence line with no header — tolerate by synthesizing
+                    // an "unnamed" record. Many bioinformatics tools do.
+                    state = ParseState::InRecord {
+                        id: "unnamed_{lineno}",
+                        description: "",
+                        buf: trimmed |> to_upper(),
+                    }
+                },
+                ParseState::InRecord { id, description, buf } => {
+                    state = ParseState::InRecord {
+                        id, description,
+                        buf: buf + (trimmed |> to_upper()),
+                    }
+                },
+            }
+        }
+    })
+}
+
+enum ParseState {
+    Idle,
+    InRecord { id: String, description: String, buf: String },
+}
+
+fn flush(state: &mut ParseState) -> Option<Record> {
+    match state {
+        ParseState::Idle => None,
+        ParseState::InRecord { id, description, buf } => {
+            let r = Record { id, description, sequence: buf }
+            *state = ParseState::Idle
+            Some(r)
+        },
+    }
+}
+
+fn split_header(h: String) -> (String, String) {
+    match h |> split_once(" ") {
+        Some((id, desc)) => (id, desc),
+        None             => (h, ""),
+    }
+}
+
+// -- Sequence ops ------------------------------------------------------------
+
+/// Reverse complement of a DNA sequence. Handles IUPAC ambiguity codes.
+pub fn reverse_complement(seq: String) -> String {
+    seq
+        |> chars()
+        |> reverse()
+        |> map(complement_base)
+        |> String::from_chars()
+}
+
+fn complement_base(c: Char) -> Char {
+    match c {
+        'A' => 'T', 'T' => 'A', 'G' => 'C', 'C' => 'G',
+        'N' => 'N',
+        'R' => 'Y', 'Y' => 'R', 'S' => 'S', 'W' => 'W',
+        'K' => 'M', 'M' => 'K', 'B' => 'V', 'V' => 'B',
+        'D' => 'H', 'H' => 'D',
+        other => other,
+    }
+}
+
+/// GC content as a fraction of total non-N bases. Returns 0.0 for empty input.
+pub fn gc_content(seq: String) -> Float {
+    let mut gc: Int = 0
+    let mut at: Int = 0
+    for c in seq |> chars() {
+        match c {
+            'G' | 'C' => gc = gc + 1,
+            'A' | 'T' => at = at + 1,
+            _         => (),
+        }
+    }
+    let total = gc + at
+    if total == 0 { 0.0 } else { (gc as Float) / (total as Float) }
+}
+
+/// k-mer frequency table. Skips windows containing any non-ACGT base.
+pub fn kmer_counts(seq: String, k: Int) -> Map<String, Int> {
+    let mut out: Map<String, Int> = Map::empty()
+    let n = len(seq)
+    if n < k { return out }
+    for i in 0..(n - k + 1) {
+        let window = seq[i..(i+k)]
+        if window |> all(is_acgt) {
+            out |> upsert_mut(window, 1, |v| v + 1)
+        }
+    }
+    out
+}
+
+fn is_acgt(c: Char) -> Bool { c == 'A' || c == 'C' || c == 'G' || c == 'T' }
+
+/// Translate DNA to protein using the standard codon table. Stops at the
+/// first `*` (stop codon) and returns the protein sequence before it.
+pub fn translate(dna: String) -> String {
+    let mut out = ""
+    let n = len(dna) - (len(dna) % 3)
+    for i in 0..(n / 3) {
+        let codon = dna[i*3..(i*3+3)]
+        let aa = codon_to_aa(codon)
+        if aa == '*' { return out }
+        out = out + aa
+    }
+    out
+}
+
+fn codon_to_aa(c: String) -> Char {
+    match c {
+        "TTT" | "TTC"                         => 'F',
+        "TTA" | "TTG" | "CTT" | "CTC"
+            | "CTA" | "CTG"                   => 'L',
+        "ATT" | "ATC" | "ATA"                 => 'I',
+        "ATG"                                 => 'M',
+        "GTT" | "GTC" | "GTA" | "GTG"         => 'V',
+        "TCT" | "TCC" | "TCA" | "TCG"
+            | "AGT" | "AGC"                   => 'S',
+        "CCT" | "CCC" | "CCA" | "CCG"         => 'P',
+        "ACT" | "ACC" | "ACA" | "ACG"         => 'T',
+        "GCT" | "GCC" | "GCA" | "GCG"         => 'A',
+        "TAT" | "TAC"                         => 'Y',
+        "TAA" | "TAG" | "TGA"                 => '*',
+        "CAT" | "CAC"                         => 'H',
+        "CAA" | "CAG"                         => 'Q',
+        "AAT" | "AAC"                         => 'N',
+        "AAA" | "AAG"                         => 'K',
+        "GAT" | "GAC"                         => 'D',
+        "GAA" | "GAG"                         => 'E',
+        "TGT" | "TGC"                         => 'C',
+        "TGG"                                 => 'W',
+        "CGT" | "CGC" | "CGA" | "CGG"
+            | "AGA" | "AGG"                   => 'R',
+        "GGT" | "GGC" | "GGA" | "GGG"         => 'G',
+        _                                     => 'X',     // unknown
+    }
+}

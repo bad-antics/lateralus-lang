@@ -1,0 +1,210 @@
+// hw/can_bus.ltl
+//
+// CAN 2.0A/B frame codec + ISO-TP (ISO 15765-2) multi-frame transport.
+//
+// CAN is the lingua franca of automotive and industrial buses. Every
+// ECU in a modern car, every BLDC controller, every CNC mill speaks
+// some dialect of it. This module covers:
+//   - Classic CAN 2.0A (11-bit ID) and 2.0B (29-bit ID) frame codec
+//   - CAN-FD flag carry-over (BRS, ESI, DLC > 8)
+//   - ISO-TP segmentation: Single, First, Consecutive, Flow Control
+//   - DBC-style signal extraction for typed decoding
+//
+// Batch 79 / automotive+industrial niche. First CAN implementation
+// in the Lateralus ecosystem.
+
+import std::bin
+import std::collections::{Deque, Map}
+import std::time
+
+pub type CanId = Int
+
+pub struct Frame {
+    id:       CanId,
+    extended: Bool,          // true => 29-bit, false => 11-bit
+    rtr:      Bool,          // remote transmission request
+    fd:       Bool,          // CAN-FD frame
+    brs:      Bool,          // bit-rate switch (FD only)
+    esi:      Bool,          // error state indicator (FD only)
+    data:     [Byte],        // 0..8 for classic, 0..64 for FD
+}
+
+pub enum DecodeError {
+    BadLength(Int),
+    DataTooLong { max: Int, got: Int },
+    RtrHasData,
+}
+
+// -- Wire format (SocketCAN-ish: simple, host-endian, good enough for a
+// reference impl; real drivers sit below this layer) ------------------
+//
+// byte 0..3  : id, with top 3 bits: bit31 = extended, bit30 = rtr, bit29 = fd
+// byte 4     : dlc (raw 0..15; FD encodes 12/16/20/24/32/48/64 here)
+// byte 5     : flags (bit0=brs, bit1=esi)
+// byte 6..7  : reserved
+// byte 8..N  : payload (length derived from dlc)
+
+const FLAG_EXT: Int = 0x80000000
+const FLAG_RTR: Int = 0x40000000
+const FLAG_FD:  Int = 0x20000000
+const ID_MASK:  Int = 0x1FFFFFFF
+
+pub fn encode(f: Frame) -> Result<[Byte], DecodeError> {
+    let max = if f.fd { 64 } else { 8 }
+    if len(f.data) > max { return Err(DecodeError::DataTooLong { max, got: len(f.data) }) }
+    if f.rtr && len(f.data) > 0 { return Err(DecodeError::RtrHasData) }
+
+    let mut id_word: Int = f.id & ID_MASK
+    if f.extended { id_word = id_word | FLAG_EXT }
+    if f.rtr      { id_word = id_word | FLAG_RTR }
+    if f.fd       { id_word = id_word | FLAG_FD  }
+
+    let mut out: [Byte] = bin::write_be_u32(id_word)
+    out |> extend_mut([dlc_from_len(len(f.data), f.fd) as Byte])
+    let mut flags: Int = 0
+    if f.brs { flags = flags | 0x01 }
+    if f.esi { flags = flags | 0x02 }
+    out |> extend_mut([flags as Byte, 0, 0])
+    out |> extend_mut(f.data)
+    Ok(out)
+}
+
+pub fn decode(bytes: [Byte]) -> Result<Frame, DecodeError> {
+    if len(bytes) < 8 { return Err(DecodeError::BadLength(len(bytes))) }
+    let id_word  = bin::read_be_u32(bytes[0..4])
+    let dlc      = bytes[4] as Int
+    let flags    = bytes[5] as Int
+    let fd       = (id_word & FLAG_FD)  != 0
+    let n        = len_from_dlc(dlc, fd)
+    if len(bytes) < 8 + n { return Err(DecodeError::BadLength(len(bytes))) }
+    Ok(Frame {
+        id:       id_word & ID_MASK,
+        extended: (id_word & FLAG_EXT) != 0,
+        rtr:      (id_word & FLAG_RTR) != 0,
+        fd,
+        brs:      (flags & 0x01) != 0,
+        esi:      (flags & 0x02) != 0,
+        data:     bytes[8..(8 + n)],
+    })
+}
+
+fn dlc_from_len(n: Int, fd: Bool) -> Int {
+    if not fd { return if n > 8 { 8 } else { n } }
+    // CAN-FD DLC encoding: 9..=15 mean 12,16,20,24,32,48,64
+    match n {
+        0..=8 => n,
+        12    => 9, 16 => 10, 20 => 11, 24 => 12,
+        32    => 13, 48 => 14, 64 => 15,
+        _     => 8,
+    }
+}
+
+fn len_from_dlc(dlc: Int, fd: Bool) -> Int {
+    if not fd { return if dlc > 8 { 8 } else { dlc } }
+    match dlc {
+        0..=8 => dlc,
+        9     => 12, 10 => 16, 11 => 20, 12 => 24,
+        13    => 32, 14 => 48, 15 => 64,
+        _     => 0,
+    }
+}
+
+// -- ISO-TP (ISO 15765-2) ---------------------------------------------------
+//
+// PCI byte layout:
+//   0x0n        Single Frame, n bytes of data follow
+//   0x1n xx     First Frame,  12-bit total length = n_hi << 8 | xx
+//   0x2n        Consecutive Frame, n = sequence number (0..15, wraps)
+//   0x3s bs st  Flow Control: s = 0 continue, 1 wait, 2 overflow
+
+pub struct IsoTpReassembler {
+    buffer:        [Byte],
+    total_length:  Int,
+    next_seq:      Int,
+    done:          Bool,
+}
+
+pub fn iso_tp_new() -> IsoTpReassembler {
+    IsoTpReassembler { buffer: [], total_length: 0, next_seq: 1, done: false }
+}
+
+pub enum IsoTpResult {
+    Incomplete,
+    Complete([Byte]),
+    SendFlowControl { block_size: Int, sep_time_ms: Int },
+    Error(String),
+}
+
+pub fn iso_tp_feed(r: &mut IsoTpReassembler, frame_data: [Byte]) -> IsoTpResult {
+    if len(frame_data) == 0 { return IsoTpResult::Error("empty frame") }
+    let pci_hi = (frame_data[0] >> 4) & 0x0F
+    match pci_hi {
+        0x0 => {     // Single Frame
+            let n = (frame_data[0] & 0x0F) as Int
+            if len(frame_data) < 1 + n { return IsoTpResult::Error("short single frame") }
+            IsoTpResult::Complete(frame_data[1..(1 + n)])
+        },
+        0x1 => {     // First Frame
+            if len(frame_data) < 2 { return IsoTpResult::Error("short first frame") }
+            let total = (((frame_data[0] & 0x0F) as Int) << 8) | (frame_data[1] as Int)
+            r.total_length = total
+            r.buffer = frame_data[2..]
+            r.next_seq = 1
+            r.done = false
+            IsoTpResult::SendFlowControl { block_size: 0, sep_time_ms: 0 }
+        },
+        0x2 => {     // Consecutive Frame
+            let seq = (frame_data[0] & 0x0F) as Int
+            if seq != (r.next_seq & 0x0F) {
+                return IsoTpResult::Error("iso-tp sequence gap: want {r.next_seq & 0x0F}, got {seq}")
+            }
+            r.next_seq = (r.next_seq + 1) & 0x0F
+            r.buffer |> extend_mut(frame_data[1..])
+            if len(r.buffer) >= r.total_length {
+                r.done = true
+                IsoTpResult::Complete(r.buffer[0..r.total_length])
+            } else {
+                IsoTpResult::Incomplete
+            }
+        },
+        0x3 => IsoTpResult::Incomplete,   // Flow Control — sender side only
+        _   => IsoTpResult::Error("unknown PCI 0x{pci_hi |> hex()}"),
+    }
+}
+
+// -- DBC-style typed signal extraction --------------------------------------
+
+pub struct SignalSpec {
+    name:         String,
+    start_bit:    Int,         // Intel (LSB) layout
+    length:       Int,         // 1..64
+    scale:        Float,
+    offset:       Float,
+    signed:       Bool,
+    unit:         String,
+}
+
+/// Extract one signal (little-endian / Intel) from a frame payload.
+pub fn extract_signal(data: [Byte], s: SignalSpec) -> Float {
+    let mut raw: Int = 0
+    for i in 0..s.length {
+        let bit_pos = s.start_bit + i
+        let byte = bit_pos / 8
+        let bit  = bit_pos % 8
+        if byte < len(data) {
+            let b = ((data[byte] as Int) >> bit) & 1
+            raw = raw | (b << i)
+        }
+    }
+    let v = if s.signed {
+        let sign_bit = 1 << (s.length - 1)
+        if raw & sign_bit != 0 { raw - (1 << s.length) } else { raw }
+    } else { raw }
+    (v as Float) * s.scale + s.offset
+}
+
+/// Convenience: decode multiple signals at once into a name->value map.
+pub fn decode_signals(data: [Byte], specs: [SignalSpec]) -> Map<String, Float> {
+    specs |> fold(Map::empty(),
+                  |acc, s| acc |> set(s.name, extract_signal(data, s)))
+}

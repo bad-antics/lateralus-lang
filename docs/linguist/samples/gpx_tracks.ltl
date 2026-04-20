@@ -1,0 +1,194 @@
+// niche/gpx_tracks.ltl
+//
+// GPX 1.1 track reader + writer + track statistics (haversine distance,
+// total ascent/descent, moving time, split pacing).
+//
+// GPX is the XML format every bike computer, dive computer, fitness
+// watch, and aviation logger produces. Parsing it well is a lingua
+// franca for outdoor data.
+//
+// Batch 80 / outdoors niche. First GPX module in the ecosystem.
+
+import std::xml
+import std::time
+import std::collections::List
+
+pub struct Track {
+    name:     Option<String>,
+    segments: [[Point]],
+}
+
+pub struct Point {
+    lat:  Float,
+    lon:  Float,
+    ele:  Option<Float>,                 // metres above sea level
+    time: Option<time::UnixTime>,
+    hr:   Option<Int>,                   // heart rate bpm (extension)
+    cad:  Option<Int>,                   // cadence rpm  (extension)
+}
+
+pub struct GpxFile {
+    creator: String,
+    tracks:  [Track],
+    routes:  [[Point]],
+    waypoints: [Point],
+}
+
+pub enum ParseError { Xml(String), MissingAttr(String), BadNumber(String) }
+
+// -- Read -------------------------------------------------------------------
+
+pub fn parse(bytes: [Byte]) -> Result<GpxFile, ParseError> {
+    let root = xml::parse(bytes).map_err(|e| ParseError::Xml(e))?
+    let creator = root |> xml::attr("creator") |> unwrap_or("unknown")
+
+    let tracks = root |> xml::children("trk") |> map(parse_track)
+                                              |> collect_results()?
+    let routes = root |> xml::children("rte")
+                      |> map(|n| n |> xml::children("rtept") |> map(parse_point) |> collect_results())
+                      |> collect_results()?
+    let waypoints = root |> xml::children("wpt") |> map(parse_point) |> collect_results()?
+
+    Ok(GpxFile { creator, tracks, routes, waypoints })
+}
+
+fn parse_track(n: xml::Node) -> Result<Track, ParseError> {
+    let name = n |> xml::child("name") |> map(|c| c.text)
+    let segs = n |> xml::children("trkseg")
+                 |> map(|s| s |> xml::children("trkpt") |> map(parse_point) |> collect_results())
+                 |> collect_results()?
+    Ok(Track { name, segments: segs })
+}
+
+fn parse_point(n: xml::Node) -> Result<Point, ParseError> {
+    let lat = n |> xml::attr("lat") |> ok_or(ParseError::MissingAttr("lat"))?
+                |> parse_float_p()?
+    let lon = n |> xml::attr("lon") |> ok_or(ParseError::MissingAttr("lon"))?
+                |> parse_float_p()?
+    let ele = n |> xml::child("ele") |> and_then(|c| parse_float_opt(c.text))
+    let tim = n |> xml::child("time") |> and_then(|c| time::parse_rfc3339(c.text).ok())
+    let hr  = n |> xml::descendant("hr")  |> and_then(|c| parse_int_opt(c.text))
+    let cad = n |> xml::descendant("cad") |> and_then(|c| parse_int_opt(c.text))
+    Ok(Point { lat, lon, ele, time: tim, hr, cad })
+}
+
+fn parse_float_p(s: String) -> Result<Float, ParseError> {
+    s |> parse_float() |> ok_or(ParseError::BadNumber(s))
+}
+
+// -- Write ------------------------------------------------------------------
+
+pub fn write(g: GpxFile) -> String {
+    let mut b = StringBuilder::new()
+    b |> append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+    b |> append("<gpx version=\"1.1\" creator=\"{g.creator}\" xmlns=\"http://www.topografix.com/GPX/1/1\">\n")
+    for t in g.tracks {
+        b |> append("  <trk>\n")
+        match t.name { Some(n) => b |> append("    <name>{xml::escape(n)}</name>\n"), None => () }
+        for seg in t.segments {
+            b |> append("    <trkseg>\n")
+            for p in seg { write_point(b, "      ", "trkpt", p) }
+            b |> append("    </trkseg>\n")
+        }
+        b |> append("  </trk>\n")
+    }
+    b |> append("</gpx>\n")
+    b |> build()
+}
+
+fn write_point(b: &mut StringBuilder, indent: String, tag: String, p: Point) {
+    b |> append("{indent}<{tag} lat=\"{p.lat}\" lon=\"{p.lon}\">\n")
+    match p.ele  { Some(e) => b |> append("{indent}  <ele>{e}</ele>\n"), None => () }
+    match p.time { Some(t) => b |> append("{indent}  <time>{time::to_rfc3339(t)}</time>\n"), None => () }
+    b |> append("{indent}</{tag}>\n")
+}
+
+// -- Statistics -------------------------------------------------------------
+
+pub struct TrackStats {
+    distance_m:       Float,
+    duration_s:       Float,
+    moving_time_s:    Float,
+    ascent_m:         Float,
+    descent_m:        Float,
+    avg_speed_kmh:    Float,
+    max_speed_kmh:    Float,
+    avg_hr:           Option<Float>,
+    point_count:      Int,
+}
+
+/// Great-circle distance between two points in metres.
+pub fn haversine(a: Point, b: Point) -> Float {
+    let r = 6371000.0
+    let to_rad = |d: Float| d * 3.141592653589793 / 180.0
+    let phi1 = to_rad(a.lat)
+    let phi2 = to_rad(b.lat)
+    let dphi = to_rad(b.lat - a.lat)
+    let dlam = to_rad(b.lon - a.lon)
+    let h = sin(dphi / 2.0).pow(2.0)
+          + cos(phi1) * cos(phi2) * sin(dlam / 2.0).pow(2.0)
+    2.0 * r * atan2(sqrt(h), sqrt(1.0 - h))
+}
+
+pub fn stats(track: Track, moving_threshold_kmh: Float) -> TrackStats {
+    let mut d: Float = 0.0
+    let mut dur: Float = 0.0
+    let mut moving: Float = 0.0
+    let mut up: Float = 0.0
+    let mut down: Float = 0.0
+    let mut max_v: Float = 0.0
+    let mut hr_sum: Float = 0.0
+    let mut hr_count: Int = 0
+    let mut points: Int = 0
+
+    for seg in track.segments {
+        let mut prev: Option<Point> = None
+        for p in seg {
+            points = points + 1
+            match p.hr { Some(h) => { hr_sum = hr_sum + h as Float; hr_count = hr_count + 1 }, None => () }
+
+            match prev {
+                Some(q) => {
+                    let leg_d = haversine(q, p)
+                    d = d + leg_d
+                    match (q.ele, p.ele) {
+                        (Some(e0), Some(e1)) => {
+                            let de = e1 - e0
+                            if de > 0.0 { up = up + de } else { down = down - de }
+                        },
+                        _ => (),
+                    }
+                    match (q.time, p.time) {
+                        (Some(t0), Some(t1)) => {
+                            let dt = (t1 - t0) as Float
+                            dur = dur + dt
+                            if dt > 0.0 {
+                                let v_kmh = leg_d / dt * 3.6
+                                if v_kmh > max_v { max_v = v_kmh }
+                                if v_kmh > moving_threshold_kmh { moving = moving + dt }
+                            }
+                        },
+                        _ => (),
+                    }
+                },
+                None => (),
+            }
+            prev = Some(p)
+        }
+    }
+
+    let avg_v = if dur > 0.0 { d / dur * 3.6 } else { 0.0 }
+    let avg_hr = if hr_count > 0 { Some(hr_sum / (hr_count as Float)) } else { None }
+
+    TrackStats {
+        distance_m:    d,
+        duration_s:    dur,
+        moving_time_s: moving,
+        ascent_m:      up,
+        descent_m:     down,
+        avg_speed_kmh: avg_v,
+        max_speed_kmh: max_v,
+        avg_hr,
+        point_count:   points,
+    }
+}

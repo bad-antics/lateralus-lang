@@ -1,0 +1,188 @@
+// niche/modbus_rtu.ltl
+//
+// Modbus RTU — the 1979 serial protocol that still runs most of the
+// world's PLCs, VFDs, HVAC controllers, solar inverters, and energy
+// meters. Each frame: slave address, function code, data, CRC-16.
+// Silent-interval framing (3.5 char times between frames).
+//
+// This module covers the codec + common function codes 0x01..0x10 +
+// a sync request/response client driven by a user-supplied transport.
+//
+// Batch 80 / industrial niche. First Modbus in the ecosystem.
+
+import std::bin
+import std::time
+
+pub type Address = Int         // 1..247
+pub type FnCode  = Int
+
+pub enum Request {
+    ReadCoils            { address: Address, start: Int, count: Int },    // 0x01
+    ReadDiscreteInputs   { address: Address, start: Int, count: Int },    // 0x02
+    ReadHoldingRegisters { address: Address, start: Int, count: Int },    // 0x03
+    ReadInputRegisters   { address: Address, start: Int, count: Int },    // 0x04
+    WriteSingleCoil      { address: Address, coil: Int, value: Bool },    // 0x05
+    WriteSingleRegister  { address: Address, reg: Int, value: Int },      // 0x06
+    WriteMultipleCoils   { address: Address, start: Int, values: [Bool] },// 0x0F
+    WriteMultipleRegs    { address: Address, start: Int, values: [Int] }, // 0x10
+}
+
+pub enum Response {
+    Coils([Bool]),
+    DiscreteInputs([Bool]),
+    HoldingRegisters([Int]),
+    InputRegisters([Int]),
+    WriteSingleCoilAck { coil: Int, value: Bool },
+    WriteSingleRegAck  { reg: Int,  value: Int  },
+    WriteMultipleAck   { start: Int, count: Int },
+    Exception          { function: FnCode, code: ExceptionCode },
+}
+
+pub enum ExceptionCode {
+    IllegalFunction       = 0x01,
+    IllegalDataAddress    = 0x02,
+    IllegalDataValue      = 0x03,
+    ServerDeviceFailure   = 0x04,
+    Acknowledge           = 0x05,
+    ServerDeviceBusy      = 0x06,
+    MemoryParityError     = 0x08,
+    GatewayPathUnavail    = 0x0A,
+    GatewayTargetNoResp   = 0x0B,
+}
+
+pub enum FrameError {
+    TooShort(Int),
+    BadCrc { expected: Int, got: Int },
+    BadFunction(Int),
+    SilentIntervalViolated,
+}
+
+// -- CRC-16 (Modbus polynomial 0xA001, init 0xFFFF) -------------------------
+
+pub fn crc16(bytes: [Byte]) -> Int {
+    let mut crc: Int = 0xFFFF
+    for b in bytes {
+        crc = crc ^ (b as Int)
+        for _ in 0..8 {
+            let lsb = crc & 1
+            crc = crc >> 1
+            if lsb != 0 { crc = crc ^ 0xA001 }
+        }
+    }
+    crc
+}
+
+// -- Encode -----------------------------------------------------------------
+
+pub fn encode_request(r: Request) -> [Byte] {
+    let mut body = match r {
+        Request::ReadCoils            { address, start, count } => [address as Byte, 0x01] |> ext_be16(start) |> ext_be16(count),
+        Request::ReadDiscreteInputs   { address, start, count } => [address as Byte, 0x02] |> ext_be16(start) |> ext_be16(count),
+        Request::ReadHoldingRegisters { address, start, count } => [address as Byte, 0x03] |> ext_be16(start) |> ext_be16(count),
+        Request::ReadInputRegisters   { address, start, count } => [address as Byte, 0x04] |> ext_be16(start) |> ext_be16(count),
+        Request::WriteSingleCoil      { address, coil, value }  => [address as Byte, 0x05] |> ext_be16(coil)  |> ext_be16(if value { 0xFF00 } else { 0x0000 }),
+        Request::WriteSingleRegister  { address, reg, value }   => [address as Byte, 0x06] |> ext_be16(reg)   |> ext_be16(value),
+        Request::WriteMultipleCoils   { address, start, values } => {
+            let bytes = pack_coils(values)
+            let mut b = [address as Byte, 0x0F] |> ext_be16(start) |> ext_be16(len(values))
+            b |> extend_mut([len(bytes) as Byte]) |> extend_mut(bytes)
+        },
+        Request::WriteMultipleRegs    { address, start, values } => {
+            let mut b = [address as Byte, 0x10] |> ext_be16(start) |> ext_be16(len(values))
+            b |> extend_mut([(len(values) * 2) as Byte])
+            for v in values { b |> extend_mut(bin::write_be_u16(v)) }
+            b
+        },
+    }
+    let c = crc16(body)
+    body |> extend_mut([(c & 0xFF) as Byte, ((c >> 8) & 0xFF) as Byte])      // CRC is little-endian
+    body
+}
+
+fn ext_be16(buf: [Byte], v: Int) -> [Byte] { buf |> extend(bin::write_be_u16(v)) }
+
+fn pack_coils(vs: [Bool]) -> [Byte] {
+    let n = (len(vs) + 7) / 8
+    let mut out = [0 as Byte; n]
+    for i in 0..len(vs) {
+        if vs[i] { out[i / 8] = out[i / 8] | ((1 << (i % 8)) as Byte) }
+    }
+    out
+}
+
+// -- Decode -----------------------------------------------------------------
+
+pub fn decode_response(expected_fn: FnCode, bytes: [Byte]) -> Result<Response, FrameError> {
+    if len(bytes) < 4 { return Err(FrameError::TooShort(len(bytes))) }
+    let body = bytes[0..(len(bytes) - 2)]
+    let crc_got = (bytes[len(bytes) - 1] as Int) << 8 | (bytes[len(bytes) - 2] as Int)
+    let crc_exp = crc16(body)
+    if crc_got != crc_exp { return Err(FrameError::BadCrc { expected: crc_exp, got: crc_got }) }
+
+    let fn_code = body[1] as Int
+    // Exception responses have the high bit of the function code set.
+    if fn_code & 0x80 != 0 {
+        let code = match body[2] {
+            0x01 => ExceptionCode::IllegalFunction,
+            0x02 => ExceptionCode::IllegalDataAddress,
+            0x03 => ExceptionCode::IllegalDataValue,
+            0x04 => ExceptionCode::ServerDeviceFailure,
+            0x06 => ExceptionCode::ServerDeviceBusy,
+            b    => ExceptionCode::IllegalFunction,
+        }
+        return Ok(Response::Exception { function: fn_code & 0x7F, code })
+    }
+
+    match expected_fn {
+        0x01 => Ok(Response::Coils(unpack_coils(body[3..], body[2] as Int))),
+        0x02 => Ok(Response::DiscreteInputs(unpack_coils(body[3..], body[2] as Int))),
+        0x03 => Ok(Response::HoldingRegisters(unpack_regs(body[3..], body[2] as Int))),
+        0x04 => Ok(Response::InputRegisters  (unpack_regs(body[3..], body[2] as Int))),
+        0x05 => Ok(Response::WriteSingleCoilAck {
+                   coil:  bin::read_be_u16(body[2..4]),
+                   value: bin::read_be_u16(body[4..6]) == 0xFF00 }),
+        0x06 => Ok(Response::WriteSingleRegAck {
+                   reg:   bin::read_be_u16(body[2..4]),
+                   value: bin::read_be_u16(body[4..6]) }),
+        0x0F | 0x10 => Ok(Response::WriteMultipleAck {
+                   start: bin::read_be_u16(body[2..4]),
+                   count: bin::read_be_u16(body[4..6]) }),
+        fc => Err(FrameError::BadFunction(fc)),
+    }
+}
+
+fn unpack_coils(bytes: [Byte], byte_count: Int) -> [Bool] {
+    let mut out: [Bool] = []
+    for i in 0..(byte_count * 8) {
+        out |> push_mut((bytes[i / 8] >> (i % 8)) & 1 == 1)
+    }
+    out
+}
+
+fn unpack_regs(bytes: [Byte], byte_count: Int) -> [Int] {
+    let mut out: [Int] = []
+    for i in 0..(byte_count / 2) {
+        out |> push_mut(bin::read_be_u16(bytes[(i*2)..(i*2+2)]))
+    }
+    out
+}
+
+// -- Transport-driven client ------------------------------------------------
+
+pub type Transport = fn([Byte]) -> Result<[Byte], String>
+
+pub fn request(tx: Transport, r: Request) -> Result<Response, String> {
+    let fn_code = match r {
+        Request::ReadCoils            _ => 0x01,
+        Request::ReadDiscreteInputs   _ => 0x02,
+        Request::ReadHoldingRegisters _ => 0x03,
+        Request::ReadInputRegisters   _ => 0x04,
+        Request::WriteSingleCoil      _ => 0x05,
+        Request::WriteSingleRegister  _ => 0x06,
+        Request::WriteMultipleCoils   _ => 0x0F,
+        Request::WriteMultipleRegs    _ => 0x10,
+    }
+    let bytes = encode_request(r)
+    let reply = tx(bytes).map_err(|e| "transport: {e}")?
+    decode_response(fn_code, reply).map_err(|e| "decode: {e}")
+}

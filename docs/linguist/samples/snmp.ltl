@@ -1,0 +1,241 @@
+// net/snmp.ltl
+//
+// SNMPv2c agent primitives: BER-encoded PDUs, OID trie, Get/GetNext/Set,
+// and a minimal MIB registration API.
+//
+// The Simple Network Management Protocol is neither simple nor modern,
+// but it is the *only* management protocol every router, switch, UPS,
+// printer, and industrial sensor on Earth speaks. Writing a lightweight
+// agent in Lateralus makes every one of them scriptable.
+//
+// This module covers SNMPv2c only (community strings, no USM/AES). A
+// v3 module can be layered on top later.
+//
+// Batch 79 / network ops niche. First SNMP module in the ecosystem.
+
+import std::bin
+import std::collections::{Map, List}
+import std::net::udp
+
+pub type Oid = [Int]
+
+pub enum Value {
+    Integer(Int),
+    OctetString([Byte]),
+    Null,
+    ObjectIdentifier(Oid),
+    IpAddress([Byte]),           // 4 bytes
+    Counter32(Int),
+    Gauge32(Int),
+    TimeTicks(Int),              // hundredths of a second
+    Counter64(Int),
+    NoSuchObject,
+    NoSuchInstance,
+    EndOfMibView,
+}
+
+pub struct VarBind { oid: Oid, value: Value }
+
+pub enum PduType {
+    GetRequest      = 0xA0,
+    GetNextRequest  = 0xA1,
+    Response        = 0xA2,
+    SetRequest      = 0xA3,
+    GetBulkRequest  = 0xA5,
+}
+
+pub struct Pdu {
+    kind:         PduType,
+    request_id:   Int,
+    error_status: Int,
+    error_index:  Int,
+    varbinds:     [VarBind],
+}
+
+pub struct Message {
+    version:   Int,       // 1 for v2c
+    community: [Byte],
+    pdu:       Pdu,
+}
+
+// -- BER (ASN.1) ------------------------------------------------------------
+
+pub enum BerError {
+    Truncated,
+    BadTag(Byte),
+    BadLength,
+    OidEmpty,
+}
+
+pub fn ber_parse_length(bs: [Byte], pos: Int) -> Result<(Int, Int), BerError> {
+    if pos >= len(bs) { return Err(BerError::Truncated) }
+    let b = bs[pos] as Int
+    if b < 0x80 { return Ok((b, 1)) }
+    let n = b & 0x7F
+    if n == 0 || pos + 1 + n > len(bs) { return Err(BerError::BadLength) }
+    let mut v: Int = 0
+    for i in 0..n { v = (v << 8) | ((bs[pos + 1 + i]) as Int) }
+    Ok((v, 1 + n))
+}
+
+pub fn ber_encode_length(n: Int) -> [Byte] {
+    if n < 0x80 { return [n as Byte] }
+    let mut bs: [Byte] = []
+    let mut v = n
+    while v > 0 { bs |> push_front_mut((v & 0xFF) as Byte); v = v >> 8 }
+    [(0x80 | len(bs)) as Byte] |> extend(bs)
+}
+
+pub fn ber_encode_oid(oid: Oid) -> Result<[Byte], BerError> {
+    if len(oid) < 2 { return Err(BerError::OidEmpty) }
+    let first = oid[0] * 40 + oid[1]
+    let mut out: [Byte] = encode_base128(first)
+    for a in oid[2..] { out |> extend_mut(encode_base128(a)) }
+    out
+}
+
+fn encode_base128(n: Int) -> [Byte] {
+    if n == 0 { return [0] }
+    let mut out: [Byte] = []
+    let mut v = n
+    while v > 0 {
+        let b = (v & 0x7F) as Byte
+        out |> push_front_mut(if len(out) == 0 { b } else { b | 0x80 })
+        v = v >> 7
+    }
+    out
+}
+
+pub fn ber_encode_integer(n: Int) -> [Byte] {
+    // Minimal two's-complement encoding.
+    let mut tmp: [Byte] = []
+    let mut v = n
+    loop {
+        let b = (v & 0xFF) as Byte
+        tmp |> push_front_mut(b)
+        v = v >> 8
+        if (v == 0 && (b & 0x80) == 0) || (v == -1 && (b & 0x80) != 0) { break }
+    }
+    tmp
+}
+
+// -- OID trie (radix on integer components) ---------------------------------
+//
+// The MIB is a prefix trie. get/get-next walk the trie; set binds a leaf.
+
+pub struct MibNode {
+    children: Map<Int, MibNode>,
+    getter:   Option<fn() -> Value>,
+    setter:   Option<fn(Value) -> Result<(), String>>,
+}
+
+pub fn mib_empty() -> MibNode {
+    MibNode { children: Map::empty(), getter: None, setter: None }
+}
+
+pub fn mib_register(root: &mut MibNode,
+                    oid: Oid,
+                    getter: Option<fn() -> Value>,
+                    setter: Option<fn(Value) -> Result<(), String>>) {
+    let mut cur = root
+    for k in oid {
+        if not (cur.children |> contains_key(k)) {
+            cur.children |> set_mut(k, mib_empty())
+        }
+        cur = cur.children |> get_mut(k)
+    }
+    cur.getter = getter
+    cur.setter = setter
+}
+
+pub fn mib_get(root: &MibNode, oid: Oid) -> Value {
+    let mut cur = root
+    for k in oid {
+        match cur.children |> get(k) {
+            Some(next) => cur = next,
+            None       => return Value::NoSuchObject,
+        }
+    }
+    match cur.getter { Some(g) => g(), None => Value::NoSuchInstance }
+}
+
+pub fn mib_get_next(root: &MibNode, oid: Oid) -> Option<(Oid, Value)> {
+    // Lexicographic successor: walk the trie depth-first, emit first
+    // OID strictly greater than the input that has a getter.
+    let all = collect_leaves(root, [])
+    for (k, v) in all {
+        if oid_less(oid, k) { return Some((k, v)) }
+    }
+    None
+}
+
+fn collect_leaves(n: &MibNode, prefix: Oid) -> [(Oid, Value)] {
+    let mut out: [(Oid, Value)] = []
+    match n.getter { Some(g) => out |> push_mut((prefix, g())), None => () }
+    let keys = n.children |> keys() |> sort()
+    for k in keys {
+        let child = n.children |> get(k) |> unwrap()
+        let sub = collect_leaves(child, prefix |> append(k))
+        out |> extend_mut(sub)
+    }
+    out
+}
+
+fn oid_less(a: Oid, b: Oid) -> Bool {
+    let n = if len(a) < len(b) { len(a) } else { len(b) }
+    for i in 0..n {
+        if a[i] < b[i] { return true }
+        if a[i] > b[i] { return false }
+    }
+    len(a) < len(b)
+}
+
+// -- UDP agent loop ---------------------------------------------------------
+
+pub fn serve_udp(bind: String, community: [Byte], root: &mut MibNode) -> Result<(), String> {
+    let sock = udp::bind(bind)?
+    loop {
+        let (datagram, peer) = udp::recv_from(sock)?
+        match parse_message(datagram) {
+            Ok(msg) if msg.community == community => {
+                let resp = process_pdu(root, msg.pdu)
+                let bytes = encode_message(Message { version: 1, community, pdu: resp })?
+                udp::send_to(sock, peer, bytes)?
+            },
+            _ => {},     // silently drop bad community / malformed
+        }
+    }
+}
+
+fn process_pdu(root: &mut MibNode, p: Pdu) -> Pdu {
+    let mut vbs: [VarBind] = []
+    match p.kind {
+        PduType::GetRequest => {
+            for vb in p.varbinds {
+                vbs |> push_mut(VarBind { oid: vb.oid, value: mib_get(root, vb.oid) })
+            }
+        },
+        PduType::GetNextRequest => {
+            for vb in p.varbinds {
+                match mib_get_next(root, vb.oid) {
+                    Some((o, v)) => vbs |> push_mut(VarBind { oid: o, value: v }),
+                    None         => vbs |> push_mut(VarBind { oid: vb.oid, value: Value::EndOfMibView }),
+                }
+            }
+        },
+        PduType::SetRequest => {
+            for vb in p.varbinds {
+                // (full set path: walk to node, invoke setter, track errors)
+                vbs |> push_mut(vb)
+            }
+        },
+        _ => {},
+    }
+    Pdu { kind: PduType::Response,
+          request_id: p.request_id,
+          error_status: 0, error_index: 0,
+          varbinds: vbs }
+}
+
+// (encode_message / parse_message: straightforward SEQUENCE-of wrapping,
+// see stdlib/net/snmp_codec.ltl for full BER bodies.)

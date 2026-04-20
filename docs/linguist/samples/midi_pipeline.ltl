@@ -1,0 +1,217 @@
+// examples/niche/midi_pipeline.ltl
+//
+// MIDI event pipeline: parse a Standard MIDI File (SMF), transform
+// the event stream, and render back to MIDI or to an OSC/synth target.
+//
+// This example shows how pipeline operators shine for live-coding and
+// creative-coding workloads: each stage is a plain function, the data
+// flow is linear, and the same pipeline can be dry-run, recorded to
+// JSON for debugging, or routed to the audio subsystem.
+//
+// Batch 78 / creative-coding niche.
+
+import std::bin
+import std::io
+import std::collections::List
+
+pub enum MidiEvent {
+    NoteOn      { channel: Int, note: Int, velocity: Int },
+    NoteOff     { channel: Int, note: Int, velocity: Int },
+    ControlChange { channel: Int, controller: Int, value: Int },
+    ProgramChange { channel: Int, program: Int },
+    PitchBend   { channel: Int, value: Int },       // -8192..8191
+    Aftertouch  { channel: Int, pressure: Int },
+    Meta        { kind: Byte, data: [Byte] },
+    SysEx       { data: [Byte] },
+}
+
+pub struct TimedEvent {
+    ticks:  Int,          // absolute ticks since track start
+    event:  MidiEvent,
+}
+
+pub struct SmfFile {
+    format:       Int,            // 0 / 1 / 2
+    track_count:  Int,
+    ticks_per_q:  Int,
+    tracks:       [[TimedEvent]],
+}
+
+// -- Parsing -----------------------------------------------------------------
+
+pub fn parse_smf(bytes: [Byte]) -> Result<SmfFile, String> {
+    let (rest, header) = read_chunk(bytes, "MThd")?
+    if len(header) < 6 { return Err("short MThd") }
+    let format      = bin::read_be_u16(header[0..2])
+    let track_count = bin::read_be_u16(header[2..4])
+    let ticks       = bin::read_be_u16(header[4..6])
+    if ticks & 0x8000 != 0 {
+        return Err("SMPTE time division not supported in this example")
+    }
+
+    let mut tracks: [[TimedEvent]] = []
+    let mut cursor = rest
+    for _ in 0..track_count {
+        let (next, body) = read_chunk(cursor, "MTrk")?
+        tracks |> push_mut(parse_track(body)?)
+        cursor = next
+    }
+
+    Ok(SmfFile {
+        format, track_count, ticks_per_q: ticks, tracks,
+    })
+}
+
+fn read_chunk(bytes: [Byte], tag: String) -> Result<([Byte], [Byte]), String> {
+    if len(bytes) < 8 { return Err("short chunk") }
+    let got_tag = bytes[0..4] |> bytes_to_ascii()
+    if got_tag != tag { return Err("expected {tag}, got {got_tag}") }
+    let size = bin::read_be_u32(bytes[4..8])
+    if len(bytes) < 8 + size { return Err("truncated {tag}") }
+    Ok((bytes[(8 + size)..], bytes[8..(8 + size)]))
+}
+
+fn parse_track(body: [Byte]) -> Result<[TimedEvent], String> {
+    let mut out: [TimedEvent] = []
+    let mut pos: Int = 0
+    let mut ticks: Int = 0
+    let mut running_status: Byte = 0
+    while pos < len(body) {
+        let (delta, adv1) = read_varlen(body, pos)
+        pos = pos + adv1
+        ticks = ticks + delta
+        let first = body[pos]
+        let status = if first & 0x80 != 0 {
+            pos = pos + 1
+            running_status = first
+            first
+        } else {
+            running_status
+        }
+        let (ev, adv2) = parse_event(body, pos, status)?
+        pos = pos + adv2
+        out |> push_mut(TimedEvent { ticks, event: ev })
+    }
+    Ok(out)
+}
+
+fn read_varlen(bs: [Byte], pos: Int) -> (Int, Int) {
+    let mut n: Int = 0
+    let mut i: Int = pos
+    loop {
+        let b = bs[i] as Int
+        n = (n << 7) | (b & 0x7F)
+        i = i + 1
+        if (b & 0x80) == 0 { return (n, i - pos) }
+    }
+}
+
+fn parse_event(bs: [Byte], pos: Int, status: Byte) -> Result<(MidiEvent, Int), String> {
+    let hi = status & 0xF0
+    let ch = (status as Int) & 0x0F
+    match hi {
+        0x80 => Ok((MidiEvent::NoteOff     { channel: ch,
+                                             note:     bs[pos] as Int,
+                                             velocity: bs[pos+1] as Int }, 2)),
+        0x90 => {
+            let v = bs[pos+1] as Int
+            let e = if v == 0 {
+                MidiEvent::NoteOff { channel: ch, note: bs[pos] as Int, velocity: 0 }
+            } else {
+                MidiEvent::NoteOn  { channel: ch, note: bs[pos] as Int, velocity: v }
+            }
+            Ok((e, 2))
+        },
+        0xA0 => Ok((MidiEvent::Aftertouch  { channel: ch,
+                                             pressure: bs[pos+1] as Int }, 2)),
+        0xB0 => Ok((MidiEvent::ControlChange {
+                       channel: ch,
+                       controller: bs[pos] as Int,
+                       value:      bs[pos+1] as Int }, 2)),
+        0xC0 => Ok((MidiEvent::ProgramChange { channel: ch,
+                                               program: bs[pos] as Int }, 1)),
+        0xD0 => Ok((MidiEvent::Aftertouch { channel: ch,
+                                            pressure: bs[pos] as Int }, 1)),
+        0xE0 => {
+            let lsb = bs[pos]   as Int
+            let msb = bs[pos+1] as Int
+            let raw = ((msb & 0x7F) << 7) | (lsb & 0x7F)
+            Ok((MidiEvent::PitchBend { channel: ch, value: raw - 8192 }, 2))
+        },
+        0xF0 => parse_sys(bs, pos, status),
+        _    => Err("unknown status 0x{status |> hex()}"),
+    }
+}
+
+fn parse_sys(bs: [Byte], pos: Int, status: Byte) -> Result<(MidiEvent, Int), String> {
+    match status {
+        0xFF => {
+            // Meta event: kind, varlen size, payload.
+            let kind = bs[pos]
+            let (size, adv) = read_varlen(bs, pos + 1)
+            let data = bs[(pos + 1 + adv)..(pos + 1 + adv + size)]
+            Ok((MidiEvent::Meta { kind, data }, 1 + adv + size))
+        },
+        0xF0 | 0xF7 => {
+            let (size, adv) = read_varlen(bs, pos)
+            let data = bs[(pos + adv)..(pos + adv + size)]
+            Ok((MidiEvent::SysEx { data }, adv + size))
+        },
+        _ => Err("unknown sysex status"),
+    }
+}
+
+// -- Pipeline transforms (composable) ---------------------------------------
+
+/// Transpose every note by `semitones`, clamping to MIDI range [0..127].
+pub fn transpose(semitones: Int, events: [TimedEvent]) -> [TimedEvent] {
+    events |> map(|te| match te.event {
+        MidiEvent::NoteOn  { channel, note, velocity }
+            => TimedEvent { ticks: te.ticks,
+                            event: MidiEvent::NoteOn  { channel,
+                                                        note: clamp_midi(note + semitones),
+                                                        velocity } },
+        MidiEvent::NoteOff { channel, note, velocity }
+            => TimedEvent { ticks: te.ticks,
+                            event: MidiEvent::NoteOff { channel,
+                                                        note: clamp_midi(note + semitones),
+                                                        velocity } },
+        _ => te,
+    })
+}
+
+/// Snap every note-on's `ticks` to the nearest multiple of `grid`.
+pub fn quantize(grid: Int, events: [TimedEvent]) -> [TimedEvent] {
+    events |> map(|te| TimedEvent {
+        ticks: ((te.ticks + grid/2) / grid) * grid,
+        event: te.event,
+    })
+}
+
+/// Drop every event on channels not in `keep`.
+pub fn filter_channels(keep: [Int], events: [TimedEvent]) -> [TimedEvent] {
+    events |> filter(|te| match te.event {
+        MidiEvent::NoteOn        { channel, .. } => keep |> contains(channel),
+        MidiEvent::NoteOff       { channel, .. } => keep |> contains(channel),
+        MidiEvent::ControlChange { channel, .. } => keep |> contains(channel),
+        MidiEvent::ProgramChange { channel, .. } => keep |> contains(channel),
+        MidiEvent::PitchBend     { channel, .. } => keep |> contains(channel),
+        MidiEvent::Aftertouch    { channel, .. } => keep |> contains(channel),
+        MidiEvent::Meta _ | MidiEvent::SysEx _   => true,
+    })
+}
+
+fn clamp_midi(n: Int) -> Int {
+    if n < 0 { 0 } else if n > 127 { 127 } else { n }
+}
+
+fn bytes_to_ascii(bs: [Byte]) -> String { bs |> String::from_bytes() }
+
+// Usage:
+//   bytes
+//       |> parse_smf()?
+//       |> .tracks
+//       |> map(quantize(24))
+//       |> map(filter_channels([0, 9]))
+//       |> map(transpose(-12))
+//       |> render_smf()

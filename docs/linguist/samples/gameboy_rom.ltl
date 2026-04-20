@@ -1,0 +1,240 @@
+// retro/gameboy_rom.ltl
+//
+// Game Boy (DMG / CGB) cartridge header parser and ROM introspection.
+//
+// The Game Boy header starts at 0x0100 and ends at 0x014F. It carries
+// the entry point, Nintendo logo (used as a copy-protection check by
+// the boot ROM), title, licensee, cartridge type, ROM/RAM size, and
+// a Fletcher-style header checksum.
+//
+// This module parses that header, verifies the logo and checksums,
+// and exposes the parsed metadata as Lateralus values. The intended
+// consumers are emulators, disassemblers, and homebrew toolchains.
+//
+// Batch 78 / retro-computing.
+
+import std::bin
+import std::io
+import std::collections::Map
+
+pub struct RomHeader {
+    entry_point:   [Byte],     // 4 bytes at 0x0100
+    title:         String,     // up to 16 chars
+    manufacturer:  Option<String>,   // CGB-era cartridges
+    cgb_flag:      CgbFlag,
+    new_licensee:  Option<String>,
+    sgb_flag:      Bool,
+    cart_type:     CartType,
+    rom_size:      Int,        // bytes
+    ram_size:      Int,        // bytes
+    destination:   Destination,
+    old_licensee:  Int,
+    rom_version:   Int,
+    header_cksum:  Byte,
+    global_cksum:  Int,        // 16-bit
+}
+
+pub enum CgbFlag { Dmg, CgbSupported, CgbOnly, Unknown(Byte) }
+pub enum Destination { Japan, Overseas, Unknown(Byte) }
+
+pub enum CartType {
+    RomOnly,
+    MBC1,                MBC1_Ram,         MBC1_Ram_Battery,
+    MBC2,                MBC2_Battery,
+    RomRam,              RomRamBattery,
+    MMM01,               MMM01_Ram,        MMM01_Ram_Battery,
+    MBC3_Timer_Battery,  MBC3_Timer_Ram_Battery,
+    MBC3,                MBC3_Ram,         MBC3_Ram_Battery,
+    MBC5,                MBC5_Ram,         MBC5_Ram_Battery,
+    MBC5_Rumble,         MBC5_Rumble_Ram,  MBC5_Rumble_Ram_Battery,
+    MBC6, MBC7_Sensor_Rumble_Ram_Battery,
+    PocketCamera, BandaiTama5, HuC3, HuC1_Ram_Battery,
+    Other(Byte),
+}
+
+pub enum ParseError {
+    TooShort(Int),          // rom size
+    BadLogo,
+    BadHeaderChecksum { expected: Byte, got: Byte },
+    BadGlobalChecksum { expected: Int,  got: Int  },
+}
+
+/// Canonical Nintendo logo bytes (0x0104..=0x0133).
+const NINTENDO_LOGO: [Byte] = [
+    0xCE, 0xED, 0x66, 0x66, 0xCC, 0x0D, 0x00, 0x0B, 0x03, 0x73, 0x00, 0x83,
+    0x00, 0x0C, 0x00, 0x0D, 0x00, 0x08, 0x11, 0x1F, 0x88, 0x89, 0x00, 0x0E,
+    0xDC, 0xCC, 0x6E, 0xE6, 0xDD, 0xDD, 0xD9, 0x99, 0xBB, 0xBB, 0x67, 0x63,
+    0x6E, 0x0E, 0xEC, 0xCC, 0xDD, 0xDC, 0x99, 0x9F, 0xBB, 0xB9, 0x33, 0x3E,
+]
+
+pub fn parse(rom: [Byte]) -> Result<RomHeader, ParseError> {
+    if len(rom) < 0x0150 { return Err(ParseError::TooShort(len(rom))) }
+
+    // Logo check (boot ROM also verifies this; real carts must match exactly).
+    let logo = rom[0x0104..0x0134]
+    if logo != NINTENDO_LOGO { return Err(ParseError::BadLogo) }
+
+    // Header checksum: x = 0; for i in 0x0134..0x014D: x = x - rom[i] - 1.
+    let mut x: Int = 0
+    for i in 0x0134..0x014D {
+        x = (x - (rom[i] as Int) - 1) & 0xFF
+    }
+    let expected = x as Byte
+    let got = rom[0x014D]
+    if expected != got {
+        return Err(ParseError::BadHeaderChecksum { expected, got })
+    }
+
+    // Global checksum: 16-bit sum of every byte except 0x014E and 0x014F.
+    let mut g: Int = 0
+    for i in 0..len(rom) {
+        if i == 0x014E || i == 0x014F { continue }
+        g = (g + (rom[i] as Int)) & 0xFFFF
+    }
+    let want_g = ((rom[0x014E] as Int) << 8) | (rom[0x014F] as Int)
+    if g != want_g {
+        return Err(ParseError::BadGlobalChecksum { expected: want_g, got: g })
+    }
+
+    // Fields.
+    let title_bytes = rom[0x0134..0x0144] |> take_while(|b| b != 0)
+    let title = title_bytes |> bytes_to_ascii()
+
+    let cgb = match rom[0x0143] {
+        0x80 => CgbFlag::CgbSupported,
+        0xC0 => CgbFlag::CgbOnly,
+        0x00 => CgbFlag::Dmg,
+        b    => CgbFlag::Unknown(b),
+    }
+
+    let new_licensee = if rom[0x014B] == 0x33 {
+        Some(bytes_to_ascii(rom[0x0144..0x0146]))
+    } else { None }
+
+    let manufacturer = match cgb {
+        CgbFlag::Dmg => None,
+        _            => Some(bytes_to_ascii(rom[0x013F..0x0143])),
+    }
+
+    let header = RomHeader {
+        entry_point:  rom[0x0100..0x0104],
+        title,
+        manufacturer,
+        cgb_flag:     cgb,
+        new_licensee,
+        sgb_flag:     rom[0x0146] == 0x03,
+        cart_type:    classify_cart(rom[0x0147]),
+        rom_size:     rom_size_bytes(rom[0x0148]),
+        ram_size:     ram_size_bytes(rom[0x0149]),
+        destination:  match rom[0x014A] { 0x00 => Destination::Japan,
+                                          0x01 => Destination::Overseas,
+                                          b    => Destination::Unknown(b) },
+        old_licensee: rom[0x014B] as Int,
+        rom_version:  rom[0x014C] as Int,
+        header_cksum: got,
+        global_cksum: want_g,
+    }
+
+    Ok(header)
+}
+
+fn classify_cart(b: Byte) -> CartType {
+    match b {
+        0x00 => CartType::RomOnly,
+        0x01 => CartType::MBC1,
+        0x02 => CartType::MBC1_Ram,
+        0x03 => CartType::MBC1_Ram_Battery,
+        0x05 => CartType::MBC2,
+        0x06 => CartType::MBC2_Battery,
+        0x08 => CartType::RomRam,
+        0x09 => CartType::RomRamBattery,
+        0x0B => CartType::MMM01,
+        0x0C => CartType::MMM01_Ram,
+        0x0D => CartType::MMM01_Ram_Battery,
+        0x0F => CartType::MBC3_Timer_Battery,
+        0x10 => CartType::MBC3_Timer_Ram_Battery,
+        0x11 => CartType::MBC3,
+        0x12 => CartType::MBC3_Ram,
+        0x13 => CartType::MBC3_Ram_Battery,
+        0x19 => CartType::MBC5,
+        0x1A => CartType::MBC5_Ram,
+        0x1B => CartType::MBC5_Ram_Battery,
+        0x1C => CartType::MBC5_Rumble,
+        0x1D => CartType::MBC5_Rumble_Ram,
+        0x1E => CartType::MBC5_Rumble_Ram_Battery,
+        0x20 => CartType::MBC6,
+        0x22 => CartType::MBC7_Sensor_Rumble_Ram_Battery,
+        0xFC => CartType::PocketCamera,
+        0xFD => CartType::BandaiTama5,
+        0xFE => CartType::HuC3,
+        0xFF => CartType::HuC1_Ram_Battery,
+        other => CartType::Other(other),
+    }
+}
+
+fn rom_size_bytes(code: Byte) -> Int {
+    // 0x00 => 32 KiB, then each increment doubles, up to 0x08 => 8 MiB.
+    match code {
+        0x00 =>  32 * 1024,
+        0x01 =>  64 * 1024,
+        0x02 => 128 * 1024,
+        0x03 => 256 * 1024,
+        0x04 => 512 * 1024,
+        0x05 =>   1 * 1024 * 1024,
+        0x06 =>   2 * 1024 * 1024,
+        0x07 =>   4 * 1024 * 1024,
+        0x08 =>   8 * 1024 * 1024,
+        _    =>   0,
+    }
+}
+
+fn ram_size_bytes(code: Byte) -> Int {
+    match code {
+        0x00 =>       0,
+        0x02 =>   8 * 1024,
+        0x03 =>  32 * 1024,
+        0x04 => 128 * 1024,
+        0x05 =>  64 * 1024,
+        _    =>       0,
+    }
+}
+
+fn bytes_to_ascii(bs: [Byte]) -> String {
+    bs |> take_while(|b| b >= 0x20 && b < 0x80) |> String::from_bytes()
+}
+
+/// Walk the ROM and extract every printable ASCII run ≥ 4 chars. Useful
+/// for finding text strings embedded by the developer.
+pub fn strings(rom: [Byte], min_len: Int) -> [String] {
+    let mut out: [String] = []
+    let mut buf: [Byte]  = []
+    for b in rom {
+        if b >= 0x20 && b < 0x7F {
+            buf |> push_mut(b)
+        } else {
+            if len(buf) >= min_len { out |> push_mut(buf |> String::from_bytes()) }
+            buf = []
+        }
+    }
+    if len(buf) >= min_len { out |> push_mut(buf |> String::from_bytes()) }
+    out
+}
+
+/// Convenience: `lateralus run retro/gameboy_rom.ltl my_game.gb` prints a summary.
+fn main(args: [String]) -> Result<(), String> {
+    if len(args) < 2 { return Err("usage: gameboy_rom <path.gb>") }
+    let rom = io::read_file(args[1]) |> map_err(|e| "read: {e}")?
+    match parse(rom) {
+        Ok(h) => {
+            println("title:       {h.title}")
+            println("cart_type:   {h.cart_type}")
+            println("rom_size:    {h.rom_size / 1024} KiB")
+            println("ram_size:    {h.ram_size / 1024} KiB")
+            println("destination: {h.destination}")
+            println("header_cksum: 0x{h.header_cksum |> hex()}  (OK)")
+            println("global_cksum: 0x{h.global_cksum |> hex()}  (OK)")
+            Ok(())
+        },
+        Err(e) => Err("{e}"),
+    }
+}

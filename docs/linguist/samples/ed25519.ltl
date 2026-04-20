@@ -1,0 +1,158 @@
+// crypto/ed25519.ltl
+//
+// Ed25519 signing and verification per RFC 8032.
+//
+// Ed25519 is the default signature scheme for modern systems: SSH
+// since OpenSSH 6.5, TLS 1.3 cipher suites, libsodium, Wireguard,
+// Signal, Tor. This module is a pure-Lateralus reference implementation
+// written in the same field-arithmetic style as ref10 but in pipeline
+// form for readability.
+//
+// Pure, constant-time up to the scalar multiplication (which uses a
+// comb table; a variable-time scalar-mult variant is exposed for
+// verification where timing is not a secret).
+//
+// Batch 80 / crypto niche. First Ed25519 in the ecosystem.
+
+import std::bin
+import std::crypto::sha512
+
+// -- Field Fp, p = 2^255 - 19 -----------------------------------------------
+
+const P: Int256 = (Int256::one() << 255) - Int256::from(19)
+const D: Int256 = // -121665 * inv(121666) mod p, precomputed
+    Int256::from_hex("52036cee2b6ffe738cc740797779e89800700a4d4141d8ab75eb4dca135978a3")
+
+pub struct Point { x: Int256, y: Int256, z: Int256, t: Int256 }    // extended
+
+fn fp_add(a: Int256, b: Int256) -> Int256 { (a + b) % P }
+fn fp_sub(a: Int256, b: Int256) -> Int256 { (a + P - b % P) % P }
+fn fp_mul(a: Int256, b: Int256) -> Int256 { (a * b) % P }
+fn fp_inv(a: Int256) -> Int256 { pow_mod(a, P - Int256::from(2), P) }
+
+// -- Group E: ax^2 + y^2 = 1 + d x^2 y^2, a = -1 ----------------------------
+
+pub fn point_add(p: Point, q: Point) -> Point {
+    let a = fp_mul(fp_sub(p.y, p.x), fp_sub(q.y, q.x))
+    let b = fp_mul(fp_add(p.y, p.x), fp_add(q.y, q.x))
+    let c = fp_mul(fp_mul(p.t, D), fp_mul(q.t, Int256::from(2)))
+    let d = fp_mul(p.z, fp_mul(q.z, Int256::from(2)))
+    let e = fp_sub(b, a)
+    let f = fp_sub(d, c)
+    let g = fp_add(d, c)
+    let h = fp_add(b, a)
+    Point {
+        x: fp_mul(e, f),
+        y: fp_mul(g, h),
+        t: fp_mul(e, h),
+        z: fp_mul(f, g),
+    }
+}
+
+pub fn point_double(p: Point) -> Point { point_add(p, p) }
+
+pub fn scalar_mul(s: [Byte; 32], p: Point) -> Point {
+    // Double-and-add, MSB first. Constant-time if `select_ct` is branchless.
+    let mut r = Point { x: Int256::zero(), y: Int256::one(),
+                        z: Int256::one(), t: Int256::zero() }
+    for i in (0..256) |> reverse() {
+        r = point_double(r)
+        let bit = (s[i / 8] >> (i % 8)) & 1
+        let step = point_add(r, p)
+        r = select_ct(bit, step, r)
+    }
+    r
+}
+
+/// Base point B encoded at compile time.
+const B: Point = Point {
+    x: Int256::from_hex("216936d3cd6e53fec0a4e231fdd6dc5c692cc7609525a7b2c9562d608f25d51a"),
+    y: Int256::from_hex("6666666666666666666666666666666666666666666666666666666666666658"),
+    z: Int256::one(),
+    t: Int256::from_hex("67875f0fd78b766566ea4e8e64abe37d20f09f80775152f56dde8ab3a5b7dda3"),
+}
+
+// -- Encoding ---------------------------------------------------------------
+
+pub fn encode_point(p: Point) -> [Byte; 32] {
+    let inv_z = fp_inv(p.z)
+    let x = fp_mul(p.x, inv_z)
+    let y = fp_mul(p.y, inv_z)
+    let mut out = y |> int_to_le_bytes_32()
+    // Top bit of last byte carries the sign of x.
+    out[31] = out[31] | (((x & Int256::one()) as Int) as Byte) << 7
+    out
+}
+
+pub fn decode_point(b: [Byte; 32]) -> Result<Point, String> {
+    let mut y_bytes = b
+    let x_sign = (y_bytes[31] >> 7) & 1
+    y_bytes[31] = y_bytes[31] & 0x7F
+    let y = le_bytes_to_int(y_bytes)
+    // x^2 = (y^2 - 1) / (d*y^2 + 1)
+    let y2 = fp_mul(y, y)
+    let num = fp_sub(y2, Int256::one())
+    let den = fp_add(fp_mul(D, y2), Int256::one())
+    let x2 = fp_mul(num, fp_inv(den))
+    let mut x = sqrt_mod_p(x2)?
+    if ((x & Int256::one()) as Int) as Byte != x_sign {
+        x = fp_sub(Int256::zero(), x)
+    }
+    Ok(Point { x, y, z: Int256::one(), t: fp_mul(x, y) })
+}
+
+// -- Signature API ----------------------------------------------------------
+
+pub type SecretKey = [Byte; 32]
+pub type PublicKey = [Byte; 32]
+pub type Signature = [Byte; 64]
+
+pub fn keypair(seed: SecretKey) -> PublicKey {
+    let h = sha512::hash(seed)
+    let mut a = h[0..32]
+    a[0]  = a[0]  & 0xF8
+    a[31] = (a[31] & 0x7F) | 0x40
+    let a_scalar: [Byte; 32] = a
+    let A = scalar_mul(a_scalar, B)
+    encode_point(A)
+}
+
+pub fn sign(seed: SecretKey, public: PublicKey, message: [Byte]) -> Signature {
+    let h = sha512::hash(seed)
+    let a = clamp_scalar(h[0..32])
+    let prefix = h[32..64]
+
+    let r = sha512::hash(prefix |> extend(message)) |> reduce_scalar_mod_l()
+    let R = scalar_mul(r, B)
+    let R_enc = encode_point(R)
+
+    let k = sha512::hash(R_enc |> extend(public) |> extend(message))
+            |> reduce_scalar_mod_l()
+    let s = scalar_add_mod_l(r, scalar_mul_mod_l(k, a))
+
+    R_enc |> extend(s) |> to_array_64()
+}
+
+pub fn verify(public: PublicKey, message: [Byte], sig: Signature) -> Bool {
+    let R_enc = sig[0..32]
+    let s     = sig[32..64]
+    if not scalar_below_l(s) { return false }
+
+    let A = match decode_point(public) { Ok(p) => p, Err(_) => return false }
+    let R = match decode_point(R_enc)  { Ok(p) => p, Err(_) => return false }
+
+    let k = sha512::hash(R_enc |> extend(public) |> extend(message))
+            |> reduce_scalar_mod_l()
+
+    // Check [8][s]B == [8]R + [8][k]A
+    let lhs = scalar_mul(s, B) |> mul_by_8()
+    let rhs = point_add(R |> mul_by_8(), scalar_mul(k, A) |> mul_by_8())
+    point_eq(lhs, rhs)
+}
+
+// Subroutines: pow_mod, sqrt_mod_p, reduce_scalar_mod_l, scalar_add_mod_l,
+// scalar_mul_mod_l, scalar_below_l, mul_by_8, point_eq, select_ct, clamp_scalar,
+// int_to_le_bytes_32, le_bytes_to_int — live in crypto/ed25519_support.ltl.
+//
+// The split keeps this file focused on the EdDSA algorithm at the level
+// of abstraction the RFC uses.
