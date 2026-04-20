@@ -1,0 +1,215 @@
+
+// YAML Parser - Parses YAML documents with indentation-based nesting
+// Supports scalars, sequences, and mappings.
+
+use std.collections.HashMap
+
+#[derive(Clone, Debug, PartialEq)]
+enum YamlValue {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    String(string),
+    Sequence([YamlValue]),
+    Mapping([(string, YamlValue)]),
+}
+
+impl YamlValue {
+    fn as_str(self) -> Option<&string> { match self { YamlValue.String(s) => some(s), _ => none } }
+    fn as_int(self) -> Option<i64> { match self { YamlValue.Int(n) => some(*n), _ => none } }
+    fn as_float(self) -> Option<f64> { match self { YamlValue.Float(f) => some(*f), _ => none } }
+    fn as_bool(self) -> Option<bool> { match self { YamlValue.Bool(b) => some(*b), _ => none } }
+    fn as_seq(self) -> Option<&[YamlValue]> { match self { YamlValue.Sequence(s) => some(s), _ => none } }
+    fn as_map(self) -> Option<&[(string, YamlValue)]> { match self { YamlValue.Mapping(m) => some(m), _ => none } }
+    fn is_null(self) -> bool { matches!(self, YamlValue.Null) }
+
+    fn get(self, key: &str) -> Option<&YamlValue> {
+        match self {
+            YamlValue.Mapping(pairs) => {
+                pairs.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+            },
+            _ => none,
+        }
+    }
+
+    fn index(self, idx: usize) -> Option<&YamlValue> {
+        match self {
+            YamlValue.Sequence(items) => items.get(idx),
+            _ => none,
+        }
+    }
+
+    fn len(self) -> usize {
+        match self {
+            YamlValue.Sequence(s) => s.len(),
+            YamlValue.Mapping(m) => m.len(),
+            _ => 0,
+        }
+    }
+}
+
+struct YamlLine {
+    indent: usize,
+    content: string,
+}
+
+fn measure_indent(line: &str) -> usize {
+    line.chars().take_while(|&c| c == ' ').count()
+}
+
+fn parse_scalar(s: &str) -> YamlValue {
+    let trimmed = s.trim()
+    if trimmed.is_empty() || trimmed == "~" || trimmed == "null" { return YamlValue.Null }
+    if trimmed == "true" || trimmed == "yes" { return YamlValue.Bool(true) }
+    if trimmed == "false" || trimmed == "no" { return YamlValue.Bool(false) }
+    if let ok(n) = trimmed.parse::<i64>() { return YamlValue.Int(n) }
+    if let ok(f) = trimmed.parse::<f64>() { return YamlValue.Float(f) }
+    // Strip quotes
+    if (trimmed.starts_with('"') && trimmed.ends_with('"')) ||
+       (trimmed.starts_with('\'') && trimmed.ends_with('\'')) {
+        return YamlValue.String(trimmed[1..trimmed.len()-1].into())
+    }
+    YamlValue.String(trimmed.into())
+}
+
+fn parse_yaml_lines(lines: &[YamlLine], start: usize, end: usize, base_indent: usize) -> YamlValue {
+    if start >= end { return YamlValue.Null }
+
+    // Check if sequence (starts with "- ")
+    let first = &lines[start].content
+    if first.trim_start().starts_with("- ") {
+        let mut items = []
+        let mut i = start
+        while i < end {
+            let line = &lines[i].content.trim_start()
+            if line.starts_with("- ") {
+                let value_str = &line[2..]
+                items.push(parse_scalar(value_str))
+            }
+            i += 1
+        }
+        return YamlValue.Sequence(items)
+    }
+
+    // Mapping
+    let mut pairs = []
+    let mut i = start
+    while i < end {
+        let line = &lines[i].content
+        if let some(colon_pos) = line.find(": ") {
+            let key = line[..colon_pos].trim().into()
+            let value_str = &line[colon_pos + 2..]
+            if value_str.trim().is_empty() && i + 1 < end && lines[i + 1].indent > lines[i].indent {
+                // Nested block
+                let child_indent = lines[i + 1].indent
+                let mut j = i + 1
+                while j < end && lines[j].indent >= child_indent { j += 1 }
+                let child = parse_yaml_lines(lines, i + 1, j, child_indent)
+                pairs.push((key, child))
+                i = j
+                continue
+            } else {
+                pairs.push((key, parse_scalar(value_str)))
+            }
+        } else if line.contains(':') && !line.contains(": ") {
+            let key = line.trim_end_matches(':').trim().into()
+            if i + 1 < end && lines[i + 1].indent > lines[i].indent {
+                let child_indent = lines[i + 1].indent
+                let mut j = i + 1
+                while j < end && lines[j].indent >= child_indent { j += 1 }
+                let child = parse_yaml_lines(lines, i + 1, j, child_indent)
+                pairs.push((key, child))
+                i = j
+                continue
+            } else {
+                pairs.push((key, YamlValue.Null))
+            }
+        }
+        i += 1
+    }
+    YamlValue.Mapping(pairs)
+}
+
+fn parse_yaml(input: &str) -> YamlValue {
+    let lines: [YamlLine] = input.lines()
+        .filter(|l| !l.trim().is_empty() && !l.trim().starts_with('#'))
+        .map(|l| YamlLine { indent: measure_indent(l), content: l.into() })
+        .collect()
+    if lines.is_empty() { return YamlValue.Null }
+    parse_yaml_lines(&lines, 0, lines.len(), 0)
+}
+
+fn main() {
+    // Scalar parsing
+    assert(parse_scalar("42") == YamlValue.Int(42))
+    assert(parse_scalar("3.14") == YamlValue.Float(3.14))
+    assert(parse_scalar("true") == YamlValue.Bool(true))
+    assert(parse_scalar("false") == YamlValue.Bool(false))
+    assert(parse_scalar("null") == YamlValue.Null)
+    assert(parse_scalar("hello") == YamlValue.String("hello".into()))
+    assert(parse_scalar("\"quoted\"") == YamlValue.String("quoted".into()))
+    print("Scalar parsing ✓")
+
+    // Simple mapping
+    let yaml = parse_yaml("name: lateralus\nversion: 1")
+    assert(yaml.get("name").unwrap().as_str().unwrap() == "lateralus")
+    assert(yaml.get("version").unwrap().as_int().unwrap() == 1)
+    print("Simple mapping ✓")
+
+    // Boolean values
+    let yaml2 = parse_yaml("debug: true\nrelease: false")
+    assert(yaml2.get("debug").unwrap().as_bool().unwrap() == true)
+    assert(yaml2.get("release").unwrap().as_bool().unwrap() == false)
+    print("Booleans ✓")
+
+    // Sequence
+    let yaml3 = parse_yaml("- apple\n- banana\n- cherry")
+    let seq = yaml3.as_seq().unwrap()
+    assert(seq.len() == 3)
+    assert(seq[0].as_str().unwrap() == "apple")
+    assert(seq[2].as_str().unwrap() == "cherry")
+    print("Sequence ✓")
+
+    // Nested mapping
+    let yaml4 = parse_yaml("server:\n  host: localhost\n  port: 8080")
+    let server = yaml4.get("server").unwrap()
+    assert(server.get("host").unwrap().as_str().unwrap() == "localhost")
+    assert(server.get("port").unwrap().as_int().unwrap() == 8080)
+    print("Nested mapping ✓")
+
+    // Value access
+    assert(yaml.len() == 2)
+    assert(yaml3.len() == 3)
+    assert(yaml.index(0) == none)  // not a sequence
+    assert(yaml3.index(1).unwrap().as_str().unwrap() == "banana")
+    print("Value access ✓")
+
+    // Null values
+    assert(YamlValue.Null.is_null())
+    assert(!YamlValue.Int(0).is_null())
+    assert(parse_scalar("~").is_null())
+    print("Null values ✓")
+
+    // Missing key
+    assert(yaml.get("nonexistent") == none)
+    print("Missing key ✓")
+
+    // Indent measurement
+    assert(measure_indent("  hello") == 2)
+    assert(measure_indent("    world") == 4)
+    assert(measure_indent("nope") == 0)
+    print("Indent ✓")
+
+    // Empty input
+    assert(parse_yaml("").is_null())
+    assert(parse_yaml("# just a comment").is_null())
+    print("Empty input ✓")
+
+    // Float values
+    let yaml5 = parse_yaml("pi: 3.14159")
+    assert((yaml5.get("pi").unwrap().as_float().unwrap() - 3.14159).abs() < 0.0001)
+    print("Float values ✓")
+
+    print("YAML parser complete ✓")
+}
