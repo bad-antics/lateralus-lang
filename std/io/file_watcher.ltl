@@ -1,0 +1,239 @@
+
+// File Watcher - Monitors filesystem changes with event callbacks
+// Supports watching files and directories for create, modify, delete events.
+
+use std.collections.{HashMap, HashSet}
+use std.time.Instant
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum EventKind { Created, Modified, Deleted, Renamed, Accessed }
+
+#[derive(Clone, Debug)]
+struct FileEvent {
+    kind: EventKind,
+    path: string,
+    timestamp: u64,
+    is_dir: bool,
+}
+
+impl FileEvent {
+    fn new(kind: EventKind, path: &str, timestamp: u64) -> FileEvent {
+        FileEvent { kind, path: path.into(), timestamp, is_dir: false }
+    }
+    fn directory(kind: EventKind, path: &str, timestamp: u64) -> FileEvent {
+        FileEvent { kind, path: path.into(), timestamp, is_dir: true }
+    }
+    fn is_create(self) -> bool { self.kind == EventKind.Created }
+    fn is_modify(self) -> bool { self.kind == EventKind.Modified }
+    fn is_delete(self) -> bool { self.kind == EventKind.Deleted }
+    fn filename(self) -> &str {
+        self.path.rsplit('/').next().unwrap_or(&self.path)
+    }
+    fn extension(self) -> Option<&str> {
+        self.filename().rsplit('.').next()
+    }
+}
+
+#[derive(Clone, Debug)]
+struct FileSnapshot {
+    path: string,
+    size: u64,
+    modified: u64,
+    hash: u64,
+}
+
+impl FileSnapshot {
+    fn new(path: &str, size: u64, modified: u64) -> FileSnapshot {
+        let mut hash: u64 = 0xcbf29ce484222325
+        for b in path.bytes() { hash ^= b as u64; hash = hash.wrapping_mul(0x100000001b3) }
+        FileSnapshot { path: path.into(), size, modified, hash }
+    }
+    fn changed_since(self, other: &FileSnapshot) -> bool {
+        self.size != other.size || self.modified != other.modified
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum FilterAction { Include, Exclude, Ignore }
+
+struct WatchFilter {
+    extensions: HashSet<string>,
+    excluded_dirs: HashSet<string>,
+    min_size: Option<u64>,
+    max_size: Option<u64>,
+}
+
+impl WatchFilter {
+    fn new() -> WatchFilter {
+        WatchFilter { extensions: HashSet.new(), excluded_dirs: HashSet.new(), min_size: None, max_size: None }
+    }
+    fn add_extension(mut self, ext: &str) -> WatchFilter { self.extensions.insert(ext.into()); self }
+    fn exclude_dir(mut self, dir: &str) -> WatchFilter { self.excluded_dirs.insert(dir.into()); self }
+    fn min_size(mut self, s: u64) -> WatchFilter { self.min_size = Some(s); self }
+    fn max_size(mut self, s: u64) -> WatchFilter { self.max_size = Some(s); self }
+
+    fn matches(self, event: &FileEvent) -> bool {
+        if !self.extensions.is_empty() {
+            if let Some(ext) = event.extension() {
+                if !self.extensions.contains(ext) { return false }
+            } else { return false }
+        }
+        for dir in &self.excluded_dirs {
+            if event.path.contains(dir) { return false }
+        }
+        true
+    }
+}
+
+struct FileWatcher {
+    watched_paths: [string],
+    snapshots: HashMap<string, FileSnapshot>,
+    events: [FileEvent],
+    filter: Option<WatchFilter>,
+    debounce_ms: u64,
+    recursive: bool,
+    event_count: u64,
+}
+
+impl FileWatcher {
+    fn new() -> FileWatcher {
+        FileWatcher {
+            watched_paths: [], snapshots: HashMap.new(), events: [],
+            filter: None, debounce_ms: 100, recursive: true, event_count: 0,
+        }
+    }
+
+    fn watch(mut self, path: &str) -> FileWatcher { self.watched_paths.push(path.into()); self }
+    fn set_filter(mut self, filter: WatchFilter) -> FileWatcher { self.filter = Some(filter); self }
+    fn set_debounce(mut self, ms: u64) -> FileWatcher { self.debounce_ms = ms; self }
+    fn set_recursive(mut self, r: bool) -> FileWatcher { self.recursive = r; self }
+
+    fn record_snapshot(mut self, snapshot: FileSnapshot) {
+        self.snapshots.insert(snapshot.path.clone(), snapshot);
+    }
+
+    fn process_event(mut self, event: FileEvent) {
+        if let Some(ref filter) = self.filter {
+            if !filter.matches(&event) { return }
+        }
+        self.events.push(event)
+        self.event_count += 1
+    }
+
+    fn pending_events(self) -> usize { self.events.len() }
+    fn total_events(self) -> u64 { self.event_count }
+    fn drain_events(mut self) -> [FileEvent] { let e = self.events.clone(); self.events.clear(); e }
+    fn watched_count(self) -> usize { self.watched_paths.len() }
+    fn snapshot_count(self) -> usize { self.snapshots.len() }
+
+    fn detect_changes(mut self, current: &[FileSnapshot]) -> [FileEvent] {
+        let mut events = []
+        let mut seen: HashSet<string> = HashSet.new()
+
+        for snap in current {
+            seen.insert(snap.path.clone())
+            match self.snapshots.get(&snap.path) {
+                Some(old) => {
+                    if snap.changed_since(old) {
+                        events.push(FileEvent.new(EventKind.Modified, &snap.path, snap.modified))
+                    }
+                }
+                None => { events.push(FileEvent.new(EventKind.Created, &snap.path, snap.modified)) }
+            }
+        }
+
+        for (path, _) in &self.snapshots {
+            if !seen.contains(path) {
+                events.push(FileEvent.new(EventKind.Deleted, path, 0))
+            }
+        }
+
+        // Update snapshots
+        self.snapshots.clear()
+        for snap in current { self.record_snapshot(snap.clone()) }
+
+        events
+    }
+}
+
+fn main() {
+    // FileEvent
+    let ev = FileEvent.new(EventKind.Created, "/src/main.ltl", 1000)
+    assert(ev.is_create())
+    assert(!ev.is_modify())
+    assert(ev.filename() == "main.ltl")
+    assert(ev.extension() == Some("ltl"))
+    print("FileEvent ✓")
+
+    // Directory event
+    let dev = FileEvent.directory(EventKind.Created, "/src/lib", 1000)
+    assert(dev.is_dir)
+    print("Dir event ✓")
+
+    // FileSnapshot
+    let s1 = FileSnapshot.new("/a.txt", 100, 5000)
+    let s2 = FileSnapshot.new("/a.txt", 200, 6000)
+    assert(s1.changed_since(&s2))
+    let s3 = FileSnapshot.new("/a.txt", 100, 5000)
+    assert(!s1.changed_since(&s3))
+    print("Snapshot ✓")
+
+    // WatchFilter
+    let filter = WatchFilter.new().add_extension("ltl").add_extension("rs").exclude_dir("node_modules")
+    let ev1 = FileEvent.new(EventKind.Modified, "/src/main.ltl", 100)
+    let ev2 = FileEvent.new(EventKind.Modified, "/src/main.py", 100)
+    let ev3 = FileEvent.new(EventKind.Modified, "/node_modules/foo.ltl", 100)
+    assert(filter.matches(&ev1))
+    assert(!filter.matches(&ev2))
+    assert(!filter.matches(&ev3))
+    print("Filter ✓")
+
+    // FileWatcher
+    let mut watcher = FileWatcher.new().watch("/src").watch("/tests").set_debounce(200)
+    assert(watcher.watched_count() == 2)
+    assert(watcher.debounce_ms == 200)
+    print("Watcher init ✓")
+
+    // Process events
+    watcher.process_event(FileEvent.new(EventKind.Created, "/src/new.ltl", 100))
+    watcher.process_event(FileEvent.new(EventKind.Modified, "/src/old.ltl", 101))
+    assert(watcher.pending_events() == 2)
+    assert(watcher.total_events() == 2)
+    print("Process ✓")
+
+    // Drain
+    let drained = watcher.drain_events()
+    assert(drained.len() == 2)
+    assert(watcher.pending_events() == 0)
+    assert(watcher.total_events() == 2)  // total still counts
+    print("Drain ✓")
+
+    // Filter on watcher
+    let mut fw = FileWatcher.new()
+        .watch("/src")
+        .set_filter(WatchFilter.new().add_extension("ltl"))
+    fw.process_event(FileEvent.new(EventKind.Modified, "/src/a.ltl", 100))
+    fw.process_event(FileEvent.new(EventKind.Modified, "/src/b.py", 100))
+    assert(fw.pending_events() == 1)
+    print("Watcher filter ✓")
+
+    // Change detection
+    let mut detector = FileWatcher.new()
+    let initial = [
+        FileSnapshot.new("/a.txt", 100, 1000),
+        FileSnapshot.new("/b.txt", 200, 2000),
+    ];
+    let _ = detector.detect_changes(&initial)  // establish baseline
+
+    let updated = [
+        FileSnapshot.new("/a.txt", 150, 1500),  // modified
+        FileSnapshot.new("/c.txt", 50, 3000),    // created (b deleted)
+    ];
+    let changes = detector.detect_changes(&updated)
+    assert(changes.iter().any(|e| e.is_modify() && e.path == "/a.txt"))
+    assert(changes.iter().any(|e| e.is_create() && e.path == "/c.txt"))
+    assert(changes.iter().any(|e| e.is_delete() && e.path == "/b.txt"))
+    print("Change detection ✓")
+
+    print("File watcher complete ✓")
+}
