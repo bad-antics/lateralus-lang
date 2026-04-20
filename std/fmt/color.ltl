@@ -1,0 +1,207 @@
+
+// Terminal color and styling utilities
+// ANSI escape code builder for rich terminal output.
+
+#[derive(Clone, Debug, PartialEq)]
+enum Color {
+    Black, Red, Green, Yellow, Blue, Magenta, Cyan, White,
+    BrightBlack, BrightRed, BrightGreen, BrightYellow,
+    BrightBlue, BrightMagenta, BrightCyan, BrightWhite,
+    Rgb(u8, u8, u8),
+    Ansi256(u8),
+}
+
+impl Color {
+    fn fg_code(self) -> string {
+        match self {
+            Color.Black => "30".into(),
+            Color.Red => "31".into(),
+            Color.Green => "32".into(),
+            Color.Yellow => "33".into(),
+            Color.Blue => "34".into(),
+            Color.Magenta => "35".into(),
+            Color.Cyan => "36".into(),
+            Color.White => "37".into(),
+            Color.BrightBlack => "90".into(),
+            Color.BrightRed => "91".into(),
+            Color.BrightGreen => "92".into(),
+            Color.BrightYellow => "93".into(),
+            Color.BrightBlue => "94".into(),
+            Color.BrightMagenta => "95".into(),
+            Color.BrightCyan => "96".into(),
+            Color.BrightWhite => "97".into(),
+            Color.Rgb(r, g, b) => format!("38;2;{};{};{}", r, g, b),
+            Color.Ansi256(n) => format!("38;5;{}", n),
+        }
+    }
+
+    fn bg_code(self) -> string {
+        match self {
+            Color.Black => "40".into(),
+            Color.Red => "41".into(),
+            Color.Green => "42".into(),
+            Color.Yellow => "43".into(),
+            Color.Blue => "44".into(),
+            Color.Magenta => "45".into(),
+            Color.Cyan => "46".into(),
+            Color.White => "47".into(),
+            Color.BrightBlack => "100".into(),
+            Color.BrightRed => "101".into(),
+            Color.BrightGreen => "102".into(),
+            Color.BrightYellow => "103".into(),
+            Color.BrightBlue => "104".into(),
+            Color.BrightMagenta => "105".into(),
+            Color.BrightCyan => "106".into(),
+            Color.BrightWhite => "107".into(),
+            Color.Rgb(r, g, b) => format!("48;2;{};{};{}", r, g, b),
+            Color.Ansi256(n) => format!("48;5;{}", n),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum Style { Bold, Dim, Italic, Underline, Blink, Reverse, Hidden, Strikethrough }
+
+impl Style {
+    fn code(self) -> string {
+        match self {
+            Style.Bold => "1".into(),
+            Style.Dim => "2".into(),
+            Style.Italic => "3".into(),
+            Style.Underline => "4".into(),
+            Style.Blink => "5".into(),
+            Style.Reverse => "7".into(),
+            Style.Hidden => "8".into(),
+            Style.Strikethrough => "9".into(),
+        }
+    }
+}
+
+struct StyledString {
+    text: string,
+    fg: Option<Color>,
+    bg: Option<Color>,
+    styles: [Style],
+}
+
+impl StyledString {
+    fn new(text: &str) -> StyledString {
+        StyledString { text: text.into(), fg: none, bg: none, styles: vec![] }
+    }
+
+    fn fg(mut self, color: Color) -> StyledString { self.fg = some(color); self }
+    fn bg(mut self, color: Color) -> StyledString { self.bg = some(color); self }
+    fn bold(mut self) -> StyledString { self.styles.push(Style.Bold); self }
+    fn italic(mut self) -> StyledString { self.styles.push(Style.Italic); self }
+    fn underline(mut self) -> StyledString { self.styles.push(Style.Underline); self }
+    fn dim(mut self) -> StyledString { self.styles.push(Style.Dim); self }
+    fn strikethrough(mut self) -> StyledString { self.styles.push(Style.Strikethrough); self }
+
+    fn render(self) -> string {
+        let mut codes = vec![]
+        for s in &self.styles { codes.push(s.code()) }
+        if let some(ref c) = self.fg { codes.push(c.fg_code()) }
+        if let some(ref c) = self.bg { codes.push(c.bg_code()) }
+
+        if codes.is_empty() { return self.text.clone() }
+
+        format!("\x1b[{}m{}\x1b[0m", codes.join(";"), self.text)
+    }
+
+    fn plain(self) -> &str { &self.text }
+    fn has_styles(self) -> bool { !self.styles.is_empty() || self.fg.is_some() || self.bg.is_some() }
+}
+
+fn strip_ansi(s: &str) -> string {
+    let mut result = String.new()
+    let mut in_escape = false
+    for ch in s.chars() {
+        if ch == '\x1b' { in_escape = true; continue }
+        if in_escape {
+            if ch == 'm' { in_escape = false }
+            continue
+        }
+        result.push(ch)
+    }
+    result
+}
+
+fn main() {
+    // Color codes
+    assert(Color.Red.fg_code() == "31")
+    assert(Color.Green.fg_code() == "32")
+    assert(Color.Blue.bg_code() == "44")
+    assert(Color.White.fg_code() == "37")
+    assert(Color.BrightRed.fg_code() == "91")
+    print("Color codes ✓")
+
+    // RGB
+    assert(Color.Rgb(255, 128, 0).fg_code() == "38;2;255;128;0")
+    assert(Color.Rgb(0, 0, 0).bg_code() == "48;2;0;0;0")
+    print("RGB ✓")
+
+    // ANSI 256
+    assert(Color.Ansi256(196).fg_code() == "38;5;196")
+    assert(Color.Ansi256(21).bg_code() == "48;5;21")
+    print("ANSI256 ✓")
+
+    // Style codes
+    assert(Style.Bold.code() == "1")
+    assert(Style.Italic.code() == "3")
+    assert(Style.Underline.code() == "4")
+    assert(Style.Strikethrough.code() == "9")
+    print("Style codes ✓")
+
+    // StyledString
+    let s = StyledString.new("hello").fg(Color.Red).bold()
+    assert(s.has_styles())
+    let rendered = s.render()
+    assert(rendered.contains("\x1b["))
+    assert(rendered.contains("hello"))
+    assert(rendered.ends_with("\x1b[0m"))
+    print("StyledString render ✓")
+
+    // Plain text (no styles)
+    let plain = StyledString.new("plain")
+    assert(!plain.has_styles())
+    assert(plain.render() == "plain")
+    assert(plain.plain() == "plain")
+    print("Plain text ✓")
+
+    // Chaining
+    let styled = StyledString.new("fancy")
+        .fg(Color.BrightCyan)
+        .bg(Color.Black)
+        .bold()
+        .underline()
+    assert(styled.has_styles())
+    let r = styled.render()
+    assert(r.contains("1"))   // bold
+    assert(r.contains("4"))   // underline
+    assert(r.contains("96"))  // bright cyan fg
+    assert(r.contains("40"))  // black bg
+    print("Chaining ✓")
+
+    // Strip ANSI
+    let escaped = "\x1b[31mred\x1b[0m text"
+    assert(strip_ansi(escaped) == "red text")
+    assert(strip_ansi("no escapes") == "no escapes")
+    assert(strip_ansi("") == "")
+    print("Strip ANSI ✓")
+
+    // Dim and strikethrough
+    let dim = StyledString.new("dim").dim()
+    assert(dim.render().contains("2"))
+    let strike = StyledString.new("old").strikethrough()
+    assert(strike.render().contains("9"))
+    print("Dim/Strike ✓")
+
+    // Color equality
+    assert(Color.Red == Color.Red)
+    assert(Color.Red != Color.Blue)
+    assert(Color.Rgb(1, 2, 3) == Color.Rgb(1, 2, 3))
+    assert(Color.Rgb(1, 2, 3) != Color.Rgb(4, 5, 6))
+    print("Color equality ✓")
+
+    print("Terminal color complete ✓")
+}
