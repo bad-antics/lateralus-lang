@@ -1,0 +1,274 @@
+
+// JSON Writer - Streaming JSON serialization
+// Builds JSON output incrementally without allocating a full DOM.
+
+use std.io.Write
+
+#[derive(Clone, Debug, PartialEq)]
+enum JsonToken {
+    ObjectStart,
+    ObjectEnd,
+    ArrayStart,
+    ArrayEnd,
+    Key(string),
+    StringVal(string),
+    NumberVal(f64),
+    IntVal(i64),
+    BoolVal(bool),
+    Null,
+    Comma,
+    Colon,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum WriterState { Root, Object, Array }
+
+struct JsonWriter {
+    buffer: string,
+    stack: [WriterState],
+    needs_comma: bool,
+    indent: Option<usize>,
+    depth: usize,
+}
+
+impl JsonWriter {
+    fn new() -> JsonWriter {
+        JsonWriter {
+            buffer: String.new(),
+            stack: vec![WriterState.Root],
+            needs_comma: false,
+            indent: none,
+            depth: 0,
+        }
+    }
+
+    fn pretty(spaces: usize) -> JsonWriter {
+        JsonWriter {
+            buffer: String.new(),
+            stack: vec![WriterState.Root],
+            needs_comma: false,
+            indent: some(spaces),
+            depth: 0,
+        }
+    }
+
+    fn write_comma(mut self) {
+        if self.needs_comma { self.buffer.push(',') }
+        if self.indent.is_some() && self.needs_comma {
+            self.write_newline()
+        }
+    }
+
+    fn write_newline(mut self) {
+        if let some(spaces) = self.indent {
+            self.buffer.push('\n')
+            for _ in 0..(self.depth * spaces) {
+                self.buffer.push(' ')
+            }
+        }
+    }
+
+    fn begin_object(mut self) -> &mut JsonWriter {
+        self.write_comma()
+        self.buffer.push('{')
+        self.stack.push(WriterState.Object)
+        self.depth += 1
+        self.needs_comma = false
+        if self.indent.is_some() { self.write_newline() }
+        self
+    }
+
+    fn end_object(mut self) -> &mut JsonWriter {
+        self.depth -= 1
+        if self.indent.is_some() { self.write_newline() }
+        self.buffer.push('}')
+        self.stack.pop()
+        self.needs_comma = true
+        self
+    }
+
+    fn begin_array(mut self) -> &mut JsonWriter {
+        self.write_comma()
+        self.buffer.push('[')
+        self.stack.push(WriterState.Array)
+        self.depth += 1
+        self.needs_comma = false
+        if self.indent.is_some() { self.write_newline() }
+        self
+    }
+
+    fn end_array(mut self) -> &mut JsonWriter {
+        self.depth -= 1
+        if self.indent.is_some() { self.write_newline() }
+        self.buffer.push(']')
+        self.stack.pop()
+        self.needs_comma = true
+        self
+    }
+
+    fn key(mut self, k: &str) -> &mut JsonWriter {
+        self.write_comma()
+        self.buffer.push('"')
+        self.buffer.push_str(&escape_json_string(k))
+        self.buffer.push('"')
+        self.buffer.push(':')
+        if self.indent.is_some() { self.buffer.push(' ') }
+        self.needs_comma = false
+        self
+    }
+
+    fn string_val(mut self, v: &str) -> &mut JsonWriter {
+        self.write_comma()
+        self.buffer.push('"')
+        self.buffer.push_str(&escape_json_string(v))
+        self.buffer.push('"')
+        self.needs_comma = true
+        self
+    }
+
+    fn number(mut self, v: f64) -> &mut JsonWriter {
+        self.write_comma()
+        self.buffer.push_str(&v.to_string())
+        self.needs_comma = true
+        self
+    }
+
+    fn integer(mut self, v: i64) -> &mut JsonWriter {
+        self.write_comma()
+        self.buffer.push_str(&v.to_string())
+        self.needs_comma = true
+        self
+    }
+
+    fn bool_val(mut self, v: bool) -> &mut JsonWriter {
+        self.write_comma()
+        self.buffer.push_str(if v { "true" } else { "false" })
+        self.needs_comma = true
+        self
+    }
+
+    fn null_val(mut self) -> &mut JsonWriter {
+        self.write_comma()
+        self.buffer.push_str("null")
+        self.needs_comma = true
+        self
+    }
+
+    fn to_string(self) -> string { self.buffer.clone() }
+    fn len(self) -> usize { self.buffer.len() }
+    fn clear(mut self) {
+        self.buffer.clear()
+        self.stack = vec![WriterState.Root]
+        self.needs_comma = false
+        self.depth = 0
+    }
+}
+
+fn escape_json_string(s: &str) -> string {
+    let mut out = String.new()
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c < '\x20' => {
+                out.push_str(&format!("\\u{:04x}", c as u32))
+            },
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+fn main() {
+    // Simple object
+    let mut w = JsonWriter.new()
+    w.begin_object()
+    w.key("name").string_val("Alice")
+    w.key("age").integer(30)
+    w.key("active").bool_val(true)
+    w.end_object()
+    let json = w.to_string()
+    assert(json.contains("\"name\":\"Alice\""))
+    assert(json.contains("\"age\":30"))
+    assert(json.contains("\"active\":true"))
+    print("Simple object ✓")
+
+    // Nested array
+    let mut w2 = JsonWriter.new()
+    w2.begin_object()
+    w2.key("items").begin_array()
+    w2.integer(1)
+    w2.integer(2)
+    w2.integer(3)
+    w2.end_array()
+    w2.end_object()
+    assert(w2.to_string().contains("[1,2,3]"))
+    print("Nested array ✓")
+
+    // Null value
+    let mut w3 = JsonWriter.new()
+    w3.begin_object()
+    w3.key("val").null_val()
+    w3.end_object()
+    assert(w3.to_string().contains("null"))
+    print("Null ✓")
+
+    // Escape strings
+    assert(escape_json_string("hello") == "hello")
+    assert(escape_json_string("a\"b") == "a\\\"b")
+    assert(escape_json_string("a\\b") == "a\\\\b")
+    assert(escape_json_string("line\nnew") == "line\\nnew")
+    assert(escape_json_string("tab\there") == "tab\\there")
+    print("Escaping ✓")
+
+    // Pretty printing
+    let mut pw = JsonWriter.pretty(2)
+    pw.begin_object()
+    pw.key("x").integer(1)
+    pw.end_object()
+    let pretty = pw.to_string()
+    assert(pretty.contains("\n"))
+    assert(pretty.contains("  "))
+    print("Pretty printing ✓")
+
+    // Empty structures
+    let mut w4 = JsonWriter.new()
+    w4.begin_object().end_object()
+    assert(w4.to_string() == "{}")
+    let mut w5 = JsonWriter.new()
+    w5.begin_array().end_array()
+    assert(w5.to_string() == "[]")
+    print("Empty structures ✓")
+
+    // Clear and reuse
+    w.clear()
+    assert(w.len() == 0)
+    w.begin_array().integer(42).end_array()
+    assert(w.to_string() == "[42]")
+    print("Clear and reuse ✓")
+
+    // Float numbers
+    let mut w6 = JsonWriter.new()
+    w6.begin_array().number(3.14).number(-0.5).end_array()
+    let fstr = w6.to_string()
+    assert(fstr.contains("3.14"))
+    assert(fstr.contains("-0.5"))
+    print("Floats ✓")
+
+    // Bool values
+    let mut w7 = JsonWriter.new()
+    w7.begin_array().bool_val(true).bool_val(false).end_array()
+    assert(w7.to_string().contains("true"))
+    assert(w7.to_string().contains("false"))
+    print("Booleans ✓")
+
+    // WriterState
+    assert(WriterState.Root != WriterState.Object)
+    assert(WriterState.Array != WriterState.Object)
+    print("WriterState ✓")
+
+    print("JSON writer complete ✓")
+}
