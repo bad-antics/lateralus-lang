@@ -1,0 +1,221 @@
+
+// Diff - Myers diff algorithm for computing minimal edit sequences
+// Generates unified diff output between two sequences of lines.
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum DiffOp { Equal, Insert, Delete }
+
+#[derive(Clone, Debug)]
+struct DiffLine {
+    op: DiffOp,
+    content: string,
+    old_line: Option<u32>,
+    new_line: Option<u32>,
+}
+
+impl DiffLine {
+    fn equal(content: &str, old: u32, new: u32) -> DiffLine {
+        DiffLine { op: DiffOp.Equal, content: content.into(), old_line: Some(old), new_line: Some(new) }
+    }
+    fn insert(content: &str, new: u32) -> DiffLine {
+        DiffLine { op: DiffOp.Insert, content: content.into(), old_line: None, new_line: Some(new) }
+    }
+    fn delete(content: &str, old: u32) -> DiffLine {
+        DiffLine { op: DiffOp.Delete, content: content.into(), old_line: Some(old), new_line: None }
+    }
+    fn prefix(self) -> char {
+        match self.op { DiffOp.Equal => ' ', DiffOp.Insert => '+', DiffOp.Delete => '-' }
+    }
+    fn is_change(self) -> bool { self.op != DiffOp.Equal }
+}
+
+#[derive(Clone, Debug)]
+struct DiffHunk {
+    old_start: u32,
+    old_count: u32,
+    new_start: u32,
+    new_count: u32,
+    lines: [DiffLine],
+}
+
+impl DiffHunk {
+    fn new(old_start: u32, new_start: u32) -> DiffHunk {
+        DiffHunk { old_start, old_count: 0, new_start, new_count: 0, lines: [] }
+    }
+    fn add_line(mut self, line: DiffLine) {
+        match line.op {
+            DiffOp.Equal => { self.old_count += 1; self.new_count += 1 }
+            DiffOp.Insert => { self.new_count += 1 }
+            DiffOp.Delete => { self.old_count += 1 }
+        }
+        self.lines.push(line)
+    }
+    fn header(self) -> string {
+        format!("@@ -{},{} +{},{} @@", self.old_start, self.old_count, self.new_start, self.new_count)
+    }
+    fn has_changes(self) -> bool { self.lines.iter().any(|l| l.is_change()) }
+}
+
+struct DiffResult {
+    hunks: [DiffHunk],
+    additions: u32,
+    deletions: u32,
+    old_file: string,
+    new_file: string,
+}
+
+impl DiffResult {
+    fn new(old: &str, new: &str) -> DiffResult {
+        DiffResult { hunks: [], additions: 0, deletions: 0, old_file: old.into(), new_file: new.into() }
+    }
+    fn add_hunk(mut self, hunk: DiffHunk) { self.hunks.push(hunk) }
+    fn total_changes(self) -> u32 { self.additions + self.deletions }
+    fn is_empty(self) -> bool { self.hunks.is_empty() }
+    fn hunk_count(self) -> usize { self.hunks.len() }
+
+    fn to_unified(self) -> string {
+        let mut out = format!("--- {}\n+++ {}\n", self.old_file, self.new_file)
+        for hunk in &self.hunks {
+            out += &hunk.header()
+            out += "\n"
+            for line in &hunk.lines {
+                out += &format!("{}{}\n", line.prefix(), line.content)
+            }
+        }
+        out
+    }
+}
+
+fn compute_lcs_length(a: &[&str], b: &[&str]) -> [[u32]] {
+    let m = a.len()
+    let n = b.len()
+    let mut dp = vec![vec![0u32; n + 1]; m + 1]
+    for i in 1..=m {
+        for j in 1..=n {
+            if a[i - 1] == b[j - 1] { dp[i][j] = dp[i - 1][j - 1] + 1 }
+            else { dp[i][j] = dp[i - 1][j].max(dp[i][j - 1]) }
+        }
+    }
+    dp
+}
+
+fn diff_lines(old: &[&str], new: &[&str]) -> DiffResult {
+    let dp = compute_lcs_length(old, new)
+    let mut lines: [DiffLine] = []
+    let mut i = old.len()
+    let mut j = new.len()
+
+    while i > 0 || j > 0 {
+        if i > 0 && j > 0 && old[i - 1] == new[j - 1] {
+            lines.push(DiffLine.equal(old[i - 1], i as u32, j as u32))
+            i -= 1; j -= 1
+        } else if j > 0 && (i == 0 || dp[i][j - 1] >= dp[i - 1][j]) {
+            lines.push(DiffLine.insert(new[j - 1], j as u32))
+            j -= 1
+        } else {
+            lines.push(DiffLine.delete(old[i - 1], i as u32))
+            i -= 1
+        }
+    }
+    lines.reverse()
+
+    let mut result = DiffResult.new("a", "b")
+    let mut hunk = DiffHunk.new(1, 1)
+    for line in &lines {
+        hunk.add_line(line.clone())
+        match line.op {
+            DiffOp.Insert => result.additions += 1,
+            DiffOp.Delete => result.deletions += 1,
+            _ => {}
+        }
+    }
+    if hunk.has_changes() { result.add_hunk(hunk) }
+    result
+}
+
+fn main() {
+    // DiffLine
+    let eq = DiffLine.equal("hello", 1, 1)
+    assert(eq.prefix() == ' ')
+    assert(!eq.is_change())
+    let ins = DiffLine.insert("new line", 2)
+    assert(ins.prefix() == '+')
+    assert(ins.is_change())
+    let del = DiffLine.delete("old line", 1)
+    assert(del.prefix() == '-')
+    print("DiffLine ✓")
+
+    // DiffHunk
+    let mut hunk = DiffHunk.new(1, 1)
+    hunk.add_line(DiffLine.equal("same", 1, 1))
+    hunk.add_line(DiffLine.delete("removed", 2))
+    hunk.add_line(DiffLine.insert("added", 2))
+    assert(hunk.old_count == 2)
+    assert(hunk.new_count == 2)
+    assert(hunk.has_changes())
+    let header = hunk.header()
+    assert(header.contains("@@"))
+    print("DiffHunk ✓")
+
+    // Identical
+    let old = ["a", "b", "c"]
+    let new = ["a", "b", "c"]
+    let result = diff_lines(&old, &new)
+    assert(result.additions == 0)
+    assert(result.deletions == 0)
+    print("Identical ✓")
+
+    // Simple addition
+    let old2 = ["a", "c"]
+    let new2 = ["a", "b", "c"]
+    let result2 = diff_lines(&old2, &new2)
+    assert(result2.additions == 1)
+    assert(result2.deletions == 0)
+    print("Addition ✓")
+
+    // Simple deletion
+    let old3 = ["a", "b", "c"]
+    let new3 = ["a", "c"]
+    let result3 = diff_lines(&old3, &new3)
+    assert(result3.additions == 0)
+    assert(result3.deletions == 1)
+    print("Deletion ✓")
+
+    // Modification (delete + insert)
+    let old4 = ["a", "b", "c"]
+    let new4 = ["a", "x", "c"]
+    let result4 = diff_lines(&old4, &new4)
+    assert(result4.additions == 1)
+    assert(result4.deletions == 1)
+    assert(result4.total_changes() == 2)
+    print("Modification ✓")
+
+    // Complete replacement
+    let old5 = ["a", "b"]
+    let new5 = ["x", "y"]
+    let result5 = diff_lines(&old5, &new5)
+    assert(result5.total_changes() == 4)
+    print("Replace ✓")
+
+    // Empty old
+    let old6: [&str] = []
+    let new6 = ["a", "b"]
+    let result6 = diff_lines(&old6, &new6)
+    assert(result6.additions == 2)
+    print("Empty old ✓")
+
+    // Unified output
+    let result7 = diff_lines(&["hello", "world"], &["hello", "earth"])
+    let unified = result7.to_unified()
+    assert(unified.contains("---"))
+    assert(unified.contains("+++"))
+    assert(unified.contains("-world"))
+    assert(unified.contains("+earth"))
+    print("Unified ✓")
+
+    // Hunk count
+    assert(result7.hunk_count() == 1)
+    print("Hunk count ✓")
+
+    print("Diff complete ✓")
+}
