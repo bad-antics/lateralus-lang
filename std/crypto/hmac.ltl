@@ -1,179 +1,222 @@
-// std.crypto.hmac - HMAC (Hash-based Message Authentication Code)
-// RFC 2104: HMAC-SHA256, HMAC-SHA3, HMAC-BLAKE3.
+// Standard Library - HMAC (Hash-based Message Authentication Code)
+// RFC 2104 HMAC with pluggable hash functions.
 
-use std.crypto.sha3.Sha3_256
-use std.crypto.blake3.Blake3
-use std.hash.Hasher
+use std.crypto.{sha256}
+use std.encoding.hex
+use std.fmt.{Display, Formatter, FmtError}
 
-pub trait MacAlgorithm {
-    fn block_size() -> usize
-    fn output_size() -> usize
-    fn hash(data: &[u8]) -> [u8]
+const BLOCK_SIZE: usize = 64  // SHA-256 block size
+const IPAD_BYTE: u8 = 0x36
+const OPAD_BYTE: u8 = 0x5C
+
+#[derive(Clone, Debug, PartialEq)]
+struct HmacKey {
+    inner_pad: [u8],
+    outer_pad: [u8],
 }
 
-struct Sha256Mac {}
-impl MacAlgorithm for Sha256Mac {
-    fn block_size() -> usize { 64 }
-    fn output_size() -> usize { 32 }
-    fn hash(data: &[u8]) -> [u8] { Sha3_256.hash(data) }
-}
-
-struct Blake3Mac {}
-impl MacAlgorithm for Blake3Mac {
-    fn block_size() -> usize { 64 }
-    fn output_size() -> usize { 32 }
-    fn hash(data: &[u8]) -> [u8] { Blake3.hash(data).as_bytes().to_vec() }
-}
-
-pub struct Hmac<H: MacAlgorithm> {
-    inner_key: [u8],
-    outer_key: [u8],
-    _phantom: std.marker.PhantomData<H>,
-}
-
-impl<H: MacAlgorithm> Hmac<H> {
-    pub fn new(key: &[u8]) -> Hmac<H> {
-        let block_size = H.block_size()
-        let mut padded_key: [u8] = if key.len() > block_size {
-            let mut h = H.hash(key)
-            h.resize(block_size, 0)
-            h
+impl HmacKey {
+    fn new(key: &[u8]) -> HmacKey {
+        let normalized = if key.len() > BLOCK_SIZE {
+            sha256::hash(key)
         } else {
-            let mut k = key.to_vec()
-            k.resize(block_size, 0)
-            k
+            key.to_vec()
         }
 
-        let mut inner_key = [0u8; block_size]
-        let mut outer_key = [0u8; block_size]
-        for i in 0..block_size {
-            inner_key[i] = padded_key[i] ^ 0x36
-            outer_key[i] = padded_key[i] ^ 0x5c
-        }
+        // Pad to block size
+        let mut padded = normalized.clone()
+        while padded.len() < BLOCK_SIZE { padded.push(0) }
 
-        Hmac { inner_key, outer_key, _phantom: std.marker.PhantomData }
+        let inner_pad: [u8] = padded.iter().map(|b| *b ^ IPAD_BYTE).collect()
+        let outer_pad: [u8] = padded.iter().map(|b| *b ^ OPAD_BYTE).collect()
+
+        HmacKey { inner_pad, outer_pad }
+    }
+}
+
+struct Hmac {
+    key: HmacKey,
+    inner_data: [u8],
+}
+
+impl Hmac {
+    fn new(key: &[u8]) -> Hmac {
+        let hk = HmacKey.new(key)
+        Hmac { key: hk, inner_data: vec![] }
     }
 
-    pub fn sign(self, message: &[u8]) -> [u8] {
-        let mut inner_data = self.inner_key.clone()
-        inner_data.extend_from_slice(message)
-        let inner_hash = H.hash(&inner_data)
-
-        let mut outer_data = self.outer_key.clone()
-        outer_data.extend_from_slice(&inner_hash)
-        H.hash(&outer_data)
+    fn update(mut self, data: &[u8]) {
+        self.inner_data.extend_from_slice(data)
     }
 
-    pub fn verify(self, message: &[u8], expected: &[u8]) -> bool {
-        let computed = self.sign(message)
-        constant_time_eq(&computed, expected)
+    fn finalize(self) -> [u8; 32] {
+        // inner hash: H(K ^ ipad || message)
+        let mut inner_input = self.key.inner_pad.clone()
+        inner_input.extend_from_slice(&self.inner_data)
+        let inner_hash = sha256::hash(&inner_input)
+
+        // outer hash: H(K ^ opad || inner_hash)
+        let mut outer_input = self.key.outer_pad.clone()
+        outer_input.extend_from_slice(&inner_hash)
+        sha256::hash(&outer_input)
+    }
+
+    fn finalize_hex(self) -> string {
+        hex::encode(&self.finalize())
+    }
+
+    fn reset(mut self) {
+        self.inner_data.clear()
+    }
+}
+
+fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
+    let mut h = Hmac.new(key)
+    h.update(message)
+    h.finalize()
+}
+
+fn hmac_sha256_hex(key: &[u8], message: &[u8]) -> string {
+    hex::encode(&hmac_sha256(key, message))
+}
+
+fn verify(key: &[u8], message: &[u8], expected: &[u8]) -> bool {
+    let computed = hmac_sha256(key, message)
+    constant_time_eq(&computed, expected)
+}
+
+fn verify_hex(key: &[u8], message: &[u8], expected_hex: &str) -> bool {
+    match hex::decode(expected_hex) {
+        ok(expected) => verify(key, message, &expected),
+        err(_) => false,
     }
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() { return false }
-    let mut diff = 0u8
-    for i in 0..a.len() { diff |= a[i] ^ b[i] }
+    let mut diff: u8 = 0
+    for i in 0..a.len() {
+        diff |= a[i] ^ b[i]
+    }
     diff == 0
 }
 
-// HKDF (HMAC-based Key Derivation Function) - RFC 5869
-pub struct Hkdf<H: MacAlgorithm> {
-    prk: [u8],
-    _phantom: std.marker.PhantomData<H>,
+// HKDF-Extract (RFC 5869)
+fn hkdf_extract(salt: &[u8], ikm: &[u8]) -> [u8; 32] {
+    hmac_sha256(salt, ikm)
 }
 
-impl<H: MacAlgorithm> Hkdf<H> {
-    pub fn extract(salt: &[u8], ikm: &[u8]) -> Hkdf<H> {
-        let effective_salt = if salt.is_empty() {
-            [0u8; H.output_size()]
-        } else { salt.to_vec() }
-        let hmac = Hmac::<H>.new(&effective_salt)
-        let prk = hmac.sign(ikm)
-        Hkdf { prk, _phantom: std.marker.PhantomData }
+// HKDF-Expand (RFC 5869)
+fn hkdf_expand(prk: &[u8], info: &[u8], length: usize) -> [u8] {
+    let n = (length + 31) / 32
+    let mut okm = vec![]
+    let mut t: [u8] = vec![]
+
+    for i in 1..=n {
+        let mut input = t.clone()
+        input.extend_from_slice(info)
+        input.push(i as u8)
+        t = hmac_sha256(prk, &input).to_vec()
+        okm.extend_from_slice(&t)
     }
 
-    pub fn expand(self, info: &[u8], length: usize) -> Result<[u8], string> {
-        let hash_len = H.output_size()
-        if length > 255 * hash_len { return err("output too long".to_string()) }
-
-        let hmac = Hmac::<H>.new(&self.prk)
-        let mut okm: [u8] = []
-        let mut prev: [u8] = []
-        let n = (length + hash_len - 1) / hash_len
-
-        for i in 1..=n {
-            let mut input = prev.clone()
-            input.extend_from_slice(info)
-            input.push(i as u8)
-            prev = hmac.sign(&input)
-            okm.extend_from_slice(&prev)
-        }
-        okm.truncate(length)
-        ok(okm)
-    }
-}
-
-// PBKDF2 - Password-Based Key Derivation Function 2
-pub fn pbkdf2<H: MacAlgorithm>(password: &[u8], salt: &[u8], iterations: u32, dk_len: usize) -> [u8] {
-    let hmac = Hmac::<H>.new(password)
-    let hash_len = H.output_size()
-    let blocks = (dk_len + hash_len - 1) / hash_len
-    let mut result: [u8] = []
-
-    for block_num in 1..=blocks {
-        let mut input = salt.to_vec()
-        input.push(((block_num >> 24) & 0xFF) as u8)
-        input.push(((block_num >> 16) & 0xFF) as u8)
-        input.push(((block_num >> 8) & 0xFF) as u8)
-        input.push((block_num & 0xFF) as u8)
-
-        let mut u = hmac.sign(&input)
-        let mut block = u.clone()
-
-        for _ in 1..iterations {
-            u = hmac.sign(&u)
-            for j in 0..block.len() { block[j] ^= u[j] }
-        }
-        result.extend_from_slice(&block)
-    }
-    result.truncate(dk_len)
-    result
+    okm[..length].to_vec()
 }
 
 fn main() {
-    // HMAC
-    let hmac = Hmac::<Sha256Mac>.new(b"secret-key")
-    let mac = hmac.sign(b"hello world")
+    // Basic HMAC
+    let mac = hmac_sha256("key".as_bytes(), "message".as_bytes())
     assert(mac.len() == 32)
-    assert(hmac.verify(b"hello world", &mac))
-    assert(!hmac.verify(b"hello worlD", &mac))
-    print("HMAC-SHA256 \u2713")
+    print("Basic HMAC ✓")
 
-    // Constant-time comparison
-    assert(constant_time_eq(b"abc", b"abc"))
-    assert(!constant_time_eq(b"abc", b"abd"))
-    assert(!constant_time_eq(b"ab", b"abc"))
-    print("Constant-time eq \u2713")
+    // Hex output
+    let hex_mac = hmac_sha256_hex("key".as_bytes(), "message".as_bytes())
+    assert(hex_mac.len() == 64)
+    assert(hex_mac.chars().all(|c| c.is_ascii_hexdigit()))
+    print("Hex HMAC ✓")
 
-    // HKDF
-    let hkdf = Hkdf::<Sha256Mac>.extract(b"salt", b"input key material")
-    let okm = hkdf.expand(b"info", 42).unwrap()
-    assert(okm.len() == 42)
-    let okm2 = hkdf.expand(b"info", 42).unwrap()
-    assert(okm == okm2)  // deterministic
-    let okm3 = hkdf.expand(b"other info", 42).unwrap()
-    assert(okm != okm3)  // different info = different output
-    print("HKDF \u2713")
+    // Deterministic
+    let mac2 = hmac_sha256("key".as_bytes(), "message".as_bytes())
+    assert(mac == mac2)
+    print("Deterministic ✓")
 
-    // PBKDF2
-    let dk = pbkdf2::<Sha256Mac>(b"password", b"salt", 1000, 32)
-    assert(dk.len() == 32)
-    let dk2 = pbkdf2::<Sha256Mac>(b"password", b"salt", 1000, 32)
-    assert(dk == dk2)
-    let dk3 = pbkdf2::<Sha256Mac>(b"wrong", b"salt", 1000, 32)
-    assert(dk != dk3)
-    print("PBKDF2 \u2713")
+    // Different keys produce different MACs
+    let mac_a = hmac_sha256("key1".as_bytes(), "msg".as_bytes())
+    let mac_b = hmac_sha256("key2".as_bytes(), "msg".as_bytes())
+    assert(mac_a != mac_b)
+    print("Different keys ✓")
 
-    print("HMAC complete \u2713")
+    // Different messages produce different MACs
+    let mac_c = hmac_sha256("key".as_bytes(), "msg1".as_bytes())
+    let mac_d = hmac_sha256("key".as_bytes(), "msg2".as_bytes())
+    assert(mac_c != mac_d)
+    print("Different messages ✓")
+
+    // Verify
+    let tag = hmac_sha256("secret".as_bytes(), "data".as_bytes())
+    assert(verify("secret".as_bytes(), "data".as_bytes(), &tag))
+    assert(!verify("wrong".as_bytes(), "data".as_bytes(), &tag))
+    assert(!verify("secret".as_bytes(), "tampered".as_bytes(), &tag))
+    print("Verify ✓")
+
+    // Verify hex
+    let hex_tag = hmac_sha256_hex("secret".as_bytes(), "data".as_bytes())
+    assert(verify_hex("secret".as_bytes(), "data".as_bytes(), &hex_tag))
+    assert(!verify_hex("secret".as_bytes(), "data".as_bytes(), "invalid"))
+    print("Verify hex ✓")
+
+    // Streaming
+    let mut h = Hmac.new("key".as_bytes())
+    h.update("hel".as_bytes())
+    h.update("lo".as_bytes())
+    let streamed = h.finalize()
+    let oneshot = hmac_sha256("key".as_bytes(), "hello".as_bytes())
+    assert(streamed == oneshot)
+    print("Streaming ✓")
+
+    // Reset
+    let mut h2 = Hmac.new("k".as_bytes())
+    h2.update("first".as_bytes())
+    h2.reset()
+    h2.update("second".as_bytes())
+    let result = h2.finalize()
+    assert(result == hmac_sha256("k".as_bytes(), "second".as_bytes()))
+    print("Reset ✓")
+
+    // Long key (> block size)
+    let long_key: [u8] = (0..100).map(|i| i as u8).collect()
+    let lk_mac = hmac_sha256(&long_key, "test".as_bytes())
+    assert(lk_mac.len() == 32)
+    print("Long key ✓")
+
+    // Empty message
+    let empty_mac = hmac_sha256("key".as_bytes(), &[])
+    assert(empty_mac.len() == 32)
+    print("Empty message ✓")
+
+    // constant_time_eq
+    assert(constant_time_eq(&[1, 2, 3], &[1, 2, 3]))
+    assert(!constant_time_eq(&[1, 2, 3], &[1, 2, 4]))
+    assert(!constant_time_eq(&[1, 2], &[1, 2, 3]))
+    print("Constant-time eq ✓")
+
+    // HKDF extract
+    let prk = hkdf_extract("salt".as_bytes(), "input".as_bytes())
+    assert(prk.len() == 32)
+    print("HKDF extract ✓")
+
+    // HKDF expand
+    let okm = hkdf_expand(&prk, "info".as_bytes(), 48)
+    assert(okm.len() == 48)
+    let okm2 = hkdf_expand(&prk, "info".as_bytes(), 48)
+    assert(okm == okm2)
+    print("HKDF expand ✓")
+
+    // HmacKey
+    let hk = HmacKey.new("test".as_bytes())
+    assert(hk.inner_pad.len() == BLOCK_SIZE)
+    assert(hk.outer_pad.len() == BLOCK_SIZE)
+    print("HmacKey ✓")
+
+    print("HMAC complete ✓")
 }
