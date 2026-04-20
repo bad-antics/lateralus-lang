@@ -1,0 +1,240 @@
+
+// Big Integer - Arbitrary precision integer arithmetic
+// Stores digits in base 10^9 chunks for efficient computation.
+
+use std.fmt.Display
+
+const BASE: u64 = 1_000_000_000
+
+#[derive(Clone, Debug)]
+struct BigInt {
+    digits: [u32],      // least significant first, base 10^9
+    negative: bool,
+}
+
+impl BigInt {
+    fn zero() -> BigInt { BigInt { digits: [0], negative: false } }
+    fn one() -> BigInt { BigInt { digits: [1], negative: false } }
+
+    fn from_i64(val: i64) -> BigInt {
+        let negative = val < 0
+        let mut v = if negative { (-val) as u64 } else { val as u64 }
+        let mut digits = []
+        if v == 0 { digits.push(0) }
+        while v > 0 {
+            digits.push((v % BASE) as u32)
+            v /= BASE
+        }
+        BigInt { digits, negative }
+    }
+
+    fn from_str(s: &str) -> BigInt {
+        let (neg, start) = if s.starts_with('-') { (true, 1) } else { (false, 0) }
+        let s = &s[start..]
+        let mut digits = []
+        let mut i = s.len() as i64
+        while i > 0 {
+            let begin = if i - 9 > 0 { (i - 9) as usize } else { 0 }
+            let chunk = &s[begin..i as usize]
+            digits.push(chunk.parse::<u32>().unwrap())
+            i -= 9
+        }
+        if digits.is_empty() { digits.push(0) }
+        let mut b = BigInt { digits, negative: neg }
+        b.trim()
+        b
+    }
+
+    fn trim(mut self) {
+        while self.digits.len() > 1 && *self.digits.last().unwrap() == 0 {
+            self.digits.pop();
+        }
+        if self.digits.len() == 1 && self.digits[0] == 0 { self.negative = false }
+    }
+
+    fn is_zero(self) -> bool { self.digits.len() == 1 && self.digits[0] == 0 }
+    fn is_negative(self) -> bool { self.negative }
+    fn digit_count(self) -> usize { self.digits.len() }
+    fn abs(self) -> BigInt { BigInt { digits: self.digits.clone(), negative: false } }
+    fn negate(self) -> BigInt {
+        if self.is_zero() { return self.clone() }
+        BigInt { digits: self.digits.clone(), negative: !self.negative }
+    }
+
+    fn cmp_abs(self, other: &BigInt) -> i32 {
+        if self.digits.len() != other.digits.len() {
+            return if self.digits.len() > other.digits.len() { 1 } else { -1 }
+        }
+        for i in (0..self.digits.len()).rev() {
+            if self.digits[i] != other.digits[i] {
+                return if self.digits[i] > other.digits[i] { 1 } else { -1 }
+            }
+        }
+        0
+    }
+
+    fn add_abs(a: &BigInt, b: &BigInt) -> [u32] {
+        let len = a.digits.len().max(b.digits.len())
+        let mut result = []
+        let mut carry: u64 = 0
+        for i in 0..len {
+            let av = if i < a.digits.len() { a.digits[i] as u64 } else { 0 }
+            let bv = if i < b.digits.len() { b.digits[i] as u64 } else { 0 }
+            let sum = av + bv + carry
+            result.push((sum % BASE) as u32)
+            carry = sum / BASE
+        }
+        if carry > 0 { result.push(carry as u32) }
+        result
+    }
+
+    fn sub_abs(a: &BigInt, b: &BigInt) -> [u32] {
+        let mut result = []
+        let mut borrow: i64 = 0
+        for i in 0..a.digits.len() {
+            let av = a.digits[i] as i64
+            let bv = if i < b.digits.len() { b.digits[i] as i64 } else { 0 }
+            let mut diff = av - bv - borrow
+            if diff < 0 { diff += BASE as i64; borrow = 1 } else { borrow = 0 }
+            result.push(diff as u32)
+        }
+        result
+    }
+
+    fn add(self, other: &BigInt) -> BigInt {
+        if self.negative == other.negative {
+            let mut r = BigInt { digits: BigInt.add_abs(self, other), negative: self.negative }
+            r.trim(); r
+        } else {
+            let cmp = self.cmp_abs(other)
+            if cmp == 0 { return BigInt.zero() }
+            let (a, b, neg) = if cmp > 0 { (self, other, self.negative) } else { (other, self, other.negative) };
+            let mut r = BigInt { digits: BigInt.sub_abs(a, b), negative: neg }
+            r.trim(); r
+        }
+    }
+
+    fn sub(self, other: &BigInt) -> BigInt {
+        self.add(&other.negate())
+    }
+
+    fn mul(self, other: &BigInt) -> BigInt {
+        let mut result = vec![0u64; self.digits.len() + other.digits.len()]
+        for i in 0..self.digits.len() {
+            let mut carry: u64 = 0
+            for j in 0..other.digits.len() {
+                let prod = self.digits[i] as u64 * other.digits[j] as u64 + result[i + j] + carry
+                result[i + j] = prod % BASE
+                carry = prod / BASE
+            }
+            result[i + other.digits.len()] += carry
+        }
+        let digits: [u32] = result.iter().map(|d| *d as u32).collect()
+        let mut r = BigInt { digits, negative: self.negative != other.negative }
+        r.trim(); r
+    }
+
+    fn pow(self, exp: u32) -> BigInt {
+        if exp == 0 { return BigInt.one() }
+        let mut result = BigInt.one()
+        let mut base = self.clone()
+        let mut e = exp
+        while e > 0 {
+            if e & 1 == 1 { result = result.mul(&base) }
+            base = base.mul(&base)
+            e >>= 1
+        }
+        result
+    }
+
+    fn factorial(n: u32) -> BigInt {
+        let mut result = BigInt.one()
+        for i in 2..=n { result = result.mul(&BigInt.from_i64(i as i64)) }
+        result
+    }
+
+    fn to_string(self) -> string {
+        let mut s = if self.negative { "-".into() } else { "".into() }
+        s += &format!("{}", self.digits.last().unwrap())
+        for i in (0..self.digits.len() - 1).rev() {
+            s += &format!("{:09}", self.digits[i])
+        }
+        s
+    }
+}
+
+fn main() {
+    // Zero and one
+    assert(BigInt.zero().is_zero())
+    assert(!BigInt.one().is_zero())
+    print("Zero/One ✓")
+
+    // From i64
+    let a = BigInt.from_i64(123456789)
+    assert(!a.is_negative())
+    let b = BigInt.from_i64(-42)
+    assert(b.is_negative())
+    print("From i64 ✓")
+
+    // From string
+    let c = BigInt.from_str("999999999999999999")
+    assert(!c.is_zero())
+    assert(c.digit_count() == 2)
+    print("From str ✓")
+
+    // Addition
+    let x = BigInt.from_i64(999999999)
+    let y = BigInt.from_i64(1)
+    let sum = x.add(&y)
+    assert(sum.to_string() == "1000000000")
+    print("Addition ✓")
+
+    // Subtraction
+    let diff = BigInt.from_i64(100).sub(&BigInt.from_i64(30))
+    assert(diff.to_string() == "70")
+    print("Subtraction ✓")
+
+    // Negative result
+    let neg = BigInt.from_i64(5).sub(&BigInt.from_i64(10))
+    assert(neg.to_string() == "-5")
+    print("Negative sub ✓")
+
+    // Multiplication
+    let prod = BigInt.from_i64(12345).mul(&BigInt.from_i64(67890))
+    assert(prod.to_string() == "838102050")
+    print("Multiplication ✓")
+
+    // Power
+    let p = BigInt.from_i64(2).pow(10)
+    assert(p.to_string() == "1024")
+    print("Power ✓")
+
+    // Large power
+    let p2 = BigInt.from_i64(2).pow(64)
+    assert(p2.to_string() == "18446744073709551616")
+    print("Large power ✓")
+
+    // Factorial
+    let f10 = BigInt.factorial(10)
+    assert(f10.to_string() == "3628800")
+    let f20 = BigInt.factorial(20)
+    assert(f20.to_string() == "2432902008176640000")
+    print("Factorial ✓")
+
+    // Abs and negate
+    let neg2 = BigInt.from_i64(-99)
+    assert(neg2.abs().to_string() == "99")
+    assert(BigInt.from_i64(7).negate().to_string() == "-7")
+    assert(BigInt.zero().negate().to_string() == "0")
+    print("Abs/Negate ✓")
+
+    // Compare absolute values
+    let a2 = BigInt.from_i64(100)
+    let b2 = BigInt.from_i64(-200)
+    assert(a2.cmp_abs(&b2) < 0)
+    assert(b2.cmp_abs(&a2) > 0)
+    assert(a2.cmp_abs(&BigInt.from_i64(100)) == 0)
+    print("Compare abs ✓")
+
+    print("BigInt complete ✓")
+}
