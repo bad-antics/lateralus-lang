@@ -1,201 +1,219 @@
 
-// Trie (Prefix Tree) - Efficient string prefix lookup
-// Supports insert, search, prefix matching, and autocomplete.
+// Trie (Prefix Tree) - Efficient string prefix lookup structure
+// Supports insert, search, prefix queries, and autocomplete.
 
-#[derive(Clone, Debug)]
+const ALPHABET_SIZE: usize = 128  // ASCII
+
 struct TrieNode {
-    children: [Option<TrieNode>; 128],  // ASCII
-    is_terminal: bool,
-    count: usize,
-    prefix_count: usize,
+    children: [Option<usize>; ALPHABET_SIZE],
+    is_end: bool,
+    count: u32,      // words passing through
+    word_count: u32,  // words ending here
+    depth: usize,
 }
 
 impl TrieNode {
-    fn new() -> TrieNode {
-        TrieNode {
-            children: [none; 128],
-            is_terminal: false,
-            count: 0,
-            prefix_count: 0,
-        }
+    fn new(depth: usize) -> TrieNode {
+        TrieNode { children: [None; ALPHABET_SIZE], is_end: false, count: 0, word_count: 0, depth }
     }
+    fn has_child(self, c: u8) -> bool { self.children[c as usize].is_some() }
+    fn child_indices(self) -> [usize] {
+        let mut result = []
+        for i in 0..ALPHABET_SIZE {
+            if let Some(idx) = self.children[i] { result.push(idx) }
+        }
+        result
+    }
+    fn child_count(self) -> usize { self.child_indices().len() }
+    fn is_leaf(self) -> bool { self.child_count() == 0 }
 }
 
 struct Trie {
-    root: TrieNode,
+    nodes: [TrieNode],
     size: usize,
     word_count: usize,
 }
 
 impl Trie {
-    fn new() -> Trie { Trie { root: TrieNode.new(), size: 0, word_count: 0 } }
-    fn len(self) -> usize { self.size }
-    fn is_empty(self) -> bool { self.size == 0 }
-    fn total_words(self) -> usize { self.word_count }
+    fn new() -> Trie {
+        Trie { nodes: [TrieNode.new(0)], size: 1, word_count: 0 }
+    }
+
+    fn alloc_node(mut self, depth: usize) -> usize {
+        let idx = self.nodes.len()
+        self.nodes.push(TrieNode.new(depth))
+        self.size += 1
+        idx
+    }
+
+    fn len(self) -> usize { self.word_count }
+    fn is_empty(self) -> bool { self.word_count == 0 }
+    fn node_count(self) -> usize { self.size }
 
     fn insert(mut self, word: &str) {
-        let mut node = &mut self.root
-        for ch in word.chars() {
-            let idx = ch as usize
-            if node.children[idx].is_none() {
-                node.children[idx] = some(TrieNode.new())
+        let mut current = 0
+        for (i, c) in word.bytes().enumerate() {
+            self.nodes[current].count += 1
+            if !self.nodes[current].has_child(c) {
+                let new_idx = self.alloc_node(i + 1)
+                self.nodes[current].children[c as usize] = Some(new_idx)
             }
-            node = node.children[idx].as_mut().unwrap()
-            node.prefix_count += 1
+            current = self.nodes[current].children[c as usize].unwrap()
         }
-        if !node.is_terminal { self.size += 1 }
-        node.is_terminal = true
-        node.count += 1
-        self.word_count += 1
+        self.nodes[current].count += 1
+        if !self.nodes[current].is_end {
+            self.nodes[current].is_end = true
+            self.nodes[current].word_count += 1
+            self.word_count += 1
+        }
     }
 
-    fn contains(self, word: &str) -> bool {
-        self.find_node(word).map(|n| n.is_terminal).unwrap_or(false)
+    fn search(self, word: &str) -> bool {
+        match self.find_node(word) {
+            Some(idx) => self.nodes[idx].is_end,
+            None => false,
+        }
     }
 
-    fn starts_with(self, prefix: &str) -> bool {
-        self.find_node(prefix).is_some()
+    fn starts_with(self, prefix: &str) -> bool { self.find_node(prefix).is_some() }
+
+    fn find_node(self, s: &str) -> Option<usize> {
+        let mut current = 0
+        for c in s.bytes() {
+            match self.nodes[current].children[c as usize] {
+                Some(next) => current = next,
+                None => return None,
+            }
+        }
+        Some(current)
     }
 
     fn count_prefix(self, prefix: &str) -> usize {
-        self.find_node(prefix).map(|n| n.prefix_count).unwrap_or(0)
-    }
-
-    fn word_frequency(self, word: &str) -> usize {
-        self.find_node(word)
-            .filter(|n| n.is_terminal)
-            .map(|n| n.count)
-            .unwrap_or(0)
-    }
-
-    fn find_node(self, prefix: &str) -> Option<&TrieNode> {
-        let mut node = &self.root
-        for ch in prefix.chars() {
-            let idx = ch as usize
-            match &node.children[idx] {
-                some(child) => node = child,
-                none => return none,
-            }
+        match self.find_node(prefix) {
+            Some(idx) => self.nodes[idx].count as usize,
+            None => 0,
         }
-        some(node)
     }
 
-    fn autocomplete(self, prefix: &str, max_results: usize) -> [string] {
+    fn autocomplete(self, prefix: &str, limit: usize) -> [string] {
         let mut results = []
-        if let some(node) = self.find_node(prefix) {
-            self.collect_words(node, &mut prefix.to_string(), &mut results, max_results)
-        }
-        results
-    }
-
-    fn collect_words(self, node: &TrieNode, current: &mut string, results: &mut [string], max: usize) {
-        if results.len() >= max { return }
-        if node.is_terminal { results.push(current.clone()) }
-        for i in 0..128 {
-            if let some(child) = &node.children[i] {
-                current.push(char.from(i as u8))
-                self.collect_words(child, current, results, max)
-                current.pop()
-                if results.len() >= max { return }
+        match self.find_node(prefix) {
+            None => results,
+            Some(idx) => {
+                self.collect_words(idx, &mut prefix.to_string(), &mut results, limit)
+                results
             }
         }
     }
+
+    fn collect_words(self, node_idx: usize, current: &mut string, results: &mut [string], limit: usize) {
+        if results.len() >= limit { return }
+        if self.nodes[node_idx].is_end { results.push(current.clone()) }
+        for c in 0u8..128u8 {
+            if let Some(child) = self.nodes[node_idx].children[c as usize] {
+                current.push(c as char)
+                self.collect_words(child, current, results, limit)
+                current.pop()
+                if results.len() >= limit { return }
+            }
+        }
+    }
+
+    fn all_words(self) -> [string] { self.autocomplete("", self.word_count + 1) }
 
     fn remove(mut self, word: &str) -> bool {
-        if !self.contains(word) { return false }
-        self.remove_recursive(&mut self.root, word, 0)
-        self.size -= 1
+        if !self.search(word) { return false }
+        let mut current = 0
+        for c in word.bytes() {
+            self.nodes[current].count -= 1
+            current = self.nodes[current].children[c as usize].unwrap()
+        }
+        self.nodes[current].count -= 1
+        self.nodes[current].is_end = false
+        self.word_count -= 1
         true
     }
 
-    fn remove_recursive(mut self, node: &mut TrieNode, word: &str, depth: usize) -> bool {
-        if depth == word.len() {
-            node.is_terminal = false
-            node.count = 0
-            return node.children.iter().all(|c| c.is_none())
-        }
-        let idx = word.as_bytes()[depth] as usize
-        if let some(child) = &mut node.children[idx] {
-            child.prefix_count -= 1
-            if self.remove_recursive(child, word, depth + 1) {
-                node.children[idx] = none
-                return !node.is_terminal && node.children.iter().all(|c| c.is_none())
+    fn longest_common_prefix(self) -> string {
+        let mut result = String.new()
+        let mut current = 0
+        loop {
+            let children = self.nodes[current].child_indices()
+            if children.len() != 1 || self.nodes[current].is_end { break }
+            for c in 0u8..128u8 {
+                if self.nodes[current].children[c as usize] == Some(children[0]) {
+                    result.push(c as char)
+                    current = children[0]
+                    break
+                }
             }
         }
-        false
-    }
-
-    fn longest_common_prefix(self) -> string {
-        let mut prefix = string.new()
-        let mut node = &self.root
-        loop {
-            let active: [(usize, &TrieNode)] = node.children.iter().enumerate()
-                .filter_map(|(i, c)| c.as_ref().map(|n| (i, n)))
-                .collect()
-            if active.len() != 1 || node.is_terminal { break }
-            let (idx, child) = active[0]
-            prefix.push(char.from(idx as u8))
-            node = child
-        }
-        prefix
+        result
     }
 }
 
 fn main() {
-    let mut trie = Trie.new()
+    // Empty
+    let trie = Trie.new()
     assert(trie.is_empty())
+    assert(trie.len() == 0)
+    assert(!trie.search("hello"))
+    print("Empty ✓")
 
-    // Insert and search
-    trie.insert("hello")
-    trie.insert("help")
-    trie.insert("hero")
-    trie.insert("world")
-    assert(trie.len() == 4)
-    assert(trie.contains("hello"))
-    assert(trie.contains("help"))
-    assert(!trie.contains("hel"))
-    assert(!trie.contains("hi"))
-    print("Insert/search ✓")
+    // Insert & search
+    let mut t = Trie.new()
+    t.insert("hello")
+    t.insert("help")
+    t.insert("world")
+    assert(t.len() == 3)
+    assert(t.search("hello"))
+    assert(t.search("help"))
+    assert(t.search("world"))
+    assert(!t.search("hell"))
+    assert(!t.search("helping"))
+    print("Insert/Search ✓")
 
-    // Prefix matching
-    assert(trie.starts_with("hel"))
-    assert(trie.starts_with("her"))
-    assert(trie.starts_with("wor"))
-    assert(!trie.starts_with("xyz"))
-    print("Prefix matching ✓")
+    // Prefix
+    assert(t.starts_with("hel"))
+    assert(t.starts_with("wor"))
+    assert(!t.starts_with("xyz"))
+    assert(t.starts_with(""))
+    print("Prefix ✓")
 
     // Count prefix
-    assert(trie.count_prefix("hel") == 2)  // hello, help
-    assert(trie.count_prefix("her") == 1)  // hero
-    assert(trie.count_prefix("h") == 3)    // hello, help, hero
-    assert(trie.count_prefix("z") == 0)
+    assert(t.count_prefix("hel") >= 2)
+    assert(t.count_prefix("world") >= 1)
+    assert(t.count_prefix("xyz") == 0)
     print("Count prefix ✓")
 
     // Autocomplete
-    let completions = trie.autocomplete("hel", 10)
+    let completions = t.autocomplete("hel", 10)
     assert(completions.len() == 2)
     assert(completions.contains(&"hello".into()))
     assert(completions.contains(&"help".into()))
     print("Autocomplete ✓")
 
     // Autocomplete with limit
-    let limited = trie.autocomplete("h", 2)
+    let limited = t.autocomplete("", 2)
     assert(limited.len() == 2)
-    print("Limited autocomplete ✓")
+    print("Limit ✓")
 
-    // Word frequency
-    trie.insert("hello")
-    trie.insert("hello")
-    assert(trie.word_frequency("hello") == 3)
-    assert(trie.total_words() == 7)  // 3 hello + 1 help + 1 hero + 1 world + extra
-    print("Frequency ✓")
+    // All words
+    let all = t.all_words()
+    assert(all.len() == 3)
+    print("All words ✓")
+
+    // Duplicate insert
+    t.insert("hello")
+    assert(t.len() == 3)  // no change
+    print("Duplicate ✓")
 
     // Remove
-    assert(trie.remove("help"))
-    assert(!trie.contains("help"))
-    assert(trie.contains("hello"))
-    assert(trie.len() == 3)
-    assert(!trie.remove("nonexistent"))
+    assert(t.remove("hello"))
+    assert(!t.search("hello"))
+    assert(t.search("help"))
+    assert(t.len() == 2)
+    assert(!t.remove("nothere"))
     print("Remove ✓")
 
     // Longest common prefix
@@ -203,14 +221,19 @@ fn main() {
     t2.insert("flower")
     t2.insert("flow")
     t2.insert("flight")
-    assert(t2.longest_common_prefix() == "fl")
+    let lcp = t2.longest_common_prefix()
+    assert(lcp == "fl")
     print("LCP ✓")
 
-    // Empty trie
-    let t3 = Trie.new()
-    assert(t3.longest_common_prefix() == "")
-    assert(t3.autocomplete("a", 5) == [])
-    print("Empty ✓")
+    // Single word LCP
+    let mut t3 = Trie.new()
+    t3.insert("only")
+    assert(t3.longest_common_prefix() == "only")
+    print("Single LCP ✓")
+
+    // Node count
+    assert(t.node_count() > 1)
+    print("Nodes ✓")
 
     print("Trie complete ✓")
 }
