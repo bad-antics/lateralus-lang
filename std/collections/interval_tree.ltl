@@ -1,0 +1,223 @@
+
+// Interval Tree - Efficient interval overlap queries
+// Augmented BST for storing intervals with O(log n) overlap search.
+
+#[derive(Clone, Debug, PartialEq)]
+struct Interval {
+    low: i64,
+    high: i64,
+}
+
+impl Interval {
+    fn new(low: i64, high: i64) -> Interval {
+        assert(low <= high)
+        Interval { low, high }
+    }
+
+    fn contains(self, point: i64) -> bool { point >= self.low && point <= self.high }
+
+    fn overlaps(self, other: &Interval) -> bool {
+        self.low <= other.high && other.low <= self.high
+    }
+
+    fn length(self) -> i64 { self.high - self.low }
+
+    fn merge(self, other: &Interval) -> Option<Interval> {
+        if self.overlaps(other) || self.high + 1 == other.low || other.high + 1 == self.low {
+            Some(Interval.new(self.low.min(other.low), self.high.max(other.high)))
+        } else { None }
+    }
+
+    fn intersection(self, other: &Interval) -> Option<Interval> {
+        if self.overlaps(other) {
+            Some(Interval.new(self.low.max(other.low), self.high.min(other.high)))
+        } else { None }
+    }
+}
+
+struct Node {
+    interval: Interval,
+    max_high: i64,
+    left: Option<Box<Node>>,
+    right: Option<Box<Node>>,
+    data: Option<string>,
+}
+
+impl Node {
+    fn new(interval: Interval, data: Option<string>) -> Node {
+        let max_high = interval.high
+        Node { interval, max_high, left: None, right: None, data }
+    }
+
+    fn update_max(mut self) {
+        self.max_high = self.interval.high
+        if let Some(ref left) = self.left {
+            self.max_high = self.max_high.max(left.max_high)
+        }
+        if let Some(ref right) = self.right {
+            self.max_high = self.max_high.max(right.max_high)
+        }
+    }
+}
+
+struct IntervalTree {
+    root: Option<Box<Node>>,
+    size: usize,
+}
+
+impl IntervalTree {
+    fn new() -> IntervalTree { IntervalTree { root: None, size: 0 } }
+
+    fn is_empty(self) -> bool { self.size == 0 }
+    fn len(self) -> usize { self.size }
+
+    fn insert(mut self, interval: Interval, data: Option<string>) {
+        self.root = IntervalTree.insert_node(self.root.take(), interval, data)
+        self.size += 1
+    }
+
+    fn insert_node(node: Option<Box<Node>>, interval: Interval, data: Option<string>) -> Option<Box<Node>> {
+        match node {
+            None => Some(Box.new(Node.new(interval, data))),
+            Some(mut n) => {
+                if interval.low <= n.interval.low {
+                    n.left = IntervalTree.insert_node(n.left.take(), interval, data)
+                } else {
+                    n.right = IntervalTree.insert_node(n.right.take(), interval, data)
+                }
+                n.update_max()
+                Some(n)
+            }
+        }
+    }
+
+    fn query_point(self, point: i64) -> [&Interval] {
+        let mut results = []
+        IntervalTree.search_point(&self.root, point, &mut results)
+        results
+    }
+
+    fn search_point<'a>(node: &'a Option<Box<Node>>, point: i64, results: &mut [&'a Interval]) {
+        if let Some(ref n) = node {
+            if point > n.max_high { return }
+            IntervalTree.search_point(&n.left, point, results)
+            if n.interval.contains(point) { results.push(&n.interval) }
+            if point >= n.interval.low {
+                IntervalTree.search_point(&n.right, point, results)
+            }
+        }
+    }
+
+    fn query_overlap(self, query: &Interval) -> [&Interval] {
+        let mut results = []
+        IntervalTree.search_overlap(&self.root, query, &mut results)
+        results
+    }
+
+    fn search_overlap<'a>(node: &'a Option<Box<Node>>, query: &Interval, results: &mut [&'a Interval]) {
+        if let Some(ref n) = node {
+            if query.low > n.max_high { return }
+            IntervalTree.search_overlap(&n.left, query, results)
+            if n.interval.overlaps(query) { results.push(&n.interval) }
+            if query.high >= n.interval.low {
+                IntervalTree.search_overlap(&n.right, query, results)
+            }
+        }
+    }
+
+    fn all_intervals(self) -> [&Interval] {
+        let mut results = []
+        IntervalTree.inorder(&self.root, &mut results)
+        results
+    }
+
+    fn inorder<'a>(node: &'a Option<Box<Node>>, results: &mut [&'a Interval]) {
+        if let Some(ref n) = node {
+            IntervalTree.inorder(&n.left, results)
+            results.push(&n.interval)
+            IntervalTree.inorder(&n.right, results)
+        }
+    }
+}
+
+fn main() {
+    // Interval basics
+    let a = Interval.new(1, 5)
+    let b = Interval.new(3, 8)
+    let c = Interval.new(10, 15)
+
+    assert(a.contains(3))
+    assert(!a.contains(6))
+    assert(a.length() == 4)
+    print("Interval basics ✓")
+
+    // Overlap
+    assert(a.overlaps(&b))
+    assert(!a.overlaps(&c))
+    assert(b.overlaps(&a))
+    print("Overlap ✓")
+
+    // Merge
+    let merged = a.merge(&b).unwrap()
+    assert(merged.low == 1 && merged.high == 8)
+    assert(a.merge(&c).is_none())
+    print("Merge ✓")
+
+    // Adjacent merge
+    let d = Interval.new(6, 9)
+    assert(a.merge(&d).is_some())  // 5+1 == 6
+    print("Adjacent merge ✓")
+
+    // Intersection
+    let inter = a.intersection(&b).unwrap()
+    assert(inter.low == 3 && inter.high == 5)
+    assert(a.intersection(&c).is_none())
+    print("Intersection ✓")
+
+    // Tree insert
+    let mut tree = IntervalTree.new()
+    assert(tree.is_empty())
+    tree.insert(Interval.new(15, 20), None)
+    tree.insert(Interval.new(10, 30), None)
+    tree.insert(Interval.new(17, 19), None)
+    tree.insert(Interval.new(5, 20), None)
+    tree.insert(Interval.new(12, 15), None)
+    tree.insert(Interval.new(30, 40), None)
+    assert(tree.len() == 6)
+    print("Insert ✓")
+
+    // Point query
+    let hits = tree.query_point(18)
+    assert(hits.len() >= 3)  // [15,20], [10,30], [17,19], [5,20]
+    print("Point query ✓")
+
+    // No hits
+    let misses = tree.query_point(50)
+    assert(misses.is_empty())
+    print("No hits ✓")
+
+    // Overlap query
+    let overlaps = tree.query_overlap(&Interval.new(14, 16))
+    assert(overlaps.len() >= 3)
+    print("Overlap query ✓")
+
+    // All intervals
+    let all = tree.all_intervals()
+    assert(all.len() == 6)
+    print("All intervals ✓")
+
+    // Edge: single point interval
+    let mut tree2 = IntervalTree.new()
+    tree2.insert(Interval.new(5, 5), None)
+    assert(tree2.query_point(5).len() == 1)
+    assert(tree2.query_point(4).is_empty())
+    print("Point interval ✓")
+
+    // Boundary overlap
+    let e = Interval.new(5, 10)
+    let f = Interval.new(10, 15)
+    assert(e.overlaps(&f))  // touching at 10
+    print("Boundary ✓")
+
+    print("Interval tree complete ✓")
+}
