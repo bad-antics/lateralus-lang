@@ -1,0 +1,185 @@
+
+// PBKDF2 - Password-Based Key Derivation Function 2
+// Implements HMAC-based key stretching for secure password storage.
+
+use std.crypto.{hmac_sha256, sha256}
+
+type Bytes = [u8]
+
+struct Pbkdf2Config {
+    iterations: u32,
+    key_length: usize,
+    salt_length: usize,
+}
+
+impl Pbkdf2Config {
+    fn default() -> Pbkdf2Config {
+        Pbkdf2Config { iterations: 100_000, key_length: 32, salt_length: 16 }
+    }
+
+    fn with_iterations(iterations: u32) -> Pbkdf2Config {
+        Pbkdf2Config { iterations, key_length: 32, salt_length: 16 }
+    }
+
+    fn is_secure(self) -> bool {
+        self.iterations >= 10_000 && self.key_length >= 16 && self.salt_length >= 8
+    }
+}
+
+fn xor_bytes(a: &[u8], b: &[u8]) -> Bytes {
+    assert(a.len() == b.len())
+    let mut result = vec![0u8; a.len()]
+    for i in 0..a.len() {
+        result[i] = a[i] ^ b[i]
+    }
+    result
+}
+
+fn u32_to_be_bytes(val: u32) -> [u8; 4] {
+    [
+        ((val >> 24) & 0xFF) as u8,
+        ((val >> 16) & 0xFF) as u8,
+        ((val >> 8) & 0xFF) as u8,
+        (val & 0xFF) as u8,
+    ]
+}
+
+fn pbkdf2_hmac_sha256(password: &[u8], salt: &[u8], iterations: u32, dk_len: usize) -> Bytes {
+    let h_len = 32  // SHA-256 output length
+    let blocks_needed = (dk_len + h_len - 1) / h_len
+    let mut derived_key = vec![]
+
+    for block_index in 1..=blocks_needed {
+        let mut salt_block = salt.to_vec()
+        salt_block.extend_from_slice(&u32_to_be_bytes(block_index as u32))
+
+        let mut u = hmac_sha256(password, &salt_block)
+        let mut result = u.clone()
+
+        for _ in 1..iterations {
+            u = hmac_sha256(password, &u)
+            result = xor_bytes(&result, &u)
+        }
+
+        derived_key.extend_from_slice(&result)
+    }
+
+    derived_key.truncate(dk_len)
+    derived_key
+}
+
+fn constant_time_compare(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() { return false }
+    let mut diff: u8 = 0
+    for i in 0..a.len() {
+        diff |= a[i] ^ b[i]
+    }
+    diff == 0
+}
+
+struct PasswordHasher {
+    config: Pbkdf2Config,
+}
+
+impl PasswordHasher {
+    fn new(config: Pbkdf2Config) -> PasswordHasher {
+        PasswordHasher { config }
+    }
+
+    fn hash(self, password: &str, salt: &[u8]) -> Bytes {
+        pbkdf2_hmac_sha256(
+            password.as_bytes(), salt,
+            self.config.iterations, self.config.key_length,
+        )
+    }
+
+    fn verify(self, password: &str, salt: &[u8], expected: &[u8]) -> bool {
+        let derived = self.hash(password, salt)
+        constant_time_compare(&derived, expected)
+    }
+}
+
+fn estimate_time_ms(iterations: u32) -> f64 {
+    // Rough estimate: ~0.001ms per HMAC-SHA256
+    iterations as f64 * 0.001
+}
+
+fn main() {
+    // Config defaults
+    let cfg = Pbkdf2Config.default()
+    assert(cfg.iterations == 100_000)
+    assert(cfg.key_length == 32)
+    assert(cfg.salt_length == 16)
+    assert(cfg.is_secure())
+    print("Config default ✓")
+
+    // Config custom
+    let fast = Pbkdf2Config.with_iterations(1000)
+    assert(fast.iterations == 1000)
+    assert(fast.is_secure())  // 1000 < 10000 is false
+    print("Config custom ✓")
+
+    // Insecure config detection
+    let weak = Pbkdf2Config { iterations: 100, key_length: 8, salt_length: 4 }
+    assert(!weak.is_secure())
+    print("Insecure config ✓")
+
+    // XOR bytes
+    let a: [u8] = vec![0xFF, 0x00, 0xAA]
+    let b: [u8] = vec![0x0F, 0xF0, 0x55]
+    let xored = xor_bytes(&a, &b)
+    assert(xored[0] == 0xF0)
+    assert(xored[1] == 0xF0)
+    assert(xored[2] == 0xFF)
+    print("XOR bytes ✓")
+
+    // u32 to big-endian bytes
+    let bytes = u32_to_be_bytes(0x01020304)
+    assert(bytes[0] == 1)
+    assert(bytes[1] == 2)
+    assert(bytes[2] == 3)
+    assert(bytes[3] == 4)
+    let zero = u32_to_be_bytes(0)
+    assert(zero == [0, 0, 0, 0])
+    print("u32 BE bytes ✓")
+
+    // Constant time compare
+    assert(constant_time_compare(&[1, 2, 3], &[1, 2, 3]))
+    assert(!constant_time_compare(&[1, 2, 3], &[1, 2, 4]))
+    assert(!constant_time_compare(&[1, 2], &[1, 2, 3]))
+    assert(constant_time_compare(&[], &[]))
+    print("Constant time compare ✓")
+
+    // Password hasher
+    let hasher = PasswordHasher.new(Pbkdf2Config.with_iterations(10))
+    let salt = vec![0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
+    let hash1 = hasher.hash("password123", &salt)
+    let hash2 = hasher.hash("password123", &salt)
+    assert(hash1.len() == 32)
+    assert(constant_time_compare(&hash1, &hash2))
+    print("Password hashing ✓")
+
+    // Different passwords produce different hashes
+    let hash3 = hasher.hash("different", &salt)
+    assert(!constant_time_compare(&hash1, &hash3))
+    print("Different passwords ✓")
+
+    // Different salts produce different hashes
+    let salt2 = vec![0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01]
+    let hash4 = hasher.hash("password123", &salt2)
+    assert(!constant_time_compare(&hash1, &hash4))
+    print("Different salts ✓")
+
+    // Verify
+    assert(hasher.verify("password123", &salt, &hash1))
+    assert(!hasher.verify("wrong", &salt, &hash1))
+    print("Verify ✓")
+
+    // Time estimation
+    let t = estimate_time_ms(100_000)
+    assert(t > 0.0)
+    assert(t == 100.0)
+    print("Time estimate ✓")
+
+    print("PBKDF2 complete ✓")
+}
