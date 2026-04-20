@@ -1,50 +1,150 @@
-// hex.ltl — Hexadecimal encode/decode
-const HEX_CHARS: string = "0123456789abcdef"
+// Standard Library - Hex Encoding/Decoding
+// Encode bytes to hexadecimal strings and decode back.
 
-pub fn encode(data: [u8]) -> string {
-    data |> flat_map(|b| [HEX_CHARS[(b >> 4) as usize], HEX_CHARS[(b & 0xF) as usize]]) |> collect_string()
+use std.fmt.{Display, Formatter, FmtError}
+
+const HEX_LOWER: &str = "0123456789abcdef"
+const HEX_UPPER: &str = "0123456789ABCDEF"
+
+#[derive(Debug)]
+enum HexError {
+    InvalidChar(char, usize),
+    OddLength,
 }
 
-pub fn encode_upper(data: [u8]) -> string {
-    encode(data).to_uppercase()
-}
-
-fn hex_nibble(c: char) -> Result<u8, string> {
-    match c {
-        '0'..='9' => ok((c as u8) - b'0'),
-        'a'..='f' => ok((c as u8) - b'a' + 10),
-        'A'..='F' => ok((c as u8) - b'A' + 10),
-        _ => err("invalid hex character: '${c}'"),
+impl Display for HexError {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError> {
+        match self {
+            HexError.InvalidChar(c, pos) => f.write_str(&format!("invalid hex char '{}' at {}", c, pos)),
+            HexError.OddLength => f.write_str("odd-length hex string"),
+        }
     }
 }
 
-pub fn decode(s: string) -> Result<[u8], string> {
-    if s.len() % 2 != 0 { return err("hex string must have even length") }
-    let chars = s.chars() |> collect()
-    let mut out = []
-    let mut i   = 0
+fn encode(data: &[u8]) -> string {
+    encode_case(data, false)
+}
+
+fn encode_upper(data: &[u8]) -> string {
+    encode_case(data, true)
+}
+
+fn encode_case(data: &[u8], upper: bool) -> string {
+    let table = if upper { HEX_UPPER } else { HEX_LOWER }
+    let mut result = String.with_capacity(data.len() * 2)
+    for byte in data {
+        result.push(table.char_at((*byte >> 4) as usize))
+        result.push(table.char_at((*byte & 0x0F) as usize))
+    }
+    result
+}
+
+fn decode(input: &str) -> Result<[u8], HexError> {
+    if input.len() % 2 != 0 {
+        return err(HexError.OddLength)
+    }
+    let chars: [char] = input.chars().collect()
+    let mut result = []
+    let mut i = 0
     while i < chars.len() {
-        let hi = hex_nibble(chars[i])?
-        let lo = hex_nibble(chars[i+1])?
-        out.push((hi << 4) | lo)
+        let hi = hex_val(chars[i]).ok_or(HexError.InvalidChar(chars[i], i))?
+        let lo = hex_val(chars[i + 1]).ok_or(HexError.InvalidChar(chars[i + 1], i + 1))?
+        result.push((hi << 4) | lo)
         i += 2
     }
-    ok(out)
+    ok(result)
 }
 
-pub fn encode_sep(data: [u8], sep: string) -> string {
-    data |> map(|b| encode([b])) |> join(sep)
+fn hex_val(c: char) -> Option<u8> {
+    match c {
+        '0'..='9' => some(c as u8 - '0' as u8),
+        'a'..='f' => some(c as u8 - 'a' as u8 + 10),
+        'A'..='F' => some(c as u8 - 'A' as u8 + 10),
+        _ => none,
+    }
+}
+
+fn encode_prefix(data: &[u8]) -> string {
+    format!("0x{}", encode(data))
+}
+
+fn decode_prefix(input: &str) -> Result<[u8], HexError> {
+    let s = if input.starts_with("0x") || input.starts_with("0X") {
+        &input[2..]
+    } else {
+        input
+    }
+    decode(s)
+}
+
+fn is_hex_string(s: &str) -> bool {
+    s.len() % 2 == 0 && s.chars().all(|c| hex_val(c).is_some())
+}
+
+fn encode_spaced(data: &[u8]) -> string {
+    data.iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<[string]>()
+        .join(" ")
 }
 
 fn main() {
-    assert(encode([0xDE, 0xAD, 0xBE, 0xEF]) == "deadbeef")
-    assert(encode_upper([0xDE, 0xAD])        == "DEAD")
-    assert(decode("deadbeef").unwrap() == [0xDE, 0xAD, 0xBE, 0xEF])
-    assert(decode("DEADBEEF").unwrap() == [0xDE, 0xAD, 0xBE, 0xEF])
-    assert(decode("zz").is_err())
-    assert(decode("abc").is_err())   // odd length
+    // Encode
+    assert(encode(&[]) == "")
+    assert(encode(&[0xDE, 0xAD, 0xBE, 0xEF]) == "deadbeef")
+    assert(encode(&[0x00, 0xFF]) == "00ff")
+    print("Encode ✓")
 
-    let data = [0x01u8, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF]
-    assert(decode(encode(data)).unwrap() == data)
-    print("hex — all round-trip tests passed ✓")
+    // Encode upper
+    assert(encode_upper(&[0xDE, 0xAD]) == "DEAD")
+    print("Encode upper ✓")
+
+    // Decode
+    assert(decode("").unwrap() == vec![])
+    assert(decode("deadbeef").unwrap() == vec![0xDE, 0xAD, 0xBE, 0xEF])
+    assert(decode("00FF").unwrap() == vec![0x00, 0xFF])
+    print("Decode ✓")
+
+    // Round-trip
+    let data: [u8] = (0..256).map(|i| i as u8).collect()
+    assert(decode(&encode(&data)).unwrap() == data)
+    print("Round-trip ✓")
+
+    // Errors
+    assert(decode("abc").is_err())  // odd length
+    assert(decode("zz").is_err())   // invalid char
+    match decode("abc").unwrap_err() {
+        HexError.OddLength => {},
+        _ => assert(false),
+    }
+    match decode("zz").unwrap_err() {
+        HexError.InvalidChar('z', 0) => {},
+        _ => assert(false),
+    }
+    print("Errors ✓")
+
+    // Prefix
+    assert(encode_prefix(&[0xCA, 0xFE]) == "0xcafe")
+    assert(decode_prefix("0xCAFE").unwrap() == vec![0xCA, 0xFE])
+    assert(decode_prefix("cafe").unwrap() == vec![0xCA, 0xFE])
+    print("Prefix ✓")
+
+    // Validation
+    assert(is_hex_string("deadbeef"))
+    assert(is_hex_string("0123456789abcdef"))
+    assert(!is_hex_string("xyz"))
+    assert(!is_hex_string("abc"))  // odd length
+    print("Validation ✓")
+
+    // Spaced
+    assert(encode_spaced(&[0xAB, 0xCD, 0xEF]) == "ab cd ef")
+    print("Spaced ✓")
+
+    // Display error
+    assert(HexError.OddLength.to_string() == "odd-length hex string")
+    let e = HexError.InvalidChar('g', 3)
+    assert(e.to_string().contains("g"))
+    print("Display ✓")
+
+    print("Hex Encoding complete ✓")
 }
