@@ -1,160 +1,311 @@
-// std.encoding.base64 — Base64 encoding/decoding (RFC 4648)
+// Standard Library - Base64 Encoding/Decoding
+// RFC 4648 compliant Base64 with standard and URL-safe alphabets.
 
-const STANDARD_ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-const URL_SAFE_ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+use std.io.{Read, Write}
+use std.fmt.{Display, Formatter}
 
-pub enum Base64Error {
-    InvalidChar(u8, usize),
+const STANDARD_ALPHABET: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+const URL_SAFE_ALPHABET: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+const PAD: char = '='
+
+#[derive(Clone, Debug, PartialEq)]
+enum Alphabet {
+    Standard,
+    UrlSafe,
+}
+
+impl Alphabet {
+    fn table(self) -> &str {
+        match self {
+            Alphabet.Standard => STANDARD_ALPHABET,
+            Alphabet.UrlSafe => URL_SAFE_ALPHABET,
+        }
+    }
+
+    fn decode_char(self, c: char) -> Option<u8> {
+        let table = self.table()
+        table.find(c).map(|i| i as u8)
+    }
+}
+
+#[derive(Clone, Debug)]
+struct Config {
+    alphabet: Alphabet,
+    padding: bool,
+    line_length: Option<usize>,
+}
+
+impl Config {
+    fn standard() -> Config {
+        Config { alphabet: Alphabet.Standard, padding: true, line_length: none }
+    }
+
+    fn url_safe() -> Config {
+        Config { alphabet: Alphabet.UrlSafe, padding: false, line_length: none }
+    }
+
+    fn with_padding(mut self, pad: bool) -> Config {
+        self.padding = pad; self
+    }
+
+    fn with_line_length(mut self, len: usize) -> Config {
+        self.line_length = some(len); self
+    }
+}
+
+#[derive(Debug)]
+enum DecodeError {
+    InvalidChar(char, usize),
     InvalidLength,
     InvalidPadding,
 }
 
-struct Base64Config {
-    alphabet: &[u8; 64],
-    pad: bool,
-}
-
-pub const STANDARD: Base64Config = Base64Config { alphabet: STANDARD_ALPHABET, pad: true }
-pub const STANDARD_NO_PAD: Base64Config = Base64Config { alphabet: STANDARD_ALPHABET, pad: false }
-pub const URL_SAFE: Base64Config = Base64Config { alphabet: URL_SAFE_ALPHABET, pad: true }
-pub const URL_SAFE_NO_PAD: Base64Config = Base64Config { alphabet: URL_SAFE_ALPHABET, pad: false }
-
-fn build_decode_table(alphabet: &[u8; 64]) -> [u8; 256] {
-    let mut table = [0xFFu8; 256]
-    for (i, &ch) in alphabet.iter().enumerate() {
-        table[ch as usize] = i as u8
+impl Display for DecodeError {
+    fn fmt(self, f: &mut Formatter) -> Result<(), std.fmt.FmtError> {
+        match self {
+            DecodeError.InvalidChar(c, pos) => f.write_str(&format!("invalid character '{}' at position {}", c, pos)),
+            DecodeError.InvalidLength => f.write_str("invalid input length"),
+            DecodeError.InvalidPadding => f.write_str("invalid padding"),
+        }
     }
-    table
 }
 
-// ── Encode ───────────────────────────────────────────────────────────────────
-pub fn encode(data: &[u8]) -> string { encode_config(data, &STANDARD) }
+fn encode(data: &[u8]) -> string {
+    encode_config(data, &Config.standard())
+}
 
-pub fn encode_url_safe(data: &[u8]) -> string { encode_config(data, &URL_SAFE_NO_PAD) }
+fn encode_config(data: &[u8], config: &Config) -> string {
+    let table = config.alphabet.table()
+    let mut result = String.new()
+    let mut i = 0
+    let len = data.len()
 
-pub fn encode_config(data: &[u8], config: &Base64Config) -> string {
-    let mut out = string.with_capacity((data.len() + 2) / 3 * 4)
-    let chunks = data.len() / 3
-    let remainder = data.len() % 3
+    while i < len {
+        let b0 = data[i] as u32
+        let b1 = if i + 1 < len { data[i + 1] as u32 } else { 0 }
+        let b2 = if i + 2 < len { data[i + 2] as u32 } else { 0 }
 
-    for i in 0..chunks {
-        let b0 = data[i * 3] as u32
-        let b1 = data[i * 3 + 1] as u32
-        let b2 = data[i * 3 + 2] as u32
         let triple = (b0 << 16) | (b1 << 8) | b2
 
-        out.push(config.alphabet[((triple >> 18) & 0x3F) as usize] as char)
-        out.push(config.alphabet[((triple >> 12) & 0x3F) as usize] as char)
-        out.push(config.alphabet[((triple >> 6) & 0x3F) as usize] as char)
-        out.push(config.alphabet[(triple & 0x3F) as usize] as char)
+        result.push(table.char_at(((triple >> 18) & 0x3F) as usize))
+        result.push(table.char_at(((triple >> 12) & 0x3F) as usize))
+
+        if i + 1 < len {
+            result.push(table.char_at(((triple >> 6) & 0x3F) as usize))
+        } else if config.padding {
+            result.push(PAD)
+        }
+
+        if i + 2 < len {
+            result.push(table.char_at((triple & 0x3F) as usize))
+        } else if config.padding {
+            result.push(PAD)
+        }
+
+        i += 3
     }
 
-    match remainder {
-        1 => {
-            let b0 = data[chunks * 3] as u32
-            out.push(config.alphabet[((b0 >> 2) & 0x3F) as usize] as char)
-            out.push(config.alphabet[((b0 << 4) & 0x3F) as usize] as char)
-            if config.pad { out.push_str("==") }
+    // Line wrapping
+    if let some(line_len) = config.line_length {
+        let mut wrapped = String.new()
+        for (j, c) in result.chars().enumerate() {
+            if j > 0 && j % line_len == 0 { wrapped.push('\n') }
+            wrapped.push(c)
         }
-        2 => {
-            let b0 = data[chunks * 3] as u32
-            let b1 = data[chunks * 3 + 1] as u32
-            out.push(config.alphabet[((b0 >> 2) & 0x3F) as usize] as char)
-            out.push(config.alphabet[(((b0 << 4) | (b1 >> 4)) & 0x3F) as usize] as char)
-            out.push(config.alphabet[((b1 << 2) & 0x3F) as usize] as char)
-            if config.pad { out.push('=') }
-        }
-        _ => {}
+        return wrapped
     }
-    out
+
+    result
 }
 
-// ── Decode ───────────────────────────────────────────────────────────────────
-pub fn decode(input: &str) -> Result<[u8], Base64Error> { decode_config(input, &STANDARD) }
-
-pub fn decode_url_safe(input: &str) -> Result<[u8], Base64Error> { decode_config(input, &URL_SAFE_NO_PAD) }
-
-pub fn decode_config(input: &str, config: &Base64Config) -> Result<[u8], Base64Error> {
-    let table = build_decode_table(config.alphabet)
-    let bytes = input.as_bytes()
-
-    // Strip padding
-    let mut len = bytes.len()
-    while len > 0 && bytes[len - 1] == b'=' { len -= 1 }
-
-    let out_len = len * 3 / 4
-    let mut out: [u8] = Vec.with_capacity(out_len)
-
-    let full_chunks = len / 4
-    for i in 0..full_chunks {
-        let mut accum: u32 = 0
-        for j in 0..4 {
-            let idx = i * 4 + j
-            let val = table[bytes[idx] as usize]
-            if val == 0xFF { return err(Base64Error.InvalidChar(bytes[idx], idx)) }
-            accum = (accum << 6) | val as u32
-        }
-        out.push(((accum >> 16) & 0xFF) as u8)
-        out.push(((accum >> 8) & 0xFF) as u8)
-        out.push((accum & 0xFF) as u8)
-    }
-
-    let remainder = len % 4
-    if remainder > 0 {
-        let base = full_chunks * 4
-        let mut accum: u32 = 0
-        for j in 0..remainder {
-            let idx = base + j
-            let val = table[bytes[idx] as usize]
-            if val == 0xFF { return err(Base64Error.InvalidChar(bytes[idx], idx)) }
-            accum = (accum << 6) | val as u32
-        }
-        accum <<= (4 - remainder) * 6
-        match remainder {
-            2 => out.push(((accum >> 16) & 0xFF) as u8),
-            3 => {
-                out.push(((accum >> 16) & 0xFF) as u8)
-                out.push(((accum >> 8) & 0xFF) as u8)
-            }
-            _ => return err(Base64Error.InvalidLength),
-        }
-    }
-
-    ok(out)
+fn decode(input: &str) -> Result<[u8], DecodeError> {
+    decode_config(input, &Config.standard())
 }
 
-// ── Streaming encoder ────────────────────────────────────────────────────────
-pub struct Base64Encoder {
-    config: Base64Config,
-    buffer: [u8; 3],
-    buf_len: usize,
-    output: string,
-}
+fn decode_config(input: &str, config: &Config) -> Result<[u8], DecodeError> {
+    let cleaned: string = input.chars()
+        .filter(|c| *c != '\n' && *c != '\r' && *c != ' ')
+        .collect()
 
-impl Base64Encoder {
-    pub fn new(config: &Base64Config) -> Base64Encoder {
-        Base64Encoder { config: *config, buffer: [0u8; 3], buf_len: 0, output: string.new() }
+    if cleaned.is_empty() { return ok(vec![]) }
+
+    // Strip padding and validate
+    let stripped: string = cleaned.trim_end_matches('=').to_string()
+    let pad_count = cleaned.len() - stripped.len()
+
+    if pad_count > 2 {
+        return err(DecodeError.InvalidPadding)
     }
 
-    pub fn write(mut self, data: &[u8]) {
-        for &byte in data {
-            self.buffer[self.buf_len] = byte
-            self.buf_len += 1
-            if self.buf_len == 3 {
-                self.flush_buffer()
-            }
+    let mut result = []
+    let mut buf: u32 = 0
+    let mut bits: usize = 0
+
+    for (pos, c) in stripped.chars().enumerate() {
+        let val = config.alphabet.decode_char(c)
+            .ok_or(DecodeError.InvalidChar(c, pos))?
+        buf = (buf << 6) | (val as u32)
+        bits += 6
+
+        if bits >= 8 {
+            bits -= 8
+            result.push(((buf >> bits) & 0xFF) as u8)
         }
     }
 
-    fn flush_buffer(mut self) {
-        if self.buf_len == 0 { return }
-        let chunk = &self.buffer[..self.buf_len]
-        self.output.push_str(&encode_config(chunk, &self.config))
-        self.buf_len = 0
+    ok(result)
+}
+
+fn encode_string(s: &str) -> string {
+    encode(s.as_bytes())
+}
+
+fn decode_string(input: &str) -> Result<string, DecodeError> {
+    let bytes = decode(input)?
+    ok(String.from_utf8(bytes).unwrap())
+}
+
+fn encode_url_safe(data: &[u8]) -> string {
+    encode_config(data, &Config.url_safe())
+}
+
+fn decode_url_safe(input: &str) -> Result<[u8], DecodeError> {
+    decode_config(input, &Config.url_safe())
+}
+
+// Streaming encoder
+struct Encoder {
+    config: Config,
+    buffer: [u8],
+    output: String,
+}
+
+impl Encoder {
+    fn new(config: Config) -> Encoder {
+        Encoder { config, buffer: [], output: String.new() }
     }
 
-    pub fn finish(mut self) -> string {
-        self.flush_buffer()
-        std.mem.take(&mut self.output)
+    fn write(mut self, data: &[u8]) {
+        self.buffer.extend_from_slice(data)
+        while self.buffer.len() >= 3 {
+            let chunk = &self.buffer[0..3]
+            self.output.push_str(&encode_config(chunk, &self.config))
+            self.buffer = self.buffer[3..].to_vec()
+        }
     }
+
+    fn finish(mut self) -> string {
+        if !self.buffer.is_empty() {
+            self.output.push_str(&encode_config(&self.buffer, &self.config))
+        }
+        self.output.clone()
+    }
+}
+
+fn main() {
+    // Basic encode
+    assert(encode("".as_bytes()) == "")
+    assert(encode("f".as_bytes()) == "Zg==")
+    assert(encode("fo".as_bytes()) == "Zm8=")
+    assert(encode("foo".as_bytes()) == "Zm9v")
+    assert(encode("foob".as_bytes()) == "Zm9vYg==")
+    assert(encode("fooba".as_bytes()) == "Zm9vYmE=")
+    assert(encode("foobar".as_bytes()) == "Zm9vYmFy")
+    print("Encode ✓")
+
+    // Basic decode
+    assert(decode("").unwrap() == vec![])
+    assert(decode("Zg==").unwrap() == "f".as_bytes())
+    assert(decode("Zm9v").unwrap() == "foo".as_bytes())
+    assert(decode("Zm9vYmFy").unwrap() == "foobar".as_bytes())
+    print("Decode ✓")
+
+    // Round-trip
+    let original = "Hello, Lateralus! 🚀"
+    let encoded = encode_string(original)
+    let decoded = decode_string(&encoded).unwrap()
+    assert(decoded == original)
+    print("Round-trip ✓")
+
+    // URL-safe alphabet
+    let data: [u8] = vec![0xFF, 0xFE, 0xFD, 0xFC]
+    let url_enc = encode_url_safe(&data)
+    assert(!url_enc.contains('+'))
+    assert(!url_enc.contains('/'))
+    assert(!url_enc.contains('='))
+    let url_dec = decode_url_safe(&url_enc).unwrap()
+    assert(url_dec == data)
+    print("URL-safe ✓")
+
+    // No padding config
+    let no_pad = Config.standard().with_padding(false)
+    let enc = encode_config("f".as_bytes(), &no_pad)
+    assert(enc == "Zg")
+    assert(!enc.contains('='))
+    print("No padding ✓")
+
+    // Line wrapping
+    let long_data = "The quick brown fox jumps over the lazy dog"
+    let wrapped = encode_config(long_data.as_bytes(), &Config.standard().with_line_length(20))
+    assert(wrapped.contains('\n'))
+    let unwrapped_decode = decode(&wrapped.replace("\n", "")).unwrap()
+    assert(String.from_utf8(unwrapped_decode).unwrap() == long_data)
+    print("Line wrapping ✓")
+
+    // Decode errors
+    let bad = decode("!!!!")
+    assert(bad.is_err())
+    match bad.unwrap_err() {
+        DecodeError.InvalidChar(c, _) => assert(c == '!'),
+        _ => assert(false),
+    }
+    print("Invalid char error ✓")
+
+    // Invalid padding
+    let bad_pad = decode_config("Zg===", &Config.standard())
+    assert(bad_pad.is_err())
+    print("Invalid padding error ✓")
+
+    // Whitespace tolerance in decode
+    let spaced = decode("Zm9v\nYmFy").unwrap()
+    assert(String.from_utf8(spaced).unwrap() == "foobar")
+    print("Whitespace tolerance ✓")
+
+    // Alphabet
+    assert(Alphabet.Standard.table() == STANDARD_ALPHABET)
+    assert(Alphabet.UrlSafe.table() == URL_SAFE_ALPHABET)
+    assert(Alphabet.Standard.decode_char('A') == some(0))
+    assert(Alphabet.Standard.decode_char('z') == some(51))
+    assert(Alphabet.Standard.decode_char('!').is_none())
+    print("Alphabet ✓")
+
+    // Streaming encoder
+    let mut enc = Encoder.new(Config.standard())
+    enc.write("foo".as_bytes())
+    enc.write("bar".as_bytes())
+    let result = enc.finish()
+    assert(result == "Zm9vYmFy")
+    print("Streaming encoder ✓")
+
+    // Binary data round-trip
+    let binary: [u8] = (0..256).map(|i| i as u8).collect()
+    let b_enc = encode(&binary)
+    let b_dec = decode(&b_enc).unwrap()
+    assert(b_dec == binary)
+    print("Binary round-trip ✓")
+
+    // Config builders
+    let cfg = Config.standard().with_padding(false).with_line_length(76)
+    assert(!cfg.padding)
+    assert(cfg.line_length == some(76))
+    assert(cfg.alphabet == Alphabet.Standard)
+    print("Config ✓")
+
+    // DecodeError display
+    let err = DecodeError.InvalidChar('$', 5)
+    assert(err.to_string().contains("$"))
+    assert(err.to_string().contains("5"))
+    print("DecodeError display ✓")
+
+    print("Base64 complete ✓")
 }
