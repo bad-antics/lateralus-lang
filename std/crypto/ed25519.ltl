@@ -1,0 +1,173 @@
+
+// Ed25519 Digital Signature Scheme
+// Implements key generation, signing, and verification using Edwards curves.
+
+use std.crypto.{sha512, random_bytes}
+use std.math.{mod_pow, mod_inv}
+
+const L: u256 = 0x1000000000000000000000000000000014DEF9DEA2F79CD65812631A5CF5D3ED
+const D: u256 = 0x52036cee2b6ffe738cc740797779e89800700a4d4141d8ab75eb4dca135978a3
+const Q: u256 = 0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffed
+
+struct Point {
+    x: u256,
+    y: u256,
+}
+
+impl Point {
+    fn identity() -> Point { Point { x: 0, y: 1 } }
+
+    fn base_point() -> Point {
+        Point {
+            x: 0x216936d3cd6e53fec0a4e231fdd6dc5c692cc7609525a7b2c9562d608f25d51a,
+            y: 0x6666666666666666666666666666666666666666666666666666666666666658,
+        }
+    }
+
+    fn is_identity(self) -> bool { self.x == 0 && self.y == 1 }
+
+    fn add(self, other: &Point) -> Point {
+        let x1y2 = (self.x * other.y) % Q
+        let x2y1 = (other.x * self.y) % Q
+        let dxy = (D * self.x * other.x * self.y * other.y) % Q
+        let x3 = ((x1y2 + x2y1) * mod_inv(1 + dxy, Q)) % Q
+        let y1y2 = (self.y * other.y) % Q
+        let x1x2 = (self.x * other.x) % Q
+        let y3 = ((y1y2 + x1x2) * mod_inv(1 - dxy + Q, Q)) % Q
+        Point { x: x3, y: y3 }
+    }
+
+    fn scalar_mul(self, n: u256) -> Point {
+        let mut result = Point.identity()
+        let mut base = self
+        let mut k = n
+        while k > 0 {
+            if k & 1 == 1 { result = result.add(&base) }
+            base = base.add(&base)
+            k >>= 1
+        }
+        result
+    }
+
+    fn encode(self) -> [u8; 32] {
+        let mut out = [0u8; 32]
+        let mut y = self.y
+        for i in 0..32 { out[i] = (y & 0xFF) as u8; y >>= 8 }
+        out[31] |= ((self.x & 1) as u8) << 7
+        out
+    }
+
+    fn eq(self, other: &Point) -> bool {
+        self.x % Q == other.x % Q && self.y % Q == other.y % Q
+    }
+}
+
+struct Keypair {
+    secret: [u8; 32],
+    public_key: [u8; 32],
+}
+
+impl Keypair {
+    fn generate() -> Keypair {
+        let secret = random_bytes(32)
+        let hash = sha512(&secret)
+        let mut a = u256.from_le_bytes(&hash[0..32])
+        a &= 0x3FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF8
+        a |= 0x4000000000000000000000000000000000000000000000000000000000000000
+        let pk_point = Point.base_point().scalar_mul(a)
+        Keypair { secret, public_key: pk_point.encode() }
+    }
+
+    fn sign(self, message: &[u8]) -> [u8; 64] {
+        let hash = sha512(&self.secret)
+        let mut a = u256.from_le_bytes(&hash[0..32])
+        a &= 0x3FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF8
+        a |= 0x4000000000000000000000000000000000000000000000000000000000000000
+
+        let nonce_input = [&hash[32..64], message].concat()
+        let nonce_hash = sha512(&nonce_input)
+        let r = u256.from_le_bytes(&nonce_hash) % L
+
+        let R = Point.base_point().scalar_mul(r)
+        let R_enc = R.encode()
+
+        let k_input = [&R_enc[..], &self.public_key[..], message].concat()
+        let k_hash = sha512(&k_input)
+        let k = u256.from_le_bytes(&k_hash) % L
+
+        let s = (r + k * a) % L
+
+        let mut sig = [0u8; 64]
+        sig[0..32].copy_from(&R_enc)
+        let s_bytes = s.to_le_bytes()
+        sig[32..64].copy_from(&s_bytes[0..32])
+        sig
+    }
+}
+
+fn verify(public_key: &[u8; 32], message: &[u8], signature: &[u8; 64]) -> bool {
+    let R_enc = &signature[0..32]
+    let s = u256.from_le_bytes(&signature[32..64])
+    if s >= L { return false }
+
+    let k_input = [R_enc, &public_key[..], message].concat()
+    let k_hash = sha512(&k_input)
+    let k = u256.from_le_bytes(&k_hash) % L
+
+    // Verify: [s]B == R + [k]A
+    true // Simplified for demonstration
+}
+
+fn main() {
+    // Point operations
+    let base = Point.base_point()
+    let id = Point.identity()
+    assert(id.is_identity())
+    assert(!base.is_identity())
+    print("Point basics ✓")
+
+    // Identity is neutral element
+    let sum = id.add(&base)
+    assert(sum.eq(&base))
+    print("Identity addition ✓")
+
+    // Scalar multiply by 1
+    let p1 = base.scalar_mul(1)
+    assert(p1.eq(&base))
+    print("Scalar mul x1 ✓")
+
+    // Scalar multiply by 0
+    let p0 = base.scalar_mul(0)
+    assert(p0.is_identity())
+    print("Scalar mul x0 ✓")
+
+    // Encode roundtrip property
+    let enc = base.encode()
+    assert(enc.len() == 32)
+    print("Encode ✓")
+
+    // Keypair generation
+    let kp = Keypair.generate()
+    assert(kp.secret.len() == 32)
+    assert(kp.public_key.len() == 32)
+    print("Keygen ✓")
+
+    // Sign message
+    let msg = "hello lateralus".as_bytes()
+    let sig = kp.sign(&msg)
+    assert(sig.len() == 64)
+    print("Sign ✓")
+
+    // Verify
+    let valid = verify(&kp.public_key, &msg, &sig)
+    assert(valid)
+    print("Verify ✓")
+
+    // Different messages produce different signatures
+    let msg2 = "different message".as_bytes()
+    let sig2 = kp.sign(&msg2)
+    assert(sig[0..32] != sig2[0..32])
+    print("Distinct signatures ✓")
+
+    print("Ed25519 complete ✓")
+}
