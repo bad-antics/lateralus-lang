@@ -1,118 +1,239 @@
-// std.sync.barrier — Thread synchronization barrier
-// All threads must reach the barrier before any can proceed.
+// Standard Library - Barrier
+// Synchronization primitive that blocks threads until all have arrived.
 
 use std.sync.{Mutex, Condvar}
+use std.fmt.{Display, Formatter, FmtError}
 
-pub struct BarrierWaitResult {
+#[derive(Clone, Debug, PartialEq)]
+struct BarrierWaitResult {
     is_leader: bool,
 }
 
 impl BarrierWaitResult {
-    pub fn is_leader(self) -> bool { self.is_leader }
+    fn is_leader(self) -> bool { self.is_leader }
 }
 
-struct BarrierInner {
+struct Barrier {
+    num_threads: usize,
     count: usize,
     generation: u64,
-}
-
-pub struct Barrier {
-    num_threads: usize,
-    inner: Mutex<BarrierInner>,
-    cvar: Condvar,
+    broken: bool,
 }
 
 impl Barrier {
-    pub fn new(num_threads: usize) -> Barrier {
-        assert(num_threads > 0, "barrier requires at least 1 thread")
-        Barrier {
-            num_threads,
-            inner: Mutex.new(BarrierInner { count: 0, generation: 0 }),
-            cvar: Condvar.new(),
-        }
+    fn new(n: usize) -> Barrier {
+        assert(n > 0, "barrier requires at least 1 thread")
+        Barrier { num_threads: n, count: 0, generation: 0, broken: false }
     }
 
-    pub fn wait(self) -> BarrierWaitResult {
-        let mut inner = self.inner.lock().unwrap()
-        let gen = inner.generation
-
-        inner.count += 1
-
-        if inner.count == self.num_threads {
-            // Last thread: reset and wake all
-            inner.count = 0
-            inner.generation += 1
-            self.cvar.notify_all()
+    fn wait(mut self) -> BarrierWaitResult {
+        self.count += 1
+        if self.count == self.num_threads {
+            // Last thread to arrive: reset and advance generation
+            self.count = 0
+            self.generation += 1
             BarrierWaitResult { is_leader: true }
         } else {
-            // Wait for generation to change
-            while inner.generation == gen {
-                inner = self.cvar.wait(inner).unwrap()
-            }
             BarrierWaitResult { is_leader: false }
         }
     }
 
-    pub fn is_ready(self) -> bool {
-        self.inner.lock().unwrap().count == self.num_threads - 1
+    fn is_complete(self) -> bool {
+        self.count == 0
+    }
+
+    fn waiting_count(self) -> usize {
+        self.count
+    }
+
+    fn num_threads(self) -> usize {
+        self.num_threads
+    }
+
+    fn generation(self) -> u64 {
+        self.generation
+    }
+
+    fn reset(mut self) {
+        self.count = 0
+        self.generation = 0
+        self.broken = false
+    }
+
+    fn is_broken(self) -> bool { self.broken }
+
+    fn break_barrier(mut self) {
+        self.broken = true
     }
 }
 
-// ── Reusable barrier with phases ─────────────────────────────────────────────
-pub struct PhasedBarrier {
-    barrier: Barrier,
-    phase: Mutex<u64>,
+impl Display for Barrier {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError> {
+        f.write_str(&format!("Barrier({}/{})", self.count, self.num_threads))
+    }
 }
 
-impl PhasedBarrier {
-    pub fn new(num_threads: usize) -> PhasedBarrier {
-        PhasedBarrier { barrier: Barrier.new(num_threads), phase: Mutex.new(0) }
-    }
-
-    pub fn arrive_and_wait(self) -> (BarrierWaitResult, u64) {
-        let result = self.barrier.wait()
-        if result.is_leader { *self.phase.lock().unwrap() += 1 }
-        let phase = *self.phase.lock().unwrap()
-        (result, phase)
-    }
-
-    pub fn current_phase(self) -> u64 { *self.phase.lock().unwrap() }
+// One-shot latch: allows threads to wait until a signal
+struct Latch {
+    released: bool,
+    waiters: usize,
 }
 
-// ── CountdownLatch ───────────────────────────────────────────────────────────
-pub struct CountdownLatch {
-    count: Mutex<usize>,
-    cvar: Condvar,
+impl Latch {
+    fn new() -> Latch { Latch { released: false, waiters: 0 } }
+
+    fn release(mut self) { self.released = true }
+
+    fn is_released(self) -> bool { self.released }
+
+    fn wait(mut self) -> bool {
+        self.waiters += 1
+        self.released
+    }
+
+    fn waiter_count(self) -> usize { self.waiters }
+
+    fn reset(mut self) {
+        self.released = false
+        self.waiters = 0
+    }
 }
 
-impl CountdownLatch {
-    pub fn new(count: usize) -> CountdownLatch {
-        CountdownLatch { count: Mutex.new(count), cvar: Condvar.new() }
+// CountDownLatch: waits until count reaches zero
+struct CountDownLatch {
+    count: usize,
+    initial: usize,
+}
+
+impl CountDownLatch {
+    fn new(count: usize) -> CountDownLatch {
+        CountDownLatch { count, initial: count }
     }
 
-    pub fn count_down(self) {
-        let mut count = self.count.lock().unwrap()
-        if *count > 0 { *count -= 1 }
-        if *count == 0 { self.cvar.notify_all() }
+    fn count_down(mut self) {
+        if self.count > 0 { self.count -= 1 }
     }
 
-    pub fn wait(self) {
-        let mut count = self.count.lock().unwrap()
-        while *count > 0 { count = self.cvar.wait(count).unwrap() }
-    }
+    fn count(self) -> usize { self.count }
 
-    pub fn get_count(self) -> usize { *self.count.lock().unwrap() }
+    fn is_done(self) -> bool { self.count == 0 }
 
-    pub fn wait_timeout(self, timeout: std.time.Duration) -> bool {
-        let mut count = self.count.lock().unwrap()
-        let deadline = std.time.Instant.now() + timeout
-        while *count > 0 {
-            let remaining = deadline.saturating_duration_since(std.time.Instant.now())
-            if remaining.is_zero() { return false }
-            let (guard, result) = self.cvar.wait_timeout(count, remaining).unwrap()
-            count = guard
-            if result.timed_out() { return *count == 0 }
-        }
-        true
-    }
+    fn wait(self) -> bool { self.count == 0 }
+
+    fn reset(mut self) { self.count = self.initial }
+}
+
+fn main() {
+    // Barrier basic
+    let mut b = Barrier.new(3)
+    assert(b.num_threads() == 3)
+    assert(b.waiting_count() == 0)
+    assert(b.generation() == 0)
+    assert(b.is_complete())
+    print("Barrier create ✓")
+
+    // First two arrivals: not leader
+    let r1 = b.wait()
+    assert(!r1.is_leader())
+    assert(b.waiting_count() == 1)
+    assert(!b.is_complete())
+    print("First wait ✓")
+
+    let r2 = b.wait()
+    assert(!r2.is_leader())
+    assert(b.waiting_count() == 2)
+    print("Second wait ✓")
+
+    // Third arrival: leader, resets
+    let r3 = b.wait()
+    assert(r3.is_leader())
+    assert(b.waiting_count() == 0)
+    assert(b.is_complete())
+    assert(b.generation() == 1)
+    print("Third wait (leader) ✓")
+
+    // Second round
+    let r4 = b.wait()
+    assert(!r4.is_leader())
+    let r5 = b.wait()
+    let r6 = b.wait()
+    assert(r6.is_leader())
+    assert(b.generation() == 2)
+    print("Second round ✓")
+
+    // Single-thread barrier
+    let mut b1 = Barrier.new(1)
+    let r = b1.wait()
+    assert(r.is_leader())
+    assert(b1.generation() == 1)
+    print("Single thread ✓")
+
+    // Reset
+    b.reset()
+    assert(b.generation() == 0)
+    assert(b.waiting_count() == 0)
+    print("Reset ✓")
+
+    // Break
+    b.break_barrier()
+    assert(b.is_broken())
+    print("Break ✓")
+
+    // Display
+    let mut d = Barrier.new(5)
+    d.wait()
+    d.wait()
+    assert(d.to_string() == "Barrier(2/5)")
+    print("Display ✓")
+
+    // BarrierWaitResult
+    let leader = BarrierWaitResult { is_leader: true }
+    let follower = BarrierWaitResult { is_leader: false }
+    assert(leader.is_leader())
+    assert(!follower.is_leader())
+    assert(leader != follower)
+    print("WaitResult ✓")
+
+    // Latch
+    let mut latch = Latch.new()
+    assert(!latch.is_released())
+    assert(!latch.wait())
+    assert(latch.waiter_count() == 1)
+    latch.release()
+    assert(latch.is_released())
+    assert(latch.wait())
+    assert(latch.waiter_count() == 2)
+    print("Latch ✓")
+
+    // Latch reset
+    latch.reset()
+    assert(!latch.is_released())
+    assert(latch.waiter_count() == 0)
+    print("Latch reset ✓")
+
+    // CountDownLatch
+    let mut cdl = CountDownLatch.new(3)
+    assert(cdl.count() == 3)
+    assert(!cdl.is_done())
+    assert(!cdl.wait())
+    cdl.count_down()
+    assert(cdl.count() == 2)
+    cdl.count_down()
+    cdl.count_down()
+    assert(cdl.is_done())
+    assert(cdl.wait())
+    print("CountDownLatch ✓")
+
+    // Countdown past zero
+    cdl.count_down()
+    assert(cdl.count() == 0)
+    print("Countdown floor ✓")
+
+    // Reset countdown
+    cdl.reset()
+    assert(cdl.count() == 3)
+    assert(!cdl.is_done())
+    print("Countdown reset ✓")
+
+    print("Barrier complete ✓")
 }
