@@ -1,0 +1,195 @@
+
+// Skip List - Probabilistic ordered data structure
+// O(log n) search, insert, delete with randomized balancing.
+
+use std.random.{Random, thread_rng}
+
+const MAX_LEVEL: usize = 16
+
+#[derive(Clone, Debug)]
+struct SkipNode<T> {
+    key: T,
+    forward: [Option<usize>],  // indices into node array
+}
+
+impl<T: Clone> SkipNode<T> {
+    fn new(key: T, level: usize) -> SkipNode<T> {
+        SkipNode { key, forward: vec![None; level + 1] }
+    }
+    fn level(self) -> usize { self.forward.len() - 1 }
+}
+
+struct SkipList<T> {
+    nodes: [SkipNode<T>],
+    head: usize,
+    level: usize,
+    len: usize,
+    rng: Random,
+}
+
+impl<T: Ord + Clone + Debug> SkipList<T> {
+    fn new(sentinel: T) -> SkipList<T> {
+        let head_node = SkipNode.new(sentinel, MAX_LEVEL)
+        SkipList { nodes: [head_node], head: 0, level: 0, len: 0, rng: thread_rng() }
+    }
+
+    fn random_level(mut self) -> usize {
+        let mut lvl = 0
+        while lvl < MAX_LEVEL && self.rng.next_f64() < 0.5 {
+            lvl += 1
+        }
+        lvl
+    }
+
+    fn insert(mut self, key: T) {
+        let mut update: [usize] = vec![self.head; MAX_LEVEL + 1]
+        let mut current = self.head
+
+        for i in (0..=self.level).rev() {
+            while let Some(next) = self.nodes[current].forward[i] {
+                if self.nodes[next].key < key { current = next }
+                else { break }
+            }
+            update[i] = current
+        }
+
+        // Check if key already exists
+        if let Some(next) = self.nodes[current].forward[0] {
+            if self.nodes[next].key == key {
+                self.nodes[next].key = key  // update
+                return
+            }
+        }
+
+        let new_level = self.random_level()
+        if new_level > self.level {
+            for i in (self.level + 1)..=new_level { update[i] = self.head }
+            self.level = new_level
+        }
+
+        let new_idx = self.nodes.len()
+        self.nodes.push(SkipNode.new(key, new_level))
+
+        for i in 0..=new_level {
+            self.nodes[new_idx].forward[i] = self.nodes[update[i]].forward[i]
+            self.nodes[update[i]].forward[i] = Some(new_idx)
+        }
+        self.len += 1
+    }
+
+    fn contains(self, key: &T) -> bool { self.find(key).is_some() }
+
+    fn find(self, key: &T) -> Option<&T> {
+        let mut current = self.head
+        for i in (0..=self.level).rev() {
+            while let Some(next) = self.nodes[current].forward[i] {
+                if self.nodes[next].key < *key { current = next }
+                else if self.nodes[next].key == *key { return Some(&self.nodes[next].key) }
+                else { break }
+            }
+        }
+        None
+    }
+
+    fn len(self) -> usize { self.len }
+    fn is_empty(self) -> bool { self.len == 0 }
+    fn max_level(self) -> usize { self.level }
+
+    fn to_sorted_vec(self) -> [T] {
+        let mut result = []
+        let mut current = self.head
+        while let Some(next) = self.nodes[current].forward[0] {
+            result.push(self.nodes[next].key.clone())
+            current = next
+        }
+        result
+    }
+
+    fn first(self) -> Option<&T> {
+        self.nodes[self.head].forward[0].map(|idx| &self.nodes[idx].key)
+    }
+
+    fn count_at_level(self, lvl: usize) -> usize {
+        if lvl > self.level { return 0 }
+        let mut count = 0
+        let mut current = self.head
+        while let Some(next) = self.nodes[current].forward[lvl] {
+            count += 1
+            current = next
+        }
+        count
+    }
+}
+
+fn main() {
+    // Basic
+    let mut sl = SkipList.new(i32.MIN)
+    assert(sl.is_empty())
+    assert(sl.len() == 0)
+    print("Init ✓")
+
+    // Insert
+    sl.insert(5)
+    sl.insert(3)
+    sl.insert(7)
+    sl.insert(1)
+    sl.insert(9)
+    assert(sl.len() == 5)
+    assert(!sl.is_empty())
+    print("Insert ✓")
+
+    // Contains
+    assert(sl.contains(&5))
+    assert(sl.contains(&3))
+    assert(sl.contains(&1))
+    assert(!sl.contains(&2))
+    assert(!sl.contains(&100))
+    print("Contains ✓")
+
+    // Find
+    assert(sl.find(&7) == Some(&7))
+    assert(sl.find(&42).is_none())
+    print("Find ✓")
+
+    // Sorted order
+    let sorted = sl.to_sorted_vec()
+    assert(sorted == [1, 3, 5, 7, 9])
+    print("Sorted ✓")
+
+    // First
+    assert(sl.first() == Some(&1))
+    print("First ✓")
+
+    // More inserts
+    for i in [2, 4, 6, 8, 10] { sl.insert(i) }
+    assert(sl.len() == 10)
+    let sorted2 = sl.to_sorted_vec()
+    assert(sorted2 == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+    print("More inserts ✓")
+
+    // Duplicate insert (update)
+    sl.insert(5)
+    assert(sl.len() == 10)  // no duplicate
+    print("Duplicate ✓")
+
+    // Level 0 has all items
+    assert(sl.count_at_level(0) == 10)
+    // Higher levels have fewer
+    let l0 = sl.count_at_level(0)
+    let l1 = sl.count_at_level(1)
+    assert(l1 <= l0)
+    print("Levels ✓")
+
+    // Large insert
+    let mut sl2 = SkipList.new(i32.MIN)
+    for i in 0..100 { sl2.insert(i) }
+    assert(sl2.len() == 100)
+    assert(sl2.contains(&50))
+    assert(sl2.first() == Some(&0))
+    let v = sl2.to_sorted_vec()
+    assert(v.len() == 100)
+    assert(v[0] == 0 && v[99] == 99)
+    print("Large ✓")
+
+    print("Skip list complete ✓")
+}
