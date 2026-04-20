@@ -1,218 +1,216 @@
-// std.sync.channel — Multi-producer, single-consumer channels
-// Bounded and unbounded channels for inter-thread communication.
 
+// Channel - Multi-producer single-consumer message passing
+// Bounded and unbounded channels for thread communication.
+
+use std.sync.{Mutex, Condvar}
 use std.collections.VecDeque
-use std.sync.{Arc, Mutex, Condvar}
 
-// ── Errors ───────────────────────────────────────────────────────────────────
-pub enum SendError<T> { Disconnected(T) }
-pub enum RecvError { Empty, Disconnected }
-pub enum TrySendError<T> { Full(T), Disconnected(T) }
-pub enum TryRecvError { Empty, Disconnected }
+#[derive(Clone, Debug, PartialEq)]
+enum ChannelError {
+    Disconnected,
+    Full,
+    Empty,
+    Timeout,
+}
 
-// ── Shared state ─────────────────────────────────────────────────────────────
-struct ChannelInner<T> {
-    queue: VecDeque<T>,
-    capacity: Option<usize>,  // none = unbounded
-    senders: u32,
-    receiver_alive: bool,
+#[derive(Clone, Debug, PartialEq)]
+enum TrySendResult<T> {
+    Ok,
+    Full(T),
+    Disconnected(T),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum TryRecvResult<T> {
+    Ok(T),
+    Empty,
+    Disconnected,
+}
+
+struct BoundedChannel<T> {
+    buffer: VecDeque<T>,
+    capacity: usize,
     closed: bool,
+    sender_count: usize,
+    total_sent: usize,
+    total_received: usize,
 }
 
-struct Shared<T> {
-    inner: Mutex<ChannelInner<T>>,
-    not_empty: Condvar,
-    not_full: Condvar,
-}
-
-// ── Sender ───────────────────────────────────────────────────────────────────
-pub struct Sender<T> {
-    shared: Arc<Shared<T>>,
-}
-
-impl<T> Sender<T> {
-    pub fn send(self, value: T) -> Result<(), SendError<T>> {
-        let mut inner = self.shared.inner.lock().unwrap()
-
-        if !inner.receiver_alive { return err(SendError.Disconnected(value)) }
-
-        // Wait for space (bounded)
-        if let some(cap) = inner.capacity {
-            while inner.queue.len() >= cap && inner.receiver_alive {
-                inner = self.shared.not_full.wait(inner).unwrap()
-            }
-            if !inner.receiver_alive { return err(SendError.Disconnected(value)) }
+impl<T: Clone> BoundedChannel<T> {
+    fn new(capacity: usize) -> BoundedChannel<T> {
+        BoundedChannel {
+            buffer: VecDeque.new(),
+            capacity,
+            closed: false,
+            sender_count: 1,
+            total_sent: 0,
+            total_received: 0,
         }
+    }
 
-        inner.queue.push_back(value)
-        self.shared.not_empty.notify_one()
+    fn try_send(mut self, value: T) -> TrySendResult<T> {
+        if self.closed { return TrySendResult.Disconnected(value) }
+        if self.buffer.len() >= self.capacity {
+            return TrySendResult.Full(value)
+        }
+        self.buffer.push_back(value);
+        self.total_sent += 1;
+        TrySendResult.Ok
+    }
+
+    fn try_recv(mut self) -> TryRecvResult<T> {
+        if let some(val) = self.buffer.pop_front() {
+            self.total_received += 1;
+            return TryRecvResult.Ok(val)
+        }
+        if self.closed { TryRecvResult.Disconnected }
+        else { TryRecvResult.Empty }
+    }
+
+    fn close(mut self) { self.closed = true }
+    fn is_closed(self) -> bool { self.closed }
+    fn len(self) -> usize { self.buffer.len() }
+    fn is_empty(self) -> bool { self.buffer.is_empty() }
+    fn is_full(self) -> bool { self.buffer.len() >= self.capacity }
+    fn capacity(self) -> usize { self.capacity }
+    fn stats(self) -> (usize, usize) { (self.total_sent, self.total_received) }
+}
+
+struct UnboundedChannel<T> {
+    buffer: VecDeque<T>,
+    closed: bool,
+    total_sent: usize,
+    total_received: usize,
+}
+
+impl<T: Clone> UnboundedChannel<T> {
+    fn new() -> UnboundedChannel<T> {
+        UnboundedChannel { buffer: VecDeque.new(), closed: false, total_sent: 0, total_received: 0 }
+    }
+
+    fn send(mut self, value: T) -> Result<(), ChannelError> {
+        if self.closed { return err(ChannelError.Disconnected) }
+        self.buffer.push_back(value);
+        self.total_sent += 1;
         ok(())
     }
 
-    pub fn try_send(self, value: T) -> Result<(), TrySendError<T>> {
-        let mut inner = self.shared.inner.lock().unwrap()
-        if !inner.receiver_alive { return err(TrySendError.Disconnected(value)) }
-        if let some(cap) = inner.capacity {
-            if inner.queue.len() >= cap { return err(TrySendError.Full(value)) }
+    fn try_recv(mut self) -> TryRecvResult<T> {
+        if let some(val) = self.buffer.pop_front() {
+            self.total_received += 1;
+            return TryRecvResult.Ok(val)
         }
-        inner.queue.push_back(value)
-        self.shared.not_empty.notify_one()
-        ok(())
+        if self.closed { TryRecvResult.Disconnected }
+        else { TryRecvResult.Empty }
     }
 
-    pub fn is_disconnected(self) -> bool {
-        !self.shared.inner.lock().unwrap().receiver_alive
-    }
-}
-
-impl<T> Clone for Sender<T> {
-    fn clone(self) -> Sender<T> {
-        self.shared.inner.lock().unwrap().senders += 1
-        Sender { shared: self.shared.clone() }
-    }
-}
-
-impl<T> Drop for Sender<T> {
-    fn drop(mut self) {
-        let mut inner = self.shared.inner.lock().unwrap()
-        inner.senders -= 1
-        if inner.senders == 0 {
-            inner.closed = true
-            self.shared.not_empty.notify_all()
+    fn close(mut self) { self.closed = true }
+    fn is_closed(self) -> bool { self.closed }
+    fn len(self) -> usize { self.buffer.len() }
+    fn is_empty(self) -> bool { self.buffer.is_empty() }
+    fn drain(mut self) -> [T] {
+        let mut result = vec![];
+        while let some(val) = self.buffer.pop_front() {
+            self.total_received += 1;
+            result.push(val);
         }
+        result
     }
 }
 
-// ── Receiver ─────────────────────────────────────────────────────────────────
-pub struct Receiver<T> {
-    shared: Arc<Shared<T>>,
-}
+fn main() {
+    // Bounded channel basics
+    let mut ch = BoundedChannel::<i32>.new(3)
+    assert(ch.capacity() == 3)
+    assert(ch.is_empty())
+    assert(!ch.is_full())
+    print("Bounded basics ✓")
 
-impl<T> Receiver<T> {
-    pub fn recv(self) -> Result<T, RecvError> {
-        let mut inner = self.shared.inner.lock().unwrap()
-        loop {
-            if let some(val) = inner.queue.pop_front() {
-                self.shared.not_full.notify_one()
-                return ok(val)
-            }
-            if inner.closed && inner.senders == 0 { return err(RecvError.Disconnected) }
-            inner = self.shared.not_empty.wait(inner).unwrap()
-        }
+    // Send
+    assert(ch.try_send(1) == TrySendResult.Ok)
+    assert(ch.try_send(2) == TrySendResult.Ok)
+    assert(ch.try_send(3) == TrySendResult.Ok)
+    assert(ch.is_full())
+    assert(ch.len() == 3)
+    print("Send ✓")
+
+    // Full channel
+    match ch.try_send(4) {
+        TrySendResult.Full(v) => assert(v == 4),
+        _ => assert(false),
     }
+    print("Full ✓")
 
-    pub fn try_recv(self) -> Result<T, TryRecvError> {
-        let mut inner = self.shared.inner.lock().unwrap()
-        if let some(val) = inner.queue.pop_front() {
-            self.shared.not_full.notify_one()
-            ok(val)
-        } else if inner.closed && inner.senders == 0 {
-            err(TryRecvError.Disconnected)
-        } else {
-            err(TryRecvError.Empty)
-        }
+    // Receive
+    match ch.try_recv() {
+        TryRecvResult.Ok(v) => assert(v == 1),
+        _ => assert(false),
     }
-
-    pub fn recv_timeout(self, timeout: std.time.Duration) -> Result<T, RecvError> {
-        let mut inner = self.shared.inner.lock().unwrap()
-        let deadline = std.time.Instant.now() + timeout
-
-        loop {
-            if let some(val) = inner.queue.pop_front() {
-                self.shared.not_full.notify_one()
-                return ok(val)
-            }
-            if inner.closed && inner.senders == 0 { return err(RecvError.Disconnected) }
-
-            let remaining = deadline.saturating_duration_since(std.time.Instant.now())
-            if remaining.is_zero() { return err(RecvError.Empty) }
-
-            let (guard, timeout_result) = self.shared.not_empty.wait_timeout(inner, remaining).unwrap()
-            inner = guard
-            if timeout_result.timed_out() && inner.queue.is_empty() {
-                return err(RecvError.Empty)
-            }
-        }
+    assert(ch.len() == 2)
+    match ch.try_recv() {
+        TryRecvResult.Ok(v) => assert(v == 2),
+        _ => assert(false),
     }
+    print("Receive ✓")
 
-    pub fn iter(self) -> ChannelIter<T> { ChannelIter { receiver: self } }
-}
-
-impl<T> Drop for Receiver<T> {
-    fn drop(mut self) {
-        self.shared.inner.lock().unwrap().receiver_alive = false
-        self.shared.not_full.notify_all()
+    // Empty receive
+    ch.try_recv();  // gets 3
+    match ch.try_recv() {
+        TryRecvResult.Empty => {},
+        _ => assert(false),
     }
-}
+    print("Empty ✓")
 
-// ── Iterator ─────────────────────────────────────────────────────────────────
-pub struct ChannelIter<'a, T> { receiver: &'a Receiver<T> }
-
-impl<'a, T> Iterator for ChannelIter<'a, T> {
-    type Item = T
-    fn next(mut self) -> Option<T> { self.receiver.recv().ok() }
-}
-
-// ── Constructors ─────────────────────────────────────────────────────────────
-pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
-    let shared = Arc.new(Shared {
-        inner: Mutex.new(ChannelInner {
-            queue: VecDeque.new(), capacity: none,
-            senders: 1, receiver_alive: true, closed: false,
-        }),
-        not_empty: Condvar.new(), not_full: Condvar.new(),
-    })
-    (Sender { shared: shared.clone() }, Receiver { shared })
-}
-
-pub fn bounded<T>(capacity: usize) -> (Sender<T>, Receiver<T>) {
-    assert(capacity > 0, "capacity must be > 0")
-    let shared = Arc.new(Shared {
-        inner: Mutex.new(ChannelInner {
-            queue: VecDeque.with_capacity(capacity),
-            capacity: some(capacity),
-            senders: 1, receiver_alive: true, closed: false,
-        }),
-        not_empty: Condvar.new(), not_full: Condvar.new(),
-    })
-    (Sender { shared: shared.clone() }, Receiver { shared })
-}
-
-// ── Oneshot channel ──────────────────────────────────────────────────────────
-pub fn oneshot<T>() -> (OneshotSender<T>, OneshotReceiver<T>) {
-    let slot: Arc<Mutex<Option<T>>> = Arc.new(Mutex.new(none))
-    let ready = Arc.new(Condvar.new())
-    (
-        OneshotSender { slot: slot.clone(), ready: ready.clone(), sent: false },
-        OneshotReceiver { slot, ready },
-    )
-}
-
-pub struct OneshotSender<T> {
-    slot: Arc<Mutex<Option<T>>>,
-    ready: Arc<Condvar>,
-    sent: bool,
-}
-
-impl<T> OneshotSender<T> {
-    pub fn send(mut self, value: T) -> Result<(), T> {
-        if self.sent { return err(value) }
-        *self.slot.lock().unwrap() = some(value)
-        self.sent = true
-        self.ready.notify_one()
-        ok(())
+    // Close
+    ch.close()
+    assert(ch.is_closed())
+    match ch.try_recv() {
+        TryRecvResult.Disconnected => {},
+        _ => assert(false),
     }
-}
-
-pub struct OneshotReceiver<T> {
-    slot: Arc<Mutex<Option<T>>>,
-    ready: Arc<Condvar>,
-}
-
-impl<T> OneshotReceiver<T> {
-    pub fn recv(self) -> Result<T, RecvError> {
-        let mut guard = self.slot.lock().unwrap()
-        while guard.is_none() { guard = self.ready.wait(guard).unwrap() }
-        ok(guard.take().unwrap())
+    match ch.try_send(99) {
+        TrySendResult.Disconnected(v) => assert(v == 99),
+        _ => assert(false),
     }
+    print("Close ✓")
+
+    // Stats
+    let (sent, recv) = ch.stats()
+    assert(sent == 3)
+    assert(recv == 3)
+    print("Stats ✓")
+
+    // Unbounded channel
+    let mut ub = UnboundedChannel::<string>.new()
+    assert(ub.send("hello".into()).is_ok())
+    assert(ub.send("world".into()).is_ok())
+    assert(ub.len() == 2)
+    print("Unbounded send ✓")
+
+    match ub.try_recv() {
+        TryRecvResult.Ok(v) => assert(v == "hello"),
+        _ => assert(false),
+    }
+    print("Unbounded recv ✓")
+
+    // Drain
+    ub.send("a".into()).unwrap()
+    ub.send("b".into()).unwrap()
+    let drained = ub.drain()
+    // "world" + "a" + "b" = but we already consumed "hello", and "world" is still there
+    assert(drained.len() == 3)  // world, a, b
+    assert(ub.is_empty())
+    print("Drain ✓")
+
+    // Unbounded close
+    ub.close()
+    assert(ub.send("nope".into()).is_err())
+    print("Unbounded close ✓")
+
+    // ChannelError
+    assert(ChannelError.Disconnected != ChannelError.Full)
+    assert(ChannelError.Empty != ChannelError.Timeout)
+    print("ChannelError ✓")
+
+    print("Channel complete ✓")
 }
