@@ -1,0 +1,414 @@
+// Standard Library - HashMap
+// Open-addressing hash map with Robin Hood hashing and automatic resizing.
+
+use std.hash.{Hash, Hasher, DefaultHasher}
+use std.cmp.{Eq}
+use std.fmt.{Display, Formatter}
+use std.iter.{Iterator, IntoIterator}
+use std.option.Option
+
+const DEFAULT_CAPACITY: usize = 16
+const LOAD_FACTOR_THRESHOLD: f64 = 0.75
+const TOMBSTONE: u64 = 0xDEAD_BEEF_CAFE_BABE
+
+#[derive(Clone, Debug)]
+enum Slot<K, V> {
+    Empty,
+    Occupied { key: K, value: V, hash: u64, probe_dist: usize },
+    Deleted,
+}
+
+impl<K, V> Slot<K, V> {
+    fn is_empty(self) -> bool {
+        match self { Slot.Empty => true, _ => false }
+    }
+
+    fn is_occupied(self) -> bool {
+        match self { Slot.Occupied { .. } => true, _ => false }
+    }
+
+    fn is_deleted(self) -> bool {
+        match self { Slot.Deleted => true, _ => false }
+    }
+}
+
+#[derive(Clone)]
+struct HashMap<K: Hash + Eq, V> {
+    slots: [Slot<K, V>],
+    len: usize,
+    capacity: usize,
+    deleted_count: usize,
+}
+
+impl<K: Hash + Eq, V> HashMap<K, V> {
+    fn new() -> HashMap<K, V> {
+        HashMap.with_capacity(DEFAULT_CAPACITY)
+    }
+
+    fn with_capacity(cap: usize) -> HashMap<K, V> {
+        let actual = cap.max(4).next_power_of_two()
+        let slots = (0..actual).map(|_| Slot.Empty).collect()
+        HashMap { slots, len: 0, capacity: actual, deleted_count: 0 }
+    }
+
+    fn hash_key(self, key: &K) -> u64 {
+        let mut hasher = DefaultHasher.new()
+        key.hash(&mut hasher)
+        hasher.finish()
+    }
+
+    fn bucket_index(self, hash: u64) -> usize {
+        (hash as usize) & (self.capacity - 1)
+    }
+
+    fn load_factor(self) -> f64 {
+        (self.len + self.deleted_count) as f64 / self.capacity as f64
+    }
+
+    fn insert(mut self, key: K, value: V) -> Option<V> {
+        if self.load_factor() >= LOAD_FACTOR_THRESHOLD {
+            self.resize(self.capacity * 2)
+        }
+
+        let hash = self.hash_key(&key)
+        let mut idx = self.bucket_index(hash)
+        let mut probe_dist: usize = 0
+        let mut insert_key = key
+        let mut insert_value = value
+        let mut insert_hash = hash
+
+        loop {
+            match &self.slots[idx] {
+                Slot.Empty | Slot.Deleted => {
+                    self.slots[idx] = Slot.Occupied {
+                        key: insert_key, value: insert_value,
+                        hash: insert_hash, probe_dist,
+                    }
+                    self.len += 1
+                    return none
+                },
+                Slot.Occupied { key: k, probe_dist: existing_dist, .. } if *k == insert_key => {
+                    let old = match std.mem.replace(&mut self.slots[idx], Slot.Empty) {
+                        Slot.Occupied { value: v, .. } => v,
+                        _ => unreachable!(),
+                    }
+                    self.slots[idx] = Slot.Occupied {
+                        key: insert_key, value: insert_value,
+                        hash: insert_hash, probe_dist: *existing_dist,
+                    }
+                    return some(old)
+                },
+                Slot.Occupied { probe_dist: existing_dist, .. } if probe_dist > *existing_dist => {
+                    // Robin Hood: steal from the rich
+                    let evicted = std.mem.replace(&mut self.slots[idx], Slot.Occupied {
+                        key: insert_key, value: insert_value,
+                        hash: insert_hash, probe_dist,
+                    })
+                    match evicted {
+                        Slot.Occupied { key: k, value: v, hash: h, probe_dist: pd } => {
+                            insert_key = k; insert_value = v;
+                            insert_hash = h; probe_dist = pd;
+                        },
+                        _ => unreachable!(),
+                    }
+                },
+                _ => {},
+            }
+            probe_dist += 1
+            idx = (idx + 1) & (self.capacity - 1)
+        }
+    }
+
+    fn get(self, key: &K) -> Option<&V> {
+        let hash = self.hash_key(key)
+        let mut idx = self.bucket_index(hash)
+        let mut probe_dist: usize = 0
+
+        loop {
+            match &self.slots[idx] {
+                Slot.Empty => return none,
+                Slot.Occupied { key: k, value: v, probe_dist: pd, .. } => {
+                    if *k == *key { return some(v) }
+                    if probe_dist > *pd { return none }
+                },
+                Slot.Deleted => {},
+            }
+            probe_dist += 1
+            idx = (idx + 1) & (self.capacity - 1)
+        }
+    }
+
+    fn get_mut(mut self, key: &K) -> Option<&mut V> {
+        let hash = self.hash_key(key)
+        let mut idx = self.bucket_index(hash)
+        let mut probe_dist: usize = 0
+
+        loop {
+            match &mut self.slots[idx] {
+                Slot.Empty => return none,
+                Slot.Occupied { key: k, value: v, probe_dist: pd, .. } => {
+                    if *k == *key { return some(v) }
+                    if probe_dist > *pd { return none }
+                },
+                Slot.Deleted => {},
+            }
+            probe_dist += 1
+            idx = (idx + 1) & (self.capacity - 1)
+        }
+    }
+
+    fn remove(mut self, key: &K) -> Option<V> {
+        let hash = self.hash_key(key)
+        let mut idx = self.bucket_index(hash)
+        let mut probe_dist: usize = 0
+
+        loop {
+            match &self.slots[idx] {
+                Slot.Empty => return none,
+                Slot.Occupied { key: k, probe_dist: pd, .. } => {
+                    if *k == *key {
+                        let old = std.mem.replace(&mut self.slots[idx], Slot.Deleted)
+                        self.len -= 1
+                        self.deleted_count += 1
+                        match old {
+                            Slot.Occupied { value: v, .. } => return some(v),
+                            _ => unreachable!(),
+                        }
+                    }
+                    if probe_dist > *pd { return none }
+                },
+                Slot.Deleted => {},
+            }
+            probe_dist += 1
+            idx = (idx + 1) & (self.capacity - 1)
+        }
+    }
+
+    fn contains_key(self, key: &K) -> bool {
+        self.get(key).is_some()
+    }
+
+    fn len(self) -> usize { self.len }
+    fn is_empty(self) -> bool { self.len == 0 }
+
+    fn clear(mut self) {
+        for i in 0..self.capacity {
+            self.slots[i] = Slot.Empty
+        }
+        self.len = 0
+        self.deleted_count = 0
+    }
+
+    fn resize(mut self, new_cap: usize) {
+        let old_slots = std.mem.replace(&mut self.slots,
+            (0..new_cap).map(|_| Slot.Empty).collect())
+        let old_cap = self.capacity
+        self.capacity = new_cap
+        self.len = 0
+        self.deleted_count = 0
+
+        for slot in old_slots {
+            match slot {
+                Slot.Occupied { key, value, .. } => { self.insert(key, value); },
+                _ => {},
+            }
+        }
+    }
+
+    fn keys(self) -> impl Iterator<Item = &K> {
+        self.slots.iter().filter_map(|slot| {
+            match slot {
+                Slot.Occupied { key, .. } => some(key),
+                _ => none,
+            }
+        })
+    }
+
+    fn values(self) -> impl Iterator<Item = &V> {
+        self.slots.iter().filter_map(|slot| {
+            match slot {
+                Slot.Occupied { value, .. } => some(value),
+                _ => none,
+            }
+        })
+    }
+
+    fn iter(self) -> impl Iterator<Item = (&K, &V)> {
+        self.slots.iter().filter_map(|slot| {
+            match slot {
+                Slot.Occupied { key, value, .. } => some((key, value)),
+                _ => none,
+            }
+        })
+    }
+
+    fn entry(mut self, key: K) -> Entry<K, V> {
+        if self.contains_key(&key) {
+            Entry.Occupied(OccupiedEntry { map: &mut self, key })
+        } else {
+            Entry.Vacant(VacantEntry { map: &mut self, key })
+        }
+    }
+
+    fn or_insert(mut self, key: K, default: V) -> &mut V {
+        if !self.contains_key(&key) {
+            self.insert(key.clone(), default)
+        }
+        self.get_mut(&key).unwrap()
+    }
+
+    fn extend(mut self, iter: impl IntoIterator<Item = (K, V)>) {
+        for (k, v) in iter {
+            self.insert(k, v)
+        }
+    }
+
+    fn retain(mut self, f: fn(&K, &V) -> bool) {
+        for i in 0..self.capacity {
+            let should_remove = match &self.slots[i] {
+                Slot.Occupied { key, value, .. } => !f(key, value),
+                _ => false,
+            }
+            if should_remove {
+                self.slots[i] = Slot.Deleted
+                self.len -= 1
+                self.deleted_count += 1
+            }
+        }
+    }
+}
+
+enum Entry<K, V> {
+    Occupied(OccupiedEntry<K, V>),
+    Vacant(VacantEntry<K, V>),
+}
+
+struct OccupiedEntry<K, V> {
+    map: &mut HashMap<K, V>,
+    key: K,
+}
+
+struct VacantEntry<K, V> {
+    map: &mut HashMap<K, V>,
+    key: K,
+}
+
+impl<K: Hash + Eq, V> Entry<K, V> {
+    fn or_insert(self, default: V) -> &mut V {
+        match self {
+            Entry.Occupied(e) => e.map.get_mut(&e.key).unwrap(),
+            Entry.Vacant(e) => {
+                e.map.insert(e.key.clone(), default)
+                e.map.get_mut(&e.key).unwrap()
+            },
+        }
+    }
+
+    fn or_insert_with(self, f: fn() -> V) -> &mut V {
+        match self {
+            Entry.Occupied(e) => e.map.get_mut(&e.key).unwrap(),
+            Entry.Vacant(e) => {
+                e.map.insert(e.key.clone(), f())
+                e.map.get_mut(&e.key).unwrap()
+            },
+        }
+    }
+}
+
+fn main() {
+    // Basic insert and get
+    let mut m = HashMap.new()
+    assert(m.is_empty())
+    assert(m.insert("hello", 1).is_none())
+    assert(m.insert("world", 2).is_none())
+    assert(m.len() == 2)
+    assert(m.get(&"hello") == some(&1))
+    assert(m.get(&"world") == some(&2))
+    assert(m.get(&"missing").is_none())
+    print("Basic insert/get ✓")
+
+    // Update returns old value
+    let old = m.insert("hello", 42)
+    assert(old == some(1))
+    assert(m.get(&"hello") == some(&42))
+    assert(m.len() == 2)
+    print("Update ✓")
+
+    // Remove
+    let removed = m.remove(&"hello")
+    assert(removed == some(42))
+    assert(m.get(&"hello").is_none())
+    assert(m.len() == 1)
+    assert(m.remove(&"missing").is_none())
+    print("Remove ✓")
+
+    // contains_key
+    assert(m.contains_key(&"world"))
+    assert(!m.contains_key(&"hello"))
+    print("contains_key ✓")
+
+    // Many inserts (trigger resize)
+    let mut big = HashMap.new()
+    for i in 0..100 {
+        big.insert(i, i * i)
+    }
+    assert(big.len() == 100)
+    for i in 0..100 {
+        assert(big.get(&i) == some(&(i * i)))
+    }
+    print("Resize ✓")
+
+    // clear
+    big.clear()
+    assert(big.is_empty())
+    assert(big.len() == 0)
+    print("Clear ✓")
+
+    // keys/values/iter
+    let mut kv = HashMap.new()
+    kv.insert("a", 1)
+    kv.insert("b", 2)
+    kv.insert("c", 3)
+    assert(kv.keys().count() == 3)
+    assert(kv.values().sum() == 6)
+    assert(kv.iter().count() == 3)
+    print("Iterators ✓")
+
+    // or_insert
+    let mut defaults = HashMap.new()
+    defaults.or_insert("x", 10)
+    assert(defaults.get(&"x") == some(&10))
+    defaults.or_insert("x", 99)
+    assert(defaults.get(&"x") == some(&10))
+    print("or_insert ✓")
+
+    // retain
+    let mut r = HashMap.new()
+    for i in 0..10 { r.insert(i, i) }
+    r.retain(|k, _| *k % 2 == 0)
+    assert(r.len() == 5)
+    assert(r.contains_key(&0))
+    assert(!r.contains_key(&1))
+    print("Retain ✓")
+
+    // get_mut
+    let mut gm = HashMap.new()
+    gm.insert("counter", 0)
+    *gm.get_mut(&"counter").unwrap() += 5
+    assert(gm.get(&"counter") == some(&5))
+    print("get_mut ✓")
+
+    // with_capacity
+    let pre = HashMap.with_capacity(256)
+    assert(pre.capacity >= 256)
+    assert(pre.is_empty())
+    print("with_capacity ✓")
+
+    // load_factor
+    let mut lf = HashMap.with_capacity(16)
+    for i in 0..8 { lf.insert(i, i) }
+    assert(lf.load_factor() == 0.5)
+    print("load_factor ✓")
+
+    print("HashMap complete ✓")
+}
