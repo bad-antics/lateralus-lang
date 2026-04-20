@@ -1,256 +1,57 @@
-// Standard Library - Iterator Adapters
-// Composable iterator transformations: map, filter, chain, zip, enumerate, etc.
+// std.iter.adapters - Iterator adapter types
+// Map, Filter, Chain, Zip, Enumerate, Take, Skip, FlatMap, Peekable, etc.
 
-trait Iterator {
-    type Item
-    fn next(mut self) -> Option<Self.Item>
-
-    fn map<B, F: Fn(Self.Item) -> B>(self, f: F) -> Map<Self, F> {
-        Map { iter: self, f }
-    }
-
-    fn filter<P: Fn(&Self.Item) -> bool>(self, predicate: P) -> Filter<Self, P> {
-        Filter { iter: self, predicate }
-    }
-
-    fn filter_map<B, F: Fn(Self.Item) -> Option<B>>(self, f: F) -> FilterMap<Self, F> {
-        FilterMap { iter: self, f }
-    }
-
-    fn enumerate(self) -> Enumerate<Self> {
-        Enumerate { iter: self, count: 0 }
-    }
-
-    fn skip(self, n: usize) -> Skip<Self> {
-        Skip { iter: self, n }
-    }
-
-    fn take(self, n: usize) -> Take<Self> {
-        Take { iter: self, n }
-    }
-
-    fn chain<U: Iterator<Item = Self.Item>>(self, other: U) -> Chain<Self, U> {
-        Chain { a: some(self), b: other }
-    }
-
-    fn zip<U: Iterator>(self, other: U) -> Zip<Self, U> {
-        Zip { a: self, b: other }
-    }
-
-    fn flat_map<B, U: Iterator<Item = B>, F: Fn(Self.Item) -> U>(self, f: F) -> FlatMap<Self, F, U> {
-        FlatMap { iter: self, f, inner: none }
-    }
-
-    fn peekable(self) -> Peekable<Self> {
-        Peekable { iter: self, peeked: none }
-    }
-
-    fn step_by(self, step: usize) -> StepBy<Self> {
-        assert(step > 0, "step must be positive")
-        StepBy { iter: self, step, first_take: true }
-    }
-
-    fn inspect<F: Fn(&Self.Item)>(self, f: F) -> Inspect<Self, F> {
-        Inspect { iter: self, f }
-    }
-
-    fn scan<St, B, F: Fn(&mut St, Self.Item) -> Option<B>>(self, state: St, f: F) -> Scan<Self, St, F> {
-        Scan { iter: self, state, f }
-    }
-
-    fn fuse(self) -> Fuse<Self> {
-        Fuse { iter: some(self) }
-    }
-
-    // Terminal operations
-    fn collect<C: FromIterator<Self.Item>>(self) -> C {
-        C.from_iter(self)
-    }
-
-    fn count(self) -> usize {
-        let mut n = 0
-        while let some(_) = self.next() { n += 1 }
-        n
-    }
-
-    fn last(self) -> Option<Self.Item> {
-        let mut last = none
-        while let some(x) = self.next() { last = some(x) }
-        last
-    }
-
-    fn nth(self, n: usize) -> Option<Self.Item> {
-        for i in 0..n { self.next()? }
-        self.next()
-    }
-
-    fn fold<B, F: Fn(B, Self.Item) -> B>(self, init: B, f: F) -> B {
-        let mut acc = init
-        while let some(x) = self.next() { acc = f(acc, x) }
-        acc
-    }
-
-    fn reduce<F: Fn(Self.Item, Self.Item) -> Self.Item>(self, f: F) -> Option<Self.Item> {
-        let first = self.next()?
-        some(self.fold(first, f))
-    }
-
-    fn for_each<F: Fn(Self.Item)>(self, f: F) {
-        while let some(x) = self.next() { f(x) }
-    }
-
-    fn any<P: Fn(Self.Item) -> bool>(self, predicate: P) -> bool {
-        while let some(x) = self.next() {
-            if predicate(x) { return true }
-        }
-        false
-    }
-
-    fn all<P: Fn(Self.Item) -> bool>(self, predicate: P) -> bool {
-        while let some(x) = self.next() {
-            if !predicate(x) { return false }
-        }
-        true
-    }
-
-    fn find<P: Fn(&Self.Item) -> bool>(self, predicate: P) -> Option<Self.Item> {
-        while let some(x) = self.next() {
-            if predicate(&x) { return some(x) }
-        }
-        none
-    }
-
-    fn position<P: Fn(Self.Item) -> bool>(self, predicate: P) -> Option<usize> {
-        let mut i = 0
-        while let some(x) = self.next() {
-            if predicate(x) { return some(i) }
-            i += 1
-        }
-        none
-    }
-
-    fn sum<S: Sum<Self.Item>>(self) -> S {
-        S.sum(self)
-    }
-
-    fn product<P: Product<Self.Item>>(self) -> P {
-        P.product(self)
-    }
-
-    fn min(self) -> Option<Self.Item> where Self.Item: Ord {
-        self.reduce(|a, b| if a <= b { a } else { b })
-    }
-
-    fn max(self) -> Option<Self.Item> where Self.Item: Ord {
-        self.reduce(|a, b| if a >= b { a } else { b })
-    }
-
-    fn min_by_key<K: Ord, F: Fn(&Self.Item) -> K>(self, f: F) -> Option<Self.Item> {
-        self.reduce(|a, b| if f(&a) <= f(&b) { a } else { b })
-    }
-
-    fn max_by_key<K: Ord, F: Fn(&Self.Item) -> K>(self, f: F) -> Option<Self.Item> {
-        self.reduce(|a, b| if f(&a) >= f(&b) { a } else { b })
-    }
-
-    fn unzip<A, B>(self) -> ([A], [B]) where Self.Item = (A, B) {
-        let mut as_vec: [A] = []
-        let mut bs_vec: [B] = []
-        while let some((a, b)) = self.next() {
-            as_vec.push(a)
-            bs_vec.push(b)
-        }
-        (as_vec, bs_vec)
-    }
-}
-
-// Adapter structs
-
-struct Map<I: Iterator, F> {
+pub struct Map<I, F> {
     iter: I,
     f: F,
 }
 
-impl<I: Iterator, B, F: Fn(I.Item) -> B> Iterator for Map<I, F> {
+impl<I: Iterator, B, F: FnMut(I.Item) -> B> Iterator for Map<I, F> {
     type Item = B
     fn next(mut self) -> Option<B> {
         self.iter.next().map(|x| (self.f)(x))
     }
+    fn size_hint(self) -> (usize, Option<usize>) { self.iter.size_hint() }
 }
 
-struct Filter<I: Iterator, P> {
+pub struct Filter<I, P> {
     iter: I,
     predicate: P,
 }
 
-impl<I: Iterator, P: Fn(&I.Item) -> bool> Iterator for Filter<I, P> {
+impl<I: Iterator, P: FnMut(&I.Item) -> bool> Iterator for Filter<I, P> {
     type Item = I.Item
     fn next(mut self) -> Option<I.Item> {
-        while let some(x) = self.iter.next() {
-            if (self.predicate)(&x) { return some(x) }
+        loop {
+            match self.iter.next() {
+                some(item) if (self.predicate)(&item) => return some(item),
+                some(_) => continue,
+                none => return none,
+            }
         }
-        none
     }
 }
 
-struct FilterMap<I: Iterator, F> {
+pub struct FilterMap<I, F> {
     iter: I,
     f: F,
 }
 
-impl<I: Iterator, B, F: Fn(I.Item) -> Option<B>> Iterator for FilterMap<I, F> {
+impl<I: Iterator, B, F: FnMut(I.Item) -> Option<B>> Iterator for FilterMap<I, F> {
     type Item = B
     fn next(mut self) -> Option<B> {
-        while let some(x) = self.iter.next() {
-            if let some(y) = (self.f)(x) { return some(y) }
+        loop {
+            match self.iter.next() {
+                some(item) => {
+                    if let some(mapped) = (self.f)(item) { return some(mapped) }
+                },
+                none => return none,
+            }
         }
-        none
     }
 }
 
-struct Enumerate<I: Iterator> {
-    iter: I,
-    count: usize,
-}
-
-impl<I: Iterator> Iterator for Enumerate<I> {
-    type Item = (usize, I.Item)
-    fn next(mut self) -> Option<(usize, I.Item)> {
-        let x = self.iter.next()?
-        let i = self.count
-        self.count += 1
-        some((i, x))
-    }
-}
-
-struct Skip<I: Iterator> {
-    iter: I,
-    n: usize,
-}
-
-impl<I: Iterator> Iterator for Skip<I> {
-    type Item = I.Item
-    fn next(mut self) -> Option<I.Item> {
-        while self.n > 0 { self.iter.next()?; self.n -= 1 }
-        self.iter.next()
-    }
-}
-
-struct Take<I: Iterator> {
-    iter: I,
-    n: usize,
-}
-
-impl<I: Iterator> Iterator for Take<I> {
-    type Item = I.Item
-    fn next(mut self) -> Option<I.Item> {
-        if self.n == 0 { return none }
-        self.n -= 1
-        self.iter.next()
-    }
-}
-
-struct Chain<A: Iterator, B: Iterator<Item = A.Item>> {
+pub struct Chain<A, B> {
     a: Option<A>,
     b: B,
 }
@@ -259,14 +60,26 @@ impl<A: Iterator, B: Iterator<Item = A.Item>> Iterator for Chain<A, B> {
     type Item = A.Item
     fn next(mut self) -> Option<A.Item> {
         if let some(ref mut a) = self.a {
-            if let some(x) = a.next() { return some(x) }
-            self.a = none
+            match a.next() {
+                item @ some(_) => return item,
+                none => { self.a = none },
+            }
         }
         self.b.next()
     }
+    fn size_hint(self) -> (usize, Option<usize>) {
+        let (a_lo, a_hi) = self.a.as_ref().map(|a| a.size_hint()).unwrap_or((0, some(0)))
+        let (b_lo, b_hi) = self.b.size_hint()
+        let lo = a_lo.saturating_add(b_lo)
+        let hi = match (a_hi, b_hi) {
+            (some(a), some(b)) => a.checked_add(b),
+            _ => none,
+        }
+        (lo, hi)
+    }
 }
 
-struct Zip<A: Iterator, B: Iterator> {
+pub struct Zip<A, B> {
     a: A,
     b: B,
 }
@@ -278,45 +91,137 @@ impl<A: Iterator, B: Iterator> Iterator for Zip<A, B> {
         let b = self.b.next()?
         some((a, b))
     }
+    fn size_hint(self) -> (usize, Option<usize>) {
+        let (a_lo, a_hi) = self.a.size_hint()
+        let (b_lo, b_hi) = self.b.size_hint()
+        let lo = a_lo.min(b_lo)
+        let hi = match (a_hi, b_hi) {
+            (some(a), some(b)) => some(a.min(b)),
+            (some(a), none) => some(a),
+            (none, some(b)) => some(b),
+            (none, none) => none,
+        }
+        (lo, hi)
+    }
 }
 
-struct FlatMap<I: Iterator, F, U: Iterator> {
+pub struct Enumerate<I> {
     iter: I,
-    f: F,
-    inner: Option<U>,
+    count: usize,
 }
 
-impl<I: Iterator, B, U: Iterator<Item = B>, F: Fn(I.Item) -> U> Iterator for FlatMap<I, F, U> {
-    type Item = B
-    fn next(mut self) -> Option<B> {
-        loop {
-            if let some(ref mut inner) = self.inner {
-                if let some(x) = inner.next() { return some(x) }
-            }
-            let item = self.iter.next()?
-            self.inner = some((self.f)(item))
+impl<I: Iterator> Iterator for Enumerate<I> {
+    type Item = (usize, I.Item)
+    fn next(mut self) -> Option<(usize, I.Item)> {
+        let item = self.iter.next()?
+        let idx = self.count
+        self.count += 1
+        some((idx, item))
+    }
+    fn size_hint(self) -> (usize, Option<usize>) { self.iter.size_hint() }
+}
+
+pub struct Take<I> {
+    iter: I,
+    remaining: usize,
+}
+
+impl<I: Iterator> Iterator for Take<I> {
+    type Item = I.Item
+    fn next(mut self) -> Option<I.Item> {
+        if self.remaining == 0 { return none }
+        self.remaining -= 1
+        self.iter.next()
+    }
+    fn size_hint(self) -> (usize, Option<usize>) {
+        let (lo, hi) = self.iter.size_hint()
+        (lo.min(self.remaining), hi.map(|h| h.min(self.remaining)).or(some(self.remaining)))
+    }
+}
+
+pub struct Skip<I> {
+    iter: I,
+    n: usize,
+}
+
+impl<I: Iterator> Iterator for Skip<I> {
+    type Item = I.Item
+    fn next(mut self) -> Option<I.Item> {
+        while self.n > 0 {
+            self.n -= 1
+            self.iter.next()?;
+        }
+        self.iter.next()
+    }
+}
+
+pub struct TakeWhile<I, P> {
+    iter: I,
+    predicate: P,
+    done: bool,
+}
+
+impl<I: Iterator, P: FnMut(&I.Item) -> bool> Iterator for TakeWhile<I, P> {
+    type Item = I.Item
+    fn next(mut self) -> Option<I.Item> {
+        if self.done { return none }
+        match self.iter.next() {
+            some(item) if (self.predicate)(&item) => some(item),
+            _ => { self.done = true; none },
         }
     }
 }
 
-struct Peekable<I: Iterator> {
+pub struct SkipWhile<I, P> {
+    iter: I,
+    predicate: P,
+    skipping: bool,
+}
+
+impl<I: Iterator, P: FnMut(&I.Item) -> bool> Iterator for SkipWhile<I, P> {
+    type Item = I.Item
+    fn next(mut self) -> Option<I.Item> {
+        if self.skipping {
+            loop {
+                match self.iter.next() {
+                    some(item) if !(self.predicate)(&item) => {
+                        self.skipping = false
+                        return some(item)
+                    },
+                    some(_) => continue,
+                    none => return none,
+                }
+            }
+        }
+        self.iter.next()
+    }
+}
+
+pub struct Peekable<I: Iterator> {
     iter: I,
     peeked: Option<Option<I.Item>>,
 }
 
 impl<I: Iterator> Peekable<I> {
-    fn peek(mut self) -> Option<&I.Item> {
+    pub fn peek(mut self) -> Option<&I.Item> {
         if self.peeked.is_none() {
             self.peeked = some(self.iter.next())
         }
-        self.peeked.as_ref()?.as_ref()
+        self.peeked.as_ref().and_then(|o| o.as_ref())
     }
 
-    fn peek_mut(mut self) -> Option<&mut I.Item> {
+    pub fn peek_mut(mut self) -> Option<&mut I.Item> {
         if self.peeked.is_none() {
             self.peeked = some(self.iter.next())
         }
-        self.peeked.as_mut()?.as_mut()
+        self.peeked.as_mut().and_then(|o| o.as_mut())
+    }
+
+    pub fn next_if(mut self, func: fn(&I.Item) -> bool) -> Option<I.Item> {
+        match self.peek() {
+            some(item) if func(item) => self.next(),
+            _ => none,
+        }
     }
 }
 
@@ -324,13 +229,72 @@ impl<I: Iterator> Iterator for Peekable<I> {
     type Item = I.Item
     fn next(mut self) -> Option<I.Item> {
         match self.peeked.take() {
-            some(v) => v,
+            some(peeked) => peeked,
             none => self.iter.next(),
         }
     }
 }
 
-struct StepBy<I: Iterator> {
+pub struct FlatMap<I, U, F> {
+    iter: I,
+    f: F,
+    current: Option<U>,
+}
+
+impl<I: Iterator, U: Iterator, F: FnMut(I.Item) -> U> Iterator for FlatMap<I, U, F> {
+    type Item = U.Item
+    fn next(mut self) -> Option<U.Item> {
+        loop {
+            if let some(ref mut current) = self.current {
+                if let some(item) = current.next() { return some(item) }
+            }
+            match self.iter.next() {
+                some(item) => self.current = some((self.f)(item)),
+                none => return none,
+            }
+        }
+    }
+}
+
+pub struct Flatten<I: Iterator> where I.Item: IntoIterator {
+    outer: I,
+    inner: Option<<I.Item as IntoIterator>.IntoIter>,
+}
+
+impl<I: Iterator> Iterator for Flatten<I> where I.Item: IntoIterator {
+    type Item = <I.Item as IntoIterator>.Item
+    fn next(mut self) -> Option<Self.Item> {
+        loop {
+            if let some(ref mut inner) = self.inner {
+                if let some(item) = inner.next() { return some(item) }
+            }
+            match self.outer.next() {
+                some(outer_item) => self.inner = some(outer_item.into_iter()),
+                none => return none,
+            }
+        }
+    }
+}
+
+pub struct Cycle<I: Clone + Iterator> {
+    orig: I,
+    iter: I,
+}
+
+impl<I: Clone + Iterator> Iterator for Cycle<I> {
+    type Item = I.Item
+    fn next(mut self) -> Option<I.Item> {
+        match self.iter.next() {
+            item @ some(_) => item,
+            none => {
+                self.iter = self.orig.clone()
+                self.iter.next()
+            },
+        }
+    }
+}
+
+pub struct StepBy<I> {
     iter: I,
     step: usize,
     first_take: bool,
@@ -348,120 +312,106 @@ impl<I: Iterator> Iterator for StepBy<I> {
     }
 }
 
-struct Inspect<I: Iterator, F> {
+pub struct Inspect<I, F> {
     iter: I,
     f: F,
 }
 
-impl<I: Iterator, F: Fn(&I.Item)> Iterator for Inspect<I, F> {
+impl<I: Iterator, F: FnMut(&I.Item)> Iterator for Inspect<I, F> {
     type Item = I.Item
     fn next(mut self) -> Option<I.Item> {
-        let x = self.iter.next()?
-        (self.f)(&x)
-        some(x)
+        let item = self.iter.next()?
+        (self.f)(&item)
+        some(item)
     }
 }
 
-struct Scan<I: Iterator, St, F> {
-    iter: I,
-    state: St,
-    f: F,
-}
-
-impl<I: Iterator, St, B, F: Fn(&mut St, I.Item) -> Option<B>> Iterator for Scan<I, St, F> {
-    type Item = B
-    fn next(mut self) -> Option<B> {
-        let x = self.iter.next()?
-        (self.f)(&mut self.state, x)
-    }
-}
-
-struct Fuse<I: Iterator> {
+pub struct Fuse<I> {
     iter: Option<I>,
 }
 
 impl<I: Iterator> Iterator for Fuse<I> {
     type Item = I.Item
     fn next(mut self) -> Option<I.Item> {
-        let iter = self.iter.as_mut()?
-        match iter.next() {
-            none => { self.iter = none; none },
-            x => x,
+        match self.iter {
+            some(ref mut iter) => {
+                match iter.next() {
+                    item @ some(_) => item,
+                    none => { self.iter = none; none },
+                }
+            },
+            none => none,
         }
     }
 }
 
 fn main() {
-    let v = [1, 2, 3, 4, 5]
+    // Enumerate
+    let items: [(usize, i32)] = vec![10, 20, 30].into_iter()
+        .enumerate().collect()
+    assert(items == vec![(0, 10), (1, 20), (2, 30)])
+    print("Enumerate ✓")
 
     // Map
-    let mapped: [i32] = v.iter().map(|x| x * 2).collect()
-    assert(mapped == [2, 4, 6, 8, 10])
+    let doubled: [i32] = vec![1, 2, 3].into_iter()
+        .map(|x| x * 2).collect()
+    assert(doubled == vec![2, 4, 6])
     print("Map ✓")
 
     // Filter
-    let evens: [i32] = v.iter().filter(|x| x % 2 == 0).collect()
-    assert(evens == [2, 4])
+    let evens: [i32] = vec![1, 2, 3, 4, 5].into_iter()
+        .filter(|x| *x % 2 == 0).collect()
+    assert(evens == vec![2, 4])
     print("Filter ✓")
 
-    // FilterMap
-    let fm: [i32] = v.iter().filter_map(|x| if x > 3 { some(x * 10) } else { none }).collect()
-    assert(fm == [40, 50])
-    print("FilterMap ✓")
-
-    // Enumerate
-    let pairs: [(usize, i32)] = v.iter().enumerate().collect()
-    assert(pairs[0] == (0, 1))
-    assert(pairs[4] == (4, 5))
-    print("Enumerate ✓")
-
-    // Skip & Take
-    let skipped: [i32] = v.iter().skip(2).collect()
-    assert(skipped == [3, 4, 5])
-    let taken: [i32] = v.iter().take(3).collect()
-    assert(taken == [1, 2, 3])
-    print("Skip & Take ✓")
-
     // Chain
-    let a = [1, 2]
-    let b = [3, 4]
-    let chained: [i32] = a.iter().chain(b.iter()).collect()
-    assert(chained == [1, 2, 3, 4])
+    let chained: [i32] = vec![1, 2].into_iter()
+        .chain(vec![3, 4].into_iter()).collect()
+    assert(chained == vec![1, 2, 3, 4])
     print("Chain ✓")
 
     // Zip
-    let names = ["a", "b", "c"]
-    let nums = [1, 2, 3]
-    let zipped: [(&str, i32)] = names.iter().zip(nums.iter()).collect()
+    let zipped: [(i32, &str)] = vec![1, 2, 3].into_iter()
+        .zip(vec!["a", "b", "c"].into_iter()).collect()
     assert(zipped.len() == 3)
+    assert(zipped[0] == (1, "a"))
     print("Zip ✓")
 
-    // Terminal: fold, reduce
-    let sum = v.iter().fold(0, |acc, x| acc + x)
-    assert(sum == 15)
-    let product = v.iter().reduce(|a, b| a * b).unwrap()
-    assert(product == 120)
-    print("Fold & Reduce ✓")
+    // Take
+    let taken: [i32] = vec![1, 2, 3, 4, 5].into_iter()
+        .take(3).collect()
+    assert(taken == vec![1, 2, 3])
+    print("Take ✓")
 
-    // Terminal: any, all, find, position
-    assert(v.iter().any(|x| x > 4))
-    assert(!v.iter().any(|x| x > 5))
-    assert(v.iter().all(|x| x > 0))
-    assert(!v.iter().all(|x| x > 3))
-    assert(v.iter().find(|x| *x == 3).unwrap() == 3)
-    assert(v.iter().position(|x| x == 3).unwrap() == 2)
-    print("Any/All/Find/Position ✓")
+    // Skip
+    let skipped: [i32] = vec![1, 2, 3, 4, 5].into_iter()
+        .skip(2).collect()
+    assert(skipped == vec![3, 4, 5])
+    print("Skip ✓")
 
-    // Terminal: count, last, nth
-    assert(v.iter().count() == 5)
-    assert(v.iter().last().unwrap() == 5)
-    assert(v.iter().nth(2).unwrap() == 3)
-    print("Count/Last/Nth ✓")
+    // FilterMap
+    let parsed: [i32] = vec!["1", "two", "3"].into_iter()
+        .filter_map(|s| s.parse::<i32>().ok()).collect()
+    assert(parsed == vec![1, 3])
+    print("FilterMap ✓")
 
-    // Min/Max
-    assert(v.iter().min().unwrap() == 1)
-    assert(v.iter().max().unwrap() == 5)
-    print("Min/Max ✓")
+    // FlatMap
+    let flat: [i32] = vec![vec![1, 2], vec![3, 4]].into_iter()
+        .flat_map(|v| v.into_iter()).collect()
+    assert(flat == vec![1, 2, 3, 4])
+    print("FlatMap ✓")
+
+    // TakeWhile
+    let tw: [i32] = vec![1, 2, 3, 4, 1].into_iter()
+        .take_while(|x| *x < 4).collect()
+    assert(tw == vec![1, 2, 3])
+    print("TakeWhile ✓")
+
+    // SkipWhile
+    let sw: [i32] = vec![1, 2, 3, 4, 1].into_iter()
+        .skip_while(|x| *x < 3).collect()
+    assert(sw == vec![3, 4, 1])
+    print("SkipWhile ✓")
 
     print("Iterator Adapters complete ✓")
 }
