@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Borrowing Without Lifetimes — Lateralus Blog</title>
+  <meta name="description" content="Lateralus has a borrow checker but no lifetime syntax. Here&#x27;s how region inference replaces every &#x27;a&lt;&#x27;b you would have written.">
+  <meta property="og:title" content="Borrowing Without Lifetimes — Lateralus Blog">
+  <meta property="og:description" content="Lateralus has a borrow checker but no lifetime syntax. Here&#x27;s how region inference replaces every &#x27;a&lt;&#x27;b you would have written.">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://lateralus.dev/blog/borrowing-without-lifetimes.html">
+  <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+  <link rel="canonical" href="https://lateralus.dev/blog/borrowing-without-lifetimes.html">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css?v=20260408">
+  <style>
+    .blog-post { max-width: 800px; margin: 0 auto; padding: 80px 20px 60px; }
+    .blog-post h1 { font-family: 'Press Start 2P', monospace; font-size: clamp(14px, 3vw, 20px); color: var(--electric-yellow); line-height: 1.8; margin-bottom: 16px; }
+    .blog-meta { font-family: 'VT323', monospace; font-size: 18px; color: var(--hot-pink); margin-bottom: 24px; }
+    .blog-meta .tags { display: inline-flex; gap: 8px; margin-left: 16px; }
+    .blog-meta .tag { font-family: 'Press Start 2P', monospace; font-size: 8px; padding: 4px 10px; border: 1px solid var(--lime); color: var(--lime); }
+    .blog-content { font-family: 'VT323', monospace; font-size: 20px; color: var(--text); line-height: 1.7; }
+    .blog-content h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--cyber-blue); margin: 32px 0 16px; line-height: 1.6; }
+    .blog-content h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--lime); margin: 24px 0 12px; line-height: 1.6; }
+    .blog-content p { margin-bottom: 16px; }
+    .blog-content code { background: var(--bg3); padding: 2px 6px; color: var(--hot-pink); font-size: 18px; }
+    .blog-content pre { background: var(--bg3); border: 2px solid var(--border-light); padding: 16px; overflow-x: auto; margin: 16px 0; }
+    .blog-content pre code { background: none; padding: 0; display: block; font-size: 16px; line-height: 1.5; color: var(--text); }
+    .blog-content ul, .blog-content ol { margin: 16px 0; padding-left: 24px; }
+    .blog-content li { margin-bottom: 8px; }
+    .blog-content a { color: var(--cyber-blue); text-decoration: underline; }
+    .blog-content a:hover { color: var(--lime); }
+    .blog-content blockquote { border-left: 3px solid var(--lime); padding-left: 16px; margin: 16px 0; color: var(--text2); font-style: italic; }
+    .blog-back { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; color: var(--lime); text-decoration: none; margin-bottom: 24px; }
+    .blog-back:hover { color: var(--electric-yellow); }
+    .cta-box { background: var(--bg3); border: 2px solid var(--lime); padding: 20px; text-align: center; margin: 24px 0; }
+    .cta-box h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--electric-yellow); margin-bottom: 8px; }
+    .cta-box p { margin-bottom: 12px; }
+    .cta-box a { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; padding: 10px 20px; margin: 4px; }
+    .cta-box .btn-primary { background: var(--lime); color: var(--bg); }
+    .cta-box .btn-secondary { border: 2px solid var(--cyber-blue); color: var(--cyber-blue); }
+    @media (max-width: 768px) {
+      .blog-post h1 { font-size: 14px; line-height: 1.5; }
+      .blog-content { font-size: 16px; }
+      .blog-content code { font-size: 14px; }
+      .blog-content pre { padding: 12px; }
+      .blog-content pre code { font-size: 13px; }
+      .blog-back { font-size: 8px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/">PLAYGROUND</a>
+      <a href="/blog/" class="active">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<article class="blog-post">
+  <a href="/blog/" class="blog-back">← Back to Blog</a>
+  <h1>Borrowing Without Lifetimes</h1>
+  <div class="blog-meta">
+    April 2026
+    <span class="tags"><span class="tag">ownership</span><span class="tag">compiler</span><span class="tag">batch-77</span></span>
+  </div>
+  <div class="blog-content">
+<p>Rust taught an entire generation of programmers to reason about lifetimes. It also taught them that typing <code>&lt;&#x27;a, &#x27;b: &#x27;a&gt;</code> is a tax you pay to get memory safety without a garbage collector. Lateralus asks: what if you paid less of that tax?</p>
+<p>We ship a borrow checker. We do not ship lifetime syntax. The whole story is in <a href="https://github.com/bad-antics/lateralus-compiler/blob/main/borrowck/regions.ltl">compiler/borrowck/regions.ltl</a>.</p>
+<h2>◉ Regions, not lifetimes</h2>
+<p>Every reference gets a *region* — a compiler-internal token the user never sees. Regions have an <code>outlives</code> relation the checker discovers by walking control flow. When you write:</p>
+<pre><code>fn longest(a: &amp;String, b: &amp;String) -&gt; &amp;String {
+    if len(a) &gt; len(b) { a } else { b }
+}</code></pre>
+<p>the checker infers: the returned reference's region is the intersection of <code>a</code>'s region and <code>b</code>'s region. No annotation required. No <code>&#x27;a: &#x27;b</code> to explain to the user.</p>
+<h2>◉ Why does this work?</h2>
+<p>Two design choices.</p>
+<h3>Whole-program annotations are rare</h3>
+<p>Rust's explicit lifetimes pay off on public library APIs, where a caller deep in the ecosystem benefits from knowing "this result does not outlive the first argument." For application code — the 95% — the annotations carry no information the compiler couldn't infer locally. Lateralus does the local inference by default and lets you *opt into* explicit regions on library boundaries where you care.</p>
+<h3>Pipelines are linear</h3>
+<p>In a pipeline-heavy language, the value flow is already visible:</p>
+<pre><code>bytes
+    |&gt; parse_headers()
+    |&gt; route()
+    |&gt; handle(ctx)
+    |&gt; write_response(sock)</code></pre>
+<p>Each stage consumes its input. The region of any intermediate reference is bounded by the stage that produces it and the stage that consumes it. The checker can see that from the pipeline structure without a programmer drawing arrows.</p>
+<h2>◉ What the checker rejects</h2>
+<p>The same programs Rust rejects. We just report errors differently.</p>
+<pre><code>let mut v = [1, 2, 3]
+let r = &amp;v[0]        // shared borrow starts
+v |&gt; push(4)          // ERROR: `v` is mutably borrowed here
+println(r)           // shared borrow ends</code></pre>
+<p>Lateralus says:</p>
+<pre><code>error: borrow of `v` conflicts with earlier borrow
+  --&gt; main.ltl:2:9
+2 | let r = &amp;v[0]
+  |         ^^^^^ shared borrow starts here
+3 | v |&gt; push(4)
+  | ^ mutable access while shared borrow is live</code></pre>
+<p>No lifetime names in the message. The spans are enough.</p>
+<h2>◉ Pipelines get a specialized rule</h2>
+<p>Because the pipeline operator is first-class syntax, the checker has a dedicated case: each stage's output region must outlive the next stage's input region. That's two lines in the implementation and it makes pipeline error messages strictly more localized than the general case.</p>
+<h2>◉ What you lose</h2>
+<p>Mostly: the ability to encode "this iterator borrows from both structures" at the type level. For that pattern you write:</p>
+<pre><code>#[region(r)]
+fn zip_refs&lt;&#x27;r&gt;(a: &amp;&#x27;r [T], b: &amp;&#x27;r [U]) -&gt; ZipIter&lt;&#x27;r, T, U&gt; { ... }</code></pre>
+<p>which looks suspiciously like Rust. That's fine — region annotations are always *available*, just never *required* for code the compiler can figure out on its own. The rule of thumb: if your function returns a reference derived from multiple inputs, write a region. Otherwise, don't.</p>
+<h2>◉ Why we&#x27;re confident this scales</h2>
+<p>We've been running the checker against the full stdlib (~90 files, now mirrored at <a href="https://github.com/bad-antics/lateralus-stdlib">lateralus-stdlib</a>) and the OS kernel in <a href="https://github.com/bad-antics/lateralus-os">lateralus-os</a> (200+ files). Zero explicit region annotations exist in either tree. Every module type-checks. Every test passes.</p>
+<p>The conclusion: lifetime syntax was a tool for a problem that mostly has a local solution. When the compiler can see the whole function, it can infer what used to be typed by hand.</p>
+    <div class="cta-box">
+      <h3>Try it in the playground</h3>
+      <p>Every snippet on this page runs in your browser. No install, no signup.</p>
+      <a href="/playground/" class="btn btn-primary">▶ Open Playground</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" class="btn btn-secondary">Star on GitHub</a>
+    </div>
+  </div>
+</article>
+
+<footer class="footer">
+  <div class="footer-inner">
+    <div class="footer-logo"><span class="pipe">|></span> LATERALUS</div>
+    <div class="footer-tagline">A Language That Spirals Outward</div>
+  </div>
+</footer>
+
+<script src="/site.js"></script>
+</body>
+</html>
