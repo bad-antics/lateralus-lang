@@ -1,0 +1,280 @@
+// Standard Library - Path Manipulation
+// Cross-platform path parsing, joining, and normalization.
+
+use std.fmt.{Display, Formatter, FmtError}
+use std.cmp.{PartialEq, Eq, Hash}
+
+const SEPARATOR: char = '/'
+const WINDOWS_SEPARATOR: char = '\\'
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct Path {
+    inner: string,
+}
+
+impl Path {
+    fn new(s: &str) -> Path {
+        Path { inner: s.to_string() }
+    }
+
+    fn from_string(s: string) -> Path {
+        Path { inner: s }
+    }
+
+    fn as_str(self) -> &str { &self.inner }
+
+    fn parent(self) -> Option<Path> {
+        if self.inner == "/" || self.inner.is_empty() { return none }
+        let trimmed = self.inner.trim_end_matches('/')
+        match trimmed.rfind('/') {
+            some(0) => some(Path.new("/")),
+            some(i) => some(Path.new(&trimmed[..i])),
+            none => some(Path.new("")),
+        }
+    }
+
+    fn file_name(self) -> Option<&str> {
+        if self.inner.is_empty() { return none }
+        let trimmed = self.inner.trim_end_matches('/')
+        if trimmed.is_empty() { return none }
+        match trimmed.rfind('/') {
+            some(i) => some(&trimmed[i+1..]),
+            none => some(trimmed),
+        }
+    }
+
+    fn file_stem(self) -> Option<string> {
+        let name = self.file_name()?
+        match name.rfind('.') {
+            some(0) => some(name.to_string()),
+            some(i) => some(name[..i].to_string()),
+            none => some(name.to_string()),
+        }
+    }
+
+    fn extension(self) -> Option<string> {
+        let name = self.file_name()?
+        match name.rfind('.') {
+            some(0) => none,
+            some(i) => some(name[i+1..].to_string()),
+            none => none,
+        }
+    }
+
+    fn join(self, other: &str) -> Path {
+        if other.starts_with('/') { return Path.new(other) }
+        if self.inner.is_empty() { return Path.new(other) }
+        if self.inner.ends_with('/') {
+            Path.from_string(format!("{}{}", self.inner, other))
+        } else {
+            Path.from_string(format!("{}/{}", self.inner, other))
+        }
+    }
+
+    fn is_absolute(self) -> bool {
+        self.inner.starts_with('/')
+    }
+
+    fn is_relative(self) -> bool {
+        !self.is_absolute()
+    }
+
+    fn components(self) -> [string] {
+        let mut parts = []
+        if self.inner.starts_with('/') { parts.push("/".to_string()) }
+        for part in self.inner.split('/') {
+            if !part.is_empty() { parts.push(part.to_string()) }
+        }
+        parts
+    }
+
+    fn normalize(self) -> Path {
+        let mut stack: [string] = []
+        let is_abs = self.is_absolute()
+
+        for part in self.inner.split('/') {
+            match part {
+                "" | "." => {},
+                ".." => {
+                    if !stack.is_empty() && stack.last().unwrap() != "/" {
+                        stack.pop();
+                    }
+                },
+                _ => stack.push(part.to_string()),
+            }
+        }
+
+        if is_abs {
+            Path.from_string(format!("/{}", stack.join("/")))
+        } else if stack.is_empty() {
+            Path.new(".")
+        } else {
+            Path.from_string(stack.join("/"))
+        }
+    }
+
+    fn with_extension(self, ext: &str) -> Path {
+        let stem = match self.file_stem() {
+            some(s) => s,
+            none => return self.clone(),
+        };
+        let parent = self.parent().map(|p| p.inner.clone()).unwrap_or("".to_string())
+        if ext.is_empty() {
+            if parent.is_empty() {
+                Path.from_string(stem)
+            } else {
+                Path.from_string(format!("{}/{}", parent, stem))
+            }
+        } else {
+            if parent.is_empty() {
+                Path.from_string(format!("{}.{}", stem, ext))
+            } else {
+                Path.from_string(format!("{}/{}.{}", parent, stem, ext))
+            }
+        }
+    }
+
+    fn with_file_name(self, name: &str) -> Path {
+        match self.parent() {
+            some(p) => p.join(name),
+            none => Path.new(name),
+        }
+    }
+
+    fn starts_with(self, prefix: &str) -> bool {
+        self.inner.starts_with(prefix)
+    }
+
+    fn ends_with(self, suffix: &str) -> bool {
+        self.inner.ends_with(suffix)
+    }
+
+    fn has_extension(self, ext: &str) -> bool {
+        self.extension().map(|e| e == ext).unwrap_or(false)
+    }
+
+    fn strip_prefix(self, prefix: &str) -> Option<Path> {
+        if self.inner.starts_with(prefix) {
+            let rest = &self.inner[prefix.len()..]
+            let trimmed = rest.trim_start_matches('/')
+            some(Path.new(trimmed))
+        } else {
+            none
+        }
+    }
+
+    fn depth(self) -> usize {
+        self.components().iter()
+            .filter(|c| *c != "/" && *c != "." && *c != "..")
+            .count()
+    }
+
+    fn is_hidden(self) -> bool {
+        self.file_name().map(|n| n.starts_with('.')).unwrap_or(false)
+    }
+}
+
+impl Display for Path {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError> {
+        f.write_str(&self.inner)
+    }
+}
+
+fn main() {
+    // Basic construction
+    let p = Path.new("/home/user/docs/file.txt")
+    assert(p.as_str() == "/home/user/docs/file.txt")
+    print("Construction ✓")
+
+    // Parent
+    assert(p.parent() == some(Path.new("/home/user/docs")))
+    assert(Path.new("/").parent().is_none())
+    assert(Path.new("file.txt").parent() == some(Path.new("")))
+    print("Parent ✓")
+
+    // File name
+    assert(p.file_name() == some("file.txt"))
+    assert(Path.new("/").file_name().is_none())
+    assert(Path.new("foo").file_name() == some("foo"))
+    print("File name ✓")
+
+    // File stem
+    assert(p.file_stem() == some("file".to_string()))
+    assert(Path.new("archive.tar.gz").file_stem() == some("archive.tar".to_string()))
+    assert(Path.new(".hidden").file_stem() == some(".hidden".to_string()))
+    assert(Path.new("noext").file_stem() == some("noext".to_string()))
+    print("File stem ✓")
+
+    // Extension
+    assert(p.extension() == some("txt".to_string()))
+    assert(Path.new("noext").extension().is_none())
+    assert(Path.new(".hidden").extension().is_none())
+    assert(Path.new("a.tar.gz").extension() == some("gz".to_string()))
+    print("Extension ✓")
+
+    // Join
+    let base = Path.new("/home/user")
+    assert(base.join("docs") == Path.new("/home/user/docs"))
+    assert(base.join("/etc/passwd") == Path.new("/etc/passwd"))
+    assert(Path.new("").join("foo") == Path.new("foo"))
+    assert(Path.new("a/").join("b") == Path.new("a/b"))
+    print("Join ✓")
+
+    // Absolute/relative
+    assert(Path.new("/foo").is_absolute())
+    assert(!Path.new("foo").is_absolute())
+    assert(Path.new("foo").is_relative())
+    print("Absolute/relative ✓")
+
+    // Components
+    let comps = Path.new("/usr/local/bin").components()
+    assert(comps == vec!["/".to_string(), "usr".to_string(), "local".to_string(), "bin".to_string()])
+    print("Components ✓")
+
+    // Normalize
+    assert(Path.new("/a/b/../c").normalize() == Path.new("/a/c"))
+    assert(Path.new("/a/./b/./c").normalize() == Path.new("/a/b/c"))
+    assert(Path.new("a/b/..").normalize() == Path.new("a"))
+    assert(Path.new("./a").normalize() == Path.new("a"))
+    assert(Path.new(".").normalize() == Path.new("."))
+    print("Normalize ✓")
+
+    // with_extension
+    assert(p.with_extension("md") == Path.new("/home/user/docs/file.md"))
+    assert(p.with_extension("") == Path.new("/home/user/docs/file"))
+    assert(Path.new("foo").with_extension("rs") == Path.new("foo.rs"))
+    print("with_extension ✓")
+
+    // with_file_name
+    assert(p.with_file_name("other.rs") == Path.new("/home/user/docs/other.rs"))
+    print("with_file_name ✓")
+
+    // starts_with / ends_with
+    assert(p.starts_with("/home"))
+    assert(p.ends_with(".txt"))
+    assert(p.has_extension("txt"))
+    assert(!p.has_extension("rs"))
+    print("Prefix/suffix ✓")
+
+    // strip_prefix
+    assert(p.strip_prefix("/home/user") == some(Path.new("docs/file.txt")))
+    assert(p.strip_prefix("/other").is_none())
+    print("strip_prefix ✓")
+
+    // Depth
+    assert(Path.new("/a/b/c").depth() == 3)
+    assert(Path.new("a").depth() == 1)
+    assert(Path.new("").depth() == 0)
+    print("Depth ✓")
+
+    // Hidden files
+    assert(Path.new(".gitignore").is_hidden())
+    assert(!Path.new("readme.md").is_hidden())
+    print("Hidden ✓")
+
+    // Display
+    assert(p.to_string() == "/home/user/docs/file.txt")
+    print("Display ✓")
+
+    print("Path complete ✓")
+}
