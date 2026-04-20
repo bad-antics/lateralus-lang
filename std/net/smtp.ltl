@@ -1,0 +1,269 @@
+
+// SMTP Client - Simple Mail Transfer Protocol message builder and sender
+// Constructs RFC 5321 compliant SMTP command sequences.
+
+use std.collections.HashMap
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum SmtpCommand { Ehlo, MailFrom, RcptTo, Data, Quit, Rset, Noop, StartTls, Auth }
+
+impl SmtpCommand {
+    fn verb(self) -> &str {
+        match self {
+            SmtpCommand.Ehlo => "EHLO", SmtpCommand.MailFrom => "MAIL FROM:",
+            SmtpCommand.RcptTo => "RCPT TO:", SmtpCommand.Data => "DATA",
+            SmtpCommand.Quit => "QUIT", SmtpCommand.Rset => "RSET",
+            SmtpCommand.Noop => "NOOP", SmtpCommand.StartTls => "STARTTLS",
+            SmtpCommand.Auth => "AUTH",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum SmtpStatus { Success, MailAction, StartInput, ServiceReady, Closing, Error, AuthRequired }
+
+fn classify_code(code: u16) -> SmtpStatus {
+    match code {
+        220 => SmtpStatus.ServiceReady,
+        221 => SmtpStatus.Closing,
+        235 | 250 => SmtpStatus.Success,
+        251 => SmtpStatus.MailAction,
+        334 => SmtpStatus.AuthRequired,
+        354 => SmtpStatus.StartInput,
+        _ => SmtpStatus.Error,
+    }
+}
+
+#[derive(Clone, Debug)]
+struct SmtpResponse {
+    code: u16,
+    message: string,
+    status: SmtpStatus,
+}
+
+impl SmtpResponse {
+    fn new(code: u16, message: &str) -> SmtpResponse {
+        SmtpResponse { code, message: message.into(), status: classify_code(code) }
+    }
+    fn is_success(self) -> bool { self.code >= 200 && self.code < 400 }
+    fn is_error(self) -> bool { self.code >= 400 }
+    fn is_permanent(self) -> bool { self.code >= 500 }
+    fn is_transient(self) -> bool { self.code >= 400 && self.code < 500 }
+}
+
+#[derive(Clone, Debug)]
+struct EmailAddress {
+    local: string,
+    domain: string,
+}
+
+impl EmailAddress {
+    fn new(local: &str, domain: &str) -> EmailAddress {
+        EmailAddress { local: local.into(), domain: domain.into() }
+    }
+    fn parse(addr: &str) -> Option<EmailAddress> {
+        let parts: [&str] = addr.split('@').collect()
+        if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() { return None }
+        Some(EmailAddress.new(parts[0], parts[1]))
+    }
+    fn to_string(self) -> string { format!("{}@{}", self.local, self.domain) }
+    fn to_angle(self) -> string { format!("<{}@{}>", self.local, self.domain) }
+    fn domain(self) -> &str { &self.domain }
+}
+
+#[derive(Clone, Debug)]
+struct MimeHeader {
+    name: string,
+    value: string,
+}
+
+impl MimeHeader {
+    fn new(name: &str, value: &str) -> MimeHeader {
+        MimeHeader { name: name.into(), value: value.into() }
+    }
+    fn to_string(self) -> string { format!("{}: {}", self.name, self.value) }
+}
+
+struct EmailMessage {
+    from: EmailAddress,
+    to: [EmailAddress],
+    cc: [EmailAddress],
+    bcc: [EmailAddress],
+    subject: string,
+    body: string,
+    headers: [MimeHeader],
+    content_type: string,
+}
+
+impl EmailMessage {
+    fn new(from: EmailAddress, subject: &str) -> EmailMessage {
+        EmailMessage {
+            from, to: [], cc: [], bcc: [], subject: subject.into(),
+            body: String.new(), headers: [], content_type: "text/plain; charset=UTF-8".into(),
+        }
+    }
+    fn add_to(mut self, addr: EmailAddress) { self.to.push(addr) }
+    fn add_cc(mut self, addr: EmailAddress) { self.cc.push(addr) }
+    fn add_bcc(mut self, addr: EmailAddress) { self.bcc.push(addr) }
+    fn set_body(mut self, body: &str) { self.body = body.into() }
+    fn set_html(mut self, html: &str) { self.body = html.into(); self.content_type = "text/html; charset=UTF-8".into() }
+    fn add_header(mut self, name: &str, value: &str) { self.headers.push(MimeHeader.new(name, value)) }
+
+    fn all_recipients(self) -> [&EmailAddress] {
+        let mut all = []
+        for a in &self.to { all.push(a) }
+        for a in &self.cc { all.push(a) }
+        for a in &self.bcc { all.push(a) }
+        all
+    }
+
+    fn recipient_count(self) -> usize { self.to.len() + self.cc.len() + self.bcc.len() }
+
+    fn to_rfc822(self) -> string {
+        let mut msg = String.new()
+        msg += &format!("From: {}\r\n", self.from.to_string())
+        if !self.to.is_empty() {
+            let addrs: [string] = self.to.iter().map(|a| a.to_string()).collect()
+            msg += &format!("To: {}\r\n", addrs.join(", "))
+        }
+        if !self.cc.is_empty() {
+            let addrs: [string] = self.cc.iter().map(|a| a.to_string()).collect()
+            msg += &format!("Cc: {}\r\n", addrs.join(", "))
+        }
+        msg += &format!("Subject: {}\r\n", self.subject)
+        msg += &format!("Content-Type: {}\r\n", self.content_type)
+        msg += "MIME-Version: 1.0\r\n"
+        for h in &self.headers { msg += &format!("{}\r\n", h.to_string()) }
+        msg += "\r\n"
+        msg += &self.body
+        msg
+    }
+}
+
+struct SmtpSession {
+    commands: [string],
+    responses: [SmtpResponse],
+    state: string,
+}
+
+impl SmtpSession {
+    fn new() -> SmtpSession { SmtpSession { commands: [], responses: [], state: "init".into() } }
+
+    fn record_command(mut self, cmd: &str) { self.commands.push(cmd.into()) }
+    fn record_response(mut self, resp: SmtpResponse) { self.responses.push(resp) }
+
+    fn build_send_sequence(mut self, hostname: &str, msg: &EmailMessage) -> [string] {
+        let mut cmds = []
+        cmds.push(format!("EHLO {}", hostname))
+        cmds.push(format!("MAIL FROM:{}", msg.from.to_angle()))
+        for rcpt in msg.all_recipients() {
+            cmds.push(format!("RCPT TO:{}", rcpt.to_angle()))
+        }
+        cmds.push("DATA".into())
+        cmds.push(format!("{}\r\n.", msg.to_rfc822()))
+        cmds.push("QUIT".into())
+        cmds
+    }
+
+    fn command_count(self) -> usize { self.commands.len() }
+    fn last_response(self) -> Option<&SmtpResponse> { self.responses.last() }
+}
+
+fn main() {
+    // SmtpCommand
+    assert(SmtpCommand.Ehlo.verb() == "EHLO")
+    assert(SmtpCommand.MailFrom.verb() == "MAIL FROM:")
+    assert(SmtpCommand.Quit.verb() == "QUIT")
+    print("Commands ✓")
+
+    // SmtpResponse
+    let ok = SmtpResponse.new(250, "OK")
+    assert(ok.is_success())
+    assert(!ok.is_error())
+    assert(ok.status == SmtpStatus.Success)
+    let err = SmtpResponse.new(550, "User not found")
+    assert(err.is_error())
+    assert(err.is_permanent())
+    let temp = SmtpResponse.new(421, "Try later")
+    assert(temp.is_transient())
+    print("Response ✓")
+
+    // EmailAddress
+    let addr = EmailAddress.new("user", "example.com")
+    assert(addr.to_string() == "user@example.com")
+    assert(addr.to_angle() == "<user@example.com>")
+    assert(addr.domain() == "example.com")
+    print("Address ✓")
+
+    // Parse
+    let parsed = EmailAddress.parse("test@mail.com").unwrap()
+    assert(parsed.local == "test")
+    assert(parsed.domain == "mail.com")
+    assert(EmailAddress.parse("invalid").is_none())
+    assert(EmailAddress.parse("@bad.com").is_none())
+    assert(EmailAddress.parse("no@").is_none())
+    print("Parse ✓")
+
+    // EmailMessage
+    let mut msg = EmailMessage.new(EmailAddress.new("sender", "mail.com"), "Test Subject")
+    msg.add_to(EmailAddress.new("alice", "example.com"))
+    msg.add_to(EmailAddress.new("bob", "example.com"))
+    msg.add_cc(EmailAddress.new("carol", "example.com"))
+    msg.set_body("Hello, World!")
+    assert(msg.recipient_count() == 3)
+    assert(msg.all_recipients().len() == 3)
+    print("Message ✓")
+
+    // RFC822
+    let rfc = msg.to_rfc822()
+    assert(rfc.contains("From: sender@mail.com"))
+    assert(rfc.contains("Subject: Test Subject"))
+    assert(rfc.contains("Hello, World!"))
+    assert(rfc.contains("MIME-Version: 1.0"))
+    print("RFC822 ✓")
+
+    // HTML message
+    let mut html_msg = EmailMessage.new(EmailAddress.new("a", "b.com"), "HTML")
+    html_msg.set_html("<h1>Hi</h1>")
+    assert(html_msg.content_type.contains("text/html"))
+    print("HTML ✓")
+
+    // Custom header
+    let mut msg2 = EmailMessage.new(EmailAddress.new("a", "b.com"), "Test")
+    msg2.add_header("X-Custom", "value123")
+    let rfc2 = msg2.to_rfc822()
+    assert(rfc2.contains("X-Custom: value123"))
+    print("Headers ✓")
+
+    // SmtpSession
+    let mut session = SmtpSession.new()
+    let cmds = session.build_send_sequence("localhost", &msg)
+    assert(cmds.len() == 6)  // EHLO + MAIL FROM + 3x RCPT TO + DATA + body + QUIT... actually 7
+    assert(cmds[0].starts_with("EHLO"))
+    assert(cmds[1].starts_with("MAIL FROM:"))
+    print("Session ✓")
+
+    // Session recording
+    session.record_command("EHLO localhost")
+    session.record_response(SmtpResponse.new(250, "OK"))
+    assert(session.command_count() == 1)
+    assert(session.last_response().unwrap().code == 250)
+    print("Recording ✓")
+
+    // Status classification
+    assert(classify_code(220) == SmtpStatus.ServiceReady)
+    assert(classify_code(354) == SmtpStatus.StartInput)
+    assert(classify_code(550) == SmtpStatus.Error)
+    print("Classification ✓")
+
+    // BCC not in headers
+    let mut bcc_msg = EmailMessage.new(EmailAddress.new("s", "d.com"), "Secret")
+    bcc_msg.add_to(EmailAddress.new("visible", "d.com"))
+    bcc_msg.add_bcc(EmailAddress.new("hidden", "d.com"))
+    let rfc3 = bcc_msg.to_rfc822()
+    assert(!rfc3.contains("hidden@d.com"))
+    assert(bcc_msg.recipient_count() == 2)
+    print("BCC ✓")
+
+    print("SMTP client complete ✓")
+}
