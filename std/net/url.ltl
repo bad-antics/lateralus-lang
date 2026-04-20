@@ -1,0 +1,303 @@
+// Standard Library - URL Parsing
+// Parse and manipulate URLs per RFC 3986.
+
+use std.collections.HashMap
+use std.fmt.{Display, Formatter, FmtError}
+
+#[derive(Clone, Debug, PartialEq)]
+struct Url {
+    scheme: string,
+    username: Option<string>,
+    password: Option<string>,
+    host: Option<string>,
+    port: Option<u16>,
+    path: string,
+    query: Option<string>,
+    fragment: Option<string>,
+}
+
+#[derive(Debug)]
+enum UrlError {
+    MissingScheme,
+    InvalidPort,
+    InvalidFormat,
+}
+
+impl Display for UrlError {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError> {
+        match self {
+            UrlError.MissingScheme => f.write_str("missing scheme"),
+            UrlError.InvalidPort => f.write_str("invalid port"),
+            UrlError.InvalidFormat => f.write_str("invalid URL format"),
+        }
+    }
+}
+
+impl Url {
+    fn parse(input: &str) -> Result<Url, UrlError> {
+        let mut rest = input.to_string()
+
+        // Fragment
+        let fragment = if let some(i) = rest.find('#') {
+            let frag = rest[i+1..].to_string()
+            rest = rest[..i].to_string()
+            some(frag)
+        } else { none }
+
+        // Query
+        let query = if let some(i) = rest.find('?') {
+            let q = rest[i+1..].to_string()
+            rest = rest[..i].to_string()
+            some(q)
+        } else { none }
+
+        // Scheme
+        let scheme_end = rest.find("://").ok_or(UrlError.MissingScheme)?
+        let scheme = rest[..scheme_end].to_string()
+        rest = rest[scheme_end + 3..].to_string()
+
+        // Path split
+        let (authority, path) = match rest.find('/') {
+            some(i) => (rest[..i].to_string(), rest[i..].to_string()),
+            none => (rest.clone(), "/".to_string()),
+        }
+
+        // Userinfo
+        let (userinfo, hostport) = match authority.find('@') {
+            some(i) => (some(authority[..i].to_string()), authority[i+1..].to_string()),
+            none => (none, authority),
+        }
+
+        let username = userinfo.as_ref().map(|ui| {
+            match ui.find(':') {
+                some(i) => ui[..i].to_string(),
+                none => ui.clone(),
+            }
+        })
+        let password = userinfo.as_ref().and_then(|ui| {
+            ui.find(':').map(|i| ui[i+1..].to_string())
+        })
+
+        // Host and port
+        let (host, port) = if hostport.is_empty() {
+            (none, none)
+        } else if let some(i) = hostport.rfind(':') {
+            let port_str = &hostport[i+1..]
+            match port_str.parse::<u16>() {
+                ok(p) => (some(hostport[..i].to_string()), some(p)),
+                err(_) => (some(hostport), none),
+            }
+        } else {
+            (some(hostport), none)
+        }
+
+        ok(Url { scheme, username, password, host, port, path, query, fragment })
+    }
+
+    fn authority(self) -> string {
+        let mut auth = String.new()
+        if let some(user) = &self.username {
+            auth.push_str(user)
+            if let some(pass) = &self.password {
+                auth.push(':')
+                auth.push_str(pass)
+            }
+            auth.push('@')
+        }
+        if let some(h) = &self.host { auth.push_str(h) }
+        if let some(p) = self.port {
+            auth.push(':')
+            auth.push_str(&p.to_string())
+        }
+        auth
+    }
+
+    fn origin(self) -> string {
+        let mut o = format!("{}://", self.scheme)
+        if let some(h) = &self.host { o.push_str(h) }
+        if let some(p) = self.port { o.push_str(&format!(":{}", p)) }
+        o
+    }
+
+    fn query_pairs(self) -> [(string, string)] {
+        match &self.query {
+            none => vec![],
+            some(q) => {
+                q.split('&').filter(|s| !s.is_empty()).map(|pair| {
+                    match pair.find('=') {
+                        some(i) => (pair[..i].to_string(), pair[i+1..].to_string()),
+                        none => (pair.to_string(), "".to_string()),
+                    }
+                }).collect()
+            },
+        }
+    }
+
+    fn with_path(mut self, path: &str) -> Url {
+        self.path = path.to_string(); self
+    }
+
+    fn with_query(mut self, q: &str) -> Url {
+        self.query = some(q.to_string()); self
+    }
+
+    fn with_fragment(mut self, f: &str) -> Url {
+        self.fragment = some(f.to_string()); self
+    }
+
+    fn is_secure(self) -> bool {
+        self.scheme == "https" || self.scheme == "wss"
+    }
+
+    fn default_port(self) -> Option<u16> {
+        match self.scheme.as_str() {
+            "http" => some(80),
+            "https" => some(443),
+            "ftp" => some(21),
+            "ssh" => some(22),
+            _ => none,
+        }
+    }
+
+    fn effective_port(self) -> Option<u16> {
+        self.port.or_else(|| self.default_port())
+    }
+}
+
+impl Display for Url {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError> {
+        f.write_str(&self.scheme)?
+        f.write_str("://")?
+        f.write_str(&self.authority())?
+        f.write_str(&self.path)?
+        if let some(q) = &self.query {
+            f.write_str("?")?; f.write_str(q)?
+        }
+        if let some(frag) = &self.fragment {
+            f.write_str("#")?; f.write_str(frag)?
+        }
+        ok(())
+    }
+}
+
+fn percent_encode(s: &str) -> string {
+    let mut result = String.new()
+    for c in s.chars() {
+        match c {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => result.push(c),
+            _ => {
+                for byte in c.to_string().as_bytes() {
+                    result.push_str(&format!("%{:02X}", byte))
+                }
+            },
+        }
+    }
+    result
+}
+
+fn percent_decode(s: &str) -> string {
+    let mut result = String.new()
+    let chars: [char] = s.chars().collect()
+    let mut i = 0
+    while i < chars.len() {
+        if chars[i] == '%' && i + 2 < chars.len() {
+            let hex = format!("{}{}", chars[i+1], chars[i+2])
+            if let ok(byte) = u8.parse_radix(&hex, 16) {
+                result.push(byte as char)
+                i += 3
+                continue
+            }
+        }
+        result.push(chars[i])
+        i += 1
+    }
+    result
+}
+
+fn main() {
+    // Basic parse
+    let u = Url.parse("https://example.com/path").unwrap()
+    assert(u.scheme == "https")
+    assert(u.host == some("example.com".into()))
+    assert(u.path == "/path")
+    assert(u.port.is_none())
+    print("Basic parse ✓")
+
+    // With port
+    let u2 = Url.parse("http://localhost:8080/api").unwrap()
+    assert(u2.host == some("localhost".into()))
+    assert(u2.port == some(8080))
+    assert(u2.path == "/api")
+    print("Port ✓")
+
+    // Query and fragment
+    let u3 = Url.parse("https://example.com/search?q=hello&lang=en#results").unwrap()
+    assert(u3.query == some("q=hello&lang=en".into()))
+    assert(u3.fragment == some("results".into()))
+    let pairs = u3.query_pairs()
+    assert(pairs.len() == 2)
+    assert(pairs[0] == ("q".into(), "hello".into()))
+    assert(pairs[1] == ("lang".into(), "en".into()))
+    print("Query/fragment ✓")
+
+    // Userinfo
+    let u4 = Url.parse("ftp://user:pass@ftp.example.com/files").unwrap()
+    assert(u4.username == some("user".into()))
+    assert(u4.password == some("pass".into()))
+    assert(u4.host == some("ftp.example.com".into()))
+    print("Userinfo ✓")
+
+    // Authority
+    assert(u4.authority() == "user:pass@ftp.example.com")
+    print("Authority ✓")
+
+    // Origin
+    assert(u2.origin() == "http://localhost:8080")
+    print("Origin ✓")
+
+    // Display round-trip
+    let display = u3.to_string()
+    assert(display.contains("https://"))
+    assert(display.contains("q=hello"))
+    assert(display.contains("#results"))
+    print("Display ✓")
+
+    // Secure check
+    assert(Url.parse("https://x.com/").unwrap().is_secure())
+    assert(!Url.parse("http://x.com/").unwrap().is_secure())
+    print("Secure ✓")
+
+    // Default/effective port
+    assert(Url.parse("http://x.com/").unwrap().default_port() == some(80))
+    assert(Url.parse("https://x.com/").unwrap().default_port() == some(443))
+    assert(u2.effective_port() == some(8080))
+    assert(Url.parse("http://x.com/").unwrap().effective_port() == some(80))
+    print("Ports ✓")
+
+    // Builder methods
+    let built = Url.parse("https://api.com/v1").unwrap()
+        .with_path("/v2")
+        .with_query("key=abc")
+        .with_fragment("top")
+    assert(built.path == "/v2")
+    assert(built.query == some("key=abc".into()))
+    assert(built.fragment == some("top".into()))
+    print("Builder ✓")
+
+    // Percent encode/decode
+    assert(percent_encode("hello world") == "hello%20world")
+    assert(percent_encode("a+b=c") == "a%2Bb%3Dc")
+    assert(percent_decode("hello%20world") == "hello world")
+    assert(percent_decode("no%encoding") == "no%encoding")
+    print("Percent encoding ✓")
+
+    // Error cases
+    assert(Url.parse("noscheme").is_err())
+    print("Errors ✓")
+
+    // Empty query pairs
+    assert(Url.parse("https://x.com/").unwrap().query_pairs().is_empty())
+    print("Empty query ✓")
+
+    print("URL Parsing complete ✓")
+}
