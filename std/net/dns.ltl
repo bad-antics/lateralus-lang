@@ -1,0 +1,192 @@
+
+// DNS resolver utilities for Lateralus
+// Supports A, AAAA, CNAME, MX, TXT record lookups.
+
+use std.net.{IpAddr, Ipv4Addr, Ipv6Addr}
+use std.collections.HashMap
+
+#[derive(Clone, Debug, PartialEq)]
+enum RecordType { A, AAAA, CNAME, MX, TXT, NS, SOA, SRV, PTR }
+
+impl RecordType {
+    fn code(self) -> u16 {
+        match self {
+            RecordType.A => 1,
+            RecordType.AAAA => 28,
+            RecordType.CNAME => 5,
+            RecordType.MX => 15,
+            RecordType.TXT => 16,
+            RecordType.NS => 2,
+            RecordType.SOA => 6,
+            RecordType.SRV => 33,
+            RecordType.PTR => 12,
+        }
+    }
+
+    fn from_code(code: u16) -> Option<RecordType> {
+        match code {
+            1 => some(RecordType.A),
+            28 => some(RecordType.AAAA),
+            5 => some(RecordType.CNAME),
+            15 => some(RecordType.MX),
+            16 => some(RecordType.TXT),
+            2 => some(RecordType.NS),
+            6 => some(RecordType.SOA),
+            33 => some(RecordType.SRV),
+            12 => some(RecordType.PTR),
+            _ => none,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum DnsRecord {
+    A(Ipv4Addr),
+    AAAA(Ipv6Addr),
+    CNAME(string),
+    MX { priority: u16, exchange: string },
+    TXT(string),
+    NS(string),
+    SRV { priority: u16, weight: u16, port: u16, target: string },
+}
+
+#[derive(Clone, Debug)]
+struct DnsResponse {
+    id: u16,
+    records: [DnsRecord],
+    authoritative: bool,
+    ttl: u32,
+}
+
+struct DnsCache {
+    entries: HashMap<(string, RecordType), (DnsResponse, u64)>,
+    max_entries: usize,
+}
+
+impl DnsCache {
+    fn new(max_entries: usize) -> DnsCache {
+        DnsCache { entries: HashMap.new(), max_entries }
+    }
+
+    fn get(self, name: &str, rtype: RecordType, now: u64) -> Option<&DnsResponse> {
+        match self.entries.get(&(name.to_string(), rtype)) {
+            some((resp, expires)) if *expires > now => some(resp),
+            _ => none,
+        }
+    }
+
+    fn put(mut self, name: string, rtype: RecordType, resp: DnsResponse, now: u64) {
+        if self.entries.len() >= self.max_entries {
+            self.evict(now)
+        }
+        let expires = now + resp.ttl as u64
+        self.entries.insert((name, rtype), (resp, expires))
+    }
+
+    fn evict(mut self, now: u64) {
+        self.entries.retain(|_, (_, expires)| *expires > now)
+    }
+
+    fn clear(mut self) { self.entries.clear() }
+    fn len(self) -> usize { self.entries.len() }
+}
+
+fn encode_domain_name(name: &str) -> [u8] {
+    let mut result = vec![]
+    for label in name.split('.') {
+        result.push(label.len() as u8)
+        for b in label.bytes() { result.push(b) }
+    }
+    result.push(0)
+    result
+}
+
+fn is_valid_hostname(name: &str) -> bool {
+    if name.is_empty() || name.len() > 253 { return false }
+    for label in name.split('.') {
+        if label.is_empty() || label.len() > 63 { return false }
+        if label.starts_with('-') || label.ends_with('-') { return false }
+        if !label.chars().all(|c| c.is_alphanumeric() || c == '-') { return false }
+    }
+    true
+}
+
+fn main() {
+    // RecordType codes
+    assert(RecordType.A.code() == 1)
+    assert(RecordType.AAAA.code() == 28)
+    assert(RecordType.MX.code() == 15)
+    assert(RecordType.SRV.code() == 33)
+    assert(RecordType.from_code(1) == some(RecordType.A))
+    assert(RecordType.from_code(28) == some(RecordType.AAAA))
+    assert(RecordType.from_code(999).is_none())
+    print("RecordType ✓")
+
+    // DnsRecord variants
+    let a_rec = DnsRecord.A(Ipv4Addr.new(93, 184, 216, 34))
+    let mx_rec = DnsRecord.MX { priority: 10, exchange: "mail.example.com".into() }
+    let txt_rec = DnsRecord.TXT("v=spf1 include:example.com ~all".into())
+    let cname_rec = DnsRecord.CNAME("www.example.com".into())
+    assert(a_rec != mx_rec)
+    print("DnsRecord ✓")
+
+    // DnsCache
+    let mut cache = DnsCache.new(100)
+    let resp = DnsResponse {
+        id: 1234, records: vec![a_rec.clone()], authoritative: true, ttl: 300,
+    }
+    cache.put("example.com".into(), RecordType.A, resp, 1000)
+    assert(cache.len() == 1)
+    assert(cache.get("example.com", RecordType.A, 1100).is_some())
+    assert(cache.get("example.com", RecordType.A, 2000).is_none())  // expired
+    assert(cache.get("other.com", RecordType.A, 1100).is_none())
+    print("DnsCache ✓")
+
+    // Cache eviction
+    cache.put("a.com".into(), RecordType.A, DnsResponse { id: 1, records: vec![], authoritative: false, ttl: 10 }, 1000)
+    cache.put("b.com".into(), RecordType.A, DnsResponse { id: 2, records: vec![], authoritative: false, ttl: 500 }, 1000)
+    cache.evict(1050)
+    assert(cache.get("a.com", RecordType.A, 1050).is_none())
+    assert(cache.get("b.com", RecordType.A, 1050).is_some())
+    print("Cache eviction ✓")
+
+    // Cache clear
+    cache.clear()
+    assert(cache.len() == 0)
+    print("Cache clear ✓")
+
+    // Domain encoding
+    let encoded = encode_domain_name("www.example.com")
+    assert(encoded[0] == 3)  // "www" length
+    assert(encoded[4] == 7)  // "example" length
+    assert(encoded[encoded.len() - 1] == 0)  // null terminator
+    print("Domain encoding ✓")
+
+    // Hostname validation
+    assert(is_valid_hostname("example.com"))
+    assert(is_valid_hostname("sub.domain.example.com"))
+    assert(is_valid_hostname("a-b.com"))
+    assert(!is_valid_hostname(""))
+    assert(!is_valid_hostname("-bad.com"))
+    assert(!is_valid_hostname("bad-.com"))
+    assert(!is_valid_hostname("a." .repeat(128)))  // too long
+    print("Hostname validation ✓")
+
+    // SRV record
+    let srv = DnsRecord.SRV { priority: 10, weight: 60, port: 5060, target: "sip.example.com".into() }
+    match &srv {
+        DnsRecord.SRV { port, .. } => assert(*port == 5060),
+        _ => assert(false),
+    }
+    print("SRV record ✓")
+
+    // NS record
+    let ns = DnsRecord.NS("ns1.example.com".into())
+    match &ns {
+        DnsRecord.NS(name) => assert(name == "ns1.example.com"),
+        _ => assert(false),
+    }
+    print("NS record ✓")
+
+    print("DNS resolver complete ✓")
+}
