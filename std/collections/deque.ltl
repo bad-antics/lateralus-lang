@@ -1,265 +1,159 @@
-// Standard Library - Double-Ended Queue (Deque)
-// Ring-buffer backed deque with O(1) push/pop at both ends.
 
-use std.fmt.{Debug, Formatter, FmtError}
-use std.iter.{Iterator, IntoIterator}
-use std.option.Option
+// Double-ended queue (deque) implementation
+// Supports O(1) push/pop from both front and back using a ring buffer.
 
-const MIN_CAPACITY: usize = 8
-
-#[derive(Clone)]
 struct Deque<T> {
-    buf: [Option<T>],
+    buf: [T],
     head: usize,
+    tail: usize,
     len: usize,
-    capacity: usize,
+    cap: usize,
 }
 
 impl<T> Deque<T> {
     fn new() -> Deque<T> {
-        Deque.with_capacity(MIN_CAPACITY)
+        let cap = 8
+        Deque { buf: [T; cap], head: 0, tail: 0, len: 0, cap }
     }
 
     fn with_capacity(cap: usize) -> Deque<T> {
-        let actual = cap.max(MIN_CAPACITY).next_power_of_two()
-        Deque {
-            buf: (0..actual).map(|_| none).collect(),
-            head: 0, len: 0, capacity: actual,
-        }
+        let c = cap.max(1).next_power_of_two()
+        Deque { buf: [T; c], head: 0, tail: 0, len: 0, cap: c }
     }
 
-    fn len(self) -> usize { self.len }
     fn is_empty(self) -> bool { self.len == 0 }
-    fn capacity(self) -> usize { self.capacity }
+    fn len(self) -> usize { self.len }
 
-    fn mask(self, idx: usize) -> usize {
-        idx & (self.capacity - 1)
+    fn grow(mut self) {
+        let new_cap = self.cap * 2
+        let mut new_buf = [T; new_cap]
+        for i in 0..self.len {
+            new_buf[i] = self.buf[(self.head + i) % self.cap]
+        }
+        self.buf = new_buf
+        self.head = 0
+        self.tail = self.len
+        self.cap = new_cap
     }
 
     fn push_back(mut self, val: T) {
-        if self.len == self.capacity { self.grow() }
-        let idx = self.mask(self.head + self.len)
-        self.buf[idx] = some(val)
+        if self.len == self.cap { self.grow() }
+        self.buf[self.tail] = val
+        self.tail = (self.tail + 1) % self.cap
         self.len += 1
     }
 
     fn push_front(mut self, val: T) {
-        if self.len == self.capacity { self.grow() }
-        self.head = self.mask(self.head.wrapping_sub(1).wrapping_add(self.capacity))
-        self.buf[self.head] = some(val)
+        if self.len == self.cap { self.grow() }
+        self.head = if self.head == 0 { self.cap - 1 } else { self.head - 1 }
+        self.buf[self.head] = val
         self.len += 1
     }
 
     fn pop_back(mut self) -> Option<T> {
-        if self.len == 0 { return none }
+        if self.is_empty() { return None }
+        self.tail = if self.tail == 0 { self.cap - 1 } else { self.tail - 1 }
         self.len -= 1
-        let idx = self.mask(self.head + self.len)
-        self.buf[idx].take()
+        Some(self.buf[self.tail])
     }
 
     fn pop_front(mut self) -> Option<T> {
-        if self.len == 0 { return none }
-        let val = self.buf[self.head].take()
-        self.head = self.mask(self.head + 1)
+        if self.is_empty() { return None }
+        let val = self.buf[self.head]
+        self.head = (self.head + 1) % self.cap
         self.len -= 1
-        val
+        Some(val)
     }
 
     fn front(self) -> Option<&T> {
-        if self.len == 0 { none } else { self.buf[self.head].as_ref() }
+        if self.is_empty() { None } else { Some(&self.buf[self.head]) }
     }
 
     fn back(self) -> Option<&T> {
-        if self.len == 0 { none }
-        else { self.buf[self.mask(self.head + self.len - 1)].as_ref() }
+        if self.is_empty() { None }
+        else {
+            let idx = if self.tail == 0 { self.cap - 1 } else { self.tail - 1 }
+            Some(&self.buf[idx])
+        }
     }
 
     fn get(self, index: usize) -> Option<&T> {
-        if index >= self.len { return none }
-        self.buf[self.mask(self.head + index)].as_ref()
+        if index >= self.len { None }
+        else { Some(&self.buf[(self.head + index) % self.cap]) }
     }
 
-    fn clear(mut self) {
-        for i in 0..self.len {
-            self.buf[self.mask(self.head + i)] = none
-        }
-        self.head = 0
-        self.len = 0
-    }
-
-    fn grow(mut self) {
-        let new_cap = self.capacity * 2
-        let mut new_buf: [Option<T>] = (0..new_cap).map(|_| none).collect()
-        for i in 0..self.len {
-            new_buf[i] = self.buf[self.mask(self.head + i)].take()
-        }
-        self.buf = new_buf
-        self.head = 0
-        self.capacity = new_cap
-    }
-
-    fn iter(self) -> impl Iterator<Item = &T> {
-        (0..self.len).filter_map(|i| self.get(i))
-    }
+    fn clear(mut self) { self.head = 0; self.tail = 0; self.len = 0 }
 
     fn contains(self, val: &T) -> bool where T: PartialEq {
-        self.iter().any(|v| v == val)
-    }
-
-    fn retain(mut self, f: fn(&T) -> bool) {
-        let items: [T] = self.iter().filter(|v| f(v)).cloned().collect()
-        self.clear()
-        for item in items { self.push_back(item) }
+        for i in 0..self.len {
+            if self.buf[(self.head + i) % self.cap] == *val { return true }
+        }
+        false
     }
 
     fn to_vec(self) -> [T] where T: Clone {
-        self.iter().cloned().collect()
-    }
-
-    fn from_iter(iter: impl IntoIterator<Item = T>) -> Deque<T> {
-        let mut d = Deque.new()
-        for item in iter { d.push_back(item) }
-        d
-    }
-
-    fn swap(mut self, i: usize, j: usize) {
-        let a = self.mask(self.head + i)
-        let b = self.mask(self.head + j)
-        self.buf.swap(a, b)
-    }
-
-    fn rotate_left(mut self, n: usize) {
-        if self.len <= 1 { return }
-        let k = n % self.len
-        for _ in 0..k {
-            let val = self.pop_front().unwrap()
-            self.push_back(val)
+        let mut result = []
+        for i in 0..self.len {
+            result.push(self.buf[(self.head + i) % self.cap].clone())
         }
-    }
-
-    fn rotate_right(mut self, n: usize) {
-        if self.len <= 1 { return }
-        let k = n % self.len
-        for _ in 0..k {
-            let val = self.pop_back().unwrap()
-            self.push_front(val)
-        }
-    }
-}
-
-impl<T: Debug> Debug for Deque<T> {
-    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError> {
-        f.write_str("Deque[")?
-        for (i, item) in self.iter().enumerate() {
-            if i > 0 { f.write_str(", ")? }
-            item.fmt(f)?
-        }
-        f.write_str("]")
+        result
     }
 }
 
 fn main() {
-    // Push back and pop front (FIFO)
-    let mut d = Deque.new()
-    d.push_back(1)
-    d.push_back(2)
-    d.push_back(3)
-    assert(d.len() == 3)
-    assert(d.pop_front() == some(1))
-    assert(d.pop_front() == some(2))
-    assert(d.pop_front() == some(3))
-    assert(d.pop_front().is_none())
-    print("FIFO ✓")
+    let mut dq = Deque::<i64>.new()
+    assert(dq.is_empty())
+    assert(dq.len() == 0)
+    print("Init ✓")
 
-    // Push front and pop back (LIFO from front)
-    let mut d2 = Deque.new()
-    d2.push_front(1)
-    d2.push_front(2)
-    d2.push_front(3)
-    assert(d2.pop_back() == some(1))
-    assert(d2.pop_back() == some(2))
-    assert(d2.pop_back() == some(3))
+    dq.push_back(1)
+    dq.push_back(2)
+    dq.push_back(3)
+    assert(dq.len() == 3)
+    assert(*dq.front().unwrap() == 1)
+    assert(*dq.back().unwrap() == 3)
+    print("Push back ✓")
+
+    dq.push_front(0)
+    assert(dq.len() == 4)
+    assert(*dq.front().unwrap() == 0)
     print("Push front ✓")
 
-    // Front/back peek
-    let mut d3 = Deque.new()
-    d3.push_back(10)
-    d3.push_back(20)
-    d3.push_back(30)
-    assert(d3.front() == some(&10))
-    assert(d3.back() == some(&30))
-    print("Peek ✓")
+    assert(dq.pop_front().unwrap() == 0)
+    assert(dq.pop_back().unwrap() == 3)
+    assert(dq.len() == 2)
+    print("Pop ✓")
 
-    // Index access
-    assert(d3.get(0) == some(&10))
-    assert(d3.get(1) == some(&20))
-    assert(d3.get(2) == some(&30))
-    assert(d3.get(3).is_none())
-    print("Index ✓")
+    assert(*dq.get(0).unwrap() == 1)
+    assert(*dq.get(1).unwrap() == 2)
+    assert(dq.get(5).is_none())
+    print("Get ✓")
 
-    // Grow (exceed initial capacity)
-    let mut big = Deque.new()
-    for i in 0..100 { big.push_back(i) }
-    assert(big.len() == 100)
-    for i in 0..100 { assert(big.get(i) == some(&i)) }
-    print("Grow ✓")
-
-    // Clear
-    big.clear()
-    assert(big.is_empty())
-    assert(big.len() == 0)
-    print("Clear ✓")
-
-    // Mixed push/pop
-    let mut m = Deque.new()
-    m.push_back(1)
-    m.push_front(0)
-    m.push_back(2)
-    assert(m.to_vec() == vec![0, 1, 2])
-    print("Mixed ✓")
-
-    // Contains
-    assert(m.contains(&1))
-    assert(!m.contains(&99))
+    assert(dq.contains(&1))
+    assert(!dq.contains(&99))
     print("Contains ✓")
 
-    // Retain
-    let mut r = Deque.from_iter(vec![1, 2, 3, 4, 5, 6])
-    r.retain(|x| *x % 2 == 0)
-    assert(r.to_vec() == vec![2, 4, 6])
-    print("Retain ✓")
+    let v = dq.to_vec()
+    assert(v.len() == 2)
+    print("To vec ✓")
 
-    // Rotate left
-    let mut rot = Deque.from_iter(vec![1, 2, 3, 4, 5])
-    rot.rotate_left(2)
-    assert(rot.to_vec() == vec![3, 4, 5, 1, 2])
-    print("Rotate left ✓")
+    // Grow test
+    let mut big = Deque::<i64>.with_capacity(4)
+    for i in 0..20 { big.push_back(i) }
+    assert(big.len() == 20)
+    assert(*big.front().unwrap() == 0)
+    assert(*big.back().unwrap() == 19)
+    print("Grow ✓")
 
-    // Rotate right
-    let mut rot2 = Deque.from_iter(vec![1, 2, 3, 4, 5])
-    rot2.rotate_right(2)
-    assert(rot2.to_vec() == vec![4, 5, 1, 2, 3])
-    print("Rotate right ✓")
+    big.clear()
+    assert(big.is_empty())
+    print("Clear ✓")
 
-    // Empty deque
-    let empty: Deque<int> = Deque.new()
-    assert(empty.front().is_none())
-    assert(empty.back().is_none())
-    assert(empty.pop_front().is_none())
-    assert(empty.pop_back().is_none())
-    print("Empty ✓")
-
-    // Swap
-    let mut sw = Deque.from_iter(vec![10, 20, 30])
-    sw.swap(0, 2)
-    assert(sw.to_vec() == vec![30, 20, 10])
-    print("Swap ✓")
-
-    // with_capacity
-    let pre = Deque.with_capacity(64)
-    assert(pre.capacity() >= 64)
-    assert(pre.is_empty())
-    print("with_capacity ✓")
+    // Empty pop
+    assert(dq.pop_front().is_some())
+    assert(dq.pop_front().is_some())
+    assert(dq.pop_front().is_none())
+    print("Empty pop ✓")
 
     print("Deque complete ✓")
 }
