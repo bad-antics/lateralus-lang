@@ -1,0 +1,218 @@
+
+// Table Formatter - Pretty-print tabular data with alignment and borders
+// Supports left/right/center alignment, column widths, and multiple styles.
+
+#[derive(Clone, Copy, PartialEq)]
+enum Align { Left, Right, Center }
+
+#[derive(Clone, Copy, PartialEq)]
+enum BorderStyle { None, Ascii, Unicode }
+
+struct Column {
+    header: string,
+    align: Align,
+    min_width: usize,
+    max_width: Option<usize>,
+}
+
+impl Column {
+    fn new(header: &str) -> Column {
+        Column { header: header.into(), align: Align.Left, min_width: 0, max_width: None }
+    }
+
+    fn aligned(mut self, a: Align) -> Column { self.align = a; self }
+    fn min_w(mut self, w: usize) -> Column { self.min_width = w; self }
+    fn max_w(mut self, w: usize) -> Column { self.max_width = Some(w); self }
+}
+
+struct Table {
+    columns: [Column],
+    rows: [[string]],
+    border: BorderStyle,
+    padding: usize,
+}
+
+impl Table {
+    fn new(columns: [Column]) -> Table {
+        Table { columns, rows: [], border: BorderStyle.Ascii, padding: 1 }
+    }
+
+    fn with_border(mut self, style: BorderStyle) -> Table { self.border = style; self }
+    fn with_padding(mut self, p: usize) -> Table { self.padding = p; self }
+
+    fn add_row(mut self, row: [string]) {
+        assert(row.len() == self.columns.len())
+        self.rows.push(row)
+    }
+
+    fn col_widths(self) -> [usize] {
+        let mut widths = []
+        for (i, col) in self.columns.iter().enumerate() {
+            let mut w = col.header.len().max(col.min_width)
+            for row in &self.rows {
+                w = w.max(row[i].len())
+            }
+            if let Some(max) = col.max_width { w = w.min(max) }
+            widths.push(w)
+        }
+        widths
+    }
+
+    fn pad_cell(self, text: &str, width: usize, align: Align) -> string {
+        let truncated = if text.len() > width { &text[..width] } else { text }
+        let t_len = truncated.len()
+        if t_len >= width { return truncated.into() }
+        let gap = width - t_len
+        match align {
+            Align.Left => format!("{}{}", truncated, " ".repeat(gap)),
+            Align.Right => format!("{}{}", " ".repeat(gap), truncated),
+            Align.Center => {
+                let left = gap / 2
+                let right = gap - left
+                format!("{}{}{}", " ".repeat(left), truncated, " ".repeat(right))
+            }
+        }
+    }
+
+    fn separator(self, widths: &[usize]) -> string {
+        let pad = self.padding
+        match self.border {
+            BorderStyle.None => "".into(),
+            BorderStyle.Ascii => {
+                let parts: [string] = widths.iter().map(|w| "-".repeat(w + pad * 2)).collect()
+                format!("+{}+", parts.join("+"))
+            }
+            BorderStyle.Unicode => {
+                let parts: [string] = widths.iter().map(|w| "─".repeat(w + pad * 2)).collect()
+                format!("├{}┤", parts.join("┼"))
+            }
+        }
+    }
+
+    fn format_row(self, cells: &[string], widths: &[usize]) -> string {
+        let pad_str = " ".repeat(self.padding)
+        let mut parts = []
+        for (i, cell) in cells.iter().enumerate() {
+            let aligned = self.pad_cell(cell, widths[i], self.columns[i].align)
+            parts.push(format!("{}{}{}", pad_str, aligned, pad_str))
+        }
+        let sep = match self.border {
+            BorderStyle.None => "  ",
+            BorderStyle.Ascii => "|",
+            BorderStyle.Unicode => "│",
+        }
+        match self.border {
+            BorderStyle.None => parts.join("  "),
+            _ => format!("{sep}{}{sep}", parts.join(sep)),
+        }
+    }
+
+    fn render(self) -> string {
+        let widths = self.col_widths()
+        let mut lines = []
+
+        let sep = self.separator(&widths)
+        if !sep.is_empty() { lines.push(sep.clone()) }
+
+        let headers: [string] = self.columns.iter().map(|c| c.header.clone()).collect()
+        lines.push(self.format_row(&headers, &widths))
+
+        if !sep.is_empty() { lines.push(sep.clone()) }
+
+        for row in &self.rows {
+            lines.push(self.format_row(row, &widths))
+        }
+
+        if !sep.is_empty() { lines.push(sep) }
+
+        lines.join("\n")
+    }
+
+    fn row_count(self) -> usize { self.rows.len() }
+    fn col_count(self) -> usize { self.columns.len() }
+}
+
+fn main() {
+    // Basic table creation
+    let cols = [
+        Column.new("Name").aligned(Align.Left),
+        Column.new("Age").aligned(Align.Right),
+        Column.new("City").aligned(Align.Center),
+    ]
+    let mut table = Table.new(cols)
+    assert(table.col_count() == 3)
+    assert(table.row_count() == 0)
+    print("Init ✓")
+
+    // Add rows
+    table.add_row(["Alice".into(), "30".into(), "NYC".into()])
+    table.add_row(["Bob".into(), "25".into(), "London".into()])
+    table.add_row(["Charlie".into(), "35".into(), "Tokyo".into()])
+    assert(table.row_count() == 3)
+    print("Add rows ✓")
+
+    // Column widths
+    let widths = table.col_widths()
+    assert(widths[0] == 7)  // "Charlie" is longest
+    assert(widths[1] == 3)  // "Age" header
+    assert(widths[2] == 6)  // "London" is longest
+    print("Col widths ✓")
+
+    // Padding
+    let padded = table.pad_cell("hi", 6, Align.Left)
+    assert(padded == "hi    ")
+    let right = table.pad_cell("hi", 6, Align.Right)
+    assert(right == "    hi")
+    let center = table.pad_cell("hi", 6, Align.Center)
+    assert(center == "  hi  ")
+    print("Padding ✓")
+
+    // Render ASCII
+    let output = table.render()
+    assert(output.contains("Alice"))
+    assert(output.contains("Charlie"))
+    assert(output.contains("+"))
+    assert(output.contains("|"))
+    print("ASCII render ✓")
+
+    // No border
+    let cols2 = [Column.new("X"), Column.new("Y")]
+    let mut t2 = Table.new(cols2).with_border(BorderStyle.None)
+    t2.add_row(["1".into(), "2".into()])
+    let out2 = t2.render()
+    assert(!out2.contains("|"))
+    assert(!out2.contains("+"))
+    print("No border ✓")
+
+    // Min width
+    let cols3 = [Column.new("A").min_w(10)]
+    let t3 = Table.new(cols3)
+    let w3 = t3.col_widths()
+    assert(w3[0] == 10)
+    print("Min width ✓")
+
+    // Max width truncation
+    let cols4 = [Column.new("Header").max_w(4)]
+    let mut t4 = Table.new(cols4)
+    t4.add_row(["LongValue".into()])
+    let w4 = t4.col_widths()
+    assert(w4[0] == 4)
+    print("Max width ✓")
+
+    // Truncated cell
+    let trunc = t4.pad_cell("LongValue", 4, Align.Left)
+    assert(trunc.len() == 4)
+    assert(trunc == "Long")
+    print("Truncation ✓")
+
+    // Unicode border
+    let cols5 = [Column.new("Val")]
+    let mut t5 = Table.new(cols5).with_border(BorderStyle.Unicode)
+    t5.add_row(["test".into()])
+    let out5 = t5.render()
+    assert(out5.contains("│"))
+    assert(out5.contains("─"))
+    print("Unicode border ✓")
+
+    print("Table formatter complete ✓")
+}
