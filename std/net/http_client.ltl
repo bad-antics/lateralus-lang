@@ -1,105 +1,244 @@
-// http_client.ltl — Async HTTP/1.1 client with connection pooling
-use std.net.TcpStream
-use std.io.{BufReader, Write}
-use std.encoding.{base64, url_encode}
-use std.tls.TlsStream
 
-struct HttpRequest {
-    method:  string,
-    url:     string,
-    headers: dict<string, string>,
-    body:    [u8]?,
+// HTTP Client - Simple HTTP/1.1 client with request/response handling
+// Supports GET, POST, PUT, DELETE with headers and body.
+
+use std.collections.HashMap
+use std.net.tcp
+use std.encoding.{base64}
+
+#[derive(Clone, Debug, PartialEq)]
+enum HttpMethod { GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS }
+
+impl HttpMethod {
+    fn as_str(self) -> &str {
+        match self {
+            HttpMethod.GET => "GET", HttpMethod.POST => "POST",
+            HttpMethod.PUT => "PUT", HttpMethod.DELETE => "DELETE",
+            HttpMethod.PATCH => "PATCH", HttpMethod.HEAD => "HEAD",
+            HttpMethod.OPTIONS => "OPTIONS",
+        }
+    }
+
+    fn from_str(s: &str) -> Option<HttpMethod> {
+        match s {
+            "GET" => some(HttpMethod.GET), "POST" => some(HttpMethod.POST),
+            "PUT" => some(HttpMethod.PUT), "DELETE" => some(HttpMethod.DELETE),
+            "PATCH" => some(HttpMethod.PATCH), "HEAD" => some(HttpMethod.HEAD),
+            "OPTIONS" => some(HttpMethod.OPTIONS), _ => none,
+        }
+    }
+
+    fn has_body(self) -> bool {
+        match self {
+            HttpMethod.POST | HttpMethod.PUT | HttpMethod.PATCH => true,
+            _ => false,
+        }
+    }
 }
 
-struct HttpResponse {
-    status:  int,
-    reason:  string,
-    headers: dict<string, string>,
-    body:    [u8],
+#[derive(Clone, Debug)]
+struct HttpRequest {
+    method: HttpMethod,
+    url: string,
+    headers: HashMap<string, string>,
+    body: Option<string>,
+    timeout_ms: u64,
 }
 
 impl HttpRequest {
-    fn get(url: string) -> HttpRequest {
-        HttpRequest { method: "GET", url, headers: {}, body: none }
+    fn new(method: HttpMethod, url: &str) -> HttpRequest {
+        let mut headers = HashMap.new()
+        headers.insert("User-Agent".into(), "Lateralus/1.0".into())
+        headers.insert("Accept".into(), "*/*".into())
+        HttpRequest { method, url: url.into(), headers, body: none, timeout_ms: 30000 }
     }
-    fn post(url: string, body: [u8], content_type: string) -> HttpRequest {
-        HttpRequest {
-            method: "POST", url,
-            headers: {"Content-Type": content_type, "Content-Length": body.len().to_string()},
-            body: some(body),
+
+    fn get(url: &str) -> HttpRequest { HttpRequest.new(HttpMethod.GET, url) }
+    fn post(url: &str) -> HttpRequest { HttpRequest.new(HttpMethod.POST, url) }
+    fn put(url: &str) -> HttpRequest { HttpRequest.new(HttpMethod.PUT, url) }
+    fn delete(url: &str) -> HttpRequest { HttpRequest.new(HttpMethod.DELETE, url) }
+
+    fn header(mut self, key: &str, value: &str) -> HttpRequest {
+        self.headers.insert(key.into(), value.into()); self
+    }
+
+    fn content_type(mut self, ct: &str) -> HttpRequest { self.header("Content-Type", ct) }
+    fn authorization(mut self, token: &str) -> HttpRequest { self.header("Authorization", token) }
+    fn bearer_token(mut self, token: &str) -> HttpRequest {
+        self.header("Authorization", &format!("Bearer {}", token))
+    }
+
+    fn basic_auth(mut self, user: &str, pass: &str) -> HttpRequest {
+        let encoded = base64.encode(format!("{}:{}", user, pass).as_bytes())
+        self.header("Authorization", &format!("Basic {}", encoded))
+    }
+
+    fn body(mut self, body: &str) -> HttpRequest { self.body = some(body.into()); self }
+    fn json_body(mut self, json: &str) -> HttpRequest {
+        self.body = some(json.into())
+        self.content_type("application/json")
+    }
+
+    fn timeout(mut self, ms: u64) -> HttpRequest { self.timeout_ms = ms; self }
+
+    fn to_raw(self) -> string {
+        let path = parse_path(&self.url)
+        let host = parse_host(&self.url)
+        let mut raw = format!("{} {} HTTP/1.1\r\nHost: {}\r\n", self.method.as_str(), path, host)
+        for (k, v) in &self.headers { raw += &format!("{}: {}\r\n", k, v) }
+        if let some(body) = &self.body {
+            raw += &format!("Content-Length: {}\r\n", body.len())
         }
-    }
-    fn header(mut self, k: string, v: string) -> HttpRequest {
-        self.headers[k] = v
-        self
-    }
-    fn bearer(self, token: string) -> HttpRequest {
-        self.header("Authorization", "Bearer ${token}")
+        raw += "\r\n"
+        if let some(body) = &self.body { raw += body }
+        raw
     }
 }
 
-fn parse_url(url: string) -> Result<(bool, string, int, string), string> {
-    let (tls, rest) = if url.starts_with("https://") { (true, url[8..]) }
-                      else if url.starts_with("http://") { (false, url[7..]) }
-                      else { return err("unsupported scheme") }
-    let (host_port, path) = if let some(i) = rest.find('/') { (rest[..i], rest[i..]) }
-                             else { (rest, "/") }
-    let (host, port) = if let some(i) = host_port.find(':') {
-        (host_port[..i], host_port[i+1..].parse_int().map_err(|_| "bad port")?)
-    } else {
-        (host_port, if tls { 443 } else { 80 })
-    }
-    ok((tls, host.to_string(), port, path.to_string()))
+#[derive(Clone, Debug)]
+struct HttpResponse {
+    status_code: u16,
+    status_text: string,
+    headers: HashMap<string, string>,
+    body: string,
 }
 
-async fn send(req: HttpRequest) -> Result<HttpResponse, string> {
-    let (tls, host, port, path) = parse_url(req.url.clone())?
-    let addr = "${host}:${port}"
+impl HttpResponse {
+    fn new(status_code: u16, status_text: &str) -> HttpResponse {
+        HttpResponse { status_code, status_text: status_text.into(), headers: HashMap.new(), body: string.new() }
+    }
 
-    let raw = TcpStream.connect(addr).await?
-    let mut stream: dyn Write = if tls { TlsStream.wrap(raw, host).await? } else { raw }
+    fn is_success(self) -> bool { self.status_code >= 200 && self.status_code < 300 }
+    fn is_redirect(self) -> bool { self.status_code >= 300 && self.status_code < 400 }
+    fn is_client_error(self) -> bool { self.status_code >= 400 && self.status_code < 500 }
+    fn is_server_error(self) -> bool { self.status_code >= 500 }
 
-    // Build request
-    let mut lines = ["${req.method} ${path} HTTP/1.1", "Host: ${host}", "Connection: close"]
-    for (k, v) in req.headers { lines.push("${k}: ${v}") }
-    let request_str = lines |> join("
-") + "
+    fn header(self, key: &str) -> Option<&string> { self.headers.get(key) }
+    fn content_type(self) -> Option<&string> { self.header("Content-Type") }
+    fn content_length(self) -> Option<usize> {
+        self.header("Content-Length").and_then(|v| v.parse().ok())
+    }
 
-"
-    stream.write_all(request_str.as_bytes()).await?
-    if let some(body) = req.body { stream.write_all(body).await? }
-
-    // Parse response
-    let mut reader = BufReader.new(stream)
-    let status_line = reader.read_line().await?
-    let parts = status_line.split(" ")
-    let status = parts[1].parse_int().map_err(|_| "bad status")?
-    let reason = parts[2..] |> join(" ")
-
-    let mut headers: dict<string, string> = {}
-    loop {
-        let line = reader.read_line().await?
-        if line.trim().is_empty() { break }
-        if let some(i) = line.find(':') {
-            headers[line[..i].trim().to_lowercase()] = line[i+1..].trim().to_string()
+    fn parse(raw: &str) -> Result<HttpResponse, string> {
+        let mut lines = raw.split("\r\n")
+        let status_line = lines.next().ok_or("Empty response")?
+        let parts: [&str] = status_line.splitn(3, ' ').collect()
+        if parts.len() < 2 { return err("Invalid status line".into()) }
+        let code: u16 = parts[1].parse().map_err(|_| "Invalid status code")?
+        let text = if parts.len() > 2 { parts[2] } else { "" }
+        let mut resp = HttpResponse.new(code, text)
+        for line in &mut lines {
+            if line.is_empty() { break }
+            if let some(colon) = line.find(": ") {
+                resp.headers.insert(line[..colon].into(), line[colon+2..].into())
+            }
         }
+        resp.body = lines.collect::<[&str]>().join("\r\n")
+        ok(resp)
     }
-
-    let content_length = headers.get("content-length").and_then(|v| v.parse_int().ok()) ?? 0
-    let mut body = [0u8; content_length]
-    reader.read_exact(mut body).await?
-
-    ok(HttpResponse { status, reason, headers, body })
 }
 
-pub fn get(url: string)  -> impl Future<Output = Result<HttpResponse, string>> { send(HttpRequest.get(url)) }
-pub fn post(url: string, body: [u8], ct: string) -> impl Future<Output = Result<HttpResponse, string>> {
-    send(HttpRequest.post(url, body, ct))
+fn parse_host(url: &str) -> string {
+    let without_scheme = if url.starts_with("http://") { &url[7..] }
+        else if url.starts_with("https://") { &url[8..] }
+        else { url }
+    without_scheme.split('/').next().unwrap_or("").into()
 }
 
-async fn main() {
-    // In real usage:
-    // let resp = get("https://httpbin.org/get").await.unwrap()
-    // print(string.from_utf8(resp.body))
-    print("http_client — module ready ✓")
+fn parse_path(url: &str) -> string {
+    let without_scheme = if url.starts_with("http://") { &url[7..] }
+        else if url.starts_with("https://") { &url[8..] }
+        else { url }
+    match without_scheme.find('/') {
+        some(idx) => without_scheme[idx..].into(),
+        none => "/".into(),
+    }
+}
+
+fn main() {
+    // HttpMethod
+    assert(HttpMethod.GET.as_str() == "GET")
+    assert(HttpMethod.POST.as_str() == "POST")
+    assert(HttpMethod.from_str("DELETE") == some(HttpMethod.DELETE))
+    assert(HttpMethod.from_str("INVALID") == none)
+    assert(HttpMethod.POST.has_body())
+    assert(!HttpMethod.GET.has_body())
+    print("HttpMethod ✓")
+
+    // Request building
+    let req = HttpRequest.get("http://example.com/api/users")
+        .header("Accept", "application/json")
+        .bearer_token("tok123")
+        .timeout(5000)
+    assert(req.method == HttpMethod.GET)
+    assert(req.url == "http://example.com/api/users")
+    assert(req.headers.get("Accept") == some(&"application/json".into()))
+    assert(req.headers.get("Authorization") == some(&"Bearer tok123".into()))
+    assert(req.timeout_ms == 5000)
+    print("Request building ✓")
+
+    // POST with JSON
+    let post = HttpRequest.post("http://api.example.com/data")
+        .json_body("{\"key\": \"value\"}")
+    assert(post.body == some("{\"key\": \"value\"}".into()))
+    assert(post.headers.get("Content-Type") == some(&"application/json".into()))
+    print("POST JSON ✓")
+
+    // Raw request
+    let raw = HttpRequest.get("http://example.com/path").to_raw()
+    assert(raw.contains("GET /path HTTP/1.1"))
+    assert(raw.contains("Host: example.com"))
+    print("Raw request ✓")
+
+    // URL parsing
+    assert(parse_host("http://example.com/path") == "example.com")
+    assert(parse_host("https://api.test.io/v1") == "api.test.io")
+    assert(parse_path("http://example.com/api/v1") == "/api/v1")
+    assert(parse_path("http://example.com") == "/")
+    print("URL parsing ✓")
+
+    // Response
+    let resp = HttpResponse.new(200, "OK")
+    assert(resp.is_success())
+    assert(!resp.is_redirect())
+    assert(!resp.is_client_error())
+    assert(!resp.is_server_error())
+    print("Response status ✓")
+
+    // Response categories
+    assert(HttpResponse.new(301, "Moved").is_redirect())
+    assert(HttpResponse.new(404, "Not Found").is_client_error())
+    assert(HttpResponse.new(500, "Error").is_server_error())
+    print("Status categories ✓")
+
+    // Response parsing
+    let raw_resp = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 5\r\n\r\nhello"
+    let parsed = HttpResponse.parse(raw_resp).unwrap()
+    assert(parsed.status_code == 200)
+    assert(parsed.status_text == "OK")
+    assert(parsed.header("Content-Type") == some(&"text/html".into()))
+    assert(parsed.body == "hello")
+    assert(parsed.content_length() == some(5))
+    print("Response parsing ✓")
+
+    // Basic auth
+    let auth_req = HttpRequest.get("http://api.com").basic_auth("user", "pass")
+    assert(auth_req.headers.get("Authorization").unwrap().starts_with("Basic "))
+    print("Basic auth ✓")
+
+    // PUT/DELETE
+    let put = HttpRequest.put("http://api.com/item/1").body("updated")
+    assert(put.method == HttpMethod.PUT)
+    assert(put.body == some("updated".into()))
+    let del = HttpRequest.delete("http://api.com/item/1")
+    assert(del.method == HttpMethod.DELETE)
+    print("PUT/DELETE ✓")
+
+    // Default headers
+    let def = HttpRequest.get("http://test.com")
+    assert(def.headers.contains_key("User-Agent"))
+    assert(def.timeout_ms == 30000)
+    print("Defaults ✓")
+
+    print("HTTP client complete ✓")
 }
