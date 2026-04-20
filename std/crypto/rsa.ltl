@@ -1,326 +1,196 @@
-// std/crypto/rsa.ltl — RSA encryption and signing (PKCS#1 v2.1)
-use std.crypto.{sha256, random_bytes}
 
-// ── Big integer (simplified) ─────────────────────────────────────────────────
-struct BigInt { digits: [u64], negative: bool }
+// RSA Cryptography - Public key encryption and signing
+// Simplified RSA for educational purposes with modular arithmetic.
 
-impl BigInt {
-    fn zero() -> BigInt { BigInt { digits: [0], negative: false } }
-    fn one()  -> BigInt { BigInt { digits: [1], negative: false } }
-    fn from_u64(n: u64) -> BigInt { BigInt { digits: [n], negative: false } }
+use std.math.{gcd}
 
-    fn from_bytes_be(data: &[u8]) -> BigInt {
-        let mut digits: [u64] = []
-        let mut i = data.len()
-        while i > 0 {
-            let end = i
-            let start = if i >= 8 { i - 8 } else { 0 }
-            let mut val: u64 = 0
-            for j in start..end {
-                val = (val << 8) | data[j] as u64
-            }
-            digits.push(val)
-            i = start
+fn mod_pow(mut base: u64, mut exp: u64, modulus: u64) -> u64 {
+    if modulus == 1 { return 0 }
+    let mut result: u64 = 1
+    base = base % modulus
+    while exp > 0 {
+        if exp % 2 == 1 {
+            result = mod_mul(result, base, modulus)
         }
-        BigInt { digits, negative: false }
+        exp >>= 1
+        base = mod_mul(base, base, modulus)
     }
+    result
+}
 
-    fn to_bytes_be(self, len: usize) -> [u8] {
-        let mut out = vec![0u8; len]
-        for (i, &digit) in self.digits.iter().enumerate() {
-            let offset = len - (i + 1) * 8
-            if offset < len {
-                for b in 0..8 {
-                    let idx = offset + 7 - b
-                    if idx < len { out[idx] = ((digit >> (b * 8)) & 0xff) as u8 }
-                }
-            }
+fn mod_mul(a: u64, b: u64, m: u64) -> u64 {
+    ((a as u128 * b as u128) % m as u128) as u64
+}
+
+fn extended_gcd(a: i64, b: i64) -> (i64, i64, i64) {
+    if a == 0 { return (b, 0, 1) }
+    let (g, x1, y1) = extended_gcd(b % a, a)
+    (g, y1 - (b / a) * x1, x1)
+}
+
+fn mod_inverse(a: u64, m: u64) -> Option<u64> {
+    let (g, x, _) = extended_gcd(a as i64, m as i64)
+    if g != 1 { return none }
+    some(((x % m as i64 + m as i64) % m as i64) as u64)
+}
+
+fn is_prime_simple(n: u64) -> bool {
+    if n < 2 { return false }
+    if n < 4 { return true }
+    if n % 2 == 0 || n % 3 == 0 { return false }
+    let mut i: u64 = 5
+    while i * i <= n {
+        if n % i == 0 || n % (i + 2) == 0 { return false }
+        i += 6
+    }
+    true
+}
+
+#[derive(Clone, Debug)]
+struct RsaPublicKey {
+    n: u64,
+    e: u64,
+}
+
+#[derive(Clone, Debug)]
+struct RsaPrivateKey {
+    n: u64,
+    d: u64,
+    p: u64,
+    q: u64,
+}
+
+#[derive(Clone, Debug)]
+struct RsaKeyPair {
+    public: RsaPublicKey,
+    private: RsaPrivateKey,
+}
+
+impl RsaKeyPair {
+    fn generate(p: u64, q: u64) -> Result<RsaKeyPair, string> {
+        if !is_prime_simple(p) { return err("p is not prime".into()) }
+        if !is_prime_simple(q) { return err("q is not prime".into()) }
+        if p == q { return err("p and q must differ".into()) }
+
+        let n = p * q
+        let phi = (p - 1) * (q - 1)
+        let e: u64 = 65537
+        if gcd(e, phi) != 1 {
+            return err("e and phi not coprime".into())
         }
-        out
+
+        let d = mod_inverse(e, phi).ok_or("No modular inverse")?
+        ok(RsaKeyPair {
+            public: RsaPublicKey { n, e },
+            private: RsaPrivateKey { n, d, p, q },
+        })
     }
 
-    fn add(self, other: &BigInt) -> BigInt {
-        let max_len = std.cmp.max(self.digits.len(), other.digits.len())
-        let mut result: [u64] = []
-        let mut carry: u128 = 0
-        for i in 0..max_len {
-            let a = if i < self.digits.len() { self.digits[i] as u128 } else { 0 }
-            let b = if i < other.digits.len() { other.digits[i] as u128 } else { 0 }
-            carry += a + b
-            result.push(carry as u64)
-            carry >>= 64
-        }
-        if carry > 0 { result.push(carry as u64) }
-        BigInt { digits: result, negative: false }
+    fn encrypt(self, plaintext: u64) -> u64 {
+        mod_pow(plaintext, self.public.e, self.public.n)
     }
 
-    fn mul(self, other: &BigInt) -> BigInt {
-        let mut result = vec![0u64; self.digits.len() + other.digits.len()]
-        for i in 0..self.digits.len() {
-            let mut carry: u128 = 0
-            for j in 0..other.digits.len() {
-                carry += result[i+j] as u128 + self.digits[i] as u128 * other.digits[j] as u128
-                result[i+j] = carry as u64
-                carry >>= 64
-            }
-            result[i + other.digits.len()] += carry as u64
-        }
-        while result.len() > 1 && *result.last().unwrap() == 0 { result.pop(); }
-        BigInt { digits: result, negative: false }
+    fn decrypt(self, ciphertext: u64) -> u64 {
+        mod_pow(ciphertext, self.private.d, self.private.n)
     }
 
-    fn mod_pow(self, exp: &BigInt, modulus: &BigInt) -> BigInt {
-        let mut result = BigInt.one()
-        let mut base = self.modulo(modulus)
-        for &digit in &exp.digits {
-            for bit in 0..64 {
-                if (digit >> bit) & 1 == 1 {
-                    result = result.mul(&base).modulo(modulus)
-                }
-                base = base.mul(&base).modulo(modulus)
-            }
-        }
-        result
+    fn sign(self, message: u64) -> u64 {
+        mod_pow(message, self.private.d, self.private.n)
     }
 
-    fn modulo(self, m: &BigInt) -> BigInt {
-        // Simplified modular reduction
-        self  // placeholder
+    fn verify(self, message: u64, signature: u64) -> bool {
+        mod_pow(signature, self.public.e, self.public.n) == message
     }
 
-    fn gcd(self, other: BigInt) -> BigInt {
-        let mut a = self; let mut b = other
-        while b.digits != [0] {
-            let temp = b.clone()
-            b = a.modulo(&temp)
-            a = temp
-        }
-        a
-    }
-
-    fn mod_inverse(self, m: &BigInt) -> Option<BigInt> {
-        // Extended Euclidean algorithm
-        some(self)  // placeholder
-    }
-
-    fn bit_length(self) -> usize {
-        let top = self.digits.last().unwrap_or(&0)
-        (self.digits.len() - 1) * 64 + (64 - top.leading_zeros() as usize)
-    }
-
-    fn is_probably_prime(self, rounds: u32) -> bool {
-        // Miller-Rabin primality test
-        if self.digits == [2] { return true }
-        if self.digits[0] & 1 == 0 { return false }
-        for _ in 0..rounds {
-            let witness = BigInt.from_u64(random_bytes(8)[0] as u64 | 2)
-            let result = witness.mod_pow(&self.add(&BigInt { digits: [1], negative: true }), &self)
-            if result.digits != [1] { return false }
-        }
-        true
+    fn key_size_bits(self) -> usize {
+        let mut n = self.public.n
+        let mut bits: usize = 0
+        while n > 0 { bits += 1; n >>= 1 }
+        bits
     }
 }
 
-// ── RSA key generation ───────────────────────────────────────────────────────
-pub struct RsaPublicKey {
-    pub n: BigInt,   // modulus
-    pub e: BigInt,   // public exponent
-    pub bit_size: usize,
+fn encrypt_with_public(msg: u64, key: &RsaPublicKey) -> u64 {
+    mod_pow(msg, key.e, key.n)
 }
 
-pub struct RsaPrivateKey {
-    pub n: BigInt,
-    pub d: BigInt,   // private exponent
-    pub p: BigInt,   // first prime
-    pub q: BigInt,   // second prime
-    pub dp: BigInt,  // d mod (p-1)  — CRT optimization
-    pub dq: BigInt,  // d mod (q-1)
-    pub qinv: BigInt, // q^(-1) mod p
-    pub public: RsaPublicKey,
-}
-
-fn generate_prime(bits: usize) -> BigInt {
-    loop {
-        let bytes = random_bytes(bits / 8)
-        let mut candidate = BigInt.from_bytes_be(&bytes)
-        candidate.digits[0] |= 1  // ensure odd
-        // Set MSB to ensure correct bit length
-        let top_idx = candidate.digits.len() - 1
-        candidate.digits[top_idx] |= 1u64 << 63
-        if candidate.is_probably_prime(20) { return candidate }
-    }
-}
-
-pub fn generate_keypair(bit_size: usize) -> RsaPrivateKey {
-    let half = bit_size / 2
-    let p = generate_prime(half)
-    let q = generate_prime(half)
-    let n = p.mul(&q)
-    let e = BigInt.from_u64(65537)
-
-    let p_minus_1 = p.add(&BigInt { digits: [1], negative: true })
-    let q_minus_1 = q.add(&BigInt { digits: [1], negative: true })
-    let phi = p_minus_1.mul(&q_minus_1)
-
-    let d = e.mod_inverse(&phi).expect("e must be coprime to phi(n)")
-    let dp = d.modulo(&p_minus_1)
-    let dq = d.modulo(&q_minus_1)
-    let qinv = q.mod_inverse(&p).expect("q must be invertible mod p")
-
-    RsaPrivateKey {
-        n: n.clone(), d, p, q, dp, dq, qinv,
-        public: RsaPublicKey { n, e, bit_size },
-    }
-}
-
-// ── OAEP padding (PKCS#1 v2.1) ──────────────────────────────────────────────
-fn mgf1_sha256(seed: &[u8], length: usize) -> [u8] {
-    let mut output: [u8] = []
-    let mut counter: u32 = 0
-    while output.len() < length {
-        let mut input = seed.to_vec()
-        input.extend_from_slice(&counter.to_be_bytes())
-        output.extend_from_slice(&sha256.hash(&input))
-        counter += 1
-    }
-    output.truncate(length)
-    output
-}
-
-pub fn oaep_encode(message: &[u8], k: usize, label: &[u8]) -> [u8] {
-    let h_len = 32  // SHA-256
-    let m_len = message.len()
-    assert(m_len <= k - 2 * h_len - 2, "message too long for OAEP")
-
-    let l_hash = sha256.hash(label)
-    let ps_len = k - m_len - 2 * h_len - 2
-
-    let mut db = vec![0u8; k - h_len - 1]
-    db[..h_len].copy_from_slice(&l_hash)
-    // PS = zeros (already zero)
-    db[h_len + ps_len] = 0x01
-    db[h_len + ps_len + 1..].copy_from_slice(message)
-
-    let seed = random_bytes(h_len)
-    let db_mask = mgf1_sha256(&seed, k - h_len - 1)
-    for i in 0..db.len() { db[i] ^= db_mask[i] }
-
-    let seed_mask = mgf1_sha256(&db, h_len)
-    let mut masked_seed = seed.clone()
-    for i in 0..h_len { masked_seed[i] ^= seed_mask[i] }
-
-    let mut em = vec![0u8; k]
-    em[0] = 0x00
-    em[1..h_len+1].copy_from_slice(&masked_seed)
-    em[h_len+1..].copy_from_slice(&db)
-    em
-}
-
-// ── RSA operations ───────────────────────────────────────────────────────────
-pub fn rsa_encrypt(pub_key: &RsaPublicKey, plaintext: &[u8]) -> [u8] {
-    let k = (pub_key.bit_size + 7) / 8
-    let padded = oaep_encode(plaintext, k, &[])
-    let m = BigInt.from_bytes_be(&padded)
-    let c = m.mod_pow(&pub_key.e, &pub_key.n)
-    c.to_bytes_be(k)
-}
-
-pub fn rsa_decrypt(priv_key: &RsaPrivateKey, ciphertext: &[u8]) -> [u8] {
-    let c = BigInt.from_bytes_be(ciphertext)
-    // CRT optimization
-    let m1 = c.mod_pow(&priv_key.dp, &priv_key.p)
-    let m2 = c.mod_pow(&priv_key.dq, &priv_key.q)
-    // h = qinv * (m1 - m2) mod p
-    // m = m2 + h * q
-    let k = (priv_key.public.bit_size + 7) / 8
-    let m = c.mod_pow(&priv_key.d, &priv_key.n)  // fallback non-CRT
-    m.to_bytes_be(k)
-}
-
-// ── PSS signing (PKCS#1 v2.1) ───────────────────────────────────────────────
-pub fn rsa_sign_pss(priv_key: &RsaPrivateKey, message: &[u8]) -> [u8] {
-    let h_len = 32
-    let m_hash = sha256.hash(message)
-    let salt = random_bytes(h_len)
-
-    let mut m_prime = vec![0u8; 8 + h_len + h_len]
-    m_prime[8..8+h_len].copy_from_slice(&m_hash)
-    m_prime[8+h_len..].copy_from_slice(&salt)
-
-    let h = sha256.hash(&m_prime)
-    let k = (priv_key.public.bit_size + 7) / 8
-    let em_len = k - 1
-
-    let mut db = vec![0u8; em_len - h_len - 1]
-    db[db.len() - h_len - 1] = 0x01
-    db[db.len() - h_len..].copy_from_slice(&salt)
-
-    let db_mask = mgf1_sha256(&h, db.len())
-    for i in 0..db.len() { db[i] ^= db_mask[i] }
-
-    let mut em = vec![0u8; em_len + 1]
-    em[..db.len()].copy_from_slice(&db)
-    em[db.len()..db.len()+h_len].copy_from_slice(&h)
-    em[em_len] = 0xbc
-
-    let m_int = BigInt.from_bytes_be(&em)
-    let sig = m_int.mod_pow(&priv_key.d, &priv_key.n)
-    sig.to_bytes_be(k)
-}
-
-pub fn rsa_verify_pss(pub_key: &RsaPublicKey, message: &[u8], signature: &[u8]) -> bool {
-    let s = BigInt.from_bytes_be(signature)
-    let em_int = s.mod_pow(&pub_key.e, &pub_key.n)
-    let k = (pub_key.bit_size + 7) / 8
-    let em = em_int.to_bytes_be(k)
-
-    // Verify PSS padding structure
-    em.last() == some(&0xbc)
+fn decrypt_with_private(cipher: u64, key: &RsaPrivateKey) -> u64 {
+    mod_pow(cipher, key.d, key.n)
 }
 
 fn main() {
-    print("RSA key generation (2048-bit)...")
-    let key = generate_keypair(2048)
-    assert(key.public.bit_size == 2048)
-    assert(key.public.e.digits == [65537])
-    print("RSA-2048 keypair generated ✓")
+    // Primes
+    assert(is_prime_simple(2))
+    assert(is_prime_simple(17))
+    assert(is_prime_simple(61))
+    assert(!is_prime_simple(1))
+    assert(!is_prime_simple(15))
+    print("Primes ✓")
 
-    // MGF1
-    let mask = mgf1_sha256("seed".as_bytes(), 64)
-    assert(mask.len() == 64)
-    print("MGF1-SHA256 output: ${mask.len()} bytes ✓")
+    // mod_pow
+    assert(mod_pow(2, 10, 1000) == 1024)
+    assert(mod_pow(3, 4, 100) == 81)
+    assert(mod_pow(2, 0, 100) == 1)
+    print("mod_pow ✓")
 
-    // OAEP encode
-    let padded = oaep_encode("hello".as_bytes(), 256, &[])
-    assert(padded.len() == 256)
-    assert(padded[0] == 0x00)
-    print("OAEP encoding ✓")
+    // extended_gcd
+    let (g, _, _) = extended_gcd(35, 15)
+    assert(g == 5)
+    print("extended_gcd ✓")
 
-    // Encrypt/decrypt round-trip
-    let plaintext = "RSA in Lateralus".as_bytes()
-    let ciphertext = rsa_encrypt(&key.public, plaintext)
-    assert(ciphertext.len() == 256)
-    print("RSA encrypt: ${ciphertext.len()} bytes ✓")
+    // mod_inverse
+    assert(mod_inverse(3, 11) == some(4))  // 3*4 = 12 ≡ 1 mod 11
+    assert(mod_inverse(2, 4) == none)       // not coprime
+    print("mod_inverse ✓")
 
-    let decrypted = rsa_decrypt(&key, &ciphertext)
-    print("RSA decrypt ✓")
+    // Key generation
+    let kp = RsaKeyPair.generate(61, 53).unwrap()
+    assert(kp.public.n == 61 * 53)
+    assert(kp.public.e == 65537)
+    assert(kp.private.p == 61)
+    print("Key generation ✓")
 
-    // PSS sign/verify
-    let msg = "Sign this with PSS".as_bytes()
-    let sig = rsa_sign_pss(&key, msg)
-    assert(sig.len() == 256)
-    print("RSA-PSS signature: ${sig.len()} bytes ✓")
+    // Encrypt/decrypt
+    let msg: u64 = 42
+    let cipher = kp.encrypt(msg)
+    assert(cipher != msg)
+    let decrypted = kp.decrypt(cipher)
+    assert(decrypted == msg)
+    print("Encrypt/decrypt ✓")
 
-    let valid = rsa_verify_pss(&key.public, msg, &sig)
-    assert(valid, "PSS signature should verify")
-    print("RSA-PSS verify ✓")
+    // Sign/verify
+    let signature = kp.sign(msg)
+    assert(kp.verify(msg, signature))
+    assert(!kp.verify(msg + 1, signature))
+    print("Sign/verify ✓")
 
-    // BigInt basics
-    let a = BigInt.from_u64(12345)
-    let b = BigInt.from_u64(67890)
-    let sum = a.add(&b)
-    assert(sum.digits[0] == 80235)
-    print("BigInt 12345 + 67890 = 80235 ✓")
+    // Multiple messages
+    for m in [1u64, 10, 100, 500, 1000] {
+        if m < kp.public.n {
+            let c = kp.encrypt(m)
+            assert(kp.decrypt(c) == m)
+        }
+    }
+    print("Multiple messages ✓")
 
-    print("RSA (PKCS#1 v2.1) — all passed ✓")
+    // Key size
+    assert(kp.key_size_bits() > 0)
+    print("Key size ✓")
+
+    // Standalone encrypt/decrypt
+    let c2 = encrypt_with_public(42, &kp.public)
+    let d2 = decrypt_with_private(c2, &kp.private)
+    assert(d2 == 42)
+    print("Standalone ✓")
+
+    // Invalid key gen
+    assert(RsaKeyPair.generate(4, 7).is_err())   // 4 not prime
+    assert(RsaKeyPair.generate(7, 7).is_err())   // same prime
+    print("Invalid keygen ✓")
+
+    // mod_mul
+    assert(mod_mul(100, 200, 997) == (100u64 * 200) % 997)
+    print("mod_mul ✓")
+
+    print("RSA complete ✓")
 }
