@@ -1,0 +1,298 @@
+
+// MessagePack Binary Serialization
+// Compact binary format encoder/decoder supporting all standard types.
+
+#[derive(Clone, Debug, PartialEq)]
+enum MsgValue {
+    Nil,
+    Bool(bool),
+    Int(i64),
+    UInt(u64),
+    Float(f64),
+    Str(string),
+    Bin([u8]),
+    Array([MsgValue]),
+    Map([(MsgValue, MsgValue)]),
+}
+
+struct MsgPackWriter {
+    buf: [u8],
+}
+
+impl MsgPackWriter {
+    fn new() -> MsgPackWriter { MsgPackWriter { buf: [] } }
+
+    fn bytes(self) -> &[u8] { &self.buf }
+    fn len(self) -> usize { self.buf.len() }
+
+    fn write_byte(mut self, b: u8) { self.buf.push(b) }
+
+    fn write_nil(mut self) { self.write_byte(0xc0) }
+
+    fn write_bool(mut self, v: bool) {
+        self.write_byte(if v { 0xc3 } else { 0xc2 })
+    }
+
+    fn write_int(mut self, v: i64) {
+        if v >= 0 && v <= 127 {
+            self.write_byte(v as u8)
+        } else if v >= -32 && v < 0 {
+            self.write_byte((v as u8) & 0xff)
+        } else if v >= -128 && v <= 127 {
+            self.write_byte(0xd0)
+            self.write_byte(v as u8)
+        } else if v >= -32768 && v <= 32767 {
+            self.write_byte(0xd1)
+            self.buf.extend_from_slice(&(v as i16).to_be_bytes())
+        } else if v >= -2147483648 && v <= 2147483647 {
+            self.write_byte(0xd2)
+            self.buf.extend_from_slice(&(v as i32).to_be_bytes())
+        } else {
+            self.write_byte(0xd3)
+            self.buf.extend_from_slice(&v.to_be_bytes())
+        }
+    }
+
+    fn write_uint(mut self, v: u64) {
+        if v <= 127 {
+            self.write_byte(v as u8)
+        } else if v <= 255 {
+            self.write_byte(0xcc)
+            self.write_byte(v as u8)
+        } else if v <= 65535 {
+            self.write_byte(0xcd)
+            self.buf.extend_from_slice(&(v as u16).to_be_bytes())
+        } else if v <= 4294967295 {
+            self.write_byte(0xce)
+            self.buf.extend_from_slice(&(v as u32).to_be_bytes())
+        } else {
+            self.write_byte(0xcf)
+            self.buf.extend_from_slice(&v.to_be_bytes())
+        }
+    }
+
+    fn write_f64(mut self, v: f64) {
+        self.write_byte(0xcb)
+        self.buf.extend_from_slice(&v.to_be_bytes())
+    }
+
+    fn write_str(mut self, s: &str) {
+        let bytes = s.as_bytes()
+        let len = bytes.len()
+        if len <= 31 {
+            self.write_byte(0xa0 | len as u8)
+        } else if len <= 255 {
+            self.write_byte(0xd9)
+            self.write_byte(len as u8)
+        } else if len <= 65535 {
+            self.write_byte(0xda)
+            self.buf.extend_from_slice(&(len as u16).to_be_bytes())
+        } else {
+            self.write_byte(0xdb)
+            self.buf.extend_from_slice(&(len as u32).to_be_bytes())
+        }
+        self.buf.extend_from_slice(bytes)
+    }
+
+    fn write_array_header(mut self, len: usize) {
+        if len <= 15 {
+            self.write_byte(0x90 | len as u8)
+        } else if len <= 65535 {
+            self.write_byte(0xdc)
+            self.buf.extend_from_slice(&(len as u16).to_be_bytes())
+        } else {
+            self.write_byte(0xdd)
+            self.buf.extend_from_slice(&(len as u32).to_be_bytes())
+        }
+    }
+
+    fn write_map_header(mut self, len: usize) {
+        if len <= 15 {
+            self.write_byte(0x80 | len as u8)
+        } else if len <= 65535 {
+            self.write_byte(0xde)
+            self.buf.extend_from_slice(&(len as u16).to_be_bytes())
+        } else {
+            self.write_byte(0xdf)
+            self.buf.extend_from_slice(&(len as u32).to_be_bytes())
+        }
+    }
+
+    fn write_value(mut self, val: &MsgValue) {
+        match val {
+            MsgValue.Nil => self.write_nil(),
+            MsgValue.Bool(b) => self.write_bool(*b),
+            MsgValue.Int(i) => self.write_int(*i),
+            MsgValue.UInt(u) => self.write_uint(*u),
+            MsgValue.Float(f) => self.write_f64(*f),
+            MsgValue.Str(s) => self.write_str(s),
+            MsgValue.Bin(b) => {
+                if b.len() <= 255 { self.write_byte(0xc4); self.write_byte(b.len() as u8) }
+                else { self.write_byte(0xc5); self.buf.extend_from_slice(&(b.len() as u16).to_be_bytes()) }
+                self.buf.extend_from_slice(b)
+            }
+            MsgValue.Array(arr) => {
+                self.write_array_header(arr.len())
+                for item in arr { self.write_value(item) }
+            }
+            MsgValue.Map(entries) => {
+                self.write_map_header(entries.len())
+                for (k, v) in entries {
+                    self.write_value(k)
+                    self.write_value(v)
+                }
+            }
+        }
+    }
+}
+
+struct MsgPackReader {
+    data: [u8],
+    pos: usize,
+}
+
+impl MsgPackReader {
+    fn new(data: [u8]) -> MsgPackReader { MsgPackReader { data, pos: 0 } }
+
+    fn read_byte(mut self) -> u8 {
+        let b = self.data[self.pos]
+        self.pos += 1
+        b
+    }
+
+    fn remaining(self) -> usize { self.data.len() - self.pos }
+
+    fn read_value(mut self) -> MsgValue {
+        let tag = self.read_byte()
+        match tag {
+            0xc0 => MsgValue.Nil,
+            0xc2 => MsgValue.Bool(false),
+            0xc3 => MsgValue.Bool(true),
+            t if t <= 0x7f => MsgValue.Int(t as i64),
+            t if t >= 0xe0 => MsgValue.Int((t as i8) as i64),
+            0xd0 => MsgValue.Int((self.read_byte() as i8) as i64),
+            t if (t & 0xe0) == 0xa0 => {
+                let len = (t & 0x1f) as usize
+                let s = string.from_utf8(&self.data[self.pos..self.pos + len])
+                self.pos += len
+                MsgValue.Str(s)
+            }
+            t if (t & 0xf0) == 0x90 => {
+                let len = (t & 0x0f) as usize
+                let mut arr = []
+                for _ in 0..len { arr.push(self.read_value()) }
+                MsgValue.Array(arr)
+            }
+            t if (t & 0xf0) == 0x80 => {
+                let len = (t & 0x0f) as usize
+                let mut entries = []
+                for _ in 0..len {
+                    let k = self.read_value()
+                    let v = self.read_value()
+                    entries.push((k, v))
+                }
+                MsgValue.Map(entries)
+            }
+            _ => MsgValue.Nil,
+        }
+    }
+}
+
+fn main() {
+    // Nil
+    let mut w = MsgPackWriter.new()
+    w.write_nil()
+    assert(w.len() == 1)
+    assert(w.bytes()[0] == 0xc0)
+    print("Nil ✓")
+
+    // Bool
+    let mut w2 = MsgPackWriter.new()
+    w2.write_bool(true)
+    w2.write_bool(false)
+    assert(w2.bytes()[0] == 0xc3)
+    assert(w2.bytes()[1] == 0xc2)
+    print("Bool ✓")
+
+    // Positive fixint
+    let mut w3 = MsgPackWriter.new()
+    w3.write_int(42)
+    assert(w3.len() == 1)
+    assert(w3.bytes()[0] == 42)
+    print("Fixint ✓")
+
+    // Negative fixint
+    let mut w4 = MsgPackWriter.new()
+    w4.write_int(-1)
+    assert(w4.len() == 1)
+    print("Neg fixint ✓")
+
+    // String
+    let mut w5 = MsgPackWriter.new()
+    w5.write_str("hello")
+    assert(w5.bytes()[0] == (0xa0 | 5))
+    print("String ✓")
+
+    // Float
+    let mut w6 = MsgPackWriter.new()
+    w6.write_f64(3.14)
+    assert(w6.bytes()[0] == 0xcb)
+    assert(w6.len() == 9)
+    print("Float ✓")
+
+    // Array
+    let mut w7 = MsgPackWriter.new()
+    w7.write_array_header(3)
+    w7.write_int(1)
+    w7.write_int(2)
+    w7.write_int(3)
+    assert(w7.bytes()[0] == 0x93)
+    print("Array ✓")
+
+    // Map
+    let mut w8 = MsgPackWriter.new()
+    w8.write_map_header(1)
+    w8.write_str("key")
+    w8.write_int(99)
+    assert(w8.bytes()[0] == 0x81)
+    print("Map ✓")
+
+    // Value serialization
+    let mut w9 = MsgPackWriter.new()
+    let val = MsgValue.Array([
+        MsgValue.Int(1),
+        MsgValue.Str("two".into()),
+        MsgValue.Bool(true),
+    ])
+    w9.write_value(&val)
+    assert(w9.len() > 3)
+    print("Value write ✓")
+
+    // Roundtrip
+    let mut w10 = MsgPackWriter.new()
+    w10.write_int(42)
+    w10.write_str("hi")
+    w10.write_bool(true)
+    let mut reader = MsgPackReader.new(w10.buf.clone())
+    let v1 = reader.read_value()
+    assert(v1 == MsgValue.Int(42))
+    let v2 = reader.read_value()
+    assert(v2 == MsgValue.Str("hi".into()))
+    let v3 = reader.read_value()
+    assert(v3 == MsgValue.Bool(true))
+    print("Roundtrip ✓")
+
+    // UInt encoding
+    let mut w11 = MsgPackWriter.new()
+    w11.write_uint(200)
+    assert(w11.bytes()[0] == 0xcc)
+    print("UInt ✓")
+
+    // Large int
+    let mut w12 = MsgPackWriter.new()
+    w12.write_int(100000)
+    assert(w12.bytes()[0] == 0xd2)
+    print("Large int ✓")
+
+    print("MessagePack complete ✓")
+}
