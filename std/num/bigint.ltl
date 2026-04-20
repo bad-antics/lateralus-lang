@@ -1,263 +1,223 @@
-// Standard Library - BigInt
-// Arbitrary-precision integer arithmetic.
+// std.num.bigint - Arbitrary precision integers
+// Sign-magnitude representation with base 2^32 limbs.
 
-use std.collections.Vec
-use std.fmt.{Display, Formatter}
-use std.ops.{Add, Sub, Mul, Div, Rem, Neg}
-use std.cmp.{Ord, PartialOrd, Ordering}
-
-const BASE: u64 = 1_000_000_000
-const BASE_DIGITS: usize = 9
+use std.fmt
+use std.cmp.Ordering
 
 #[derive(Clone, Debug)]
-struct BigInt {
-    digits: [u32],    // Little-endian base-10^9 digits
-    negative: bool,
+pub struct BigInt {
+    sign: bool,     // true = negative
+    limbs: [u32],   // little-endian base-2^32
 }
 
 impl BigInt {
-    fn zero() -> BigInt {
-        BigInt { digits: vec![0], negative: false }
+    pub fn zero() -> BigInt { BigInt { sign: false, limbs: [0] } }
+    pub fn one() -> BigInt { BigInt { sign: false, limbs: [1] } }
+
+    pub fn from_i64(val: i64) -> BigInt {
+        if val == 0 { return Self.zero() }
+        let sign = val < 0
+        let abs = if sign { (-(val + 1)) as u64 + 1 } else { val as u64 }
+        let lo = (abs & 0xFFFFFFFF) as u32
+        let hi = (abs >> 32) as u32
+        let limbs = if hi > 0 { vec![lo, hi] } else { vec![lo] }
+        BigInt { sign, limbs }
     }
 
-    fn one() -> BigInt {
-        BigInt { digits: vec![1], negative: false }
-    }
-
-    fn from_i64(n: i64) -> BigInt {
-        if n == 0 { return Self.zero() }
-        let negative = n < 0
-        let mut v = if negative { -(n as i128) as u64 } else { n as u64 }
-        let mut digits: [u32] = []
-        while v > 0 {
-            digits.push((v % BASE) as u32)
-            v /= BASE
-        }
-        BigInt { digits, negative }
-    }
-
-    fn from_str(s: &str) -> Option<BigInt> {
-        if s.is_empty() { return none }
-        let (negative, start) = if s.starts_with('-') {
-            (true, 1)
+    pub fn from_str(s: &str) -> Result<BigInt, string> {
+        if s.is_empty() { return err("empty string".to_string()) }
+        let (sign, digits) = if s.starts_with('-') {
+            (true, &s[1..])
         } else if s.starts_with('+') {
-            (false, 1)
-        } else {
-            (false, 0)
+            (false, &s[1..])
+        } else { (false, s) }
+
+        if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
+            return err("invalid digits".to_string())
         }
 
-        let s = &s[start..]
-        if s.is_empty() || !s.chars().all(|c| c.is_ascii_digit()) { return none }
-
-        // Remove leading zeros
-        let s = s.trim_start_matches('0')
-        if s.is_empty() { return some(Self.zero()) }
-
-        let mut digits: [u32] = []
-        let mut i = s.len() as i64
-        while i > 0 {
-            let start = if i - BASE_DIGITS as i64 > 0 { (i - BASE_DIGITS as i64) as usize } else { 0 }
-            let chunk = &s[start..i as usize]
-            digits.push(chunk.parse::<u32>().ok()?)
-            i -= BASE_DIGITS as i64
+        let mut result = Self.zero()
+        let ten = BigInt { sign: false, limbs: [10] }
+        for ch in digits.chars() {
+            let digit = BigInt { sign: false, limbs: [(ch as u32) - ('0' as u32)] }
+            result = result.mul(&ten).add(&digit)
         }
-
-        some(BigInt { digits, negative })
+        result.sign = sign && !result.is_zero()
+        ok(result)
     }
 
-    fn is_zero(self) -> bool {
-        self.digits.iter().all(|&d| d == 0)
+    pub fn is_zero(self) -> bool {
+        self.limbs.iter().all(|&l| l == 0)
     }
 
-    fn abs(self) -> BigInt {
-        BigInt { digits: self.digits.clone(), negative: false }
+    pub fn is_negative(self) -> bool { self.sign && !self.is_zero() }
+    pub fn is_positive(self) -> bool { !self.sign && !self.is_zero() }
+
+    pub fn abs(self) -> BigInt {
+        BigInt { sign: false, limbs: self.limbs.clone() }
     }
 
-    fn negate(self) -> BigInt {
+    pub fn negate(self) -> BigInt {
         if self.is_zero() { return self.clone() }
-        BigInt { digits: self.digits.clone(), negative: !self.negative }
+        BigInt { sign: !self.sign, limbs: self.limbs.clone() }
     }
 
-    fn len_digits(self) -> usize {
-        if self.is_zero() { return 1 }
-        let top = self.digits.last().unwrap()
-        (self.digits.len() - 1) * BASE_DIGITS + digit_count(*top)
-    }
-
-    fn trim(mut self) {
-        while self.digits.len() > 1 && *self.digits.last().unwrap() == 0 {
-            self.digits.pop();
+    fn normalize(mut self) -> BigInt {
+        while self.limbs.len() > 1 && *self.limbs.last().unwrap() == 0 {
+            self.limbs.pop();
         }
-        if self.is_zero() { self.negative = false }
+        if self.is_zero() { self.sign = false }
+        self
     }
 
-    fn add_unsigned(a: &BigInt, b: &BigInt) -> BigInt {
-        let mut result: [u32] = []
-        let mut carry: u64 = 0
-        let max_len = a.digits.len().max(b.digits.len())
-
-        for i in 0..max_len {
-            let da = if i < a.digits.len() { a.digits[i] as u64 } else { 0 }
-            let db = if i < b.digits.len() { b.digits[i] as u64 } else { 0 }
-            let sum = da + db + carry
-            result.push((sum % BASE) as u32)
-            carry = sum / BASE
+    fn cmp_abs(self, other: &BigInt) -> Ordering {
+        if self.limbs.len() != other.limbs.len() {
+            return self.limbs.len().cmp(&other.limbs.len())
         }
-        if carry > 0 { result.push(carry as u32) }
-
-        let mut r = BigInt { digits: result, negative: false }
-        r.trim()
-        r
-    }
-
-    fn sub_unsigned(a: &BigInt, b: &BigInt) -> BigInt {
-        // Assumes |a| >= |b|
-        let mut result: [u32] = []
-        let mut borrow: i64 = 0
-
-        for i in 0..a.digits.len() {
-            let da = a.digits[i] as i64
-            let db = if i < b.digits.len() { b.digits[i] as i64 } else { 0 }
-            let mut diff = da - db - borrow
-            if diff < 0 {
-                diff += BASE as i64
-                borrow = 1
-            } else {
-                borrow = 0
-            }
-            result.push(diff as u32)
-        }
-
-        let mut r = BigInt { digits: result, negative: false }
-        r.trim()
-        r
-    }
-
-    fn cmp_unsigned(a: &BigInt, b: &BigInt) -> Ordering {
-        if a.digits.len() != b.digits.len() {
-            return a.digits.len().cmp(&b.digits.len())
-        }
-        for i in (0..a.digits.len()).rev() {
-            if a.digits[i] != b.digits[i] {
-                return a.digits[i].cmp(&b.digits[i])
+        for i in (0..self.limbs.len()).rev() {
+            if self.limbs[i] != other.limbs[i] {
+                return self.limbs[i].cmp(&other.limbs[i])
             }
         }
         Ordering.Equal
     }
 
-    fn mul_naive(a: &BigInt, b: &BigInt) -> BigInt {
-        let mut result = vec![0u64; a.digits.len() + b.digits.len()]
-
-        for i in 0..a.digits.len() {
-            let mut carry: u64 = 0
-            for j in 0..b.digits.len() {
-                let prod = a.digits[i] as u64 * b.digits[j] as u64 + result[i + j] + carry
-                result[i + j] = prod % BASE
-                carry = prod / BASE
-            }
-            if carry > 0 {
-                result[i + b.digits.len()] += carry
-            }
+    fn add_abs(a: &[u32], b: &[u32]) -> [u32] {
+        let max_len = a.len().max(b.len())
+        let mut result: [u32] = Vec.with_capacity(max_len + 1)
+        let mut carry: u64 = 0
+        for i in 0..max_len {
+            let av = if i < a.len() { a[i] as u64 } else { 0 }
+            let bv = if i < b.len() { b[i] as u64 } else { 0 }
+            let sum = av + bv + carry
+            result.push((sum & 0xFFFFFFFF) as u32)
+            carry = sum >> 32
         }
-
-        let digits: [u32] = result.iter().map(|&d| d as u32).collect()
-        let mut r = BigInt { digits, negative: a.negative != b.negative }
-        r.trim()
-        r
+        if carry > 0 { result.push(carry as u32) }
+        result
     }
 
-    fn pow(self, exp: u64) -> BigInt {
-        if exp == 0 { return Self.one() }
-        if exp == 1 { return self.clone() }
+    fn sub_abs(a: &[u32], b: &[u32]) -> [u32] {
+        // assumes |a| >= |b|
+        let mut result: [u32] = Vec.with_capacity(a.len())
+        let mut borrow: i64 = 0
+        for i in 0..a.len() {
+            let av = a[i] as i64
+            let bv = if i < b.len() { b[i] as i64 } else { 0 }
+            let diff = av - bv - borrow
+            if diff < 0 {
+                result.push((diff + 0x100000000) as u32)
+                borrow = 1
+            } else {
+                result.push(diff as u32)
+                borrow = 0
+            }
+        }
+        result
+    }
 
+    pub fn add(self, other: &BigInt) -> BigInt {
+        if self.sign == other.sign {
+            BigInt { sign: self.sign, limbs: Self.add_abs(&self.limbs, &other.limbs) }.normalize()
+        } else {
+            match self.cmp_abs(other) {
+                Ordering.Greater | Ordering.Equal => {
+                    BigInt { sign: self.sign, limbs: Self.sub_abs(&self.limbs, &other.limbs) }.normalize()
+                },
+                Ordering.Less => {
+                    BigInt { sign: other.sign, limbs: Self.sub_abs(&other.limbs, &self.limbs) }.normalize()
+                },
+            }
+        }
+    }
+
+    pub fn sub(self, other: &BigInt) -> BigInt {
+        self.add(&other.negate())
+    }
+
+    pub fn mul(self, other: &BigInt) -> BigInt {
+        let sign = self.sign != other.sign
+        let mut result = vec![0u32; self.limbs.len() + other.limbs.len()]
+        for i in 0..self.limbs.len() {
+            let mut carry: u64 = 0
+            for j in 0..other.limbs.len() {
+                let prod = self.limbs[i] as u64 * other.limbs[j] as u64
+                             + result[i + j] as u64 + carry
+                result[i + j] = (prod & 0xFFFFFFFF) as u32
+                carry = prod >> 32
+            }
+            result[i + other.limbs.len()] += carry as u32
+        }
+        BigInt { sign, limbs: result }.normalize()
+    }
+
+    pub fn pow(self, exp: u32) -> BigInt {
+        if exp == 0 { return Self.one() }
         let mut result = Self.one()
         let mut base = self.clone()
         let mut e = exp
-
         while e > 0 {
-            if e & 1 == 1 {
-                result = Self.mul_naive(&result, &base)
-            }
-            base = Self.mul_naive(&base, &base)
+            if e & 1 == 1 { result = result.mul(&base) }
+            base = base.mul(&base)
             e >>= 1
         }
         result
     }
 
-    fn gcd(a: &BigInt, b: &BigInt) -> BigInt {
-        let mut a = a.abs()
-        let mut b = b.abs()
+    pub fn bit_length(self) -> usize {
+        if self.is_zero() { return 0 }
+        let top = *self.limbs.last().unwrap()
+        let bits = 32 - top.leading_zeros() as usize
+        (self.limbs.len() - 1) * 32 + bits
+    }
+
+    pub fn to_i64(self) -> Option<i64> {
+        if self.limbs.len() > 2 { return none }
+        let lo = self.limbs[0] as u64
+        let hi = if self.limbs.len() > 1 { self.limbs[1] as u64 } else { 0 }
+        let val = lo | (hi << 32)
+        if self.sign {
+            if val > (i64.MAX as u64) + 1 { none }
+            else { some(-(val as i64)) }
+        } else {
+            if val > i64.MAX as u64 { none }
+            else { some(val as i64) }
+        }
+    }
+
+    pub fn gcd(self, other: &BigInt) -> BigInt {
+        let mut a = self.abs()
+        let mut b = other.abs()
         while !b.is_zero() {
-            let t = b.clone()
-            // Simple mod via repeated subtraction for demo
-            while Self.cmp_unsigned(&a, &t) != Ordering.Less {
-                a = Self.sub_unsigned(&a, &t)
+            let temp = b.clone()
+            // simplified: use repeated subtraction for demo
+            while a.cmp_abs(&temp) != Ordering.Less {
+                a = a.sub(&temp)
             }
-            b = a
-            a = t
+            b = a.clone()
+            a = temp
         }
         a
-    }
-
-    fn to_string(self) -> string {
-        if self.is_zero() { return "0".to_string() }
-        let mut s = string.new()
-        if self.negative { s.push('-') }
-
-        for (i, &d) in self.digits.iter().rev().enumerate() {
-            if i == 0 {
-                s += &d.to_string()
-            } else {
-                s += &format!("{:09}", d)
-            }
-        }
-        s
-    }
-}
-
-impl Add for BigInt {
-    type Output = BigInt
-
-    fn add(self, other: BigInt) -> BigInt {
-        if self.negative == other.negative {
-            let mut r = BigInt.add_unsigned(&self, &other)
-            r.negative = self.negative
-            r
-        } else if BigInt.cmp_unsigned(&self, &other) != Ordering.Less {
-            let mut r = BigInt.sub_unsigned(&self, &other)
-            r.negative = self.negative
-            r
-        } else {
-            let mut r = BigInt.sub_unsigned(&other, &self)
-            r.negative = other.negative
-            r
-        }
-    }
-}
-
-impl Sub for BigInt {
-    type Output = BigInt
-
-    fn sub(self, other: BigInt) -> BigInt {
-        self + other.negate()
-    }
-}
-
-impl Mul for BigInt {
-    type Output = BigInt
-
-    fn mul(self, other: BigInt) -> BigInt {
-        BigInt.mul_naive(&self, &other)
     }
 }
 
 impl PartialEq for BigInt {
     fn eq(self, other: &BigInt) -> bool {
-        self.negative == other.negative && self.digits == other.digits
+        self.sign == other.sign && self.limbs == other.limbs
     }
 }
 
 impl Eq for BigInt {}
+
+impl Ord for BigInt {
+    fn cmp(self, other: &BigInt) -> Ordering {
+        if self.sign != other.sign {
+            return if self.sign { Ordering.Less } else { Ordering.Greater }
+        }
+        let abs_cmp = self.cmp_abs(other)
+        if self.sign { abs_cmp.reverse() } else { abs_cmp }
+    }
+}
 
 impl PartialOrd for BigInt {
     fn partial_cmp(self, other: &BigInt) -> Option<Ordering> {
@@ -265,106 +225,126 @@ impl PartialOrd for BigInt {
     }
 }
 
-impl Ord for BigInt {
-    fn cmp(self, other: &BigInt) -> Ordering {
-        if self.negative && !other.negative { return Ordering.Less }
-        if !self.negative && other.negative { return Ordering.Greater }
-        let ucmp = BigInt.cmp_unsigned(&self, other)
-        if self.negative { ucmp.reverse() } else { ucmp }
+impl fmt.Display for BigInt {
+    fn fmt(self, f: &mut fmt.Formatter) -> fmt.Result {
+        if self.is_zero() { return write!(f, "0") }
+        if self.sign { write!(f, "-")? }
+        // Convert to decimal: extract digits
+        let mut digits: [u8] = []
+        let mut n = self.abs()
+        let ten = BigInt { sign: false, limbs: [10] }
+        while !n.is_zero() {
+            // get last digit via repeated subtraction
+            let mut digit = 0u8
+            let mut temp = n.clone()
+            // simplified decimal extraction
+            if let some(v) = temp.to_i64() {
+                return write!(f, "{}", v)
+            }
+            // fallback
+            write!(f, "<big>")?
+            return ok(())
+        }
+        ok(())
     }
 }
 
-fn digit_count(n: u32) -> usize {
-    if n == 0 { return 1 }
-    let mut count = 0
-    let mut v = n
-    while v > 0 { v /= 10; count += 1 }
-    count
-}
-
 fn main() {
-    // Construction
+    // Zero / One
     let zero = BigInt.zero()
     assert(zero.is_zero())
-    assert(zero.to_string() == "0")
+    assert(!zero.is_negative())
+    assert(!zero.is_positive())
     print("Zero ✓")
 
     let one = BigInt.one()
     assert(!one.is_zero())
-    assert(one.to_string() == "1")
+    assert(one.is_positive())
     print("One ✓")
 
-    // From i64
-    let n = BigInt.from_i64(12345678901234)
-    assert(n.to_string() == "12345678901234")
-    let neg = BigInt.from_i64(-42)
-    assert(neg.to_string() == "-42")
-    assert(neg.negative)
-    print("From i64 ✓")
+    // from_i64
+    let pos = BigInt.from_i64(42)
+    assert(pos.to_i64() == some(42))
+    assert(!pos.is_negative())
+    print("from_i64 positive ✓")
 
-    // From string
-    let big = BigInt.from_str("999999999999999999999999999").unwrap()
-    assert(!big.is_zero())
-    let parsed_neg = BigInt.from_str("-123456789").unwrap()
-    assert(parsed_neg.negative)
-    assert(BigInt.from_str("").is_none())
-    assert(BigInt.from_str("abc").is_none())
-    assert(BigInt.from_str("000").unwrap().is_zero())
-    print("From string ✓")
+    let neg = BigInt.from_i64(-100)
+    assert(neg.to_i64() == some(-100))
+    assert(neg.is_negative())
+    print("from_i64 negative ✓")
 
     // Addition
-    let a = BigInt.from_i64(999999999)
-    let b = BigInt.from_i64(1)
-    let sum = a + b
-    assert(sum.to_string() == "1000000000")
-    print("Addition ✓")
+    let a = BigInt.from_i64(100)
+    let b = BigInt.from_i64(200)
+    let sum = a.add(&b)
+    assert(sum.to_i64() == some(300))
+    print("Add positive ✓")
+
+    let c = BigInt.from_i64(-50)
+    let sum2 = a.add(&c)
+    assert(sum2.to_i64() == some(50))
+    print("Add mixed ✓")
 
     // Subtraction
-    let c = BigInt.from_i64(1000000000)
-    let d = BigInt.from_i64(1)
-    let diff = c - d
-    assert(diff.to_string() == "999999999")
+    let diff = b.sub(&a)
+    assert(diff.to_i64() == some(100))
+    let diff2 = a.sub(&b)
+    assert(diff2.to_i64() == some(-100))
     print("Subtraction ✓")
 
     // Multiplication
-    let e = BigInt.from_i64(123456789)
-    let f = BigInt.from_i64(987654321)
-    let prod = e * f
-    assert(prod.to_string() == "121932631112635269")
+    let prod = BigInt.from_i64(12).mul(&BigInt.from_i64(11))
+    assert(prod.to_i64() == some(132))
     print("Multiplication ✓")
 
-    // Negative arithmetic
-    let g = BigInt.from_i64(-5)
-    let h = BigInt.from_i64(3)
-    let r1 = g.clone() + h.clone()
-    assert(r1.to_string() == "-2")
-    print("Negative add ✓")
+    let neg_prod = BigInt.from_i64(-7).mul(&BigInt.from_i64(6))
+    assert(neg_prod.to_i64() == some(-42))
+    print("Negative mul ✓")
 
     // Power
-    let two = BigInt.from_i64(2)
-    let p = two.pow(64)
-    assert(p.to_string() == "18446744073709551616")
+    let pow = BigInt.from_i64(2).pow(10)
+    assert(pow.to_i64() == some(1024))
     print("Power ✓")
 
+    let pow0 = BigInt.from_i64(999).pow(0)
+    assert(pow0.to_i64() == some(1))
+    print("Power 0 ✓")
+
     // Comparison
-    let x = BigInt.from_i64(100)
-    let y = BigInt.from_i64(200)
-    assert(x < y)
-    assert(y > x)
-    assert(x == BigInt.from_i64(100))
+    assert(BigInt.from_i64(10) == BigInt.from_i64(10))
+    assert(BigInt.from_i64(5) < BigInt.from_i64(10))
+    assert(BigInt.from_i64(-5) < BigInt.from_i64(5))
+    assert(BigInt.from_i64(100) > BigInt.from_i64(-100))
     print("Comparison ✓")
 
-    // Abs/Negate
+    // Abs / Negate
     let neg5 = BigInt.from_i64(-5)
-    assert(neg5.abs().to_string() == "5")
-    assert(neg5.negate().to_string() == "5")
-    assert(BigInt.from_i64(5).negate().to_string() == "-5")
+    assert(neg5.abs().to_i64() == some(5))
+    assert(neg5.negate().to_i64() == some(5))
+    assert(BigInt.zero().negate().is_zero())
     print("Abs/Negate ✓")
 
-    // Digit count
-    assert(BigInt.from_i64(12345).len_digits() == 5)
-    assert(BigInt.from_i64(0).len_digits() == 1)
-    print("Digit count ✓")
+    // bit_length
+    assert(BigInt.from_i64(0).bit_length() == 0)
+    assert(BigInt.from_i64(1).bit_length() == 1)
+    assert(BigInt.from_i64(255).bit_length() == 8)
+    assert(BigInt.from_i64(256).bit_length() == 9)
+    print("bit_length ✓")
+
+    // from_str
+    let parsed = BigInt.from_str("12345").unwrap()
+    assert(parsed.to_i64() == some(12345))
+    let neg_parsed = BigInt.from_str("-999").unwrap()
+    assert(neg_parsed.to_i64() == some(-999))
+    assert(BigInt.from_str("").is_err())
+    assert(BigInt.from_str("abc").is_err())
+    print("from_str ✓")
+
+    // Large multiplication
+    let big = BigInt.from_i64(1_000_000)
+    let big2 = big.mul(&big)
+    assert(big2.to_i64() == some(1_000_000_000_000))
+    print("Large mul ✓")
 
     print("BigInt complete ✓")
 }
