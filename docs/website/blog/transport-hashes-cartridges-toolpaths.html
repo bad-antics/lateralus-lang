@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Transport, Hashes, Cartridges, Toolpaths — Lateralus Blog</title>
+  <meta name="description" content="Batch 81: a QUIC framing layer, Argon2id password hashing, an NES ROM parser, a G-code bounding-box tool, and a tail-call elimination pass.">
+  <meta property="og:title" content="Transport, Hashes, Cartridges, Toolpaths — Lateralus Blog">
+  <meta property="og:description" content="Five new first-of-their-kind Lateralus modules.">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://lateralus.dev/blog/transport-hashes-cartridges-toolpaths.html">
+  <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+  <link rel="canonical" href="https://lateralus.dev/blog/transport-hashes-cartridges-toolpaths.html">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css?v=20260420">
+  <style>
+    .blog-post { max-width: 800px; margin: 0 auto; padding: 80px 20px 60px; }
+    .blog-post h1 { font-family: 'Press Start 2P', monospace; font-size: clamp(14px, 3vw, 20px); color: var(--electric-yellow); line-height: 1.8; margin-bottom: 16px; }
+    .blog-meta { font-family: 'VT323', monospace; font-size: 18px; color: var(--hot-pink); margin-bottom: 24px; }
+    .blog-meta .tags { display: inline-flex; gap: 8px; margin-left: 16px; }
+    .blog-meta .tag { font-family: 'Press Start 2P', monospace; font-size: 8px; padding: 4px 10px; border: 1px solid var(--lime); color: var(--lime); }
+    .blog-content { font-family: 'VT323', monospace; font-size: 20px; color: var(--text); line-height: 1.7; }
+    .blog-content h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--cyber-blue); margin: 32px 0 16px; line-height: 1.6; }
+    .blog-content p { margin-bottom: 16px; }
+    .blog-content code { background: var(--bg3); padding: 2px 6px; color: var(--hot-pink); font-size: 18px; }
+    .blog-content pre { background: var(--bg3); border: 2px solid var(--border-light); padding: 16px; overflow-x: auto; margin: 16px 0; }
+    .blog-content pre code { background: none; padding: 0; display: block; font-size: 16px; line-height: 1.5; color: var(--text); }
+    .blog-content ul, .blog-content ol { margin: 16px 0; padding-left: 24px; }
+    .blog-content li { margin-bottom: 8px; }
+    .blog-content a { color: var(--cyber-blue); text-decoration: underline; }
+    .blog-back { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; color: var(--lime); text-decoration: none; margin-bottom: 24px; }
+    .cta-box { background: var(--bg3); border: 2px solid var(--lime); padding: 20px; text-align: center; margin: 24px 0; }
+    .cta-box h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--electric-yellow); margin-bottom: 8px; }
+    .cta-box a { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; padding: 10px 20px; margin: 4px; }
+    .cta-box .btn-primary { background: var(--lime); color: var(--bg); }
+    .cta-box .btn-secondary { border: 2px solid var(--cyber-blue); color: var(--cyber-blue); }
+    @media (max-width: 768px) {
+      .blog-post h1 { font-size: 14px; line-height: 1.5; }
+      .blog-content { font-size: 16px; }
+      .blog-content pre code { font-size: 13px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/">PLAYGROUND</a>
+      <a href="/blog/" class="active">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<article class="blog-post">
+  <a href="/blog/" class="blog-back">← Back to Blog</a>
+  <h1>Transport, Hashes, Cartridges, Toolpaths</h1>
+  <div class="blog-meta">
+    2026-04-20
+    <span class="tags"><span class="tag">niche</span><span class="tag">showcase</span><span class="tag">batch-81</span></span>
+  </div>
+  <div class="blog-content">
+
+<p>Another week, another five files that have no business being in the same paragraph. Batch 81 ships a modern transport protocol, a memory-hard password KDF, a 40-year-old games console parser, a machine-shop instruction decoder, and an optimizer pass — each one first-of-its-kind in the <code>lateralus-*</code> ecosystem. Every file was dedup-checked against the full repo set before it was allowed in.</p>
+
+<h2>◉ 1. QUIC framing: the transport nobody reads the RFC for</h2>
+
+<p><code>stdlib/net/quic.ltl</code> parses RFC 9000 packets — long header, short header, version negotiation, and the full variable-length integer scheme Google invented to avoid ever wasting a byte. The module gets you everything up to (but not including) the TLS handshake: parse a packet, pull out the connection ID, walk the frame list, route to the right connection. HTTP/3 and WebTransport live downstream of this.</p>
+
+<pre><code>match parse_frame(&amp;mut r)? {
+    Frame::Stream { id, offset, data, fin } =&gt; conn.on_stream(id, offset, data, fin),
+    Frame::Ack    { largest, delay, ranges } =&gt; conn.on_ack(largest, delay, ranges),
+    Frame::ConnectionClose { error, reason, .. } =&gt; conn.close_peer(error, reason),
+    _ =&gt; (),
+}</code></pre>
+
+<h2>◉ 2. Argon2id: the only password hash OWASP still recommends</h2>
+
+<p><code>stdlib/crypto/argon2.ltl</code> implements Argon2id with OWASP-2024 defaults out of the box: 19 MiB memory, 2 iterations, parallelism 1, 32-byte output. PHC-format encoding so the hash string is self-describing and version-portable. The hot path (memory-filling with 1 KiB blocks and BLAKE2b compression) delegates to a native intrinsic because SIMD matters here more than almost anywhere else in the stdlib.</p>
+
+<pre><code>let phc = argon2::hash_encoded(b"correct horse battery staple",
+                                &amp;Argon2Params::owasp_default())?
+// "$argon2id$v=19$m=19456,t=2,p=1$<salt>$<hash>"
+assert!(argon2::verify_encoded(b"correct horse battery staple", &amp;phc)?)</code></pre>
+
+<h2>◉ 3. NES cartridges, iNES 2.0 and all</h2>
+
+<p><code>examples/niche/nes_rom.ltl</code> reads the <code>.nes</code> file format — both the original 1996 iNES header and the 2006 NES 2.0 extension, distinguished by two bits in byte 7. Pulls out PRG/CHR bank counts, mapper number (0 through 4095), submapper, mirroring, battery-backup flag, the trainer blob, region code, and a mapper-name lookup table covering the popular chips from NROM to MMC5. Companion to Batch 78's Game Boy parser.</p>
+
+<h2>◉ 4. G-code: the language every CNC mill speaks</h2>
+
+<p><code>examples/niche/gcode_parser.ltl</code> turns a <code>.gcode</code> file into a stream of <code>Command</code> values with modal state threaded through. A <code>G1 X10</code> after a prior <code>F1500</code> keeps the feed rate, because that's how the physical machines interpret it. Included: bounding-box computation so you can tell a Prusa user their print won't fit on the bed before they send it.</p>
+
+<pre><code>let (xmin, _, _, xmax, _, _) = gcode::bounding_box("bracket.gcode")?
+println!("part is {:.1} mm wide", xmax - xmin)</code></pre>
+
+<h2>◉ 5. Tail-call elimination, finally</h2>
+
+<p><code>compiler/pass/tail_call_elim.ltl</code> rewrites self-recursive tail calls into <code>loop { ... continue }</code>, turning the classic stack-exploding factorial into a constant-stack iteration. Uses shadow temporaries to preserve simultaneous-substitution semantics (so argument aliasing doesn't silently produce wrong answers) and threads cleanly through <code>if</code>, <code>match</code>, and nested blocks. Mutual TCO is intentionally out of scope — that wants a trampoline or a CPS pass.</p>
+
+<pre><code>// Before:
+fn fact(n: Int, acc: Int) -&gt; Int =
+    if n == 0 { acc } else { fact(n - 1, n * acc) }
+
+// After TCE:
+fn fact(n: Int, acc: Int) -&gt; Int = loop {
+    if n == 0 { return acc }
+    let __t0 = n - 1
+    let __t1 = n * acc
+    n = __t0; acc = __t1
+    continue
+}</code></pre>
+
+<h2>◉ Scoreboard</h2>
+
+<p>Batch 81 takes the niche count from 20 to 25 unique-domain modules shipped in four weeks. Every one of them survives the same dedup gate: the file's import path must 404 on the GitHub API before the module is allowed in, and a topical <code>grep</code> across the whole ecosystem must find no meaningful prior coverage.</p>
+
+<p>Source on GitHub via <a href="https://github.com/bad-antics/lateralus-stdlib">lateralus-stdlib</a>, <a href="https://github.com/bad-antics/lateralus-examples">lateralus-examples</a>, and <a href="https://github.com/bad-antics/lateralus-compiler">lateralus-compiler</a>.</p>
+
+    <div class="cta-box">
+      <h3>Try it in the playground</h3>
+      <a href="/playground/" class="btn btn-primary">▶ Open Playground</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" class="btn btn-secondary">Star on GitHub</a>
+    </div>
+  </div>
+</article>
+
+<footer class="footer">
+  <div class="footer-inner">
+    <div class="footer-logo"><span class="pipe">|></span> LATERALUS</div>
+    <div class="footer-tagline">A Language That Spirals Outward</div>
+  </div>
+</footer>
+
+<script src="/site.js"></script>
+</body>
+</html>
