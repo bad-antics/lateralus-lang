@@ -1,0 +1,239 @@
+// Standard Library - Buffered Writer
+// Wraps an underlying writer to reduce system calls via internal buffering.
+
+use std.io.{Write, Result as IoResult, Error as IoError}
+use std.fmt.{Display, Formatter, FmtError}
+
+const DEFAULT_BUF_SIZE: usize = 8192
+
+struct BufWriter<W: Write> {
+    inner: W,
+    buf: [u8],
+    capacity: usize,
+    panicked: bool,
+    bytes_written: usize,
+    flush_count: usize,
+}
+
+impl<W: Write> BufWriter<W> {
+    fn new(inner: W) -> BufWriter<W> {
+        BufWriter.with_capacity(DEFAULT_BUF_SIZE, inner)
+    }
+
+    fn with_capacity(capacity: usize, inner: W) -> BufWriter<W> {
+        BufWriter {
+            inner, buf: [], capacity,
+            panicked: false, bytes_written: 0, flush_count: 0,
+        }
+    }
+
+    fn write(mut self, data: &[u8]) -> IoResult<usize> {
+        if data.len() >= self.capacity {
+            // Data larger than buffer: flush existing, write directly
+            self.flush()?
+            let written = self.inner.write(data)?
+            self.bytes_written += written
+            return ok(written)
+        }
+
+        if self.buf.len() + data.len() > self.capacity {
+            self.flush()?
+        }
+
+        self.buf.extend_from_slice(data)
+        ok(data.len())
+    }
+
+    fn write_all(mut self, data: &[u8]) -> IoResult<()> {
+        let mut offset = 0
+        while offset < data.len() {
+            let written = self.write(&data[offset..])?
+            offset += written
+        }
+        ok(())
+    }
+
+    fn write_byte(mut self, byte: u8) -> IoResult<()> {
+        if self.buf.len() >= self.capacity {
+            self.flush()?
+        }
+        self.buf.push(byte)
+        ok(())
+    }
+
+    fn write_str(mut self, s: &str) -> IoResult<()> {
+        self.write_all(s.as_bytes())
+    }
+
+    fn flush(mut self) -> IoResult<()> {
+        if self.buf.is_empty() { return ok(()) }
+        let written = self.inner.write(&self.buf)?
+        self.bytes_written += written
+        self.buf.clear()
+        self.flush_count += 1
+        ok(())
+    }
+
+    fn buffered(self) -> usize { self.buf.len() }
+    fn capacity(self) -> usize { self.capacity }
+    fn is_empty(self) -> bool { self.buf.is_empty() }
+    fn bytes_written(self) -> usize { self.bytes_written }
+    fn flush_count(self) -> usize { self.flush_count }
+
+    fn get_ref(self) -> &W { &self.inner }
+    fn get_mut(mut self) -> &mut W { &mut self.inner }
+
+    fn into_inner(mut self) -> IoResult<W> {
+        self.flush()?
+        ok(self.inner)
+    }
+
+    fn reset(mut self) {
+        self.buf.clear()
+        self.bytes_written = 0
+        self.flush_count = 0
+    }
+}
+
+impl<W: Write> Drop for BufWriter<W> {
+    fn drop(mut self) {
+        if !self.panicked {
+            let _ = self.flush()
+        }
+    }
+}
+
+// Simple in-memory writer for testing
+struct MemWriter {
+    data: [u8],
+    write_calls: usize,
+}
+
+impl MemWriter {
+    fn new() -> MemWriter { MemWriter { data: [], write_calls: 0 } }
+    fn as_bytes(self) -> &[u8] { &self.data }
+    fn as_string(self) -> string { String.from_utf8(self.data.clone()).unwrap() }
+    fn write_calls(self) -> usize { self.write_calls }
+}
+
+impl Write for MemWriter {
+    fn write(mut self, buf: &[u8]) -> IoResult<usize> {
+        self.data.extend_from_slice(buf)
+        self.write_calls += 1
+        ok(buf.len())
+    }
+
+    fn flush(mut self) -> IoResult<()> { ok(()) }
+}
+
+fn main() {
+    // Basic write and flush
+    let inner = MemWriter.new()
+    let mut bw = BufWriter.new(inner)
+    bw.write("hello".as_bytes()).unwrap()
+    assert(bw.buffered() == 5)
+    assert(bw.bytes_written() == 0)  // not flushed yet
+    bw.flush().unwrap()
+    assert(bw.buffered() == 0)
+    assert(bw.bytes_written() == 5)
+    assert(bw.flush_count() == 1)
+    print("Basic write/flush ✓")
+
+    // Multiple writes before flush
+    let inner2 = MemWriter.new()
+    let mut bw2 = BufWriter.new(inner2)
+    bw2.write("aaa".as_bytes()).unwrap()
+    bw2.write("bbb".as_bytes()).unwrap()
+    bw2.write("ccc".as_bytes()).unwrap()
+    assert(bw2.buffered() == 9)
+    bw2.flush().unwrap()
+    assert(bw2.get_ref().as_string() == "aaabbbccc")
+    assert(bw2.get_ref().write_calls() == 1)  // single write call
+    print("Batched writes ✓")
+
+    // Auto-flush when buffer full
+    let inner3 = MemWriter.new()
+    let mut bw3 = BufWriter.with_capacity(4, inner3)
+    assert(bw3.capacity() == 4)
+    bw3.write(&[1, 2, 3]).unwrap()
+    assert(bw3.buffered() == 3)
+    bw3.write(&[4, 5]).unwrap()  // exceeds capacity, triggers flush
+    assert(bw3.flush_count() >= 1)
+    print("Auto-flush ✓")
+
+    // Large write bypasses buffer
+    let inner4 = MemWriter.new()
+    let mut bw4 = BufWriter.with_capacity(4, inner4)
+    bw4.write(&[1, 2, 3, 4, 5, 6, 7, 8]).unwrap()  // larger than capacity
+    assert(bw4.bytes_written() == 8)
+    assert(bw4.buffered() == 0)
+    print("Large write bypass ✓")
+
+    // write_byte
+    let inner5 = MemWriter.new()
+    let mut bw5 = BufWriter.new(inner5)
+    bw5.write_byte(65).unwrap()  // 'A'
+    bw5.write_byte(66).unwrap()  // 'B'
+    bw5.flush().unwrap()
+    assert(bw5.get_ref().as_string() == "AB")
+    print("write_byte ✓")
+
+    // write_str
+    let inner6 = MemWriter.new()
+    let mut bw6 = BufWriter.new(inner6)
+    bw6.write_str("hello world").unwrap()
+    bw6.flush().unwrap()
+    assert(bw6.get_ref().as_string() == "hello world")
+    print("write_str ✓")
+
+    // write_all
+    let inner7 = MemWriter.new()
+    let mut bw7 = BufWriter.with_capacity(4, inner7)
+    bw7.write_all(&[1, 2, 3, 4, 5, 6]).unwrap()
+    bw7.flush().unwrap()
+    assert(bw7.get_ref().as_bytes().len() == 6)
+    print("write_all ✓")
+
+    // is_empty
+    let inner8 = MemWriter.new()
+    let mut bw8 = BufWriter.new(inner8)
+    assert(bw8.is_empty())
+    bw8.write(&[1]).unwrap()
+    assert(!bw8.is_empty())
+    print("is_empty ✓")
+
+    // into_inner flushes
+    let inner9 = MemWriter.new()
+    let mut bw9 = BufWriter.new(inner9)
+    bw9.write("flushed".as_bytes()).unwrap()
+    let recovered = bw9.into_inner().unwrap()
+    assert(recovered.as_string() == "flushed")
+    print("into_inner ✓")
+
+    // reset
+    let inner10 = MemWriter.new()
+    let mut bw10 = BufWriter.new(inner10)
+    bw10.write("data".as_bytes()).unwrap()
+    bw10.flush().unwrap()
+    bw10.reset()
+    assert(bw10.bytes_written() == 0)
+    assert(bw10.flush_count() == 0)
+    assert(bw10.is_empty())
+    print("Reset ✓")
+
+    // Flush empty buffer is no-op
+    let inner11 = MemWriter.new()
+    let mut bw11 = BufWriter.new(inner11)
+    bw11.flush().unwrap()
+    assert(bw11.flush_count() == 0)
+    print("Empty flush no-op ✓")
+
+    // MemWriter
+    let mut mw = MemWriter.new()
+    mw.write(&[72, 105]).unwrap()
+    assert(mw.as_string() == "Hi")
+    assert(mw.write_calls() == 1)
+    print("MemWriter ✓")
+
+    print("Buffered Writer complete ✓")
+}
