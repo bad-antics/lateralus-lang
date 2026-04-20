@@ -1,0 +1,240 @@
+
+// Stopwatch - High-resolution timing utility
+// Supports lap timing, splits, and duration formatting.
+
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
+struct Duration {
+    nanos: u64,
+}
+
+impl Duration {
+    fn zero() -> Duration { Duration { nanos: 0 } }
+    fn from_nanos(n: u64) -> Duration { Duration { nanos: n } }
+    fn from_micros(us: u64) -> Duration { Duration { nanos: us * 1_000 } }
+    fn from_millis(ms: u64) -> Duration { Duration { nanos: ms * 1_000_000 } }
+    fn from_secs(s: u64) -> Duration { Duration { nanos: s * 1_000_000_000 } }
+
+    fn as_nanos(self) -> u64 { self.nanos }
+    fn as_micros(self) -> u64 { self.nanos / 1_000 }
+    fn as_millis(self) -> u64 { self.nanos / 1_000_000 }
+    fn as_secs(self) -> u64 { self.nanos / 1_000_000_000 }
+    fn as_secs_f64(self) -> f64 { self.nanos as f64 / 1_000_000_000.0 }
+
+    fn add(self, other: &Duration) -> Duration {
+        Duration { nanos: self.nanos + other.nanos }
+    }
+
+    fn sub(self, other: &Duration) -> Duration {
+        Duration { nanos: self.nanos.saturating_sub(other.nanos) }
+    }
+
+    fn is_zero(self) -> bool { self.nanos == 0 }
+
+    fn format(self) -> string {
+        let total_secs = self.as_secs()
+        let millis = (self.nanos / 1_000_000) % 1000
+        let secs = total_secs % 60
+        let mins = (total_secs / 60) % 60
+        let hours = total_secs / 3600
+
+        if hours > 0 {
+            format!("{}h {:02}m {:02}.{:03}s", hours, mins, secs, millis)
+        } else if mins > 0 {
+            format!("{}m {:02}.{:03}s", mins, secs, millis)
+        } else if total_secs > 0 {
+            format!("{}.{:03}s", secs, millis)
+        } else if millis > 0 {
+            format!("{}ms", millis)
+        } else {
+            format!("{}µs", self.as_micros())
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct Lap {
+    name: Option<string>,
+    duration: Duration,
+    cumulative: Duration,
+}
+
+struct Stopwatch {
+    start_time: Option<u64>,
+    elapsed: Duration,
+    laps: [Lap],
+    running: bool,
+}
+
+impl Stopwatch {
+    fn new() -> Stopwatch {
+        Stopwatch { start_time: none, elapsed: Duration.zero(), laps: vec![], running: false }
+    }
+
+    fn start(mut self, now: u64) {
+        if !self.running {
+            self.start_time = some(now)
+            self.running = true
+        }
+    }
+
+    fn stop(mut self, now: u64) {
+        if self.running {
+            if let some(start) = self.start_time {
+                self.elapsed = self.elapsed.add(&Duration.from_nanos(now - start))
+            }
+            self.running = false
+            self.start_time = none
+        }
+    }
+
+    fn lap(mut self, now: u64, name: Option<string>) {
+        let current = self.current_elapsed(now)
+        let prev_cumulative = self.laps.last()
+            .map(|l| l.cumulative.clone())
+            .unwrap_or(Duration.zero())
+        let lap_duration = current.sub(&prev_cumulative)
+
+        self.laps.push(Lap {
+            name,
+            duration: lap_duration,
+            cumulative: current,
+        })
+    }
+
+    fn current_elapsed(self, now: u64) -> Duration {
+        if self.running {
+            if let some(start) = self.start_time {
+                return self.elapsed.add(&Duration.from_nanos(now - start))
+            }
+        }
+        self.elapsed.clone()
+    }
+
+    fn reset(mut self) {
+        self.start_time = none
+        self.elapsed = Duration.zero()
+        self.laps.clear()
+        self.running = false
+    }
+
+    fn lap_count(self) -> usize { self.laps.len() }
+    fn is_running(self) -> bool { self.running }
+
+    fn fastest_lap(self) -> Option<&Lap> {
+        self.laps.iter().min_by_key(|l| l.duration.nanos)
+    }
+
+    fn slowest_lap(self) -> Option<&Lap> {
+        self.laps.iter().max_by_key(|l| l.duration.nanos)
+    }
+
+    fn average_lap(self) -> Option<Duration> {
+        if self.laps.is_empty() { return none }
+        let total: u64 = self.laps.iter().map(|l| l.duration.nanos).sum()
+        some(Duration.from_nanos(total / self.laps.len() as u64))
+    }
+}
+
+fn main() {
+    // Duration basics
+    let d = Duration.from_millis(1500)
+    assert(d.as_millis() == 1500)
+    assert(d.as_secs() == 1)
+    assert(d.as_micros() == 1_500_000)
+    assert(!d.is_zero())
+    assert(Duration.zero().is_zero())
+    print("Duration ✓")
+
+    // Duration arithmetic
+    let a = Duration.from_secs(2)
+    let b = Duration.from_millis(500)
+    let sum = a.add(&b)
+    assert(sum.as_millis() == 2500)
+    let diff = a.sub(&b)
+    assert(diff.as_millis() == 1500)
+    // Saturating subtraction
+    let small = Duration.from_millis(100)
+    let big = Duration.from_secs(5)
+    assert(small.sub(&big).is_zero())
+    print("Duration arithmetic ✓")
+
+    // Duration formatting
+    assert(Duration.from_millis(500).format() == "500ms")
+    assert(Duration.from_secs(5).format().contains("5.000s"))
+    assert(Duration.from_millis(65_500).format().contains("m"))
+    assert(Duration.from_secs(3661).format().contains("h"))
+    assert(Duration.from_micros(50).format().contains("µs"))
+    print("Duration format ✓")
+
+    // Duration as_secs_f64
+    let d2 = Duration.from_millis(2500)
+    assert(d2.as_secs_f64() == 2.5)
+    print("Duration f64 ✓")
+
+    // Stopwatch basic
+    let mut sw = Stopwatch.new()
+    assert(!sw.is_running())
+    sw.start(1000)
+    assert(sw.is_running())
+    let elapsed = sw.current_elapsed(2000)
+    assert(elapsed.as_nanos() == 1000)
+    sw.stop(3000)
+    assert(!sw.is_running())
+    assert(sw.current_elapsed(5000).as_nanos() == 2000)
+    print("Stopwatch ✓")
+
+    // Lap timing
+    let mut sw2 = Stopwatch.new()
+    sw2.start(0)
+    sw2.lap(100, some("warmup".into()))
+    sw2.lap(350, some("sprint".into()))
+    sw2.lap(500, none)
+    assert(sw2.lap_count() == 3)
+    assert(sw2.laps[0].duration.as_nanos() == 100)
+    assert(sw2.laps[1].duration.as_nanos() == 250)
+    assert(sw2.laps[2].duration.as_nanos() == 150)
+    assert(sw2.laps[0].name == some("warmup".to_string()))
+    assert(sw2.laps[2].name.is_none())
+    print("Laps ✓")
+
+    // Fastest/slowest lap
+    let fastest = sw2.fastest_lap().unwrap()
+    assert(fastest.duration.as_nanos() == 100)
+    let slowest = sw2.slowest_lap().unwrap()
+    assert(slowest.duration.as_nanos() == 250)
+    print("Fastest/slowest ✓")
+
+    // Average lap
+    let avg = sw2.average_lap().unwrap()
+    assert(avg.as_nanos() == 166)  // (100+250+150)/3 = 166
+    print("Average lap ✓")
+
+    // Reset
+    sw2.reset()
+    assert(!sw2.is_running())
+    assert(sw2.lap_count() == 0)
+    assert(sw2.current_elapsed(9999).is_zero())
+    print("Reset ✓")
+
+    // Empty stats
+    let empty = Stopwatch.new()
+    assert(empty.fastest_lap().is_none())
+    assert(empty.average_lap().is_none())
+    print("Empty stats ✓")
+
+    // Double start ignored
+    let mut sw3 = Stopwatch.new()
+    sw3.start(100)
+    sw3.start(200)  // should be ignored
+    sw3.stop(300)
+    assert(sw3.current_elapsed(999).as_nanos() == 200)
+    print("Double start ✓")
+
+    // Stop when not running
+    let mut sw4 = Stopwatch.new()
+    sw4.stop(100)  // noop
+    assert(sw4.current_elapsed(200).is_zero())
+    print("Stop noop ✓")
+
+    print("Stopwatch complete ✓")
+}
