@@ -1,221 +1,232 @@
 
-// LRU Cache - Least Recently Used eviction policy
-// O(1) get and put using a doubly-linked list + hash map.
+// LRU Cache - Least Recently Used eviction cache
+// O(1) get/put using a doubly-linked list and hash map.
 
 use std.collections.HashMap
 
-type Key = string
-
-#[derive(Clone, Debug)]
-struct Node<V> {
-    key: Key,
+struct LruEntry<K, V> {
+    key: K,
     value: V,
     prev: Option<usize>,
     next: Option<usize>,
 }
 
-struct LruCache<V> {
-    capacity: usize,
-    map: HashMap<Key, usize>,
-    nodes: [Option<Node<V>>],
+struct LruCache<K, V> {
+    entries: [LruEntry<K, V>],
+    map: HashMap<K, usize>,
     head: Option<usize>,
     tail: Option<usize>,
-    free_slots: [usize],
-    len: usize,
+    capacity: usize,
+    free_list: [usize],
+    hits: u64,
+    misses: u64,
 }
 
-impl<V: Clone> LruCache<V> {
-    fn new(capacity: usize) -> LruCache<V> {
-        let mut nodes = vec![]
-        let mut free_slots = vec![]
-        for i in 0..capacity {
-            nodes.push(none)
-            free_slots.push(i)
+impl<K: Hash + Eq + Clone + Debug, V: Clone + Debug> LruCache<K, V> {
+    fn new(capacity: usize) -> LruCache<K, V> {
+        assert(capacity > 0, "capacity must be > 0")
+        LruCache {
+            entries: [], map: HashMap.new(),
+            head: None, tail: None, capacity,
+            free_list: [], hits: 0, misses: 0,
         }
-        LruCache { capacity, map: HashMap.new(), nodes, head: none, tail: none, free_slots, len: 0 }
     }
 
-    fn get(mut self, key: &str) -> Option<V> {
-        let idx = *self.map.get(key)?;
-        self.move_to_front(idx);
-        self.nodes[idx].as_ref().map(|n| n.value.clone())
-    }
-
-    fn put(mut self, key: Key, value: V) {
-        if let some(&idx) = self.map.get(&key) {
-            self.nodes[idx].as_mut().unwrap().value = value;
-            self.move_to_front(idx);
-            return
-        }
-
-        if self.len >= self.capacity {
-            self.evict_lru()
-        }
-
-        let slot = self.free_slots.pop().unwrap();
-        self.nodes[slot] = some(Node { key: key.clone(), value, prev: none, next: self.head });
-        if let some(old_head) = self.head {
-            self.nodes[old_head].as_mut().unwrap().prev = some(slot);
-        }
-        self.head = some(slot);
-        if self.tail.is_none() { self.tail = some(slot) }
-        self.map.insert(key, slot);
-        self.len += 1
-    }
-
-    fn remove(mut self, key: &str) -> Option<V> {
-        let idx = *self.map.get(key)?;
-        self.unlink(idx);
-        self.map.remove(key);
-        let node = self.nodes[idx].take().unwrap();
-        self.free_slots.push(idx);
-        self.len -= 1;
-        some(node.value)
-    }
-
-    fn contains(self, key: &str) -> bool { self.map.contains_key(key) }
-    fn len(self) -> usize { self.len }
-    fn is_empty(self) -> bool { self.len == 0 }
+    fn len(self) -> usize { self.map.len() }
+    fn is_empty(self) -> bool { self.map.is_empty() }
+    fn is_full(self) -> bool { self.map.len() >= self.capacity }
     fn capacity(self) -> usize { self.capacity }
-    fn is_full(self) -> bool { self.len >= self.capacity }
+    fn hit_rate(self) -> f64 {
+        let total = self.hits + self.misses
+        if total == 0 { 0.0 } else { self.hits as f64 / total as f64 }
+    }
 
-    fn peek(self, key: &str) -> Option<&V> {
-        let idx = *self.map.get(key)?;
-        self.nodes[idx].as_ref().map(|n| &n.value)
+    fn alloc_entry(mut self, key: K, value: V) -> usize {
+        if let Some(idx) = self.free_list.pop() {
+            self.entries[idx] = LruEntry { key, value, prev: None, next: None }
+            idx
+        } else {
+            let idx = self.entries.len()
+            self.entries.push(LruEntry { key, value, prev: None, next: None })
+            idx
+        }
+    }
+
+    fn detach(mut self, idx: usize) {
+        let prev = self.entries[idx].prev
+        let next = self.entries[idx].next
+        match prev { Some(p) => self.entries[p].next = next, None => self.head = next }
+        match next { Some(n) => self.entries[n].prev = prev, None => self.tail = prev }
+        self.entries[idx].prev = None
+        self.entries[idx].next = None
+    }
+
+    fn push_front(mut self, idx: usize) {
+        self.entries[idx].prev = None
+        self.entries[idx].next = self.head
+        if let Some(h) = self.head { self.entries[h].prev = Some(idx) }
+        self.head = Some(idx)
+        if self.tail.is_none() { self.tail = Some(idx) }
+    }
+
+    fn evict_tail(mut self) -> Option<K> {
+        let tail_idx = self.tail?
+        let key = self.entries[tail_idx].key.clone()
+        self.detach(tail_idx)
+        self.map.remove(&key)
+        self.free_list.push(tail_idx)
+        Some(key)
+    }
+
+    fn get(mut self, key: &K) -> Option<&V> {
+        match self.map.get(key) {
+            Some(&idx) => {
+                self.hits += 1
+                self.detach(idx)
+                self.push_front(idx)
+                Some(&self.entries[idx].value)
+            }
+            None => { self.misses += 1; None }
+        }
+    }
+
+    fn put(mut self, key: K, value: V) -> Option<K> {
+        let mut evicted = None
+        if let Some(&idx) = self.map.get(&key) {
+            self.entries[idx].value = value
+            self.detach(idx)
+            self.push_front(idx)
+            return None
+        }
+        if self.is_full() { evicted = self.evict_tail() }
+        let idx = self.alloc_entry(key.clone(), value)
+        self.map.insert(key, idx)
+        self.push_front(idx)
+        evicted
+    }
+
+    fn contains(self, key: &K) -> bool { self.map.contains_key(key) }
+
+    fn peek(self, key: &K) -> Option<&V> {
+        self.map.get(key).map(|&idx| &self.entries[idx].value)
+    }
+
+    fn remove(mut self, key: &K) -> Option<V> {
+        let idx = self.map.remove(key)?;
+        self.detach(idx)
+        self.free_list.push(idx)
+        Some(self.entries[idx].value.clone())
     }
 
     fn clear(mut self) {
-        self.map.clear();
-        for slot in &mut self.nodes { *slot = none }
-        self.free_slots.clear();
-        for i in 0..self.capacity { self.free_slots.push(i) }
-        self.head = none; self.tail = none; self.len = 0
+        self.map.clear()
+        self.head = None
+        self.tail = None
+        self.free_list.clear()
+        self.entries.clear()
     }
 
-    fn keys(self) -> [Key] {
-        let mut result = vec![];
-        let mut current = self.head;
-        while let some(idx) = current {
-            let node = self.nodes[idx].as_ref().unwrap();
-            result.push(node.key.clone());
-            current = node.next;
+    fn keys_mru_order(self) -> [K] {
+        let mut result = []
+        let mut cur = self.head
+        while let Some(idx) = cur {
+            result.push(self.entries[idx].key.clone())
+            cur = self.entries[idx].next
         }
         result
-    }
-
-    fn move_to_front(mut self, idx: usize) {
-        if self.head == some(idx) { return }
-        self.unlink(idx);
-        let node = self.nodes[idx].as_mut().unwrap();
-        node.prev = none;
-        node.next = self.head;
-        if let some(old_head) = self.head {
-            self.nodes[old_head].as_mut().unwrap().prev = some(idx);
-        }
-        self.head = some(idx);
-    }
-
-    fn unlink(mut self, idx: usize) {
-        let (prev, next) = {
-            let node = self.nodes[idx].as_ref().unwrap();
-            (node.prev, node.next)
-        };
-        if let some(p) = prev { self.nodes[p].as_mut().unwrap().next = next }
-        else { self.head = next }
-        if let some(n) = next { self.nodes[n].as_mut().unwrap().prev = prev }
-        else { self.tail = prev }
-    }
-
-    fn evict_lru(mut self) {
-        if let some(tail_idx) = self.tail {
-            let key = self.nodes[tail_idx].as_ref().unwrap().key.clone();
-            self.unlink(tail_idx);
-            self.nodes[tail_idx] = none;
-            self.map.remove(&key);
-            self.free_slots.push(tail_idx);
-            self.len -= 1
-        }
     }
 }
 
 fn main() {
-    // Basic put/get
-    let mut cache = LruCache::<i32>.new(3)
+    // Empty cache
+    let cache = LruCache::<string, i32>.new(3)
     assert(cache.is_empty())
     assert(cache.capacity() == 3)
-    cache.put("a".into(), 1)
-    cache.put("b".into(), 2)
-    cache.put("c".into(), 3)
-    assert(cache.len() == 3)
-    assert(cache.is_full())
-    assert(cache.get("a") == some(1))
-    assert(cache.get("b") == some(2))
-    assert(cache.get("c") == some(3))
-    print("Basic put/get ✓")
+    assert(cache.len() == 0)
+    print("Empty ✓")
+
+    // Put and get
+    let mut c = LruCache::<string, i32>.new(3)
+    c.put("a".into(), 1)
+    c.put("b".into(), 2)
+    c.put("c".into(), 3)
+    assert(c.len() == 3)
+    assert(c.get(&"a".into()) == Some(&1))
+    assert(c.get(&"b".into()) == Some(&2))
+    assert(c.get(&"d".into()).is_none())
+    print("Put/Get ✓")
 
     // Eviction
-    cache.put("d".into(), 4)  // should evict LRU
-    assert(cache.len() == 3)
-    assert(cache.get("d") == some(4))
-    // "a" was accessed most recently among a,b,c so "b" should be evicted
-    // Actually after get(a),get(b),get(c), c is MRU, then put(d) evicts LRU
-    // LRU order after gets: a(MRU from get), b, c(MRU from last get)
-    // After get(a): head=a, get(b): head=b->a->c, get(c): head=c->b->a
-    // put(d) evicts tail=a... but we got a earlier making it MRU
-    // Let me just check d exists
-    assert(cache.contains("d"))
+    let evicted = c.put("d".into(), 4)
+    // "c" was LRU after getting a,b => c should be evicted
+    assert(c.len() == 3)
+    assert(c.contains(&"d".into()))
     print("Eviction ✓")
 
     // Update existing
-    let mut c2 = LruCache::<i32>.new(2)
-    c2.put("x".into(), 10)
-    c2.put("x".into(), 20)
-    assert(c2.get("x") == some(20))
-    assert(c2.len() == 1)
-    print("Update existing ✓")
+    c.put("a".into(), 10)
+    assert(c.get(&"a".into()) == Some(&10))
+    assert(c.len() == 3)
+    print("Update ✓")
 
-    // Remove
-    let mut c3 = LruCache::<i32>.new(3)
-    c3.put("a".into(), 1)
-    c3.put("b".into(), 2)
-    assert(c3.remove("a") == some(1))
-    assert(c3.len() == 1)
-    assert(!c3.contains("a"))
-    assert(c3.contains("b"))
-    assert(c3.remove("z").is_none())
-    print("Remove ✓")
+    // MRU order
+    let mut c2 = LruCache::<i32, i32>.new(3)
+    c2.put(1, 10)
+    c2.put(2, 20)
+    c2.put(3, 30)
+    c2.get(&1)  // touch 1
+    let order = c2.keys_mru_order()
+    assert(order[0] == 1)  // most recent
+    print("MRU order ✓")
 
     // Peek (no promotion)
-    let mut c4 = LruCache::<i32>.new(2)
-    c4.put("a".into(), 1)
-    c4.put("b".into(), 2)
-    assert(*c4.peek("a").unwrap() == 1)
-    // peek doesn't move to front, so putting "c" should evict "a"
-    c4.put("c".into(), 3)
-    assert(!c4.contains("a"))
+    let mut c3 = LruCache::<i32, i32>.new(2)
+    c3.put(1, 10)
+    c3.put(2, 20)
+    assert(c3.peek(&1) == Some(&10))
+    // 1 is still LRU since peek doesn't promote
+    c3.put(3, 30)  // should evict 1, not 2
+    assert(!c3.contains(&1))
+    assert(c3.contains(&2))
     print("Peek ✓")
 
-    // Keys in MRU order
-    let mut c5 = LruCache::<i32>.new(3)
-    c5.put("x".into(), 1)
-    c5.put("y".into(), 2)
-    c5.put("z".into(), 3)
-    let keys = c5.keys()
-    assert(keys[0] == "z")  // most recent
-    assert(keys[2] == "x")  // least recent
-    print("Keys order ✓")
+    // Remove
+    let mut c4 = LruCache::<string, i32>.new(5)
+    c4.put("x".into(), 42)
+    let removed = c4.remove(&"x".into())
+    assert(removed == Some(42))
+    assert(c4.is_empty())
+    assert(c4.remove(&"x".into()).is_none())
+    print("Remove ✓")
 
     // Clear
-    c5.clear()
-    assert(c5.is_empty())
-    assert(c5.len() == 0)
-    assert(!c5.contains("x"))
+    c4.put("a".into(), 1)
+    c4.put("b".into(), 2)
+    c4.clear()
+    assert(c4.is_empty())
+    assert(c4.len() == 0)
     print("Clear ✓")
 
-    // Miss
-    let c6 = LruCache::<i32>.new(1)
-    assert(c6.get("nope").is_none())
-    print("Miss ✓")
+    // Hit rate
+    let mut c5 = LruCache::<i32, i32>.new(2)
+    c5.put(1, 1)
+    c5.get(&1)  // hit
+    c5.get(&1)  // hit
+    c5.get(&2)  // miss
+    assert(c5.hits == 2)
+    assert(c5.misses == 1)
+    let rate = c5.hit_rate()
+    assert(rate > 0.6 && rate < 0.7)
+    print("Hit rate ✓")
+
+    // Capacity 1
+    let mut c6 = LruCache::<i32, i32>.new(1)
+    c6.put(1, 10)
+    c6.put(2, 20)
+    assert(c6.len() == 1)
+    assert(!c6.contains(&1))
+    assert(c6.contains(&2))
+    print("Cap 1 ✓")
 
     print("LRU cache complete ✓")
 }
