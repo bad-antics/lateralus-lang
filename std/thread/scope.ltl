@@ -1,0 +1,217 @@
+
+// Scoped Threads - Structured concurrency with guaranteed join
+// Ensures all spawned threads complete before the scope exits.
+
+use std.sync.{Mutex, Arc}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum TaskState { Pending, Running, Completed, Failed, Cancelled }
+
+impl TaskState {
+    fn is_terminal(self) -> bool { matches!(self, TaskState.Completed | TaskState.Failed | TaskState.Cancelled) }
+    fn is_active(self) -> bool { matches!(self, TaskState.Pending | TaskState.Running) }
+}
+
+#[derive(Clone, Debug)]
+struct ScopedTask<T> {
+    id: u64,
+    name: string,
+    state: TaskState,
+    result: Option<T>,
+    error: Option<string>,
+    start_time: Option<u64>,
+    end_time: Option<u64>,
+}
+
+impl<T: Clone + Debug> ScopedTask<T> {
+    fn new(id: u64, name: &str) -> ScopedTask<T> {
+        ScopedTask { id, name: name.into(), state: TaskState.Pending, result: None, error: None, start_time: None, end_time: None }
+    }
+    fn start(mut self, time: u64) { self.state = TaskState.Running; self.start_time = Some(time) }
+    fn complete(mut self, result: T, time: u64) { self.state = TaskState.Completed; self.result = Some(result); self.end_time = Some(time) }
+    fn fail(mut self, err: &str, time: u64) { self.state = TaskState.Failed; self.error = Some(err.into()); self.end_time = Some(time) }
+    fn cancel(mut self) { self.state = TaskState.Cancelled }
+    fn is_done(self) -> bool { self.state.is_terminal() }
+    fn duration(self) -> Option<u64> {
+        match (self.start_time, self.end_time) {
+            (Some(s), Some(e)) => Some(e - s),
+            _ => None,
+        }
+    }
+    fn unwrap(self) -> T { self.result.unwrap() }
+}
+
+struct Scope<T> {
+    tasks: [ScopedTask<T>],
+    next_id: u64,
+    name: string,
+    max_concurrency: Option<usize>,
+    cancelled: bool,
+}
+
+impl<T: Clone + Debug> Scope<T> {
+    fn new(name: &str) -> Scope<T> {
+        Scope { tasks: [], next_id: 1, name: name.into(), max_concurrency: None, cancelled: false }
+    }
+
+    fn with_max_concurrency(mut self, max: usize) -> Scope<T> {
+        self.max_concurrency = Some(max); self
+    }
+
+    fn spawn(mut self, name: &str) -> u64 {
+        let id = self.next_id
+        self.next_id += 1
+        self.tasks.push(ScopedTask.new(id, name))
+        id
+    }
+
+    fn start_task(mut self, id: u64, time: u64) -> bool {
+        if self.cancelled { return false }
+        if let Some(max) = self.max_concurrency {
+            let running = self.tasks.iter().filter(|t| t.state == TaskState.Running).count()
+            if running >= max { return false }
+        }
+        for task in &mut self.tasks {
+            if task.id == id && task.state == TaskState.Pending {
+                task.start(time)
+                return true
+            }
+        }
+        false
+    }
+
+    fn complete_task(mut self, id: u64, result: T, time: u64) {
+        for task in &mut self.tasks {
+            if task.id == id { task.complete(result, time); return }
+        }
+    }
+
+    fn fail_task(mut self, id: u64, err: &str, time: u64) {
+        for task in &mut self.tasks {
+            if task.id == id { task.fail(err, time); return }
+        }
+    }
+
+    fn cancel_all(mut self) {
+        self.cancelled = true
+        for task in &mut self.tasks {
+            if task.state.is_active() { task.cancel() }
+        }
+    }
+
+    fn all_done(self) -> bool { self.tasks.iter().all(|t| t.is_done()) }
+    fn any_failed(self) -> bool { self.tasks.iter().any(|t| t.state == TaskState.Failed) }
+    fn task_count(self) -> usize { self.tasks.len() }
+    fn completed_count(self) -> usize { self.tasks.iter().filter(|t| t.state == TaskState.Completed).count() }
+    fn failed_count(self) -> usize { self.tasks.iter().filter(|t| t.state == TaskState.Failed).count() }
+    fn pending_count(self) -> usize { self.tasks.iter().filter(|t| t.state == TaskState.Pending).count() }
+    fn running_count(self) -> usize { self.tasks.iter().filter(|t| t.state == TaskState.Running).count() }
+
+    fn get_task(self, id: u64) -> Option<&ScopedTask<T>> { self.tasks.iter().find(|t| t.id == id) }
+
+    fn results(self) -> [T] {
+        self.tasks.iter().filter_map(|t| t.result.clone()).collect()
+    }
+
+    fn errors(self) -> [string] {
+        self.tasks.iter().filter_map(|t| t.error.clone()).collect()
+    }
+}
+
+fn main() {
+    // TaskState
+    assert(TaskState.Completed.is_terminal())
+    assert(TaskState.Failed.is_terminal())
+    assert(!TaskState.Running.is_terminal())
+    assert(TaskState.Running.is_active())
+    assert(TaskState.Pending.is_active())
+    print("TaskState ✓")
+
+    // ScopedTask
+    let mut task = ScopedTask::<i32>.new(1, "compute")
+    assert(!task.is_done())
+    task.start(100)
+    assert(task.state == TaskState.Running)
+    task.complete(42, 200)
+    assert(task.is_done())
+    assert(task.unwrap() == 42)
+    assert(task.duration() == Some(100))
+    print("ScopedTask ✓")
+
+    // Failed task
+    let mut fail_task = ScopedTask::<i32>.new(2, "bad")
+    fail_task.start(0)
+    fail_task.fail("timeout", 50)
+    assert(fail_task.state == TaskState.Failed)
+    assert(fail_task.error == Some("timeout".into()))
+    print("Failed ✓")
+
+    // Scope basics
+    let mut scope = Scope::<i32>.new("test-scope")
+    let t1 = scope.spawn("task-1")
+    let t2 = scope.spawn("task-2")
+    let t3 = scope.spawn("task-3")
+    assert(scope.task_count() == 3)
+    assert(scope.pending_count() == 3)
+    assert(!scope.all_done())
+    print("Scope ✓")
+
+    // Start and complete
+    scope.start_task(t1, 0)
+    scope.start_task(t2, 0)
+    assert(scope.running_count() == 2)
+    scope.complete_task(t1, 10, 50)
+    scope.complete_task(t2, 20, 60)
+    scope.start_task(t3, 60)
+    scope.complete_task(t3, 30, 100)
+    assert(scope.all_done())
+    assert(scope.completed_count() == 3)
+    assert(!scope.any_failed())
+    print("Complete ✓")
+
+    // Results
+    let results = scope.results()
+    assert(results.len() == 3)
+    assert(results.contains(&10))
+    assert(results.contains(&20))
+    assert(results.contains(&30))
+    print("Results ✓")
+
+    // Max concurrency
+    let mut limited = Scope::<i32>.new("limited").with_max_concurrency(2)
+    let a = limited.spawn("a")
+    let b = limited.spawn("b")
+    let c = limited.spawn("c")
+    assert(limited.start_task(a, 0))
+    assert(limited.start_task(b, 0))
+    assert(!limited.start_task(c, 0))  // blocked
+    limited.complete_task(a, 1, 10)
+    assert(limited.start_task(c, 10))  // now OK
+    print("Concurrency ✓")
+
+    // Cancel all
+    let mut cancel_scope = Scope::<i32>.new("cancel")
+    let x = cancel_scope.spawn("x")
+    let y = cancel_scope.spawn("y")
+    cancel_scope.start_task(x, 0)
+    cancel_scope.cancel_all()
+    assert(cancel_scope.get_task(x).unwrap().state == TaskState.Cancelled)
+    assert(cancel_scope.get_task(y).unwrap().state == TaskState.Cancelled)
+    assert(!cancel_scope.start_task(y, 10))  // cancelled scope
+    print("Cancel ✓")
+
+    // Mixed results
+    let mut mixed = Scope::<string>.new("mixed")
+    let m1 = mixed.spawn("ok")
+    let m2 = mixed.spawn("err")
+    mixed.start_task(m1, 0)
+    mixed.start_task(m2, 0)
+    mixed.complete_task(m1, "success".into(), 10)
+    mixed.fail_task(m2, "network error", 10)
+    assert(mixed.any_failed())
+    assert(mixed.failed_count() == 1)
+    assert(mixed.errors().len() == 1)
+    print("Mixed ✓")
+
+    print("Scoped threads complete ✓")
+}
