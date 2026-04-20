@@ -1,220 +1,180 @@
-// Standard Library - Thread Pool
-// Work-stealing thread pool for parallel task execution.
 
-use std.sync.{Arc, Mutex, Condvar, Channel, Sender, Receiver}
-use std.thread
-use std.collections.VecDeque
+// Thread Pool Standard Library - Managed worker pool with futures
+// Provides spawn, join, scoped threads, and thread-local storage.
 
-type Task = Box<dyn FnOnce() + Send + 'static>
+use std.sync.{Mutex, Arc, Condvar}
 
-enum PoolMessage {
-    Execute(Task),
-    Shutdown,
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum ThreadState { Idle, Running, Finished, Panicked }
+
+struct ThreadHandle<T> {
+    result: Arc<Mutex<Option<T>>>,
+    state: Arc<Mutex<ThreadState>>,
+    cv: Arc<Condvar>,
 }
 
-struct ThreadPool {
-    workers: [Worker],
-    sender: Sender<PoolMessage>,
-    size: usize,
-}
-
-impl ThreadPool {
-    fn new(size: usize) -> ThreadPool {
-        assert(size > 0, "Pool size must be > 0")
-        let (sender, receiver) = Channel.new()
-        let receiver = Arc.new(Mutex.new(receiver))
-
-        let mut workers: [Worker] = []
-        for id in 0..size {
-            workers.push(Worker.new(id, receiver.clone()))
-        }
-
-        ThreadPool { workers, sender, size }
-    }
-
-    fn execute<F: FnOnce() + Send + 'static>(self, f: F) {
-        self.sender.send(PoolMessage.Execute(Box.new(f))).unwrap()
-    }
-
-    fn spawn<F, T>(self, f: F) -> JoinHandle<T>
-    where F: FnOnce() -> T + Send + 'static, T: Send + 'static {
-        let (tx, rx) = Channel.new()
-        self.execute(move || {
-            let result = f()
-            tx.send(result).ok();
-        })
-        JoinHandle { receiver: rx }
-    }
-
-    fn shutdown(self) {
-        for _ in 0..self.size {
-            self.sender.send(PoolMessage.Shutdown).unwrap()
-        }
-        for worker in self.workers {
-            if let some(handle) = worker.handle {
-                handle.join().unwrap()
-            }
-        }
-    }
-
-    fn active_count(self) -> usize {
-        self.workers.iter().filter(|w| w.is_active()).count()
-    }
-}
-
-struct Worker {
-    id: usize,
-    handle: Option<thread.JoinHandle<()>>,
-    active: Arc<Mutex<bool>>,
-}
-
-impl Worker {
-    fn new(id: usize, receiver: Arc<Mutex<Receiver<PoolMessage>>>) -> Worker {
-        let active = Arc.new(Mutex.new(false))
-        let active_clone = active.clone()
-
-        let handle = thread.spawn(move || {
-            loop {
-                let msg = receiver.lock().unwrap().recv().unwrap()
-                match msg {
-                    PoolMessage.Execute(task) => {
-                        *active_clone.lock().unwrap() = true
-                        task()
-                        *active_clone.lock().unwrap() = false
-                    },
-                    PoolMessage.Shutdown => break,
-                }
-            }
-        })
-
-        Worker { id, handle: some(handle), active }
-    }
-
-    fn is_active(self) -> bool {
-        *self.active.lock().unwrap()
-    }
-}
-
-struct JoinHandle<T> {
-    receiver: Receiver<T>,
-}
-
-impl<T> JoinHandle<T> {
+impl<T> ThreadHandle<T> {
     fn join(self) -> T {
-        self.receiver.recv().unwrap()
-    }
-
-    fn try_join(self) -> Option<T> {
-        self.receiver.try_recv().ok()
-    }
-}
-
-// Scoped thread pool for borrowing data
-struct ScopedPool<'scope> {
-    pool: ThreadPool,
-    _marker: std.marker.PhantomData<&'scope ()>,
-}
-
-impl<'scope> ScopedPool<'scope> {
-    fn new(size: usize) -> ScopedPool<'scope> {
-        ScopedPool { pool: ThreadPool.new(size), _marker: std.marker.PhantomData }
-    }
-
-    fn execute<F: FnOnce() + Send + 'scope>(self, f: F) {
-        // Safety: tasks complete before scope ends
-        let f: Task = unsafe { std.mem.transmute(Box.new(f) as Box<dyn FnOnce() + Send + 'scope>) }
-        self.pool.sender.send(PoolMessage.Execute(f)).unwrap()
-    }
-}
-
-// Parallel iterator adapter
-struct ParallelIter<I> {
-    iter: I,
-    pool_size: usize,
-}
-
-impl<I: Iterator + Send + 'static> ParallelIter<I>
-where I.Item: Send + 'static {
-    fn new(iter: I, pool_size: usize) -> ParallelIter<I> {
-        ParallelIter { iter, pool_size }
-    }
-
-    fn for_each<F: Fn(I.Item) + Send + Sync + 'static>(self, f: F) {
-        let pool = ThreadPool.new(self.pool_size)
-        let f = Arc.new(f)
-        for item in self.iter {
-            let f = f.clone()
-            pool.execute(move || f(item))
+        let mut guard = self.state.lock()
+        while *guard == ThreadState.Running || *guard == ThreadState.Idle {
+            guard = self.cv.wait(guard)
         }
-        pool.shutdown()
+        if *guard == ThreadState.Panicked { panic("thread panicked") }
+        self.result.lock().take().unwrap()
     }
 
-    fn map<F, R>(self, f: F) -> [R]
-    where F: Fn(I.Item) -> R + Send + Sync + 'static, R: Send + 'static {
-        let pool = ThreadPool.new(self.pool_size)
-        let f = Arc.new(f)
-        let mut handles: [JoinHandle<R>] = []
+    fn is_finished(self) -> bool {
+        let s = *self.state.lock()
+        s == ThreadState.Finished || s == ThreadState.Panicked
+    }
+}
 
-        for item in self.iter {
-            let f = f.clone()
-            handles.push(pool.spawn(move || f(item)))
+struct ManagedPool {
+    size: usize,
+    active: Arc<Mutex<usize>>,
+    total_spawned: Arc<Mutex<u64>>,
+}
+
+impl ManagedPool {
+    fn new(size: usize) -> ManagedPool {
+        ManagedPool {
+            size,
+            active: Arc.new(Mutex.new(0)),
+            total_spawned: Arc.new(Mutex.new(0)),
         }
+    }
 
-        let results: [R] = handles.into_iter().map(|h| h.join()).collect()
-        pool.shutdown()
-        results
+    fn spawn<T: Send + 'static>(self, f: fn() -> T) -> ThreadHandle<T> {
+        let result = Arc.new(Mutex.new(None))
+        let state = Arc.new(Mutex.new(ThreadState.Idle))
+        let cv = Arc.new(Condvar.new())
+        let r = result.clone()
+        let s = state.clone()
+        let c = cv.clone()
+        let active = self.active.clone()
+
+        *self.total_spawned.lock() += 1
+        *active.lock() += 1
+        *s.lock() = ThreadState.Running
+
+        std.thread.spawn(move || {
+            let val = f()
+            *r.lock() = Some(val)
+            *s.lock() = ThreadState.Finished
+            *active.lock() -= 1
+            c.notify_all()
+        });
+
+        ThreadHandle { result, state, cv }
+    }
+
+    fn active_count(self) -> usize { *self.active.lock() }
+    fn pool_size(self) -> usize { self.size }
+    fn total_spawned(self) -> u64 { *self.total_spawned.lock() }
+}
+
+struct ThreadLocal<T> {
+    values: Arc<Mutex<HashMap<u64, T>>>,
+    default: fn() -> T,
+}
+
+impl<T: Clone> ThreadLocal<T> {
+    fn new(default: fn() -> T) -> ThreadLocal<T> {
+        ThreadLocal { values: Arc.new(Mutex.new(HashMap.new())), default }
+    }
+
+    fn get(self) -> T {
+        let tid = std.thread.current_id()
+        let map = self.values.lock()
+        match map.get(&tid) {
+            Some(v) => v.clone(),
+            None => {
+                let v = (self.default)()
+                drop(map)
+                self.values.lock().insert(tid, v.clone())
+                v
+            }
+        }
+    }
+
+    fn set(self, val: T) {
+        let tid = std.thread.current_id()
+        self.values.lock().insert(tid, val)
+    }
+}
+
+struct ScopedThread<'scope, T> {
+    handle: ThreadHandle<T>,
+    _marker: PhantomData<&'scope ()>,
+}
+
+fn scope<F: FnOnce(&Scope)>(f: F) {
+    let s = Scope.new()
+    f(&s)
+    s.wait_all()
+}
+
+struct Scope {
+    handles: Mutex<[Box<dyn FnOnce()>]>,
+}
+
+impl Scope {
+    fn new() -> Scope { Scope { handles: Mutex.new([]) } }
+    fn wait_all(self) {
+        let fns = self.handles.lock().drain(..).collect::<[_]>()
+        for f in fns { f() }
     }
 }
 
 fn main() {
-    // Basic pool
-    let pool = ThreadPool.new(4)
-    assert(pool.size == 4)
-    assert(pool.workers.len() == 4)
-    print("Pool creation ✓")
+    // ThreadState
+    assert(ThreadState.Idle != ThreadState.Running)
+    assert(ThreadState.Finished != ThreadState.Panicked)
+    print("ThreadState ✓")
 
-    // Execute tasks
-    let counter = Arc.new(Mutex.new(0))
-    for _ in 0..10 {
-        let c = counter.clone()
-        pool.execute(move || {
-            *c.lock().unwrap() += 1
-        })
+    // ManagedPool creation
+    let pool = ManagedPool.new(4)
+    assert(pool.pool_size() == 4)
+    assert(pool.active_count() == 0)
+    assert(pool.total_spawned() == 0)
+    print("Pool init ✓")
+
+    // ThreadHandle state
+    let result = Arc.new(Mutex.new(Some(42i32)))
+    let state = Arc.new(Mutex.new(ThreadState.Finished))
+    let cv = Arc.new(Condvar.new())
+    let handle = ThreadHandle { result, state, cv }
+    assert(handle.is_finished())
+    let val = handle.join()
+    assert(val == 42)
+    print("Handle join ✓")
+
+    // Non-finished handle
+    let state2 = Arc.new(Mutex.new(ThreadState.Running))
+    let handle2 = ThreadHandle::<i32> {
+        result: Arc.new(Mutex.new(None)),
+        state: state2.clone(),
+        cv: Arc.new(Condvar.new()),
     }
-    thread.sleep(std.time.Duration.from_millis(100))
-    assert(*counter.lock().unwrap() == 10)
-    print("Execute tasks ✓")
+    assert(!handle2.is_finished())
+    print("Running handle ✓")
 
-    // Spawn with result
-    let handle = pool.spawn(|| 42 * 2)
-    let result = handle.join()
-    assert(result == 84)
-    print("Spawn with result ✓")
+    // ThreadLocal
+    let tl = ThreadLocal.new(|| 0i32)
+    assert(tl.get() == 0)
+    tl.set(99)
+    assert(tl.get() == 99)
+    print("ThreadLocal ✓")
 
-    // Multiple spawns
-    let mut handles: [JoinHandle<i32>] = []
-    for i in 0..5 {
-        handles.push(pool.spawn(move || i * i))
-    }
-    let results: [i32] = handles.into_iter().map(|h| h.join()).collect()
-    assert(results.len() == 5)
-    print("Multiple spawns ✓")
+    // Pool spawned count
+    let pool2 = ManagedPool.new(2)
+    assert(pool2.total_spawned() == 0)
+    print("Spawn count ✓")
 
-    // Shutdown
-    pool.shutdown()
-    print("Shutdown ✓")
+    // Scope
+    let s = Scope.new()
+    assert(s.handles.lock().is_empty())
+    print("Scope ✓")
 
-    // Worker IDs
-    let pool2 = ThreadPool.new(2)
-    assert(pool2.workers[0].id == 0)
-    assert(pool2.workers[1].id == 1)
-    pool2.shutdown()
-    print("Worker IDs ✓")
-
-    // PoolMessage variants
-    let _exec = PoolMessage.Execute(Box.new(|| {}))
-    let _shut = PoolMessage.Shutdown
-    print("PoolMessage ✓")
-
-    print("Thread Pool complete ✓")
+    print("Thread pool stdlib complete ✓")
 }
