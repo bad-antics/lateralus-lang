@@ -1,0 +1,212 @@
+
+// Standard Library - Ring Buffer (Circular Buffer)
+// Fixed-capacity FIFO buffer that overwrites oldest entries when full.
+
+use std.fmt.{Display, Formatter}
+
+struct RingBuffer<T> {
+    data: [Option<T>],
+    capacity: usize,
+    head: usize,      // next write position
+    tail: usize,      // next read position
+    len: usize,
+}
+
+impl<T> RingBuffer<T> {
+    fn new(capacity: usize) -> RingBuffer<T> {
+        assert(capacity > 0, "capacity must be > 0")
+        RingBuffer {
+            data: vec![none; capacity],
+            capacity, head: 0, tail: 0, len: 0,
+        }
+    }
+
+    fn push(mut self, item: T) -> Option<T> {
+        let evicted = if self.len == self.capacity {
+            let old = self.data[self.head].take()
+            self.tail = (self.tail + 1) % self.capacity
+            old
+        } else {
+            self.len += 1
+            none
+        }
+        self.data[self.head] = some(item)
+        self.head = (self.head + 1) % self.capacity
+        evicted
+    }
+
+    fn pop(mut self) -> Option<T> {
+        if self.len == 0 { return none }
+        let item = self.data[self.tail].take()
+        self.tail = (self.tail + 1) % self.capacity
+        self.len -= 1
+        item
+    }
+
+    fn peek(self) -> Option<&T> {
+        if self.len == 0 { none }
+        else { self.data[self.tail].as_ref() }
+    }
+
+    fn peek_back(self) -> Option<&T> {
+        if self.len == 0 { none }
+        else {
+            let idx = if self.head == 0 { self.capacity - 1 } else { self.head - 1 }
+            self.data[idx].as_ref()
+        }
+    }
+
+    fn len(self) -> usize { self.len }
+    fn capacity(self) -> usize { self.capacity }
+    fn is_empty(self) -> bool { self.len == 0 }
+    fn is_full(self) -> bool { self.len == self.capacity }
+
+    fn clear(mut self) {
+        for i in 0..self.capacity { self.data[i] = none }
+        self.head = 0
+        self.tail = 0
+        self.len = 0
+    }
+
+    fn get(self, index: usize) -> Option<&T> {
+        if index >= self.len { return none }
+        let actual = (self.tail + index) % self.capacity
+        self.data[actual].as_ref()
+    }
+
+    fn iter(self) -> RingBufferIter<T> {
+        RingBufferIter { buf: self, pos: 0 }
+    }
+
+    fn to_vec(self) -> [T] where T: Clone {
+        let mut result = vec![]
+        for i in 0..self.len {
+            let idx = (self.tail + i) % self.capacity
+            result.push(self.data[idx].clone().unwrap())
+        }
+        result
+    }
+
+    fn contains(self, item: &T) -> bool where T: PartialEq {
+        for i in 0..self.len {
+            let idx = (self.tail + i) % self.capacity
+            if self.data[idx].as_ref() == some(item) { return true }
+        }
+        false
+    }
+
+    fn drain(mut self) -> [T] {
+        let mut result = vec![]
+        while let some(item) = self.pop() {
+            result.push(item)
+        }
+        result
+    }
+}
+
+struct RingBufferIter<T> {
+    buf: &RingBuffer<T>,
+    pos: usize,
+}
+
+impl<T> Iterator for RingBufferIter<T> {
+    type Item = &T
+
+    fn next(mut self) -> Option<&T> {
+        if self.pos >= self.buf.len { return none }
+        let item = self.buf.get(self.pos)
+        self.pos += 1
+        item
+    }
+}
+
+impl<T: Display> Display for RingBuffer<T> {
+    fn fmt(self, f: &mut Formatter) -> fmt.Result {
+        write!(f, "RingBuffer[")?
+        for i in 0..self.len {
+            if i > 0 { write!(f, ", ")? }
+            let idx = (self.tail + i) % self.capacity
+            write!(f, "{}", self.data[idx].as_ref().unwrap())?
+        }
+        write!(f, "]")
+    }
+}
+
+fn main() {
+    // Basic push/pop
+    let mut rb = RingBuffer.new(3)
+    assert(rb.is_empty())
+    assert(rb.capacity() == 3)
+    assert(rb.push(1).is_none())
+    assert(rb.push(2).is_none())
+    assert(rb.push(3).is_none())
+    assert(rb.is_full())
+    assert(rb.len() == 3)
+    print("Basic push ✓")
+
+    // Overwrite oldest
+    let evicted = rb.push(4)
+    assert(evicted == some(1))
+    assert(rb.len() == 3)
+    assert(rb.pop() == some(2))
+    assert(rb.pop() == some(3))
+    assert(rb.pop() == some(4))
+    assert(rb.is_empty())
+    print("Overwrite ✓")
+
+    // Peek
+    let mut rb2 = RingBuffer.new(3)
+    assert(rb2.peek().is_none())
+    rb2.push(10)
+    rb2.push(20)
+    assert(*rb2.peek().unwrap() == 10)
+    assert(*rb2.peek_back().unwrap() == 20)
+    print("Peek ✓")
+
+    // Get by index
+    assert(*rb2.get(0).unwrap() == 10)
+    assert(*rb2.get(1).unwrap() == 20)
+    assert(rb2.get(2).is_none())
+    print("Get ✓")
+
+    // Contains
+    assert(rb2.contains(&10))
+    assert(rb2.contains(&20))
+    assert(!rb2.contains(&30))
+    print("Contains ✓")
+
+    // to_vec
+    let v = rb2.to_vec()
+    assert(v == vec![10, 20])
+    print("to_vec ✓")
+
+    // Iterator
+    let mut rb3 = RingBuffer.new(4)
+    rb3.push(1); rb3.push(2); rb3.push(3)
+    let collected: [i32] = rb3.iter().cloned().collect()
+    assert(collected == vec![1, 2, 3])
+    print("Iterator ✓")
+
+    // Clear
+    rb3.clear()
+    assert(rb3.is_empty())
+    assert(rb3.len() == 0)
+    print("Clear ✓")
+
+    // Drain
+    let mut rb4 = RingBuffer.new(3)
+    rb4.push(100); rb4.push(200); rb4.push(300)
+    let drained = rb4.drain()
+    assert(drained == vec![100, 200, 300])
+    assert(rb4.is_empty())
+    print("Drain ✓")
+
+    // Wrap-around stress
+    let mut rb5 = RingBuffer.new(2)
+    for i in 0..10 { rb5.push(i) }
+    assert(rb5.len() == 2)
+    assert(rb5.to_vec() == vec![8, 9])
+    print("Wrap-around ✓")
+
+    print("RingBuffer complete ✓")
+}
