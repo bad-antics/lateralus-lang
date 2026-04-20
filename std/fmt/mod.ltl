@@ -1,0 +1,425 @@
+// Standard Library - Formatting Core
+// Display and Debug formatting traits with write macros and formatting options.
+
+use std.string.String
+use std.io.{Write}
+
+#[derive(Clone, Debug, PartialEq)]
+enum Alignment {
+    Left,
+    Right,
+    Center,
+}
+
+#[derive(Clone, Debug)]
+struct FormatSpec {
+    fill: char,
+    align: Option<Alignment>,
+    sign: bool,
+    alternate: bool,       // '#' flag
+    zero_pad: bool,
+    width: Option<usize>,
+    precision: Option<usize>,
+}
+
+impl FormatSpec {
+    fn default() -> FormatSpec {
+        FormatSpec {
+            fill: ' ', align: none, sign: false,
+            alternate: false, zero_pad: false,
+            width: none, precision: none,
+        }
+    }
+
+    fn with_width(mut self, w: usize) -> FormatSpec {
+        self.width = some(w); self
+    }
+
+    fn with_precision(mut self, p: usize) -> FormatSpec {
+        self.precision = some(p); self
+    }
+
+    fn with_align(mut self, a: Alignment) -> FormatSpec {
+        self.align = some(a); self
+    }
+
+    fn with_fill(mut self, c: char) -> FormatSpec {
+        self.fill = c; self
+    }
+}
+
+struct Formatter {
+    buf: String,
+    spec: FormatSpec,
+}
+
+impl Formatter {
+    fn new() -> Formatter {
+        Formatter { buf: String.new(), spec: FormatSpec.default() }
+    }
+
+    fn with_spec(spec: FormatSpec) -> Formatter {
+        Formatter { buf: String.new(), spec }
+    }
+
+    fn write_str(mut self, s: &str) -> Result<(), FmtError> {
+        self.buf.push_str(s)
+        ok(())
+    }
+
+    fn write_char(mut self, c: char) -> Result<(), FmtError> {
+        self.buf.push(c)
+        ok(())
+    }
+
+    fn write_fmt(mut self, args: Arguments) -> Result<(), FmtError> {
+        for piece in &args.pieces {
+            match piece {
+                Piece.Literal(s) => self.write_str(s)?,
+                Piece.Placeholder(idx, spec) => {
+                    let formatted = args.values[*idx].format_with(spec)?
+                    self.apply_padding(&formatted)?
+                },
+            }
+        }
+        ok(())
+    }
+
+    fn apply_padding(mut self, s: &str) -> Result<(), FmtError> {
+        match self.spec.width {
+            none => self.write_str(s),
+            some(width) if s.len() >= width => self.write_str(s),
+            some(width) => {
+                let padding = width - s.len()
+                let fill = self.spec.fill
+                let align = self.spec.align.clone().unwrap_or(Alignment.Right)
+
+                match align {
+                    Alignment.Left => {
+                        self.write_str(s)?
+                        for _ in 0..padding { self.write_char(fill)? }
+                        ok(())
+                    },
+                    Alignment.Right => {
+                        for _ in 0..padding { self.write_char(fill)? }
+                        self.write_str(s)
+                    },
+                    Alignment.Center => {
+                        let left = padding / 2
+                        let right = padding - left
+                        for _ in 0..left { self.write_char(fill)? }
+                        self.write_str(s)?
+                        for _ in 0..right { self.write_char(fill)? }
+                        ok(())
+                    },
+                }
+            },
+        }
+    }
+
+    fn finish(self) -> String {
+        self.buf
+    }
+
+    fn alternate(self) -> bool { self.spec.alternate }
+    fn width(self) -> Option<usize> { self.spec.width }
+    fn precision(self) -> Option<usize> { self.spec.precision }
+}
+
+#[derive(Debug)]
+struct FmtError;
+
+impl Display for FmtError {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError> {
+        f.write_str("formatting error")
+    }
+}
+
+trait Display {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError>
+
+    fn to_string(self) -> String {
+        let mut f = Formatter.new()
+        self.fmt(&mut f).unwrap()
+        f.finish()
+    }
+}
+
+trait Debug {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError>
+
+    fn debug_string(self) -> String {
+        let mut f = Formatter.new()
+        self.fmt(&mut f).unwrap()
+        f.finish()
+    }
+}
+
+trait Binary {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError>
+}
+
+trait Octal {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError>
+}
+
+trait LowerHex {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError>
+}
+
+trait UpperHex {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError>
+}
+
+trait LowerExp {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError>
+}
+
+trait UpperExp {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError>
+}
+
+// Built-in Display impls
+
+impl Display for int {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError> {
+        f.write_str(&self.to_string_radix(10))
+    }
+}
+
+impl Display for float {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError> {
+        let s = match f.precision() {
+            some(p) => self.to_string_precision(p),
+            none => self.to_string(),
+        }
+        f.write_str(&s)
+    }
+}
+
+impl Display for bool {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError> {
+        f.write_str(if self { "true" } else { "false" })
+    }
+}
+
+impl Display for string {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError> {
+        f.write_str(&self)
+    }
+}
+
+impl Display for char {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError> {
+        f.write_char(self)
+    }
+}
+
+impl Debug for string {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError> {
+        f.write_char('"')?
+        for c in self.chars() {
+            match c {
+                '"' => f.write_str("\\\"")?,
+                '\\' => f.write_str("\\\\")?,
+                '\n' => f.write_str("\\n")?,
+                '\r' => f.write_str("\\r")?,
+                '\t' => f.write_str("\\t")?,
+                _ => f.write_char(c)?,
+            }
+        }
+        f.write_char('"')
+    }
+}
+
+impl Binary for int {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError> {
+        let prefix = if f.alternate() { "0b" } else { "" }
+        f.write_str(&format!("{}{}", prefix, self.to_string_radix(2)))
+    }
+}
+
+impl LowerHex for int {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError> {
+        let prefix = if f.alternate() { "0x" } else { "" }
+        f.write_str(&format!("{}{}", prefix, self.to_string_radix(16)))
+    }
+}
+
+impl UpperHex for int {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError> {
+        let prefix = if f.alternate() { "0X" } else { "" }
+        f.write_str(&format!("{}{}", prefix, self.to_string_radix(16).to_upper()))
+    }
+}
+
+enum Piece {
+    Literal(string),
+    Placeholder(usize, FormatSpec),
+}
+
+struct Arguments {
+    pieces: [Piece],
+    values: [&dyn Display],
+}
+
+// DebugStruct / DebugList helpers for #[derive(Debug)]
+
+struct DebugStruct {
+    name: string,
+    fields: [(string, string)],
+}
+
+impl DebugStruct {
+    fn new(name: &str) -> DebugStruct {
+        DebugStruct { name: name.to_string(), fields: [] }
+    }
+
+    fn field(mut self, name: &str, value: &dyn Debug) -> &mut DebugStruct {
+        self.fields.push((name.to_string(), value.debug_string()))
+        &mut self
+    }
+
+    fn finish(self, f: &mut Formatter) -> Result<(), FmtError> {
+        f.write_str(&self.name)?
+        f.write_str(" { ")?
+        for (i, (name, val)) in self.fields.iter().enumerate() {
+            if i > 0 { f.write_str(", ")? }
+            f.write_str(name)?
+            f.write_str(": ")?
+            f.write_str(val)?
+        }
+        f.write_str(" }")
+    }
+}
+
+struct DebugList {
+    items: [string],
+}
+
+impl DebugList {
+    fn new() -> DebugList { DebugList { items: [] } }
+
+    fn entry(mut self, value: &dyn Debug) -> &mut DebugList {
+        self.items.push(value.debug_string())
+        &mut self
+    }
+
+    fn finish(self, f: &mut Formatter) -> Result<(), FmtError> {
+        f.write_char('[')?
+        for (i, item) in self.items.iter().enumerate() {
+            if i > 0 { f.write_str(", ")? }
+            f.write_str(item)?
+        }
+        f.write_char(']')
+    }
+}
+
+fn main() {
+    // FormatSpec defaults
+    let spec = FormatSpec.default()
+    assert(spec.fill == ' ')
+    assert(spec.width.is_none())
+    assert(!spec.alternate)
+    print("FormatSpec default ✓")
+
+    // Builder pattern
+    let spec2 = FormatSpec.default().with_width(10).with_precision(3).with_fill('_')
+    assert(spec2.width == some(10))
+    assert(spec2.precision == some(3))
+    assert(spec2.fill == '_')
+    print("FormatSpec builder ✓")
+
+    // Display - int
+    assert(42.to_string() == "42")
+    assert((-7).to_string() == "-7")
+    print("Display int ✓")
+
+    // Display - bool
+    assert(true.to_string() == "true")
+    assert(false.to_string() == "false")
+    print("Display bool ✓")
+
+    // Display - string
+    assert("hello".to_string() == "hello")
+    print("Display string ✓")
+
+    // Debug - string with escapes
+    let dbg = "say \"hi\"\nnewline".debug_string()
+    assert(dbg.contains("\\\""))
+    assert(dbg.contains("\\n"))
+    assert(dbg.starts_with("\""))
+    print("Debug string ✓")
+
+    // Formatter padding - right aligned
+    let mut f = Formatter.with_spec(FormatSpec.default().with_width(10))
+    f.apply_padding("hi").unwrap()
+    let result = f.finish()
+    assert(result.len() == 10)
+    assert(result.ends_with("hi"))
+    print("Right padding ✓")
+
+    // Formatter padding - left aligned
+    let mut f2 = Formatter.with_spec(
+        FormatSpec.default().with_width(10).with_align(Alignment.Left)
+    )
+    f2.apply_padding("hi").unwrap()
+    let result2 = f2.finish()
+    assert(result2.len() == 10)
+    assert(result2.starts_with("hi"))
+    print("Left padding ✓")
+
+    // Formatter padding - center aligned
+    let mut f3 = Formatter.with_spec(
+        FormatSpec.default().with_width(10).with_align(Alignment.Center)
+    )
+    f3.apply_padding("hi").unwrap()
+    let result3 = f3.finish()
+    assert(result3.len() == 10)
+    print("Center padding ✓")
+
+    // Custom fill char
+    let mut f4 = Formatter.with_spec(
+        FormatSpec.default().with_width(8).with_fill('*').with_align(Alignment.Center)
+    )
+    f4.apply_padding("go").unwrap()
+    let result4 = f4.finish()
+    assert(result4 == "***go***")
+    print("Custom fill ✓")
+
+    // DebugStruct
+    let mut ds = DebugStruct.new("Point")
+    ds.field("x", &42)
+    ds.field("y", &99)
+    let mut fmt = Formatter.new()
+    ds.finish(&mut fmt).unwrap()
+    let out = fmt.finish()
+    assert(out.contains("Point"))
+    assert(out.contains("x: 42"))
+    assert(out.contains("y: 99"))
+    print("DebugStruct ✓")
+
+    // DebugList
+    let mut dl = DebugList.new()
+    dl.entry(&1)
+    dl.entry(&2)
+    dl.entry(&3)
+    let mut fmt2 = Formatter.new()
+    dl.finish(&mut fmt2).unwrap()
+    let out2 = fmt2.finish()
+    assert(out2 == "[1, 2, 3]")
+    print("DebugList ✓")
+
+    // No padding when string >= width
+    let mut f5 = Formatter.with_spec(FormatSpec.default().with_width(3))
+    f5.apply_padding("hello").unwrap()
+    assert(f5.finish() == "hello")
+    print("No-op padding ✓")
+
+    // FmtError display
+    let err = FmtError
+    assert(err.to_string() == "formatting error")
+    print("FmtError ✓")
+
+    print("Formatting Core complete ✓")
+}
