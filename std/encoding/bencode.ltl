@@ -1,0 +1,207 @@
+
+// Bencode - BitTorrent encoding format parser and serializer
+// Supports integers, strings, lists, and dictionaries per BEP 0003.
+
+use std.collections.HashMap
+
+#[derive(Clone, Debug, PartialEq)]
+enum BencodeValue {
+    Integer(i64),
+    Bytes(string),
+    List([BencodeValue]),
+    Dict(HashMap<string, BencodeValue>),
+}
+
+impl BencodeValue {
+    fn as_int(self) -> Option<i64> {
+        match self { BencodeValue.Integer(n) => Some(n), _ => None }
+    }
+    fn as_str(self) -> Option<&str> {
+        match self { BencodeValue.Bytes(ref s) => Some(s.as_str()), _ => None }
+    }
+    fn as_list(self) -> Option<&[BencodeValue]> {
+        match self { BencodeValue.List(ref l) => Some(l), _ => None }
+    }
+    fn as_dict(self) -> Option<&HashMap<string, BencodeValue>> {
+        match self { BencodeValue.Dict(ref d) => Some(d), _ => None }
+    }
+    fn is_int(self) -> bool { matches!(self, BencodeValue.Integer(_)) }
+    fn is_str(self) -> bool { matches!(self, BencodeValue.Bytes(_)) }
+    fn is_list(self) -> bool { matches!(self, BencodeValue.List(_)) }
+    fn is_dict(self) -> bool { matches!(self, BencodeValue.Dict(_)) }
+}
+
+struct BencodeDecoder {
+    data: [u8],
+    pos: usize,
+}
+
+impl BencodeDecoder {
+    fn new(data: &str) -> BencodeDecoder { BencodeDecoder { data: data.bytes().collect(), pos: 0 } }
+
+    fn peek(self) -> Option<u8> { if self.pos < self.data.len() { Some(self.data[self.pos]) } else { None } }
+    fn advance(mut self) -> u8 { let b = self.data[self.pos]; self.pos += 1; b }
+    fn remaining(self) -> usize { self.data.len() - self.pos }
+
+    fn decode(mut self) -> Option<BencodeValue> {
+        match self.peek()? {
+            b'i' => self.decode_int(),
+            b'l' => self.decode_list(),
+            b'd' => self.decode_dict(),
+            b'0'..=b'9' => self.decode_string(),
+            _ => None,
+        }
+    }
+
+    fn decode_int(mut self) -> Option<BencodeValue> {
+        self.advance()  // skip 'i'
+        let mut neg = false
+        if self.peek() == Some(b'-') { neg = true; self.advance(); }
+        let mut n: i64 = 0
+        while self.peek() != Some(b'e') {
+            let d = self.advance()
+            n = n * 10 + (d - b'0') as i64
+        }
+        self.advance()  // skip 'e'
+        Some(BencodeValue.Integer(if neg { -n } else { n }))
+    }
+
+    fn decode_string(mut self) -> Option<BencodeValue> {
+        let mut len: usize = 0
+        while self.peek() != Some(b':') {
+            let d = self.advance()
+            len = len * 10 + (d - b'0') as usize
+        }
+        self.advance()  // skip ':'
+        let mut s = String.new()
+        for _ in 0..len { s.push(self.advance() as char) }
+        Some(BencodeValue.Bytes(s))
+    }
+
+    fn decode_list(mut self) -> Option<BencodeValue> {
+        self.advance()  // skip 'l'
+        let mut items = []
+        while self.peek() != Some(b'e') { items.push(self.decode()?) }
+        self.advance()  // skip 'e'
+        Some(BencodeValue.List(items))
+    }
+
+    fn decode_dict(mut self) -> Option<BencodeValue> {
+        self.advance()  // skip 'd'
+        let mut map = HashMap.new()
+        while self.peek() != Some(b'e') {
+            let key = self.decode_string()?
+            let val = self.decode()?
+            if let BencodeValue.Bytes(k) = key { map.insert(k, val) }
+        }
+        self.advance()  // skip 'e'
+        Some(BencodeValue.Dict(map))
+    }
+}
+
+fn encode(val: &BencodeValue) -> string {
+    match val {
+        BencodeValue.Integer(n) => format!("i{}e", n),
+        BencodeValue.Bytes(s) => format!("{}:{}", s.len(), s),
+        BencodeValue.List(items) => {
+            let mut out = "l".into()
+            for item in items { out += &encode(item) }
+            out += "e"
+            out
+        }
+        BencodeValue.Dict(map) => {
+            let mut out = "d".into()
+            let mut keys: [&string] = map.keys().collect()
+            keys.sort()
+            for key in keys {
+                out += &format!("{}:{}", key.len(), key)
+                out += &encode(map.get(key).unwrap())
+            }
+            out += "e"
+            out
+        }
+    }
+}
+
+fn main() {
+    // Decode integer
+    let mut dec = BencodeDecoder.new("i42e")
+    let val = dec.decode().unwrap()
+    assert(val == BencodeValue.Integer(42))
+    assert(val.as_int() == Some(42))
+    assert(val.is_int())
+    print("Integer ✓")
+
+    // Negative integer
+    let mut dec2 = BencodeDecoder.new("i-7e")
+    assert(dec2.decode().unwrap().as_int() == Some(-7))
+    print("Negative ✓")
+
+    // Zero
+    let mut dec3 = BencodeDecoder.new("i0e")
+    assert(dec3.decode().unwrap().as_int() == Some(0))
+    print("Zero ✓")
+
+    // Decode string
+    let mut dec4 = BencodeDecoder.new("5:hello")
+    let s = dec4.decode().unwrap()
+    assert(s.as_str() == Some("hello"))
+    assert(s.is_str())
+    print("String ✓")
+
+    // Empty string
+    let mut dec5 = BencodeDecoder.new("0:")
+    assert(dec5.decode().unwrap().as_str() == Some(""))
+    print("Empty string ✓")
+
+    // Decode list
+    let mut dec6 = BencodeDecoder.new("li1ei2ei3ee")
+    let list = dec6.decode().unwrap()
+    assert(list.is_list())
+    let items = list.as_list().unwrap()
+    assert(items.len() == 3)
+    assert(items[0].as_int() == Some(1))
+    assert(items[2].as_int() == Some(3))
+    print("List ✓")
+
+    // Decode dict
+    let mut dec7 = BencodeDecoder.new("d3:agei25e4:name5:Alicee")
+    let dict = dec7.decode().unwrap()
+    assert(dict.is_dict())
+    let d = dict.as_dict().unwrap()
+    assert(d.get("age").unwrap().as_int() == Some(25))
+    assert(d.get("name").unwrap().as_str() == Some("Alice"))
+    print("Dict ✓")
+
+    // Nested structures
+    let mut dec8 = BencodeDecoder.new("d4:listli1e3:twoe5:innerd1:ai1eee")
+    let nested = dec8.decode().unwrap()
+    let nd = nested.as_dict().unwrap()
+    assert(nd.get("list").unwrap().as_list().unwrap().len() == 2)
+    assert(nd.get("inner").unwrap().as_dict().unwrap().get("a").unwrap().as_int() == Some(1))
+    print("Nested ✓")
+
+    // Encode integer
+    assert(encode(&BencodeValue.Integer(42)) == "i42e")
+    assert(encode(&BencodeValue.Integer(-7)) == "i-7e")
+    print("Encode int ✓")
+
+    // Encode string
+    assert(encode(&BencodeValue.Bytes("hello".into())) == "5:hello")
+    print("Encode string ✓")
+
+    // Encode list
+    let list_val = BencodeValue.List([BencodeValue.Integer(1), BencodeValue.Bytes("ab".into())])
+    assert(encode(&list_val) == "li1e2:abe")
+    print("Encode list ✓")
+
+    // Round-trip
+    let original = "d3:agei30e4:name3:Bobe"
+    let mut dec9 = BencodeDecoder.new(original)
+    let parsed = dec9.decode().unwrap()
+    let reencoded = encode(&parsed)
+    assert(reencoded == original)
+    print("Round-trip ✓")
+
+    print("Bencode complete ✓")
+}
