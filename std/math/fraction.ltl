@@ -1,0 +1,171 @@
+
+// Fraction - Exact rational number arithmetic
+// Automatically reduces fractions and handles sign normalization.
+
+fn gcd(a: i64, b: i64) -> i64 {
+    let mut x = a.abs()
+    let mut y = b.abs()
+    while y != 0 { let t = y; y = x % y; x = t }
+    x
+}
+
+fn lcm(a: i64, b: i64) -> i64 { (a / gcd(a, b)) * b }
+
+#[derive(Clone, Copy, Debug)]
+struct Fraction {
+    num: i64,
+    den: i64,
+}
+
+impl Fraction {
+    fn new(num: i64, den: i64) -> Fraction {
+        assert(den != 0, "denominator cannot be zero")
+        let g = gcd(num.abs(), den.abs())
+        let sign = if den < 0 { -1 } else { 1 }
+        Fraction { num: sign * num / g, den: sign * den / g }
+    }
+
+    fn from_int(n: i64) -> Fraction { Fraction { num: n, den: 1 } }
+    fn zero() -> Fraction { Fraction { num: 0, den: 1 } }
+    fn one() -> Fraction { Fraction { num: 1, den: 1 } }
+
+    fn add(self, other: Fraction) -> Fraction {
+        Fraction.new(self.num * other.den + other.num * self.den, self.den * other.den)
+    }
+    fn sub(self, other: Fraction) -> Fraction {
+        Fraction.new(self.num * other.den - other.num * self.den, self.den * other.den)
+    }
+    fn mul(self, other: Fraction) -> Fraction {
+        Fraction.new(self.num * other.num, self.den * other.den)
+    }
+    fn div(self, other: Fraction) -> Fraction {
+        Fraction.new(self.num * other.den, self.den * other.num)
+    }
+    fn neg(self) -> Fraction { Fraction { num: -self.num, den: self.den } }
+    fn abs(self) -> Fraction { Fraction { num: self.num.abs(), den: self.den } }
+    fn recip(self) -> Fraction { Fraction.new(self.den, self.num) }
+
+    fn is_zero(self) -> bool { self.num == 0 }
+    fn is_positive(self) -> bool { self.num > 0 }
+    fn is_negative(self) -> bool { self.num < 0 }
+    fn is_integer(self) -> bool { self.den == 1 }
+
+    fn to_f64(self) -> f64 { self.num as f64 / self.den as f64 }
+    fn floor(self) -> i64 { self.num / self.den }
+    fn ceil(self) -> i64 { (self.num + self.den - 1) / self.den }
+
+    fn eq(self, other: Fraction) -> bool { self.num == other.num && self.den == other.den }
+    fn lt(self, other: Fraction) -> bool { self.num * other.den < other.num * self.den }
+    fn gt(self, other: Fraction) -> bool { other.lt(self) }
+    fn lte(self, other: Fraction) -> bool { !self.gt(other) }
+    fn gte(self, other: Fraction) -> bool { !self.lt(other) }
+
+    fn pow(self, n: i32) -> Fraction {
+        if n == 0 { return Fraction.one() }
+        if n < 0 { return self.recip().pow(-n) }
+        let mut result = Fraction.one()
+        for _ in 0..n { result = result.mul(self) }
+        result
+    }
+
+    fn mediant(self, other: Fraction) -> Fraction {
+        Fraction.new(self.num + other.num, self.den + other.den)
+    }
+
+    fn to_string(self) -> string {
+        if self.den == 1 { format!("{}", self.num) }
+        else { format!("{}/{}", self.num, self.den) }
+    }
+}
+
+fn main() {
+    // Basic
+    let f = Fraction.new(3, 4)
+    assert(f.num == 3 && f.den == 4)
+    print("Basic ✓")
+
+    // Auto-reduce
+    let f2 = Fraction.new(6, 8)
+    assert(f2.num == 3 && f2.den == 4)
+    let f3 = Fraction.new(10, 5)
+    assert(f3.num == 2 && f3.den == 1)
+    print("Reduce ✓")
+
+    // Sign normalization
+    let f4 = Fraction.new(-3, 4)
+    assert(f4.num == -3 && f4.den == 4)
+    let f5 = Fraction.new(3, -4)
+    assert(f5.num == -3 && f5.den == 4)
+    let f6 = Fraction.new(-3, -4)
+    assert(f6.num == 3 && f6.den == 4)
+    print("Sign ✓")
+
+    // Arithmetic
+    let a = Fraction.new(1, 3)
+    let b = Fraction.new(1, 6)
+    assert(a.add(b).eq(Fraction.new(1, 2)))
+    assert(a.sub(b).eq(Fraction.new(1, 6)))
+    assert(a.mul(b).eq(Fraction.new(1, 18)))
+    assert(a.div(b).eq(Fraction.new(2, 1)))
+    print("Arithmetic ✓")
+
+    // Negation
+    assert(a.neg().eq(Fraction.new(-1, 3)))
+    assert(a.neg().neg().eq(a))
+    print("Neg ✓")
+
+    // Abs
+    let neg = Fraction.new(-5, 7)
+    assert(neg.abs().eq(Fraction.new(5, 7)))
+    print("Abs ✓")
+
+    // Reciprocal
+    assert(a.recip().eq(Fraction.new(3, 1)))
+    print("Recip ✓")
+
+    // Comparisons
+    assert(a.gt(b))
+    assert(b.lt(a))
+    assert(a.eq(a))
+    assert(!a.eq(b))
+    print("Compare ✓")
+
+    // Properties
+    assert(Fraction.zero().is_zero())
+    assert(Fraction.one().is_integer())
+    assert(Fraction.new(3, 1).is_integer())
+    assert(Fraction.new(1, 2).is_positive())
+    assert(Fraction.new(-1, 2).is_negative())
+    print("Props ✓")
+
+    // Conversion
+    let half = Fraction.new(1, 2)
+    assert((half.to_f64() - 0.5).abs() < 0.001)
+    assert(Fraction.new(7, 3).floor() == 2)
+    assert(Fraction.new(7, 3).ceil() == 3)
+    print("Convert ✓")
+
+    // Power
+    assert(half.pow(3).eq(Fraction.new(1, 8)))
+    assert(half.pow(0).eq(Fraction.one()))
+    assert(half.pow(-1).eq(Fraction.new(2, 1)))
+    print("Power ✓")
+
+    // Mediant
+    let m = Fraction.new(1, 3).mediant(Fraction.new(1, 2))
+    assert(m.eq(Fraction.new(2, 5)))
+    print("Mediant ✓")
+
+    // String
+    assert(half.to_string() == "1/2")
+    assert(Fraction.from_int(5).to_string() == "5")
+    print("String ✓")
+
+    // GCD/LCM
+    assert(gcd(12, 8) == 4)
+    assert(gcd(7, 13) == 1)
+    assert(lcm(4, 6) == 12)
+    print("GCD/LCM ✓")
+
+    print("Fraction complete ✓")
+}
