@@ -1,0 +1,154 @@
+
+// Once - One-time initialization primitive
+// Ensures a function runs exactly once, even under concurrent access.
+
+use std.sync.{Mutex, Condvar, Arc}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum OnceState { Uninitialized, Running, Complete, Poisoned }
+
+struct Once {
+    state: Mutex<OnceState>,
+    cv: Condvar,
+}
+
+impl Once {
+    fn new() -> Once { Once { state: Mutex.new(OnceState.Uninitialized), cv: Condvar.new() } }
+
+    fn call_once<F: FnOnce()>(self, f: F) {
+        let mut guard = self.state.lock()
+        match *guard {
+            OnceState.Complete => return,
+            OnceState.Poisoned => panic("Once poisoned"),
+            OnceState.Running => {
+                while *guard == OnceState.Running { guard = self.cv.wait(guard) }
+                if *guard == OnceState.Poisoned { panic("Once poisoned") }
+                return
+            }
+            OnceState.Uninitialized => { *guard = OnceState.Running }
+        }
+        drop(guard)
+
+        // Run the function (if it panics, poison)
+        let result = std.panic.catch_unwind(f)
+        let mut guard = self.state.lock()
+        match result {
+            Ok(()) => { *guard = OnceState.Complete }
+            Err(_) => { *guard = OnceState.Poisoned }
+        }
+        self.cv.notify_all()
+    }
+
+    fn is_completed(self) -> bool { *self.state.lock() == OnceState.Complete }
+    fn is_poisoned(self) -> bool { *self.state.lock() == OnceState.Poisoned }
+}
+
+struct Lazy<T> {
+    once: Once,
+    value: Mutex<Option<T>>,
+    init: Mutex<Option<fn() -> T>>,
+}
+
+impl<T: Clone> Lazy<T> {
+    fn new(f: fn() -> T) -> Lazy<T> {
+        Lazy { once: Once.new(), value: Mutex.new(None), init: Mutex.new(Some(f)) }
+    }
+
+    fn get(self) -> T {
+        self.once.call_once(|| {
+            let f = self.init.lock().take().unwrap()
+            *self.value.lock() = Some(f())
+        });
+        self.value.lock().as_ref().unwrap().clone()
+    }
+
+    fn is_initialized(self) -> bool { self.once.is_completed() }
+}
+
+struct OnceCell<T> {
+    value: Mutex<Option<T>>,
+    initialized: Mutex<bool>,
+}
+
+impl<T: Clone> OnceCell<T> {
+    fn new() -> OnceCell<T> { OnceCell { value: Mutex.new(None), initialized: Mutex.new(false) } }
+
+    fn set(self, val: T) -> bool {
+        let mut init = self.initialized.lock()
+        if *init { return false }
+        *self.value.lock() = Some(val)
+        *init = true
+        true
+    }
+
+    fn get(self) -> Option<T> { self.value.lock().clone() }
+    fn is_set(self) -> bool { *self.initialized.lock() }
+
+    fn get_or_init(self, f: fn() -> T) -> T {
+        if !self.is_set() { self.set(f()); }
+        self.get().unwrap()
+    }
+}
+
+fn main() {
+    // Once basic
+    let once = Once.new()
+    assert(!once.is_completed())
+    let mut count = 0
+    once.call_once(|| { count += 1 })
+    assert(once.is_completed())
+    assert(count == 1)
+    once.call_once(|| { count += 1 })  // should not run
+    assert(count == 1)
+    print("Once ✓")
+
+    // Once state
+    let once2 = Once.new()
+    assert(*once2.state.lock() == OnceState.Uninitialized)
+    once2.call_once(|| {})
+    assert(*once2.state.lock() == OnceState.Complete)
+    print("State ✓")
+
+    // Lazy
+    let lazy = Lazy.new(|| 42)
+    assert(!lazy.is_initialized())
+    let val = lazy.get()
+    assert(val == 42)
+    assert(lazy.is_initialized())
+    let val2 = lazy.get()
+    assert(val2 == 42)
+    print("Lazy ✓")
+
+    // Lazy with computation
+    let lazy2 = Lazy.new(|| { let mut s = 0; for i in 1..=10 { s += i; } s })
+    assert(lazy2.get() == 55)
+    print("Lazy compute ✓")
+
+    // OnceCell
+    let cell = OnceCell::<i32>.new()
+    assert(!cell.is_set())
+    assert(cell.get().is_none())
+    assert(cell.set(99))
+    assert(cell.is_set())
+    assert(cell.get() == Some(99))
+    assert(!cell.set(100))  // already set
+    assert(cell.get() == Some(99))
+    print("OnceCell ✓")
+
+    // OnceCell get_or_init
+    let cell2 = OnceCell::<string>.new()
+    let val3 = cell2.get_or_init(|| "hello".into())
+    assert(val3 == "hello")
+    let val4 = cell2.get_or_init(|| "world".into())
+    assert(val4 == "hello")  // first init wins
+    print("Get or init ✓")
+
+    // Multiple once calls
+    let once3 = Once.new()
+    let mut x = 0
+    for _ in 0..10 { once3.call_once(|| { x += 1 }) }
+    assert(x == 1)
+    print("Multiple calls ✓")
+
+    print("Once complete ✓")
+}
