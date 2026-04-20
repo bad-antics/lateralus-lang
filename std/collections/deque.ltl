@@ -1,200 +1,265 @@
-// std.collections.deque — Double-ended queue
-// Growable ring buffer with O(1) amortized push/pop on both ends.
+// Standard Library - Double-Ended Queue (Deque)
+// Ring-buffer backed deque with O(1) push/pop at both ends.
 
-pub struct Deque<T> {
+use std.fmt.{Debug, Formatter, FmtError}
+use std.iter.{Iterator, IntoIterator}
+use std.option.Option
+
+const MIN_CAPACITY: usize = 8
+
+#[derive(Clone)]
+struct Deque<T> {
     buf: [Option<T>],
     head: usize,
-    tail: usize,
     len: usize,
     capacity: usize,
 }
 
 impl<T> Deque<T> {
-    pub fn new() -> Deque<T> { Self.with_capacity(16) }
-
-    pub fn with_capacity(capacity: usize) -> Deque<T> {
-        let cap = capacity.max(4).next_power_of_two()
-        let mut buf: [Option<T>] = []
-        for _ in 0..cap { buf.push(none) }
-        Deque { buf, head: 0, tail: 0, len: 0, capacity: cap }
+    fn new() -> Deque<T> {
+        Deque.with_capacity(MIN_CAPACITY)
     }
 
-    pub fn len(self) -> usize { self.len }
-    pub fn is_empty(self) -> bool { self.len == 0 }
-    pub fn capacity(self) -> usize { self.capacity }
+    fn with_capacity(cap: usize) -> Deque<T> {
+        let actual = cap.max(MIN_CAPACITY).next_power_of_two()
+        Deque {
+            buf: (0..actual).map(|_| none).collect(),
+            head: 0, len: 0, capacity: actual,
+        }
+    }
 
-    fn wrap_index(self, index: usize) -> usize { index & (self.capacity - 1) }
+    fn len(self) -> usize { self.len }
+    fn is_empty(self) -> bool { self.len == 0 }
+    fn capacity(self) -> usize { self.capacity }
 
-    pub fn push_back(mut self, value: T) {
+    fn mask(self, idx: usize) -> usize {
+        idx & (self.capacity - 1)
+    }
+
+    fn push_back(mut self, val: T) {
         if self.len == self.capacity { self.grow() }
-        self.buf[self.tail] = some(value)
-        self.tail = self.wrap_index(self.tail + 1)
+        let idx = self.mask(self.head + self.len)
+        self.buf[idx] = some(val)
         self.len += 1
     }
 
-    pub fn push_front(mut self, value: T) {
+    fn push_front(mut self, val: T) {
         if self.len == self.capacity { self.grow() }
-        self.head = self.wrap_index(self.head + self.capacity - 1)
-        self.buf[self.head] = some(value)
+        self.head = self.mask(self.head.wrapping_sub(1).wrapping_add(self.capacity))
+        self.buf[self.head] = some(val)
         self.len += 1
     }
 
-    pub fn pop_back(mut self) -> Option<T> {
-        if self.is_empty() { return none }
-        self.tail = self.wrap_index(self.tail + self.capacity - 1)
+    fn pop_back(mut self) -> Option<T> {
+        if self.len == 0 { return none }
         self.len -= 1
-        self.buf[self.tail].take()
+        let idx = self.mask(self.head + self.len)
+        self.buf[idx].take()
     }
 
-    pub fn pop_front(mut self) -> Option<T> {
-        if self.is_empty() { return none }
+    fn pop_front(mut self) -> Option<T> {
+        if self.len == 0 { return none }
         let val = self.buf[self.head].take()
-        self.head = self.wrap_index(self.head + 1)
+        self.head = self.mask(self.head + 1)
         self.len -= 1
         val
     }
 
-    pub fn front(self) -> Option<&T> {
-        if self.is_empty() { none } else { self.buf[self.head].as_ref() }
+    fn front(self) -> Option<&T> {
+        if self.len == 0 { none } else { self.buf[self.head].as_ref() }
     }
 
-    pub fn back(self) -> Option<&T> {
-        if self.is_empty() { none }
-        else { self.buf[self.wrap_index(self.tail + self.capacity - 1)].as_ref() }
+    fn back(self) -> Option<&T> {
+        if self.len == 0 { none }
+        else { self.buf[self.mask(self.head + self.len - 1)].as_ref() }
     }
 
-    pub fn get(self, index: usize) -> Option<&T> {
+    fn get(self, index: usize) -> Option<&T> {
         if index >= self.len { return none }
-        let actual = self.wrap_index(self.head + index)
-        self.buf[actual].as_ref()
+        self.buf[self.mask(self.head + index)].as_ref()
     }
 
-    pub fn get_mut(mut self, index: usize) -> Option<&mut T> {
-        if index >= self.len { return none }
-        let actual = self.wrap_index(self.head + index)
-        self.buf[actual].as_mut()
-    }
-
-    pub fn clear(mut self) {
-        while self.pop_front().is_some() {}
-    }
-
-    pub fn contains(self, value: &T) -> bool where T: PartialEq {
+    fn clear(mut self) {
         for i in 0..self.len {
-            let idx = self.wrap_index(self.head + i)
-            if let some(item) = &self.buf[idx] {
-                if item == value { return true }
-            }
+            self.buf[self.mask(self.head + i)] = none
         }
-        false
+        self.head = 0
+        self.len = 0
     }
 
-    pub fn swap(mut self, i: usize, j: usize) {
-        let a = self.wrap_index(self.head + i)
-        let b = self.wrap_index(self.head + j)
+    fn grow(mut self) {
+        let new_cap = self.capacity * 2
+        let mut new_buf: [Option<T>] = (0..new_cap).map(|_| none).collect()
+        for i in 0..self.len {
+            new_buf[i] = self.buf[self.mask(self.head + i)].take()
+        }
+        self.buf = new_buf
+        self.head = 0
+        self.capacity = new_cap
+    }
+
+    fn iter(self) -> impl Iterator<Item = &T> {
+        (0..self.len).filter_map(|i| self.get(i))
+    }
+
+    fn contains(self, val: &T) -> bool where T: PartialEq {
+        self.iter().any(|v| v == val)
+    }
+
+    fn retain(mut self, f: fn(&T) -> bool) {
+        let items: [T] = self.iter().filter(|v| f(v)).cloned().collect()
+        self.clear()
+        for item in items { self.push_back(item) }
+    }
+
+    fn to_vec(self) -> [T] where T: Clone {
+        self.iter().cloned().collect()
+    }
+
+    fn from_iter(iter: impl IntoIterator<Item = T>) -> Deque<T> {
+        let mut d = Deque.new()
+        for item in iter { d.push_back(item) }
+        d
+    }
+
+    fn swap(mut self, i: usize, j: usize) {
+        let a = self.mask(self.head + i)
+        let b = self.mask(self.head + j)
         self.buf.swap(a, b)
     }
 
-    pub fn rotate_left(mut self, n: usize) {
-        if self.is_empty() { return }
-        let n = n % self.len
-        for _ in 0..n {
+    fn rotate_left(mut self, n: usize) {
+        if self.len <= 1 { return }
+        let k = n % self.len
+        for _ in 0..k {
             let val = self.pop_front().unwrap()
             self.push_back(val)
         }
     }
 
-    pub fn rotate_right(mut self, n: usize) {
-        if self.is_empty() { return }
-        let n = n % self.len
-        for _ in 0..n {
+    fn rotate_right(mut self, n: usize) {
+        if self.len <= 1 { return }
+        let k = n % self.len
+        for _ in 0..k {
             let val = self.pop_back().unwrap()
             self.push_front(val)
         }
     }
+}
 
-    pub fn iter(self) -> DequeIter<T> { DequeIter { deque: self, index: 0 } }
-
-    pub fn to_vec(self) -> [T] where T: Clone {
-        let mut result: [T] = []
-        for i in 0..self.len {
-            let idx = self.wrap_index(self.head + i)
-            if let some(item) = &self.buf[idx] { result.push(item.clone()) }
+impl<T: Debug> Debug for Deque<T> {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError> {
+        f.write_str("Deque[")?
+        for (i, item) in self.iter().enumerate() {
+            if i > 0 { f.write_str(", ")? }
+            item.fmt(f)?
         }
-        result
-    }
-
-    fn grow(mut self) {
-        let new_capacity = self.capacity * 2
-        let mut new_buf: [Option<T>] = []
-        for _ in 0..new_capacity { new_buf.push(none) }
-
-        for i in 0..self.len {
-            let old_idx = self.wrap_index(self.head + i)
-            new_buf[i] = self.buf[old_idx].take()
-        }
-
-        self.buf = new_buf
-        self.head = 0
-        self.tail = self.len
-        self.capacity = new_capacity
-    }
-
-    pub fn make_contiguous(mut self) -> &[T] {
-        if self.head <= self.tail || self.is_empty() {
-            // Already contiguous
-        } else {
-            self.grow()  // grow makes it contiguous as a side-effect
-        }
-        // Return a slice view
-        unsafe { std.slice.from_raw_parts(self.buf.as_ptr().add(self.head) as *const T, self.len) }
-    }
-
-    pub fn truncate(mut self, new_len: usize) {
-        while self.len > new_len { self.pop_back(); }
-    }
-
-    pub fn retain(mut self, predicate: fn(&T) -> bool) {
-        let mut i = 0
-        while i < self.len {
-            let idx = self.wrap_index(self.head + i)
-            if let some(item) = &self.buf[idx] {
-                if predicate(item) { i += 1 }
-                else {
-                    // Remove element at position i
-                    for j in i..self.len - 1 {
-                        let from = self.wrap_index(self.head + j + 1)
-                        let to = self.wrap_index(self.head + j)
-                        self.buf.swap(from, to)
-                    }
-                    self.tail = self.wrap_index(self.tail + self.capacity - 1)
-                    self.buf[self.tail] = none
-                    self.len -= 1
-                }
-            }
-        }
+        f.write_str("]")
     }
 }
 
-pub struct DequeIter<'a, T> {
-    deque: &'a Deque<T>,
-    index: usize,
-}
+fn main() {
+    // Push back and pop front (FIFO)
+    let mut d = Deque.new()
+    d.push_back(1)
+    d.push_back(2)
+    d.push_back(3)
+    assert(d.len() == 3)
+    assert(d.pop_front() == some(1))
+    assert(d.pop_front() == some(2))
+    assert(d.pop_front() == some(3))
+    assert(d.pop_front().is_none())
+    print("FIFO ✓")
 
-impl<'a, T> Iterator for DequeIter<'a, T> {
-    type Item = &'a T
-    fn next(mut self) -> Option<&'a T> {
-        if self.index >= self.deque.len { return none }
-        let result = self.deque.get(self.index)
-        self.index += 1
-        result
-    }
-}
+    // Push front and pop back (LIFO from front)
+    let mut d2 = Deque.new()
+    d2.push_front(1)
+    d2.push_front(2)
+    d2.push_front(3)
+    assert(d2.pop_back() == some(1))
+    assert(d2.pop_back() == some(2))
+    assert(d2.pop_back() == some(3))
+    print("Push front ✓")
 
-impl<T: Clone> FromIterator<T> for Deque<T> {
-    fn from_iter<I: Iterator<Item = T>>(iter: I) -> Deque<T> {
-        let mut deque = Deque.new()
-        for item in iter { deque.push_back(item) }
-        deque
-    }
+    // Front/back peek
+    let mut d3 = Deque.new()
+    d3.push_back(10)
+    d3.push_back(20)
+    d3.push_back(30)
+    assert(d3.front() == some(&10))
+    assert(d3.back() == some(&30))
+    print("Peek ✓")
+
+    // Index access
+    assert(d3.get(0) == some(&10))
+    assert(d3.get(1) == some(&20))
+    assert(d3.get(2) == some(&30))
+    assert(d3.get(3).is_none())
+    print("Index ✓")
+
+    // Grow (exceed initial capacity)
+    let mut big = Deque.new()
+    for i in 0..100 { big.push_back(i) }
+    assert(big.len() == 100)
+    for i in 0..100 { assert(big.get(i) == some(&i)) }
+    print("Grow ✓")
+
+    // Clear
+    big.clear()
+    assert(big.is_empty())
+    assert(big.len() == 0)
+    print("Clear ✓")
+
+    // Mixed push/pop
+    let mut m = Deque.new()
+    m.push_back(1)
+    m.push_front(0)
+    m.push_back(2)
+    assert(m.to_vec() == vec![0, 1, 2])
+    print("Mixed ✓")
+
+    // Contains
+    assert(m.contains(&1))
+    assert(!m.contains(&99))
+    print("Contains ✓")
+
+    // Retain
+    let mut r = Deque.from_iter(vec![1, 2, 3, 4, 5, 6])
+    r.retain(|x| *x % 2 == 0)
+    assert(r.to_vec() == vec![2, 4, 6])
+    print("Retain ✓")
+
+    // Rotate left
+    let mut rot = Deque.from_iter(vec![1, 2, 3, 4, 5])
+    rot.rotate_left(2)
+    assert(rot.to_vec() == vec![3, 4, 5, 1, 2])
+    print("Rotate left ✓")
+
+    // Rotate right
+    let mut rot2 = Deque.from_iter(vec![1, 2, 3, 4, 5])
+    rot2.rotate_right(2)
+    assert(rot2.to_vec() == vec![4, 5, 1, 2, 3])
+    print("Rotate right ✓")
+
+    // Empty deque
+    let empty: Deque<int> = Deque.new()
+    assert(empty.front().is_none())
+    assert(empty.back().is_none())
+    assert(empty.pop_front().is_none())
+    assert(empty.pop_back().is_none())
+    print("Empty ✓")
+
+    // Swap
+    let mut sw = Deque.from_iter(vec![10, 20, 30])
+    sw.swap(0, 2)
+    assert(sw.to_vec() == vec![30, 20, 10])
+    print("Swap ✓")
+
+    // with_capacity
+    let pre = Deque.with_capacity(64)
+    assert(pre.capacity() >= 64)
+    assert(pre.is_empty())
+    print("with_capacity ✓")
+
+    print("Deque complete ✓")
 }
