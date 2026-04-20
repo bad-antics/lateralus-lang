@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Talking to Postgres With Just std — Lateralus Blog</title>
+  <meta name="description" content="A Postgres driver in pure Lateralus with no external dependencies — just std::net and std::bin.">
+  <meta property="og:title" content="Talking to Postgres With Just std — Lateralus Blog">
+  <meta property="og:description" content="A Postgres driver in pure Lateralus with no external dependencies — just std::net and std::bin.">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://lateralus.dev/blog/talking-to-postgres-with-just-std.html">
+  <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+  <link rel="canonical" href="https://lateralus.dev/blog/talking-to-postgres-with-just-std.html">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css?v=20260408">
+  <style>
+    .blog-post { max-width: 800px; margin: 0 auto; padding: 80px 20px 60px; }
+    .blog-post h1 { font-family: 'Press Start 2P', monospace; font-size: clamp(14px, 3vw, 20px); color: var(--electric-yellow); line-height: 1.8; margin-bottom: 16px; }
+    .blog-meta { font-family: 'VT323', monospace; font-size: 18px; color: var(--hot-pink); margin-bottom: 24px; }
+    .blog-meta .tags { display: inline-flex; gap: 8px; margin-left: 16px; }
+    .blog-meta .tag { font-family: 'Press Start 2P', monospace; font-size: 8px; padding: 4px 10px; border: 1px solid var(--lime); color: var(--lime); }
+    .blog-content { font-family: 'VT323', monospace; font-size: 20px; color: var(--text); line-height: 1.7; }
+    .blog-content h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--cyber-blue); margin: 32px 0 16px; line-height: 1.6; }
+    .blog-content h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--lime); margin: 24px 0 12px; line-height: 1.6; }
+    .blog-content p { margin-bottom: 16px; }
+    .blog-content code { background: var(--bg3); padding: 2px 6px; color: var(--hot-pink); font-size: 18px; }
+    .blog-content pre { background: var(--bg3); border: 2px solid var(--border-light); padding: 16px; overflow-x: auto; margin: 16px 0; }
+    .blog-content pre code { background: none; padding: 0; display: block; font-size: 16px; line-height: 1.5; color: var(--text); }
+    .blog-content ul, .blog-content ol { margin: 16px 0; padding-left: 24px; }
+    .blog-content li { margin-bottom: 8px; }
+    .blog-content a { color: var(--cyber-blue); text-decoration: underline; }
+    .blog-content a:hover { color: var(--lime); }
+    .blog-content blockquote { border-left: 3px solid var(--lime); padding-left: 16px; margin: 16px 0; color: var(--text2); font-style: italic; }
+    .blog-back { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; color: var(--lime); text-decoration: none; margin-bottom: 24px; }
+    .blog-back:hover { color: var(--electric-yellow); }
+    .cta-box { background: var(--bg3); border: 2px solid var(--lime); padding: 20px; text-align: center; margin: 24px 0; }
+    .cta-box h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--electric-yellow); margin-bottom: 8px; }
+    .cta-box p { margin-bottom: 12px; }
+    .cta-box a { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; padding: 10px 20px; margin: 4px; }
+    .cta-box .btn-primary { background: var(--lime); color: var(--bg); }
+    .cta-box .btn-secondary { border: 2px solid var(--cyber-blue); color: var(--cyber-blue); }
+    @media (max-width: 768px) {
+      .blog-post h1 { font-size: 14px; line-height: 1.5; }
+      .blog-content { font-size: 16px; }
+      .blog-content code { font-size: 14px; }
+      .blog-content pre { padding: 12px; }
+      .blog-content pre code { font-size: 13px; }
+      .blog-back { font-size: 8px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/">PLAYGROUND</a>
+      <a href="/blog/" class="active">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<article class="blog-post">
+  <a href="/blog/" class="blog-back">← Back to Blog</a>
+  <h1>Talking to Postgres With Just std</h1>
+  <div class="blog-meta">
+    April 2026
+    <span class="tags"><span class="tag">database</span><span class="tag">stdlib</span><span class="tag">batch-76</span></span>
+  </div>
+  <div class="blog-content">
+<p>The Postgres wire protocol has a reputation. It's allegedly complicated. In practice, the subset you need for <code>SELECT</code>, <code>INSERT</code>, <code>UPDATE</code>, <code>DELETE</code> with bind parameters is small enough to fit in one file.</p>
+<p>See <a href="https://github.com/bad-antics/lateralus-examples/blob/main/data/postgres_driver.ltl">examples/data/postgres_driver.ltl</a>. The whole thing depends only on <code>std::net::tcp</code>, <code>std::bin</code>, and <code>std::collections</code>.</p>
+<h2>◉ The API</h2>
+<pre><code>let mut conn = postgres::connect(&quot;db.internal&quot;, 5432, &quot;app&quot;, &quot;prod&quot;, pw)?
+
+conn
+    |&gt; postgres::query(
+        &quot;SELECT id, name FROM users WHERE active = $1 AND created &gt; $2&quot;,
+        [Param::Bool(true), Param::Int(since_ts)])?
+    |&gt; iter()
+    |&gt; map(|row| row[&quot;name&quot;] as String)
+    |&gt; collect()</code></pre>
+<p>Parameters bind by position, never by string interpolation. The driver speaks the Extended Query protocol — <code>Parse</code>, <code>Bind</code>, <code>Execute</code>, <code>Sync</code> — so your query plan is cached server-side even on the first run.</p>
+<h2>◉ Why is this short?</h2>
+<p>Three reasons:</p>
+<h3>Pattern matching kills the boilerplate</h3>
+<p>Reading message types from the wire is a <code>match</code> on a tag byte. No state machine, no parser combinators:</p>
+<pre><code>match read_message(stream)? {
+    Msg::DataRow(fields)      =&gt; ...,
+    Msg::CommandComplete(_)   =&gt; ...,
+    Msg::ReadyForQuery(_)     =&gt; break,
+    Msg::ErrorResponse(info)  =&gt; return Err(info.format()),
+    other                     =&gt; continue,
+}</code></pre>
+<h3>Parameters are a sum type, not a trait</h3>
+<p><code>Param</code> is a closed enum: <code>Null | Bool | Int | Float | Text | Bytea</code>. The OID table is a 6-line <code>match</code>. You don't need generics or trait objects.</p>
+<h3>Streaming is just an iterator</h3>
+<p><code>Rows</code> implements <code>Iterator&lt;Row&gt;</code>. <code>next()</code> reads one message at a time. No buffering an entire result set in memory. No async adapter layer — if you want concurrency, <code>spawn</code> the call.</p>
+<h2>◉ What&#x27;s not in the 200 lines</h2>
+<p>A production driver would add:</p>
+<p>- TLS (via <code>std::tls::wrap_stream</code>) - SCRAM-SHA-256 auth (~80 more lines) - Connection pooling (trivial — <code>std::sync::Pool&lt;Conn&gt;</code>) - COPY protocol for bulk loads - Prepared-statement caching</p>
+<p>None of those change the shape of the core. They layer on top.</p>
+<h2>◉ Why write it instead of binding libpq?</h2>
+<p>Because the FFI boundary is where pipeline-native languages lose their identity. Every result goes through C structs, every parameter through <code>char *</code>, every async op through a callback. You end up writing imperative glue inside a functional language.</p>
+<p>A pure-Lateralus driver stays a pipeline all the way down. <code>connect</code> returns <code>Result</code>. <code>query</code> returns <code>Result&lt;Rows&gt;</code>. <code>Rows</code> is an iterator. You <code>|&gt;</code> through it the way you <code>|&gt;</code> through everything else.</p>
+<h2>◉ Try it</h2>
+<p>Clone <a href="https://github.com/bad-antics/lateralus-examples">lateralus-examples</a>, spin up a local Postgres, point the example at it, run <code>lateralus run data/postgres_driver.ltl</code>. 200 lines, zero deps, first query runs.</p>
+    <div class="cta-box">
+      <h3>Try it in the playground</h3>
+      <p>Every snippet on this page runs in your browser. No install, no signup.</p>
+      <a href="/playground/" class="btn btn-primary">▶ Open Playground</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" class="btn btn-secondary">Star on GitHub</a>
+    </div>
+  </div>
+</article>
+
+<footer class="footer">
+  <div class="footer-inner">
+    <div class="footer-logo"><span class="pipe">|></span> LATERALUS</div>
+    <div class="footer-tagline">A Language That Spirals Outward</div>
+  </div>
+</footer>
+
+<script src="/site.js"></script>
+</body>
+</html>

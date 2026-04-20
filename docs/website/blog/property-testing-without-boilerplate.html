@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Property Testing Without the Boilerplate — Lateralus Blog</title>
+  <meta name="description" content="Lateralus&#x27; #[property] attribute turns any function into a 100-run randomized test with automatic shrinking.">
+  <meta property="og:title" content="Property Testing Without the Boilerplate — Lateralus Blog">
+  <meta property="og:description" content="Lateralus&#x27; #[property] attribute turns any function into a 100-run randomized test with automatic shrinking.">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://lateralus.dev/blog/property-testing-without-boilerplate.html">
+  <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+  <link rel="canonical" href="https://lateralus.dev/blog/property-testing-without-boilerplate.html">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css?v=20260408">
+  <style>
+    .blog-post { max-width: 800px; margin: 0 auto; padding: 80px 20px 60px; }
+    .blog-post h1 { font-family: 'Press Start 2P', monospace; font-size: clamp(14px, 3vw, 20px); color: var(--electric-yellow); line-height: 1.8; margin-bottom: 16px; }
+    .blog-meta { font-family: 'VT323', monospace; font-size: 18px; color: var(--hot-pink); margin-bottom: 24px; }
+    .blog-meta .tags { display: inline-flex; gap: 8px; margin-left: 16px; }
+    .blog-meta .tag { font-family: 'Press Start 2P', monospace; font-size: 8px; padding: 4px 10px; border: 1px solid var(--lime); color: var(--lime); }
+    .blog-content { font-family: 'VT323', monospace; font-size: 20px; color: var(--text); line-height: 1.7; }
+    .blog-content h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--cyber-blue); margin: 32px 0 16px; line-height: 1.6; }
+    .blog-content h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--lime); margin: 24px 0 12px; line-height: 1.6; }
+    .blog-content p { margin-bottom: 16px; }
+    .blog-content code { background: var(--bg3); padding: 2px 6px; color: var(--hot-pink); font-size: 18px; }
+    .blog-content pre { background: var(--bg3); border: 2px solid var(--border-light); padding: 16px; overflow-x: auto; margin: 16px 0; }
+    .blog-content pre code { background: none; padding: 0; display: block; font-size: 16px; line-height: 1.5; color: var(--text); }
+    .blog-content ul, .blog-content ol { margin: 16px 0; padding-left: 24px; }
+    .blog-content li { margin-bottom: 8px; }
+    .blog-content a { color: var(--cyber-blue); text-decoration: underline; }
+    .blog-content a:hover { color: var(--lime); }
+    .blog-content blockquote { border-left: 3px solid var(--lime); padding-left: 16px; margin: 16px 0; color: var(--text2); font-style: italic; }
+    .blog-back { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; color: var(--lime); text-decoration: none; margin-bottom: 24px; }
+    .blog-back:hover { color: var(--electric-yellow); }
+    .cta-box { background: var(--bg3); border: 2px solid var(--lime); padding: 20px; text-align: center; margin: 24px 0; }
+    .cta-box h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--electric-yellow); margin-bottom: 8px; }
+    .cta-box p { margin-bottom: 12px; }
+    .cta-box a { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; padding: 10px 20px; margin: 4px; }
+    .cta-box .btn-primary { background: var(--lime); color: var(--bg); }
+    .cta-box .btn-secondary { border: 2px solid var(--cyber-blue); color: var(--cyber-blue); }
+    @media (max-width: 768px) {
+      .blog-post h1 { font-size: 14px; line-height: 1.5; }
+      .blog-content { font-size: 16px; }
+      .blog-content code { font-size: 14px; }
+      .blog-content pre { padding: 12px; }
+      .blog-content pre code { font-size: 13px; }
+      .blog-back { font-size: 8px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/">PLAYGROUND</a>
+      <a href="/blog/" class="active">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<article class="blog-post">
+  <a href="/blog/" class="blog-back">← Back to Blog</a>
+  <h1>Property Testing Without the Boilerplate</h1>
+  <div class="blog-meta">
+    April 2026
+    <span class="tags"><span class="tag">testing</span><span class="tag">compiler</span><span class="tag">batch-76</span></span>
+  </div>
+  <div class="blog-content">
+<p>Unit tests pin down known inputs. Property tests explore the *space* of inputs and ask whether an invariant holds across all of them. The gap between them has always been tooling. In Lateralus 0.5+ that tooling lives inside the compiler.</p>
+<h2>◉ The one-line version</h2>
+<p>Add <code>#[property]</code> above a function and the compiler synthesizes a shrinking driver for you:</p>
+<pre><code>#[property(runs = 500)]
+fn reverse_twice_is_identity(xs: [Int]) -&gt; Bool {
+    xs |&gt; reverse() |&gt; reverse() == xs
+}</code></pre>
+<p>That's it. <code>lateralus test</code> finds it. The compiler generates the driver, the RNG wiring, and the shrinker.</p>
+<h2>◉ How the compiler sees it</h2>
+<p>The analysis pass (<a href="https://github.com/bad-antics/lateralus-compiler/blob/main/analysis/property_check.ltl">property_check.ltl</a>) walks the AST after type-check, finds every <code>#[property]</code> annotation, and emits a synthetic <code>__prop_&lt;name&gt;()</code> function marked <code>#[test]</code>. Generated code reads:</p>
+<pre><code>fn __prop_reverse_twice_is_identity() {
+    let rng = std::rand::Rng::from_env()
+    let failures = []
+    for _ in 0..500 { __prop_one(rng, failures) }
+    if len(failures) &gt; 0 {
+        panic(&quot;property failed after shrinking: {failures[0]}&quot;)
+    }
+}</code></pre>
+<p>The driver is a normal test. It shows up in your test runner output. It fails with a shrunk counterexample.</p>
+<h2>◉ Why a compiler pass and not a macro?</h2>
+<p>Lateralus has macros, but we chose a pass because:</p>
+<h3>It sees types</h3>
+<p>The arbitrary generator for <code>[Int]</code> is wired up by reading the argument type from the AST, not by asking the user to write <code>any::&lt;Vec&lt;i32&gt;&gt;()</code>.</p>
+<h3>It runs after inference</h3>
+<p>Property functions can return <code>Bool</code> or <code>Result&lt;(), E&gt;</code> and we pick the right assertion shape at codegen time.</p>
+<h3>It composes with other passes</h3>
+<p>The observability pass (<a href="https://github.com/bad-antics/lateralus-compiler/blob/main/codegen/otel_emit.ltl">otel_emit.ltl</a>) wraps property drivers in spans automatically — every property run shows up in your traces.</p>
+<h2>◉ Attributes you can tune</h2>
+<pre><code>#[property(runs = 5000, max_shrink = 256, seed = 0xC0FFEE)]
+fn sort_is_idempotent(xs: [Int]) -&gt; Bool {
+    let a = xs |&gt; sort()
+    let b = a  |&gt; sort()
+    a == b
+}</code></pre>
+<p>- <code>runs</code> — how many samples to try (default 100) - <code>max_shrink</code> — shrink-step budget (default 128) - <code>seed</code> — pin an RNG for deterministic CI</p>
+<h2>◉ What&#x27;s next</h2>
+<p>Stateful properties (think QuickCheck state machines) and coverage-guided input generation are both in-flight. Neither needs user-facing syntax changes — they slot into the same pass. Which is the whole point.</p>
+    <div class="cta-box">
+      <h3>Try it in the playground</h3>
+      <p>Every snippet on this page runs in your browser. No install, no signup.</p>
+      <a href="/playground/" class="btn btn-primary">▶ Open Playground</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" class="btn btn-secondary">Star on GitHub</a>
+    </div>
+  </div>
+</article>
+
+<footer class="footer">
+  <div class="footer-inner">
+    <div class="footer-logo"><span class="pipe">|></span> LATERALUS</div>
+    <div class="footer-tagline">A Language That Spirals Outward</div>
+  </div>
+</footer>
+
+<script src="/site.js"></script>
+</body>
+</html>

@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Timezones Are Not a Joke — Lateralus Blog</title>
+  <meta name="description" content="A look at Lateralus&#x27; new timezone-aware datetime stdlib — IANA zones, wall-clock resolution, and why &#x27;just store UTC&#x27; isn&#x27;t enough.">
+  <meta property="og:title" content="Timezones Are Not a Joke — Lateralus Blog">
+  <meta property="og:description" content="A look at Lateralus&#x27; new timezone-aware datetime stdlib — IANA zones, wall-clock resolution, and why &#x27;just store UTC&#x27; isn&#x27;t enough.">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://lateralus.dev/blog/timezones-are-not-a-joke.html">
+  <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+  <link rel="canonical" href="https://lateralus.dev/blog/timezones-are-not-a-joke.html">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css?v=20260408">
+  <style>
+    .blog-post { max-width: 800px; margin: 0 auto; padding: 80px 20px 60px; }
+    .blog-post h1 { font-family: 'Press Start 2P', monospace; font-size: clamp(14px, 3vw, 20px); color: var(--electric-yellow); line-height: 1.8; margin-bottom: 16px; }
+    .blog-meta { font-family: 'VT323', monospace; font-size: 18px; color: var(--hot-pink); margin-bottom: 24px; }
+    .blog-meta .tags { display: inline-flex; gap: 8px; margin-left: 16px; }
+    .blog-meta .tag { font-family: 'Press Start 2P', monospace; font-size: 8px; padding: 4px 10px; border: 1px solid var(--lime); color: var(--lime); }
+    .blog-content { font-family: 'VT323', monospace; font-size: 20px; color: var(--text); line-height: 1.7; }
+    .blog-content h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--cyber-blue); margin: 32px 0 16px; line-height: 1.6; }
+    .blog-content h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--lime); margin: 24px 0 12px; line-height: 1.6; }
+    .blog-content p { margin-bottom: 16px; }
+    .blog-content code { background: var(--bg3); padding: 2px 6px; color: var(--hot-pink); font-size: 18px; }
+    .blog-content pre { background: var(--bg3); border: 2px solid var(--border-light); padding: 16px; overflow-x: auto; margin: 16px 0; }
+    .blog-content pre code { background: none; padding: 0; display: block; font-size: 16px; line-height: 1.5; color: var(--text); }
+    .blog-content ul, .blog-content ol { margin: 16px 0; padding-left: 24px; }
+    .blog-content li { margin-bottom: 8px; }
+    .blog-content a { color: var(--cyber-blue); text-decoration: underline; }
+    .blog-content a:hover { color: var(--lime); }
+    .blog-content blockquote { border-left: 3px solid var(--lime); padding-left: 16px; margin: 16px 0; color: var(--text2); font-style: italic; }
+    .blog-back { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; color: var(--lime); text-decoration: none; margin-bottom: 24px; }
+    .blog-back:hover { color: var(--electric-yellow); }
+    .cta-box { background: var(--bg3); border: 2px solid var(--lime); padding: 20px; text-align: center; margin: 24px 0; }
+    .cta-box h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--electric-yellow); margin-bottom: 8px; }
+    .cta-box p { margin-bottom: 12px; }
+    .cta-box a { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; padding: 10px 20px; margin: 4px; }
+    .cta-box .btn-primary { background: var(--lime); color: var(--bg); }
+    .cta-box .btn-secondary { border: 2px solid var(--cyber-blue); color: var(--cyber-blue); }
+    @media (max-width: 768px) {
+      .blog-post h1 { font-size: 14px; line-height: 1.5; }
+      .blog-content { font-size: 16px; }
+      .blog-content code { font-size: 14px; }
+      .blog-content pre { padding: 12px; }
+      .blog-content pre code { font-size: 13px; }
+      .blog-back { font-size: 8px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/">PLAYGROUND</a>
+      <a href="/blog/" class="active">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<article class="blog-post">
+  <a href="/blog/" class="blog-back">← Back to Blog</a>
+  <h1>Timezones Are Not a Joke</h1>
+  <div class="blog-meta">
+    April 2026
+    <span class="tags"><span class="tag">stdlib</span><span class="tag">time</span><span class="tag">batch-76</span></span>
+  </div>
+  <div class="blog-content">
+<p>"Just store UTC" is good advice until you need to answer one of these:</p>
+<p>- What time does the store open in Los Angeles *next Tuesday*? - How many billable hours did this contractor work across the DST change? - When the user types <code>2026-03-08 02:30 America/Los_Angeles</code>, do we accept or reject?</p>
+<p>Each of those is a wall-clock query, not a UTC instant. You need a tz database. Now Lateralus has one, built into the stdlib, typed all the way through.</p>
+<p>See <a href="https://github.com/bad-antics/lateralus-lang/blob/main/stdlib/time/tz.ltl">stdlib/time/tz.ltl</a>.</p>
+<h2>◉ The core type</h2>
+<pre><code>pub struct ZonedDateTime {
+    instant: UnixTime,
+    tz:      Tz,
+}</code></pre>
+<p>An instant and a zone. Arithmetic happens on <code>instant</code>. Formatting resolves through <code>tz</code>. You never accidentally add 24 hours to a wall-clock and skip a DST boundary.</p>
+<h2>◉ Parsing an IANA zone</h2>
+<pre><code>let la  = tz::load(&quot;America/Los_Angeles&quot;)?
+let nyc = tz::load(&quot;America/New_York&quot;)?
+
+let now_in_la = tz::now_in(la)
+println(now_in_la |&gt; tz::to_iso8601())
+// =&gt; &quot;2026-04-20T09:17:42-07:00&quot;
+
+let now_in_nyc = now_in_la |&gt; tz::in_zone(nyc)
+// same instant, different wall-clock</code></pre>
+<p><code>load</code> reads <code>/usr/share/zoneinfo/&lt;name&gt;</code> (TZif v2) and parses the transition table. Zones are values — you can cache them, pass them around, ship them in config.</p>
+<h2>◉ The hard case: wall-clock to instant</h2>
+<pre><code>tz::from_wall(2026, 3, 8, 2, 30, 0, la, AmbiguityPolicy::Reject)
+// =&gt; Err(TzError::Missing)
+
+tz::from_wall(2026, 11, 1, 1, 30, 0, la, AmbiguityPolicy::Earliest)
+// =&gt; Ok(ZonedDateTime { ... first 1:30 AM, PDT offset })</code></pre>
+<p>When DST starts, <code>2:30 AM</code> on the spring-forward day doesn't exist — the clock jumps from 1:59:59 straight to 3:00:00. When DST ends, <code>1:30 AM</code> happens twice. Most APIs pick silently. Ours makes you pass an <code>AmbiguityPolicy</code>:</p>
+<p>- <code>Earliest</code> — pick the first occurrence, usually the pre-transition offset - <code>Latest</code> — pick the second - <code>Reject</code> — return <code>TzError::Ambiguous</code></p>
+<p>Calendar apps want <code>Latest</code>. Log parsers want <code>Reject</code>. There is no universal right answer, so we don't hide the choice.</p>
+<h2>◉ What about leap seconds?</h2>
+<p>We don't apply them to <code>UnixTime</code>. POSIX says a Unix second is 1/86400 of a mean solar day, leap seconds are smeared or skipped by NTP upstream, and your database almost certainly doesn't track them either. If you need TAI, there's <code>std::time::tai</code> for that.</p>
+<h2>◉ Why ship this now?</h2>
+<p>Because every batch-76 gap-fill file needs it. The Postgres driver wants timestamps with offsets. JWT <code>exp</code> and <code>nbf</code> want clock-skew comparison. OTEL spans want consistent wall-clock output. Observability pipelines drown without timezone sanity.</p>
+<p>Now all of them share one type.</p>
+<h2>◉ Further reading</h2>
+<p>- <a href="https://github.com/bad-antics/lateralus-lang/blob/main/stdlib/time/tz.ltl">time/tz.ltl</a> — the source - <a href="https://datatracker.ietf.org/doc/html/rfc9636">RFC 9636</a> — TZif format - <a href="https://infiniteundo.com/post/25326999628/falsehoods-programmers-believe-about-time">Falsehoods programmers believe about time</a> — evergreen</p>
+<p>Respect your future self. Store instants. Resolve wall-clocks at the edge.</p>
+    <div class="cta-box">
+      <h3>Try it in the playground</h3>
+      <p>Every snippet on this page runs in your browser. No install, no signup.</p>
+      <a href="/playground/" class="btn btn-primary">▶ Open Playground</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" class="btn btn-secondary">Star on GitHub</a>
+    </div>
+  </div>
+</article>
+
+<footer class="footer">
+  <div class="footer-inner">
+    <div class="footer-logo"><span class="pipe">|></span> LATERALUS</div>
+    <div class="footer-tagline">A Language That Spirals Outward</div>
+  </div>
+</footer>
+
+<script src="/site.js"></script>
+</body>
+</html>

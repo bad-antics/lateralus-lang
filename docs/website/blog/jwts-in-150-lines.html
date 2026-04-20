@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JWTs in 150 Lines — Lateralus Blog</title>
+  <meta name="description" content="A complete, constant-time JWT (HS256) implementation in Lateralus with no external dependencies.">
+  <meta property="og:title" content="JWTs in 150 Lines — Lateralus Blog">
+  <meta property="og:description" content="A complete, constant-time JWT (HS256) implementation in Lateralus with no external dependencies.">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://lateralus.dev/blog/jwts-in-150-lines.html">
+  <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+  <link rel="canonical" href="https://lateralus.dev/blog/jwts-in-150-lines.html">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css?v=20260408">
+  <style>
+    .blog-post { max-width: 800px; margin: 0 auto; padding: 80px 20px 60px; }
+    .blog-post h1 { font-family: 'Press Start 2P', monospace; font-size: clamp(14px, 3vw, 20px); color: var(--electric-yellow); line-height: 1.8; margin-bottom: 16px; }
+    .blog-meta { font-family: 'VT323', monospace; font-size: 18px; color: var(--hot-pink); margin-bottom: 24px; }
+    .blog-meta .tags { display: inline-flex; gap: 8px; margin-left: 16px; }
+    .blog-meta .tag { font-family: 'Press Start 2P', monospace; font-size: 8px; padding: 4px 10px; border: 1px solid var(--lime); color: var(--lime); }
+    .blog-content { font-family: 'VT323', monospace; font-size: 20px; color: var(--text); line-height: 1.7; }
+    .blog-content h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--cyber-blue); margin: 32px 0 16px; line-height: 1.6; }
+    .blog-content h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--lime); margin: 24px 0 12px; line-height: 1.6; }
+    .blog-content p { margin-bottom: 16px; }
+    .blog-content code { background: var(--bg3); padding: 2px 6px; color: var(--hot-pink); font-size: 18px; }
+    .blog-content pre { background: var(--bg3); border: 2px solid var(--border-light); padding: 16px; overflow-x: auto; margin: 16px 0; }
+    .blog-content pre code { background: none; padding: 0; display: block; font-size: 16px; line-height: 1.5; color: var(--text); }
+    .blog-content ul, .blog-content ol { margin: 16px 0; padding-left: 24px; }
+    .blog-content li { margin-bottom: 8px; }
+    .blog-content a { color: var(--cyber-blue); text-decoration: underline; }
+    .blog-content a:hover { color: var(--lime); }
+    .blog-content blockquote { border-left: 3px solid var(--lime); padding-left: 16px; margin: 16px 0; color: var(--text2); font-style: italic; }
+    .blog-back { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; color: var(--lime); text-decoration: none; margin-bottom: 24px; }
+    .blog-back:hover { color: var(--electric-yellow); }
+    .cta-box { background: var(--bg3); border: 2px solid var(--lime); padding: 20px; text-align: center; margin: 24px 0; }
+    .cta-box h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--electric-yellow); margin-bottom: 8px; }
+    .cta-box p { margin-bottom: 12px; }
+    .cta-box a { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; padding: 10px 20px; margin: 4px; }
+    .cta-box .btn-primary { background: var(--lime); color: var(--bg); }
+    .cta-box .btn-secondary { border: 2px solid var(--cyber-blue); color: var(--cyber-blue); }
+    @media (max-width: 768px) {
+      .blog-post h1 { font-size: 14px; line-height: 1.5; }
+      .blog-content { font-size: 16px; }
+      .blog-content code { font-size: 14px; }
+      .blog-content pre { padding: 12px; }
+      .blog-content pre code { font-size: 13px; }
+      .blog-back { font-size: 8px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/">PLAYGROUND</a>
+      <a href="/blog/" class="active">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<article class="blog-post">
+  <a href="/blog/" class="blog-back">← Back to Blog</a>
+  <h1>JWTs in 150 Lines</h1>
+  <div class="blog-meta">
+    April 2026
+    <span class="tags"><span class="tag">security</span><span class="tag">crypto</span><span class="tag">batch-76</span></span>
+  </div>
+  <div class="blog-content">
+<p>Most JWT libraries bundle six algorithms, three encoders, two JSON parsers, and a framework integration layer. Most applications need HS256 and two operations: <code>issue</code> and <code>verify</code>. So that's what we wrote.</p>
+<p><a href="https://github.com/bad-antics/lateralus-examples/blob/main/security/jwt_auth.ltl">examples/security/jwt_auth.ltl</a> — the whole thing.</p>
+<h2>◉ Issuing</h2>
+<pre><code>let secret = &quot;rotate-me-every-90-days&quot; |&gt; as_bytes()
+let token  = jwt::issue(secret, &quot;alice&quot;, 3600,
+    Map::empty() |&gt; set(&quot;role&quot;, json::Str(&quot;admin&quot;)))</code></pre>
+<p><code>issue</code> base64url-encodes the header and claims, HMACs the <code>header.claims</code> signing input, concatenates with dots. No surprises.</p>
+<h2>◉ Verifying</h2>
+<pre><code>match jwt::verify(secret, token, clock_skew_secs = 5) {
+    Ok(claims) =&gt; {
+        let role = claims |&gt; get(&quot;role&quot;) |&gt; unwrap()
+        handle_request_as(role)
+    },
+    Err(JwtError::Expired)          =&gt; response_401(&quot;expired&quot;),
+    Err(JwtError::InvalidSignature) =&gt; response_401(&quot;bad sig&quot;),
+    Err(JwtError::WrongAlgorithm(a))=&gt; response_400(&quot;alg: {a}&quot;),
+    Err(_)                          =&gt; response_400(&quot;malformed&quot;),
+}</code></pre>
+<p>Errors are a closed enum. You handle the cases the compiler enumerates for you. You can't forget to check a signature — <code>verify</code> never returns claims without having done it.</p>
+<h2>◉ The constant-time compare</h2>
+<pre><code>fn constant_time_eq(a: [Byte], b: [Byte]) -&gt; Bool {
+    if len(a) != len(b) { return false }
+    let mut diff: Int = 0
+    for i in 0..len(a) {
+        diff = diff | ((a[i] as Int) ^ (b[i] as Int))
+    }
+    diff == 0
+}</code></pre>
+<p>This is the one place shortcuts are dangerous. A naive <code>==</code> short-circuits on the first mismatching byte and leaks signature bytes via timing. Our version walks the full input every time. Three lines, one footgun closed.</p>
+<h2>◉ What about `alg: none`?</h2>
+<p>Rejected. The verify path pattern-matches on <code>Some(json::Str(&quot;HS256&quot;))</code> and returns <code>WrongAlgorithm</code> for anything else. A token with <code>&quot;alg&quot;: &quot;none&quot;</code> doesn't deserialize into that branch, so it errors out. No "attack surface" — just exhaustive <code>match</code>.</p>
+<h2>◉ What&#x27;s missing on purpose</h2>
+<p>- RS256 / ES256 — bring <code>std::crypto::rsa</code> or <code>std::crypto::ed25519</code>, pattern is identical - JWK rotation — out of scope; key management belongs in your auth service - Encrypted JWTs (JWE) — different protocol, different file</p>
+<h2>◉ The takeaway</h2>
+<p>Crypto code is where "no dependencies" matters most. Every library you add is code you didn't audit. This file is small enough you *can* audit it. Read it, vendor it, change the secret-rotation policy, move on.</p>
+    <div class="cta-box">
+      <h3>Try it in the playground</h3>
+      <p>Every snippet on this page runs in your browser. No install, no signup.</p>
+      <a href="/playground/" class="btn btn-primary">▶ Open Playground</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" class="btn btn-secondary">Star on GitHub</a>
+    </div>
+  </div>
+</article>
+
+<footer class="footer">
+  <div class="footer-inner">
+    <div class="footer-logo"><span class="pipe">|></span> LATERALUS</div>
+    <div class="footer-tagline">A Language That Spirals Outward</div>
+  </div>
+</footer>
+
+<script src="/site.js"></script>
+</body>
+</html>
