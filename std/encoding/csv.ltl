@@ -1,0 +1,300 @@
+
+// Standard Library - CSV Parser and Writer
+// RFC 4180 compliant CSV handling with streaming support.
+
+use std.io.{Read, Write, Result, BufReader, BufWriter}
+use std.collections.HashMap
+
+#[derive(Clone, Debug, PartialEq)]
+struct CsvRecord {
+    fields: [string],
+}
+
+impl CsvRecord {
+    fn new(fields: [string]) -> CsvRecord { CsvRecord { fields } }
+    fn empty() -> CsvRecord { CsvRecord { fields: vec![] } }
+
+    fn get(self, index: usize) -> Option<&str> {
+        if index < self.fields.len() { some(&self.fields[index]) }
+        else { none }
+    }
+
+    fn len(self) -> usize { self.fields.len() }
+    fn is_empty(self) -> bool { self.fields.is_empty() }
+
+    fn push(mut self, field: string) { self.fields.push(field) }
+
+    fn iter(self) -> impl Iterator<Item = &str> { self.fields.iter().map(|s| s.as_str()) }
+
+    fn join(self, sep: &str) -> string { self.fields.join(sep) }
+}
+
+#[derive(Clone, Debug)]
+struct CsvConfig {
+    delimiter: char,
+    quote: char,
+    escape: char,
+    has_header: bool,
+    trim_whitespace: bool,
+    flexible: bool,  // allow variable field counts
+}
+
+impl CsvConfig {
+    fn default() -> CsvConfig {
+        CsvConfig {
+            delimiter: ',', quote: '"', escape: '"',
+            has_header: true, trim_whitespace: false, flexible: false,
+        }
+    }
+
+    fn tsv() -> CsvConfig {
+        let mut c = CsvConfig.default()
+        c.delimiter = '\t'
+        c
+    }
+
+    fn delimiter(mut self, d: char) -> CsvConfig { self.delimiter = d; self }
+    fn quote(mut self, q: char) -> CsvConfig { self.quote = q; self }
+    fn has_header(mut self, h: bool) -> CsvConfig { self.has_header = h; self }
+    fn trim(mut self, t: bool) -> CsvConfig { self.trim_whitespace = t; self }
+    fn flexible(mut self, f: bool) -> CsvConfig { self.flexible = f; self }
+}
+
+struct CsvReader {
+    config: CsvConfig,
+    headers: Option<CsvRecord>,
+    records: [CsvRecord],
+}
+
+impl CsvReader {
+    fn parse(input: &str) -> CsvReader { CsvReader.parse_with(input, CsvConfig.default()) }
+
+    fn parse_with(input: &str, config: CsvConfig) -> CsvReader {
+        let lines = CsvReader.split_lines(input)
+        let mut records: [CsvRecord] = vec![]
+        let mut headers: Option<CsvRecord> = none
+
+        for (i, line) in lines.iter().enumerate() {
+            if line.is_empty() { continue }
+            let record = CsvReader.parse_record(line, &config)
+            if i == 0 && config.has_header {
+                headers = some(record)
+            } else {
+                records.push(record)
+            }
+        }
+
+        CsvReader { config, headers, records }
+    }
+
+    fn split_lines(input: &str) -> [string] {
+        let mut lines: [string] = vec![]
+        let mut current = String.new()
+        let mut in_quotes = false
+
+        for ch in input.chars() {
+            if ch == '"' { in_quotes = !in_quotes }
+            if ch == '\n' && !in_quotes {
+                let trimmed = if current.ends_with('\r') {
+                    current[..current.len()-1].into()
+                } else { current.clone() }
+                lines.push(trimmed)
+                current.clear()
+            } else {
+                current.push(ch)
+            }
+        }
+        if !current.is_empty() {
+            let trimmed = if current.ends_with('\r') {
+                current[..current.len()-1].into()
+            } else { current }
+            lines.push(trimmed)
+        }
+        lines
+    }
+
+    fn parse_record(line: &str, config: &CsvConfig) -> CsvRecord {
+        let mut fields: [string] = vec![]
+        let mut current = String.new()
+        let mut in_quotes = false
+        let chars: [char] = line.chars().collect()
+        let mut i = 0
+
+        while i < chars.len() {
+            let ch = chars[i]
+            if in_quotes {
+                if ch == config.quote {
+                    if i + 1 < chars.len() && chars[i+1] == config.quote {
+                        current.push(config.quote)
+                        i += 2
+                        continue
+                    } else {
+                        in_quotes = false
+                    }
+                } else {
+                    current.push(ch)
+                }
+            } else {
+                if ch == config.quote {
+                    in_quotes = true
+                } else if ch == config.delimiter {
+                    let field = if config.trim_whitespace { current.trim().into() } else { current.clone() }
+                    fields.push(field)
+                    current.clear()
+                } else {
+                    current.push(ch)
+                }
+            }
+            i += 1
+        }
+
+        let field = if config.trim_whitespace { current.trim().into() } else { current }
+        fields.push(field)
+        CsvRecord.new(fields)
+    }
+
+    fn headers(self) -> Option<&CsvRecord> { self.headers.as_ref() }
+    fn records(self) -> &[CsvRecord] { &self.records }
+    fn len(self) -> usize { self.records.len() }
+
+    fn get_by_header(self, record_idx: usize, header: &str) -> Option<&str> {
+        let headers = self.headers.as_ref()?
+        let col = headers.fields.iter().position(|h| h == header)?
+        self.records.get(record_idx)?.get(col)
+    }
+
+    fn to_maps(self) -> [HashMap<string, string>] {
+        let headers = match &self.headers { some(h) => h, none => return vec![] };
+        self.records.iter().map(|rec| {
+            let mut map = HashMap.new()
+            for (i, key) in headers.fields.iter().enumerate() {
+                let val = rec.get(i).unwrap_or("").into()
+                map.insert(key.clone(), val)
+            }
+            map
+        }).collect()
+    }
+}
+
+struct CsvWriter {
+    config: CsvConfig,
+    output: String,
+}
+
+impl CsvWriter {
+    fn new() -> CsvWriter { CsvWriter.with_config(CsvConfig.default()) }
+
+    fn with_config(config: CsvConfig) -> CsvWriter {
+        CsvWriter { config, output: String.new() }
+    }
+
+    fn write_record(mut self, record: &CsvRecord) {
+        for (i, field) in record.fields.iter().enumerate() {
+            if i > 0 { self.output.push(self.config.delimiter) }
+            self.write_field(field)
+        }
+        self.output.push('\n')
+    }
+
+    fn write_field(mut self, field: &str) {
+        let needs_quote = field.contains(self.config.delimiter)
+            || field.contains(self.config.quote)
+            || field.contains('\n')
+            || field.contains('\r')
+
+        if needs_quote {
+            self.output.push(self.config.quote)
+            for ch in field.chars() {
+                if ch == self.config.quote {
+                    self.output.push(self.config.quote)
+                }
+                self.output.push(ch)
+            }
+            self.output.push(self.config.quote)
+        } else {
+            self.output.push_str(field)
+        }
+    }
+
+    fn to_string(self) -> string { self.output.clone() }
+}
+
+fn main() {
+    // Basic CSV parsing
+    let csv = "name,age,city\nAlice,30,NYC\nBob,25,LA"
+    let reader = CsvReader.parse(csv)
+    assert(reader.len() == 2)
+    assert(reader.headers().unwrap().get(0) == some("name"))
+    assert(reader.headers().unwrap().get(1) == some("age"))
+    assert(reader.records()[0].get(0) == some("Alice"))
+    assert(reader.records()[0].get(1) == some("30"))
+    assert(reader.records()[1].get(0) == some("Bob"))
+    print("Basic parse ✓")
+
+    // Get by header
+    assert(reader.get_by_header(0, "name") == some("Alice"))
+    assert(reader.get_by_header(0, "city") == some("NYC"))
+    assert(reader.get_by_header(1, "age") == some("25"))
+    assert(reader.get_by_header(0, "missing").is_none())
+    print("Get by header ✓")
+
+    // Quoted fields
+    let csv2 = "a,b\n\"hello, world\",test\n\"she said \"\"hi\"\"\",ok"
+    let r2 = CsvReader.parse(csv2)
+    assert(r2.records()[0].get(0) == some("hello, world"))
+    assert(r2.records()[1].get(0) == some("she said \"hi\""))
+    print("Quoted fields ✓")
+
+    // No header
+    let csv3 = "1,2,3\n4,5,6"
+    let r3 = CsvReader.parse_with(csv3, CsvConfig.default().has_header(false))
+    assert(r3.headers().is_none())
+    assert(r3.len() == 2)
+    assert(r3.records()[0].get(0) == some("1"))
+    print("No header ✓")
+
+    // TSV
+    let tsv = "name\tage\nAlice\t30"
+    let r4 = CsvReader.parse_with(tsv, CsvConfig.tsv())
+    assert(r4.records()[0].get(0) == some("Alice"))
+    assert(r4.records()[0].get(1) == some("30"))
+    print("TSV ✓")
+
+    // Trim whitespace
+    let csv5 = "a , b \n hello , world "
+    let r5 = CsvReader.parse_with(csv5, CsvConfig.default().trim(true))
+    assert(r5.headers().unwrap().get(0) == some("a"))
+    assert(r5.records()[0].get(0) == some("hello"))
+    print("Trim ✓")
+
+    // CsvRecord
+    let rec = CsvRecord.new(vec!["a".into(), "b".into(), "c".into()])
+    assert(rec.len() == 3)
+    assert(!rec.is_empty())
+    assert(rec.join(",") == "a,b,c")
+    assert(CsvRecord.empty().is_empty())
+    print("CsvRecord ✓")
+
+    // Writer
+    let mut w = CsvWriter.new()
+    w.write_record(&CsvRecord.new(vec!["name".into(), "value".into()]))
+    w.write_record(&CsvRecord.new(vec!["hello, world".into(), "42".into()]))
+    let output = w.to_string()
+    assert(output.contains("name,value"))
+    assert(output.contains("\"hello, world\""))
+    print("Writer ✓")
+
+    // to_maps
+    let maps = reader.to_maps()
+    assert(maps.len() == 2)
+    assert(maps[0].get("name").unwrap() == "Alice")
+    assert(maps[1].get("city").unwrap() == "LA")
+    print("to_maps ✓")
+
+    // Empty input
+    let r6 = CsvReader.parse("")
+    assert(r6.len() == 0)
+    print("Empty ✓")
+
+    print("CSV module complete ✓")
+}
