@@ -1,0 +1,317 @@
+// std.time.timer - Timer and stopwatch utilities
+// High-resolution timing, intervals, and deadlines.
+
+use std.time.{Duration, Instant, SystemTime}
+
+pub struct Stopwatch {
+    start_time: Option<Instant>,
+    elapsed: Duration,
+    running: bool,
+    laps: [Duration],
+}
+
+impl Stopwatch {
+    pub fn new() -> Stopwatch {
+        Stopwatch { start_time: none, elapsed: Duration.from_secs(0), running: false, laps: [] }
+    }
+
+    pub fn start(mut self) {
+        if !self.running {
+            self.start_time = some(Instant.now())
+            self.running = true
+        }
+    }
+
+    pub fn stop(mut self) {
+        if self.running {
+            if let some(start) = self.start_time {
+                self.elapsed += start.elapsed()
+            }
+            self.start_time = none
+            self.running = false
+        }
+    }
+
+    pub fn reset(mut self) {
+        self.start_time = none
+        self.elapsed = Duration.from_secs(0)
+        self.running = false
+        self.laps.clear()
+    }
+
+    pub fn restart(mut self) {
+        self.reset()
+        self.start()
+    }
+
+    pub fn elapsed(self) -> Duration {
+        let mut total = self.elapsed
+        if self.running {
+            if let some(start) = self.start_time {
+                total += start.elapsed()
+            }
+        }
+        total
+    }
+
+    pub fn elapsed_ms(self) -> f64 {
+        self.elapsed().as_secs_f64() * 1000.0
+    }
+
+    pub fn elapsed_secs(self) -> f64 {
+        self.elapsed().as_secs_f64()
+    }
+
+    pub fn is_running(self) -> bool { self.running }
+
+    pub fn lap(mut self) -> Duration {
+        let current = self.elapsed()
+        let last = self.laps.last().cloned().unwrap_or(Duration.from_secs(0))
+        let lap_time = current - last
+        self.laps.push(current)
+        lap_time
+    }
+
+    pub fn lap_times(self) -> [Duration] {
+        let mut times: [Duration] = []
+        let mut prev = Duration.from_secs(0)
+        for &lap in &self.laps {
+            times.push(lap - prev)
+            prev = lap
+        }
+        times
+    }
+
+    pub fn lap_count(self) -> usize { self.laps.len() }
+}
+
+pub struct Timer {
+    duration: Duration,
+    started_at: Option<Instant>,
+    paused_remaining: Option<Duration>,
+    callback: Option<fn()>,
+    repeating: bool,
+    fired_count: u64,
+}
+
+impl Timer {
+    pub fn new(duration: Duration) -> Timer {
+        Timer {
+            duration, started_at: none, paused_remaining: none,
+            callback: none, repeating: false, fired_count: 0,
+        }
+    }
+
+    pub fn from_secs(secs: u64) -> Timer { Timer.new(Duration.from_secs(secs)) }
+    pub fn from_millis(ms: u64) -> Timer { Timer.new(Duration.from_millis(ms)) }
+
+    pub fn with_callback(mut self, cb: fn()) -> Timer {
+        self.callback = some(cb)
+        self
+    }
+
+    pub fn repeating(mut self) -> Timer {
+        self.repeating = true
+        self
+    }
+
+    pub fn start(mut self) {
+        self.started_at = some(Instant.now())
+        self.paused_remaining = none
+    }
+
+    pub fn pause(mut self) {
+        if let some(start) = self.started_at {
+            let elapsed = start.elapsed()
+            if elapsed < self.duration {
+                self.paused_remaining = some(self.duration - elapsed)
+            } else {
+                self.paused_remaining = some(Duration.from_secs(0))
+            }
+            self.started_at = none
+        }
+    }
+
+    pub fn resume(mut self) {
+        if let some(_remaining) = self.paused_remaining.take() {
+            self.started_at = some(Instant.now())
+        }
+    }
+
+    pub fn cancel(mut self) {
+        self.started_at = none
+        self.paused_remaining = none
+    }
+
+    pub fn is_expired(self) -> bool {
+        if let some(start) = self.started_at {
+            let target = self.paused_remaining.unwrap_or(self.duration)
+            start.elapsed() >= target
+        } else { false }
+    }
+
+    pub fn remaining(self) -> Duration {
+        if let some(remaining) = self.paused_remaining {
+            return remaining
+        }
+        if let some(start) = self.started_at {
+            let elapsed = start.elapsed()
+            if elapsed >= self.duration { Duration.from_secs(0) }
+            else { self.duration - elapsed }
+        } else { self.duration }
+    }
+
+    pub fn progress(self) -> f64 {
+        let remaining = self.remaining()
+        let total = self.duration.as_secs_f64()
+        if total == 0.0 { return 1.0 }
+        1.0 - (remaining.as_secs_f64() / total)
+    }
+
+    pub fn check(mut self) -> bool {
+        if self.is_expired() {
+            self.fired_count += 1
+            if let some(cb) = self.callback { cb() }
+            if self.repeating { self.start() }
+            true
+        } else { false }
+    }
+
+    pub fn fired_count(self) -> u64 { self.fired_count }
+}
+
+pub struct Deadline {
+    target: Instant,
+}
+
+impl Deadline {
+    pub fn after(duration: Duration) -> Deadline {
+        Deadline { target: Instant.now() + duration }
+    }
+
+    pub fn at(target: Instant) -> Deadline {
+        Deadline { target }
+    }
+
+    pub fn is_expired(self) -> bool {
+        Instant.now() >= self.target
+    }
+
+    pub fn remaining(self) -> Duration {
+        let now = Instant.now()
+        if now >= self.target { Duration.from_secs(0) }
+        else { self.target - now }
+    }
+
+    pub fn elapsed_since_deadline(self) -> Option<Duration> {
+        let now = Instant.now()
+        if now >= self.target { some(now - self.target) }
+        else { none }
+    }
+}
+
+pub struct RateLimiter {
+    interval: Duration,
+    last_allowed: Option<Instant>,
+    tokens: f64,
+    max_tokens: f64,
+    refill_rate: f64,  // tokens per second
+}
+
+impl RateLimiter {
+    pub fn new(max_per_second: f64) -> RateLimiter {
+        RateLimiter {
+            interval: Duration.from_secs_f64(1.0 / max_per_second),
+            last_allowed: none,
+            tokens: max_per_second,
+            max_tokens: max_per_second,
+            refill_rate: max_per_second,
+        }
+    }
+
+    pub fn try_acquire(mut self) -> bool {
+        self.refill()
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0
+            self.last_allowed = some(Instant.now())
+            true
+        } else { false }
+    }
+
+    fn refill(mut self) {
+        if let some(last) = self.last_allowed {
+            let elapsed = last.elapsed().as_secs_f64()
+            self.tokens = (self.tokens + elapsed * self.refill_rate).min(self.max_tokens)
+        }
+    }
+
+    pub fn tokens_available(self) -> f64 { self.tokens }
+}
+
+fn main() {
+    // Stopwatch
+    let mut sw = Stopwatch.new()
+    assert(!sw.is_running())
+    assert(sw.elapsed() == Duration.from_secs(0))
+    print("Stopwatch new ✓")
+
+    sw.start()
+    assert(sw.is_running())
+    print("Stopwatch start ✓")
+
+    sw.stop()
+    assert(!sw.is_running())
+    let elapsed = sw.elapsed()
+    assert(elapsed >= Duration.from_secs(0))
+    print("Stopwatch stop ✓")
+
+    sw.reset()
+    assert(sw.elapsed() == Duration.from_secs(0))
+    assert(sw.lap_count() == 0)
+    print("Stopwatch reset ✓")
+
+    // Timer
+    let timer = Timer.from_secs(60)
+    assert(!timer.is_expired())
+    assert(timer.remaining() == Duration.from_secs(60))
+    assert(timer.progress() == 0.0)
+    assert(timer.fired_count() == 0)
+    print("Timer new ✓")
+
+    let timer2 = Timer.from_millis(100)
+    assert(timer2.duration == Duration.from_millis(100))
+    print("Timer from_millis ✓")
+
+    // Repeating
+    let mut rep = Timer.from_secs(1).repeating()
+    assert(rep.repeating)
+    print("Timer repeating ✓")
+
+    // Cancel
+    let mut t = Timer.from_secs(5)
+    t.start()
+    t.cancel()
+    assert(!t.is_expired())
+    print("Timer cancel ✓")
+
+    // Deadline
+    let dl = Deadline.after(Duration.from_secs(3600))
+    assert(!dl.is_expired())
+    assert(dl.remaining() > Duration.from_secs(0))
+    assert(dl.elapsed_since_deadline().is_none())
+    print("Deadline ✓")
+
+    // RateLimiter
+    let mut rl = RateLimiter.new(10.0)
+    assert(rl.tokens_available() == 10.0)
+    assert(rl.try_acquire())
+    print("RateLimiter ✓")
+
+    // Stopwatch elapsed_ms
+    let sw2 = Stopwatch.new()
+    assert(sw2.elapsed_ms() == 0.0)
+    assert(sw2.elapsed_secs() == 0.0)
+    print("Elapsed ms/secs ✓")
+
+    print("Timer module complete ✓")
+}
