@@ -1,0 +1,237 @@
+
+// Regex Engine - NFA-based regular expression matcher
+// Supports literals, dot, *, +, ?, character classes, and alternation.
+
+use std.collections.HashSet
+
+#[derive(Clone, Debug)]
+enum RegexNode {
+    Literal(char),
+    Dot,
+    CharClass([CharRange], bool),  // ranges, negated
+    Concat([RegexNode]),
+    Alt(Box<RegexNode>, Box<RegexNode>),
+    Star(Box<RegexNode>),
+    Plus(Box<RegexNode>),
+    Optional(Box<RegexNode>),
+    Group(Box<RegexNode>),
+    Empty,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CharRange { start: char, end: char }
+
+impl CharRange {
+    fn new(s: char, e: char) -> CharRange { CharRange { start: s, end: e } }
+    fn single(c: char) -> CharRange { CharRange { start: c, end: c } }
+    fn contains(self, c: char) -> bool { c >= self.start && c <= self.end }
+}
+
+type StateId = usize
+
+#[derive(Clone, Debug)]
+enum NfaTransition {
+    Char(char),
+    Dot,
+    CharClass([CharRange], bool),
+    Epsilon,
+}
+
+struct NfaState {
+    id: StateId,
+    transitions: [(NfaTransition, StateId)],
+    accepting: bool,
+}
+
+struct Nfa {
+    states: [NfaState],
+    start: StateId,
+}
+
+impl Nfa {
+    fn new() -> Nfa { Nfa { states: [], start: 0 } }
+
+    fn add_state(mut self, accepting: bool) -> StateId {
+        let id = self.states.len()
+        self.states.push(NfaState { id, transitions: [], accepting })
+        id
+    }
+
+    fn add_transition(mut self, from: StateId, trans: NfaTransition, to: StateId) {
+        self.states[from].transitions.push((trans, to))
+    }
+
+    fn epsilon_closure(self, states: &HashSet<StateId>) -> HashSet<StateId> {
+        let mut closure = states.clone()
+        let mut stack: [StateId] = states.iter().cloned().collect()
+        while let Some(s) = stack.pop() {
+            for (trans, next) in &self.states[s].transitions {
+                if matches!(trans, NfaTransition.Epsilon) && !closure.contains(next) {
+                    closure.insert(*next)
+                    stack.push(*next)
+                }
+            }
+        }
+        closure
+    }
+
+    fn step(self, states: &HashSet<StateId>, c: char) -> HashSet<StateId> {
+        let mut next = HashSet.new()
+        for &s in states {
+            for (trans, target) in &self.states[s].transitions {
+                let matched = match trans {
+                    NfaTransition.Char(tc) => *tc == c,
+                    NfaTransition.Dot => true,
+                    NfaTransition.CharClass(ranges, neg) => {
+                        let in_range = ranges.iter().any(|r| r.contains(c))
+                        if *neg { !in_range } else { in_range }
+                    }
+                    NfaTransition.Epsilon => false,
+                };
+                if matched { next.insert(*target); }
+            }
+        }
+        self.epsilon_closure(&next)
+    }
+
+    fn matches(self, input: &str) -> bool {
+        let mut current = HashSet.new()
+        current.insert(self.start)
+        current = self.epsilon_closure(&current)
+
+        for c in input.chars() {
+            current = self.step(&current, c)
+            if current.is_empty() { return false }
+        }
+        current.iter().any(|s| self.states[*s].accepting)
+    }
+
+    fn state_count(self) -> usize { self.states.len() }
+}
+
+// Simple regex builder for testing
+fn build_literal(nfa: &mut Nfa, c: char) -> (StateId, StateId) {
+    let s = nfa.add_state(false)
+    let e = nfa.add_state(false)
+    nfa.add_transition(s, NfaTransition.Char(c), e)
+    (s, e)
+}
+
+fn build_dot(nfa: &mut Nfa) -> (StateId, StateId) {
+    let s = nfa.add_state(false)
+    let e = nfa.add_state(false)
+    nfa.add_transition(s, NfaTransition.Dot, e)
+    (s, e)
+}
+
+fn build_concat(nfa: &mut Nfa, a: (StateId, StateId), b: (StateId, StateId)) -> (StateId, StateId) {
+    nfa.add_transition(a.1, NfaTransition.Epsilon, b.0)
+    (a.0, b.1)
+}
+
+fn build_star(nfa: &mut Nfa, inner: (StateId, StateId)) -> (StateId, StateId) {
+    let s = nfa.add_state(false)
+    let e = nfa.add_state(false)
+    nfa.add_transition(s, NfaTransition.Epsilon, inner.0)
+    nfa.add_transition(s, NfaTransition.Epsilon, e)
+    nfa.add_transition(inner.1, NfaTransition.Epsilon, inner.0)
+    nfa.add_transition(inner.1, NfaTransition.Epsilon, e)
+    (s, e)
+}
+
+fn build_alt(nfa: &mut Nfa, a: (StateId, StateId), b: (StateId, StateId)) -> (StateId, StateId) {
+    let s = nfa.add_state(false)
+    let e = nfa.add_state(false)
+    nfa.add_transition(s, NfaTransition.Epsilon, a.0)
+    nfa.add_transition(s, NfaTransition.Epsilon, b.0)
+    nfa.add_transition(a.1, NfaTransition.Epsilon, e)
+    nfa.add_transition(b.1, NfaTransition.Epsilon, e)
+    (s, e)
+}
+
+fn main() {
+    // Literal match: "abc"
+    let mut nfa = Nfa.new()
+    let a = build_literal(&mut nfa, 'a')
+    let b = build_literal(&mut nfa, 'b')
+    let c = build_literal(&mut nfa, 'c')
+    let ab = build_concat(&mut nfa, a, b)
+    let abc = build_concat(&mut nfa, ab, c)
+    nfa.start = abc.0
+    nfa.states[abc.1].accepting = true
+    assert(nfa.matches("abc"))
+    assert(!nfa.matches("ab"))
+    assert(!nfa.matches("abcd"))
+    assert(!nfa.matches("xyz"))
+    print("Literal ✓")
+
+    // Dot: "a.c"
+    let mut nfa2 = Nfa.new()
+    let a2 = build_literal(&mut nfa2, 'a')
+    let d = build_dot(&mut nfa2)
+    let c2 = build_literal(&mut nfa2, 'c')
+    let ad = build_concat(&mut nfa2, a2, d)
+    let adc = build_concat(&mut nfa2, ad, c2)
+    nfa2.start = adc.0
+    nfa2.states[adc.1].accepting = true
+    assert(nfa2.matches("abc"))
+    assert(nfa2.matches("axc"))
+    assert(nfa2.matches("a1c"))
+    assert(!nfa2.matches("ac"))
+    print("Dot ✓")
+
+    // Star: "a*"
+    let mut nfa3 = Nfa.new()
+    let a3 = build_literal(&mut nfa3, 'a')
+    let star = build_star(&mut nfa3, a3)
+    nfa3.start = star.0
+    nfa3.states[star.1].accepting = true
+    assert(nfa3.matches(""))
+    assert(nfa3.matches("a"))
+    assert(nfa3.matches("aaa"))
+    assert(!nfa3.matches("b"))
+    print("Star ✓")
+
+    // Alternation: "a|b"
+    let mut nfa4 = Nfa.new()
+    let la = build_literal(&mut nfa4, 'a')
+    let lb = build_literal(&mut nfa4, 'b')
+    let alt = build_alt(&mut nfa4, la, lb)
+    nfa4.start = alt.0
+    nfa4.states[alt.1].accepting = true
+    assert(nfa4.matches("a"))
+    assert(nfa4.matches("b"))
+    assert(!nfa4.matches("c"))
+    assert(!nfa4.matches("ab"))
+    print("Alt ✓")
+
+    // CharRange
+    let cr = CharRange.new('a', 'z')
+    assert(cr.contains('m'))
+    assert(!cr.contains('A'))
+    let cs = CharRange.single('x')
+    assert(cs.contains('x'))
+    assert(!cs.contains('y'))
+    print("CharRange ✓")
+
+    // State count
+    assert(nfa.state_count() > 0)
+    print("State count ✓")
+
+    // Epsilon closure
+    let mut nfa5 = Nfa.new()
+    let s0 = nfa5.add_state(false)
+    let s1 = nfa5.add_state(false)
+    let s2 = nfa5.add_state(true)
+    nfa5.add_transition(s0, NfaTransition.Epsilon, s1)
+    nfa5.add_transition(s1, NfaTransition.Epsilon, s2)
+    let mut init = HashSet.new()
+    init.insert(s0)
+    let closure = nfa5.epsilon_closure(&init)
+    assert(closure.contains(&s0))
+    assert(closure.contains(&s1))
+    assert(closure.contains(&s2))
+    print("Epsilon closure ✓")
+
+    print("Regex engine complete ✓")
+}
