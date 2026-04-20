@@ -1,0 +1,181 @@
+
+// Glob Pattern Matching for File Paths
+// Supports *, ?, **, character classes [a-z], and negation [!x].
+
+struct GlobPattern {
+    pattern: string,
+    segments: [GlobSegment],
+}
+
+#[derive(Clone, Debug)]
+enum GlobSegment {
+    Literal(string),
+    Star,
+    DoubleStar,
+    Question,
+    CharClass { chars: [char], negated: bool },
+}
+
+impl GlobPattern {
+    fn new(pattern: &str) -> GlobPattern {
+        let segments = GlobPattern.parse(pattern)
+        GlobPattern { pattern: pattern.into(), segments }
+    }
+
+    fn parse(pattern: &str) -> [GlobSegment] {
+        let mut segs = []
+        let chars = pattern.chars().collect::<[char]>()
+        let mut i = 0
+        while i < chars.len() {
+            match chars[i] {
+                '*' if i + 1 < chars.len() && chars[i + 1] == '*' => {
+                    segs.push(GlobSegment.DoubleStar)
+                    i += 2
+                    if i < chars.len() && chars[i] == '/' { i += 1 }
+                }
+                '*' => { segs.push(GlobSegment.Star); i += 1 }
+                '?' => { segs.push(GlobSegment.Question); i += 1 }
+                '[' => {
+                    i += 1
+                    let negated = i < chars.len() && chars[i] == '!'
+                    if negated { i += 1 }
+                    let mut cls = []
+                    while i < chars.len() && chars[i] != ']' {
+                        if i + 2 < chars.len() && chars[i + 1] == '-' {
+                            let start = chars[i]
+                            let end = chars[i + 2]
+                            for c in start..=end { cls.push(c) }
+                            i += 3
+                        } else {
+                            cls.push(chars[i])
+                            i += 1
+                        }
+                    }
+                    if i < chars.len() { i += 1 }  // skip ]
+                    segs.push(GlobSegment.CharClass { chars: cls, negated })
+                }
+                c => {
+                    let mut lit = string.new()
+                    while i < chars.len() && !['*', '?', '['].contains(&chars[i]) {
+                        lit.push(chars[i])
+                        i += 1
+                    }
+                    segs.push(GlobSegment.Literal(lit))
+                }
+            }
+        }
+        segs
+    }
+
+    fn matches(self, path: &str) -> bool {
+        GlobPattern.match_segments(&self.segments, path, 0, 0)
+    }
+
+    fn match_segments(segs: &[GlobSegment], text: &str, si: usize, ti: usize) -> bool {
+        let chars = text.chars().collect::<[char]>()
+        let mut s = si
+        let mut t = ti
+
+        if s == segs.len() { return t == chars.len() }
+
+        match &segs[s] {
+            GlobSegment.Literal(lit) => {
+                let lc = lit.chars().collect::<[char]>()
+                for (j, &c) in lc.iter().enumerate() {
+                    if t + j >= chars.len() || chars[t + j] != c { return false }
+                }
+                GlobPattern.match_segments(segs, text, s + 1, t + lc.len())
+            }
+            GlobSegment.Question => {
+                if t >= chars.len() { return false }
+                GlobPattern.match_segments(segs, text, s + 1, t + 1)
+            }
+            GlobSegment.Star => {
+                // Match any sequence except /
+                for end in t..=chars.len() {
+                    if end > t && chars[end - 1] == '/' { break }
+                    if GlobPattern.match_segments(segs, text, s + 1, end) { return true }
+                }
+                false
+            }
+            GlobSegment.DoubleStar => {
+                // Match any sequence including /
+                for end in t..=chars.len() {
+                    if GlobPattern.match_segments(segs, text, s + 1, end) { return true }
+                }
+                false
+            }
+            GlobSegment.CharClass { chars: cls, negated } => {
+                if t >= chars.len() { return false }
+                let in_class = cls.contains(&chars[t])
+                let ok = if *negated { !in_class } else { in_class }
+                if !ok { return false }
+                GlobPattern.match_segments(segs, text, s + 1, t + 1)
+            }
+        }
+    }
+}
+
+fn glob_match(pattern: &str, path: &str) -> bool {
+    GlobPattern.new(pattern).matches(path)
+}
+
+fn main() {
+    // Literal match
+    assert(glob_match("hello", "hello"))
+    assert(!glob_match("hello", "world"))
+    print("Literal ✓")
+
+    // Star wildcard
+    assert(glob_match("*.txt", "readme.txt"))
+    assert(glob_match("*.txt", ".txt"))
+    assert(!glob_match("*.txt", "readme.md"))
+    assert(glob_match("src/*.rs", "src/main.rs"))
+    assert(!glob_match("src/*.rs", "src/sub/main.rs"))
+    print("Star ✓")
+
+    // Question mark
+    assert(glob_match("file?.txt", "file1.txt"))
+    assert(glob_match("file?.txt", "fileA.txt"))
+    assert(!glob_match("file?.txt", "file12.txt"))
+    assert(!glob_match("file?.txt", "file.txt"))
+    print("Question ✓")
+
+    // Double star
+    assert(glob_match("**/*.ltl", "src/main.ltl"))
+    assert(glob_match("**/*.ltl", "src/deep/nested/file.ltl"))
+    assert(glob_match("**/test.ltl", "test.ltl"))
+    assert(glob_match("src/**/*.ltl", "src/a/b/c.ltl"))
+    print("Double star ✓")
+
+    // Character class
+    assert(glob_match("[abc].txt", "a.txt"))
+    assert(glob_match("[abc].txt", "b.txt"))
+    assert(!glob_match("[abc].txt", "d.txt"))
+    print("Char class ✓")
+
+    // Range in character class
+    assert(glob_match("[a-z].txt", "m.txt"))
+    assert(!glob_match("[a-z].txt", "M.txt"))
+    assert(glob_match("[0-9].log", "5.log"))
+    print("Char range ✓")
+
+    // Negated class
+    assert(glob_match("[!0-9].txt", "a.txt"))
+    assert(!glob_match("[!0-9].txt", "5.txt"))
+    print("Negated class ✓")
+
+    // Complex patterns
+    assert(glob_match("src/**/[A-Z]*.ltl", "src/models/User.ltl"))
+    assert(!glob_match("src/**/[A-Z]*.ltl", "src/models/user.ltl"))
+    print("Complex ✓")
+
+    // Edge cases
+    assert(glob_match("*", "anything"))
+    assert(!glob_match("*", "path/file"))  // * doesn't cross /
+    assert(glob_match("**", "path/to/file"))
+    assert(glob_match("", ""))
+    print("Edge cases ✓")
+
+    print("Glob matching complete ✓")
+}
