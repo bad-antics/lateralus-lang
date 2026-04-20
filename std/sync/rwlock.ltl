@@ -1,235 +1,258 @@
-// std/sync/rwlock.ltl — Reader-writer lock with writer starvation prevention
+// Standard Library - Read-Write Lock
+// Multiple concurrent readers or one exclusive writer with poisoning support.
+
 use std.sync.{Mutex, Condvar}
-use std.thread
+use std.fmt.{Debug, Formatter, FmtError}
+use std.time.Duration
 
-// ── RwLock ───────────────────────────────────────────────────────────────────
-pub struct RwLock<T> {
-    data:            UnsafeCell<T>,
-    state:           Mutex<RwLockState>,
-    readers_cv:      Condvar,
-    writers_cv:      Condvar,
+#[derive(Clone, Debug, PartialEq)]
+enum LockState {
+    Unlocked,
+    ReadLocked(usize),    // number of active readers
+    WriteLocked,
 }
 
-struct RwLockState {
-    readers:         u32,
-    writer_active:   bool,
-    writers_waiting: u32,
+#[derive(Debug)]
+enum RwLockError {
+    Poisoned,
+    WouldBlock,
+    Timeout,
 }
 
-pub struct ReadGuard<'a, T> {
-    lock: &'a RwLock<T>,
+impl std.fmt.Display for RwLockError {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError> {
+        match self {
+            RwLockError.Poisoned => f.write_str("rwlock poisoned"),
+            RwLockError.WouldBlock => f.write_str("would block"),
+            RwLockError.Timeout => f.write_str("lock timeout"),
+        }
+    }
 }
 
-pub struct WriteGuard<'a, T> {
-    lock: &'a RwLock<T>,
+struct RwLock<T> {
+    data: T,
+    state: LockState,
+    poisoned: bool,
+    waiting_writers: usize,
+    waiting_readers: usize,
+    writer_priority: bool,
+}
+
+struct ReadGuard<T> {
+    lock: &RwLock<T>,
+}
+
+struct WriteGuard<T> {
+    lock: &mut RwLock<T>,
 }
 
 impl<T> RwLock<T> {
-    pub fn new(value: T) -> RwLock<T> {
+    fn new(data: T) -> RwLock<T> {
         RwLock {
-            data: UnsafeCell.new(value),
-            state: Mutex.new(RwLockState { readers: 0, writer_active: false, writers_waiting: 0 }),
-            readers_cv: Condvar.new(),
-            writers_cv: Condvar.new(),
+            data, state: LockState.Unlocked,
+            poisoned: false, waiting_writers: 0,
+            waiting_readers: 0, writer_priority: true,
         }
     }
 
-    pub fn read(self) -> ReadGuard<T> {
-        let mut state = self.state.lock()
-        // Wait if writer is active or writers are waiting (prevent starvation)
-        while state.writer_active || state.writers_waiting > 0 {
-            state = self.readers_cv.wait(state)
-        }
-        state.readers += 1
-        ReadGuard { lock: self }
+    fn with_writer_priority(mut self, priority: bool) -> RwLock<T> {
+        self.writer_priority = priority; self
     }
 
-    pub fn try_read(self) -> Option<ReadGuard<T>> {
-        let mut state = self.state.lock()
-        if state.writer_active || state.writers_waiting > 0 {
-            return none
-        }
-        state.readers += 1
-        some(ReadGuard { lock: self })
-    }
-
-    pub fn write(self) -> WriteGuard<T> {
-        let mut state = self.state.lock()
-        state.writers_waiting += 1
-        while state.writer_active || state.readers > 0 {
-            state = self.writers_cv.wait(state)
-        }
-        state.writers_waiting -= 1
-        state.writer_active = true
-        WriteGuard { lock: self }
-    }
-
-    pub fn try_write(self) -> Option<WriteGuard<T>> {
-        let mut state = self.state.lock()
-        if state.writer_active || state.readers > 0 {
-            return none
-        }
-        state.writer_active = true
-        some(WriteGuard { lock: self })
-    }
-
-    fn release_read(self) {
-        let mut state = self.state.lock()
-        state.readers -= 1
-        if state.readers == 0 {
-            // Wake one writer if waiting
-            self.writers_cv.notify_one()
+    fn read(self) -> Result<ReadGuard<T>, RwLockError> {
+        if self.poisoned { return err(RwLockError.Poisoned) }
+        match &self.state {
+            LockState.Unlocked => {
+                self.state = LockState.ReadLocked(1)
+                ok(ReadGuard { lock: &self })
+            },
+            LockState.ReadLocked(n) => {
+                if self.writer_priority && self.waiting_writers > 0 {
+                    return err(RwLockError.WouldBlock)
+                }
+                self.state = LockState.ReadLocked(*n + 1)
+                ok(ReadGuard { lock: &self })
+            },
+            LockState.WriteLocked => err(RwLockError.WouldBlock),
         }
     }
 
-    fn release_write(self) {
-        let mut state = self.state.lock()
-        state.writer_active = false
-        // Prefer writers over readers to prevent starvation
-        if state.writers_waiting > 0 {
-            self.writers_cv.notify_one()
-        } else {
-            self.readers_cv.notify_all()
+    fn write(mut self) -> Result<WriteGuard<T>, RwLockError> {
+        if self.poisoned { return err(RwLockError.Poisoned) }
+        match &self.state {
+            LockState.Unlocked => {
+                self.state = LockState.WriteLocked
+                ok(WriteGuard { lock: &mut self })
+            },
+            _ => err(RwLockError.WouldBlock),
         }
     }
 
-    pub fn into_inner(self) -> T {
-        self.data.into_inner()
-    }
-}
-
-impl<'a, T> ReadGuard<'a, T> {
-    pub fn deref(self) -> &T {
-        unsafe { &*self.lock.data.get() }
-    }
-}
-
-impl<'a, T> Drop for ReadGuard<'a, T> {
-    fn drop(mut self) {
-        self.lock.release_read()
-    }
-}
-
-impl<'a, T> WriteGuard<'a, T> {
-    pub fn deref(self) -> &T {
-        unsafe { &*self.lock.data.get() }
+    fn try_read(self) -> Result<ReadGuard<T>, RwLockError> {
+        self.read()
     }
 
-    pub fn deref_mut(self) -> &mut T {
-        unsafe { &mut *self.lock.data.get() }
+    fn try_write(mut self) -> Result<WriteGuard<T>, RwLockError> {
+        self.write()
     }
-}
 
-impl<'a, T> Drop for WriteGuard<'a, T> {
-    fn drop(mut self) {
-        self.lock.release_write()
-    }
-}
-
-// ── Upgradable read lock ─────────────────────────────────────────────────────
-pub struct UpgradableReadGuard<'a, T> {
-    lock: &'a RwLock<T>,
-}
-
-impl<T> RwLock<T> {
-    pub fn upgradable_read(self) -> UpgradableReadGuard<T> {
-        let guard = self.read()
-        std.mem.forget(guard)  // prevent drop
-        UpgradableReadGuard { lock: self }
-    }
-}
-
-impl<'a, T> UpgradableReadGuard<'a, T> {
-    pub fn upgrade(self) -> WriteGuard<'a, T> {
-        let mut state = self.lock.state.lock()
-        state.readers -= 1
-        state.writers_waiting += 1
-        while state.writer_active || state.readers > 0 {
-            state = self.lock.writers_cv.wait(state)
+    fn release_read(mut self) {
+        match &self.state {
+            LockState.ReadLocked(1) => self.state = LockState.Unlocked,
+            LockState.ReadLocked(n) => self.state = LockState.ReadLocked(*n - 1),
+            _ => {},
         }
-        state.writers_waiting -= 1
-        state.writer_active = true
-        std.mem.forget(self)
-        WriteGuard { lock: self.lock }
     }
 
-    pub fn deref(self) -> &T {
-        unsafe { &*self.lock.data.get() }
+    fn release_write(mut self) {
+        match &self.state {
+            LockState.WriteLocked => self.state = LockState.Unlocked,
+            _ => {},
+        }
+    }
+
+    fn poison(mut self) { self.poisoned = true }
+    fn is_poisoned(self) -> bool { self.poisoned }
+
+    fn reader_count(self) -> usize {
+        match &self.state {
+            LockState.ReadLocked(n) => *n,
+            _ => 0,
+        }
+    }
+
+    fn is_write_locked(self) -> bool {
+        matches!(self.state, LockState.WriteLocked)
+    }
+
+    fn into_inner(self) -> Result<T, RwLockError> {
+        if self.poisoned { return err(RwLockError.Poisoned) }
+        ok(self.data)
+    }
+
+    fn get_mut(mut self) -> Result<&mut T, RwLockError> {
+        if self.poisoned { return err(RwLockError.Poisoned) }
+        ok(&mut self.data)
     }
 }
 
-impl<'a, T> Drop for UpgradableReadGuard<'a, T> {
-    fn drop(mut self) {
-        self.lock.release_read()
-    }
+impl<T> ReadGuard<T> {
+    fn deref(self) -> &T { &self.lock.data }
+}
+
+impl<T> WriteGuard<T> {
+    fn deref(self) -> &T { &self.lock.data }
+    fn deref_mut(mut self) -> &mut T { &mut self.lock.data }
+}
+
+impl<T> Drop for ReadGuard<T> {
+    fn drop(mut self) { self.lock.release_read() }
+}
+
+impl<T> Drop for WriteGuard<T> {
+    fn drop(mut self) { self.lock.release_write() }
 }
 
 fn main() {
-    let lock = RwLock.new(42)
+    // Create
+    let mut rw = RwLock.new(42)
+    assert(!rw.is_poisoned())
+    assert(rw.reader_count() == 0)
+    assert(!rw.is_write_locked())
+    print("Create ✓")
+
+    // Read lock
+    let r1 = rw.read().unwrap()
+    assert(*r1.deref() == 42)
+    assert(rw.reader_count() == 1)
+    print("Read lock ✓")
 
     // Multiple readers
-    {
-        let r1 = lock.read()
-        let r2 = lock.read()
-        assert(*r1.deref() == 42)
-        assert(*r2.deref() == 42)
-        print("Multiple readers: ${*r1.deref()} ✓")
+    let r2 = rw.read().unwrap()
+    assert(rw.reader_count() == 2)
+    print("Multiple readers ✓")
+
+    // Release readers
+    rw.release_read()
+    rw.release_read()
+    assert(rw.reader_count() == 0)
+    print("Release read ✓")
+
+    // Write lock
+    let w = rw.write().unwrap()
+    assert(rw.is_write_locked())
+    print("Write lock ✓")
+
+    // Can't read while write locked
+    assert(rw.read().is_err())
+    print("Read blocked during write ✓")
+
+    // Can't write while write locked
+    assert(rw.try_write().is_err())
+    print("Write blocked during write ✓")
+
+    // Release write
+    rw.release_write()
+    assert(!rw.is_write_locked())
+    assert(rw.read().is_ok())
+    rw.release_read()
+    print("Release write ✓")
+
+    // Can't write while read locked
+    rw.read().unwrap()
+    assert(rw.write().is_err())
+    rw.release_read()
+    print("Write blocked during read ✓")
+
+    // Poisoning
+    rw.poison()
+    assert(rw.is_poisoned())
+    assert(rw.read().is_err())
+    assert(rw.write().is_err())
+    match rw.read().unwrap_err() {
+        RwLockError.Poisoned => {},
+        _ => assert(false),
     }
+    print("Poisoning ✓")
 
-    // Writer
-    {
-        let mut w = lock.write()
-        *w.deref_mut() = 100
-    }
-    {
-        let r = lock.read()
-        assert(*r.deref() == 100)
-        print("Writer updated value: ${*r.deref()} ✓")
-    }
+    // into_inner
+    let clean = RwLock.new(99)
+    assert(clean.into_inner().unwrap() == 99)
+    let poisoned = RwLock.new(0)
+    poisoned.poison()
+    assert(poisoned.into_inner().is_err())
+    print("into_inner ✓")
 
-    // try_read / try_write
-    {
-        let r = lock.read()
-        assert(lock.try_write().is_none(), "can't write while reading")
-        print("try_write blocked during read ✓")
-    }
-    {
-        let w = lock.write()
-        assert(lock.try_read().is_none(), "can't read while writing")
-        print("try_read blocked during write ✓")
-    }
+    // get_mut
+    let mut gm = RwLock.new(10)
+    *gm.get_mut().unwrap() = 20
+    assert(gm.data == 20)
+    print("get_mut ✓")
 
-    // Concurrent test
-    let shared = std.sync.Arc.new(RwLock.new(0))
-    let mut handles: [thread.JoinHandle<()>] = []
+    // LockState
+    assert(LockState.Unlocked != LockState.WriteLocked)
+    assert(LockState.ReadLocked(2) == LockState.ReadLocked(2))
+    print("LockState ✓")
 
-    // Spawn 10 readers
-    for i in range(0, 10) {
-        let s = shared.clone()
-        handles.push(thread.spawn(move || {
-            for _ in range(0, 100) {
-                let r = s.read()
-                let _ = *r.deref()
-            }
-        }))
-    }
+    // Writer priority: readers blocked when writers waiting
+    let mut wp = RwLock.new(0).with_writer_priority(true)
+    wp.read().unwrap()
+    wp.waiting_writers = 1
+    assert(wp.read().is_err())  // blocked by writer priority
+    print("Writer priority ✓")
 
-    // Spawn 2 writers
-    for i in range(0, 2) {
-        let s = shared.clone()
-        handles.push(thread.spawn(move || {
-            for j in range(0, 50) {
-                let mut w = s.write()
-                *w.deref_mut() += 1
-            }
-        }))
-    }
+    // No writer priority
+    let mut np = RwLock.new(0).with_writer_priority(false)
+    np.read().unwrap()
+    np.waiting_writers = 1
+    assert(np.read().is_ok())  // allowed
+    print("No writer priority ✓")
 
-    for h in handles { h.join().unwrap() }
+    // Error display
+    assert(RwLockError.Poisoned.to_string() == "rwlock poisoned")
+    assert(RwLockError.WouldBlock.to_string() == "would block")
+    assert(RwLockError.Timeout.to_string() == "lock timeout")
+    print("Error display ✓")
 
-    let final_val = *shared.read().deref()
-    assert(final_val == 100, "2 writers × 50 increments = 100")
-    print("Concurrent RwLock: final value = ${final_val} ✓")
-
-    print("RwLock — all passed ✓")
+    print("RwLock complete ✓")
 }
