@@ -1,0 +1,290 @@
+
+// HTTP/1.1 Server Framework
+// Route-based request handling with middleware, path params, and response builder.
+
+use std.collections.HashMap
+use std.net.TcpListener
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum HttpMethod { Get, Post, Put, Delete, Patch, Head, Options }
+
+impl HttpMethod {
+    fn from_str(s: &str) -> Option<HttpMethod> {
+        match s.to_uppercase().as_str() {
+            "GET" => Some(HttpMethod.Get), "POST" => Some(HttpMethod.Post),
+            "PUT" => Some(HttpMethod.Put), "DELETE" => Some(HttpMethod.Delete),
+            "PATCH" => Some(HttpMethod.Patch), "HEAD" => Some(HttpMethod.Head),
+            "OPTIONS" => Some(HttpMethod.Options), _ => None,
+        }
+    }
+
+    fn as_str(self) -> &str {
+        match self {
+            HttpMethod.Get => "GET", HttpMethod.Post => "POST",
+            HttpMethod.Put => "PUT", HttpMethod.Delete => "DELETE",
+            HttpMethod.Patch => "PATCH", HttpMethod.Head => "HEAD",
+            HttpMethod.Options => "OPTIONS",
+        }
+    }
+}
+
+struct Request {
+    method: HttpMethod,
+    path: string,
+    headers: HashMap<string, string>,
+    body: string,
+    params: HashMap<string, string>,
+    query: HashMap<string, string>,
+}
+
+impl Request {
+    fn new(method: HttpMethod, path: &str) -> Request {
+        let (clean_path, query) = Request.parse_query(path)
+        Request {
+            method, path: clean_path, headers: HashMap.new(),
+            body: "".into(), params: HashMap.new(), query,
+        }
+    }
+
+    fn parse_query(path: &str) -> (string, HashMap<string, string>) {
+        if let Some(idx) = path.find('?') {
+            let p = path[..idx].into()
+            let qs = &path[idx + 1..]
+            let mut map = HashMap.new()
+            for pair in qs.split('&') {
+                if let Some(eq) = pair.find('=') {
+                    map.insert(pair[..eq].into(), pair[eq + 1..].into())
+                }
+            }
+            (p, map)
+        } else {
+            (path.into(), HashMap.new())
+        }
+    }
+
+    fn header(self, key: &str) -> Option<&str> {
+        self.headers.get(key).map(|s| s.as_str())
+    }
+
+    fn param(self, key: &str) -> Option<&str> {
+        self.params.get(key).map(|s| s.as_str())
+    }
+
+    fn query_param(self, key: &str) -> Option<&str> {
+        self.query.get(key).map(|s| s.as_str())
+    }
+
+    fn content_type(self) -> Option<&str> { self.header("Content-Type") }
+}
+
+#[derive(Clone)]
+struct Response {
+    status: u16,
+    status_text: string,
+    headers: HashMap<string, string>,
+    body: string,
+}
+
+impl Response {
+    fn new(status: u16) -> Response {
+        let text = match status {
+            200 => "OK", 201 => "Created", 204 => "No Content",
+            301 => "Moved Permanently", 302 => "Found",
+            400 => "Bad Request", 401 => "Unauthorized",
+            403 => "Forbidden", 404 => "Not Found",
+            405 => "Method Not Allowed", 500 => "Internal Server Error",
+            _ => "Unknown",
+        }
+        Response { status, status_text: text.into(), headers: HashMap.new(), body: "".into() }
+    }
+
+    fn ok() -> Response { Response.new(200) }
+    fn not_found() -> Response { Response.new(404).with_body("Not Found") }
+    fn bad_request() -> Response { Response.new(400) }
+
+    fn with_body(mut self, body: &str) -> Response {
+        self.body = body.into()
+        self.headers.insert("Content-Length".into(), body.len().to_string())
+        self
+    }
+
+    fn with_json(mut self, json: &str) -> Response {
+        self.headers.insert("Content-Type".into(), "application/json".into())
+        self.with_body(json)
+    }
+
+    fn with_header(mut self, key: &str, val: &str) -> Response {
+        self.headers.insert(key.into(), val.into())
+        self
+    }
+
+    fn redirect(url: &str) -> Response {
+        Response.new(302).with_header("Location", url)
+    }
+
+    fn serialize(self) -> string {
+        let mut lines = [format!("HTTP/1.1 {} {}", self.status, self.status_text)]
+        for (k, v) in &self.headers { lines.push(format!("{}: {}", k, v)) }
+        lines.push("".into())
+        lines.push(self.body.clone())
+        lines.join("\r\n")
+    }
+}
+
+type Handler = fn(&Request) -> Response
+
+struct Route {
+    method: HttpMethod,
+    pattern: string,
+    segments: [RouteSegment],
+    handler: Handler,
+}
+
+#[derive(Clone, Debug)]
+enum RouteSegment { Literal(string), Param(string), Wildcard }
+
+fn parse_route(pattern: &str) -> [RouteSegment] {
+    pattern.trim_start_matches('/').split('/').map(|seg| {
+        if seg.starts_with(':') { RouteSegment.Param(seg[1..].into()) }
+        else if seg == "*" { RouteSegment.Wildcard }
+        else { RouteSegment.Literal(seg.into()) }
+    }).collect()
+}
+
+fn match_route(segments: &[RouteSegment], path: &str) -> Option<HashMap<string, string>> {
+    let parts: [&str] = path.trim_start_matches('/').split('/').collect()
+    if parts.len() != segments.len() {
+        if !segments.last().map_or(false, |s| matches!(s, RouteSegment.Wildcard)) {
+            return None
+        }
+    }
+    let mut params = HashMap.new()
+    for (i, seg) in segments.iter().enumerate() {
+        match seg {
+            RouteSegment.Literal(lit) => {
+                if i >= parts.len() || parts[i] != lit.as_str() { return None }
+            }
+            RouteSegment.Param(name) => {
+                if i >= parts.len() { return None }
+                params.insert(name.clone(), parts[i].into())
+            }
+            RouteSegment.Wildcard => {}
+        }
+    }
+    Some(params)
+}
+
+struct Router {
+    routes: [Route],
+}
+
+impl Router {
+    fn new() -> Router { Router { routes: [] } }
+
+    fn add(mut self, method: HttpMethod, pattern: &str, handler: Handler) {
+        let segments = parse_route(pattern)
+        self.routes.push(Route { method, pattern: pattern.into(), segments, handler })
+    }
+
+    fn get(mut self, p: &str, h: Handler) { self.add(HttpMethod.Get, p, h) }
+    fn post(mut self, p: &str, h: Handler) { self.add(HttpMethod.Post, p, h) }
+    fn put(mut self, p: &str, h: Handler) { self.add(HttpMethod.Put, p, h) }
+    fn delete(mut self, p: &str, h: Handler) { self.add(HttpMethod.Delete, p, h) }
+
+    fn route(self, req: &mut Request) -> Response {
+        for route in &self.routes {
+            if route.method != req.method { continue }
+            if let Some(params) = match_route(&route.segments, &req.path) {
+                req.params = params
+                return (route.handler)(req)
+            }
+        }
+        Response.not_found()
+    }
+
+    fn route_count(self) -> usize { self.routes.len() }
+}
+
+fn main() {
+    // HttpMethod
+    assert(HttpMethod.from_str("GET") == Some(HttpMethod.Get))
+    assert(HttpMethod.from_str("post") == Some(HttpMethod.Post))
+    assert(HttpMethod.from_str("INVALID").is_none())
+    assert(HttpMethod.Get.as_str() == "GET")
+    print("Methods ✓")
+
+    // Request
+    let req = Request.new(HttpMethod.Get, "/users?page=2&limit=10")
+    assert(req.path == "/users")
+    assert(req.query_param("page") == Some("2"))
+    assert(req.query_param("limit") == Some("10"))
+    assert(req.query_param("missing").is_none())
+    print("Request ✓")
+
+    // Response
+    let resp = Response.ok().with_json(r#"{"id":1}"#)
+    assert(resp.status == 200)
+    assert(resp.headers.get("Content-Type") == Some(&"application/json".into()))
+    print("Response ✓")
+
+    // Serialize
+    let serial = resp.serialize()
+    assert(serial.contains("HTTP/1.1 200 OK"))
+    assert(serial.contains("application/json"))
+    print("Serialize ✓")
+
+    // Redirect
+    let redir = Response.redirect("/login")
+    assert(redir.status == 302)
+    assert(redir.headers.get("Location") == Some(&"/login".into()))
+    print("Redirect ✓")
+
+    // Route parsing
+    let segs = parse_route("/users/:id/posts")
+    assert(segs.len() == 3)
+    print("Parse route ✓")
+
+    // Route matching
+    let params = match_route(&segs, "/users/42/posts")
+    assert(params.is_some())
+    assert(params.unwrap().get("id") == Some(&"42".into()))
+    assert(match_route(&segs, "/users/42").is_none())
+    print("Match route ✓")
+
+    // Router
+    let mut router = Router.new()
+    router.get("/hello", |_req| Response.ok().with_body("world"))
+    router.get("/users/:id", |req| {
+        let id = req.param("id").unwrap_or("?")
+        Response.ok().with_body(&format!("User {}", id))
+    })
+    assert(router.route_count() == 2)
+    print("Router setup ✓")
+
+    // Route dispatch
+    let mut req1 = Request.new(HttpMethod.Get, "/hello")
+    let resp1 = router.route(&mut req1)
+    assert(resp1.status == 200)
+    assert(resp1.body == "world")
+    print("Dispatch ✓")
+
+    // Param extraction
+    let mut req2 = Request.new(HttpMethod.Get, "/users/99")
+    let resp2 = router.route(&mut req2)
+    assert(resp2.body == "User 99")
+    print("Param dispatch ✓")
+
+    // 404
+    let mut req3 = Request.new(HttpMethod.Get, "/unknown")
+    let resp3 = router.route(&mut req3)
+    assert(resp3.status == 404)
+    print("404 ✓")
+
+    // Method mismatch
+    let mut req4 = Request.new(HttpMethod.Post, "/hello")
+    let resp4 = router.route(&mut req4)
+    assert(resp4.status == 404)
+    print("Method mismatch ✓")
+
+    print("HTTP server complete ✓")
+}
