@@ -1,0 +1,281 @@
+// Standard Library - Monotonic Clock / Instant
+// High-resolution monotonic time for measuring durations.
+
+use std.time.{Duration}
+use std.cmp.{Ord, PartialOrd, Ordering}
+use std.fmt.{Display, Formatter, FmtError}
+use std.ops.{Sub, Add}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct Instant {
+    nanos: u128,  // nanoseconds since an arbitrary epoch
+}
+
+impl Instant {
+    fn now() -> Instant {
+        Instant { nanos: __intrinsic_monotonic_nanos() }
+    }
+
+    fn elapsed(self) -> Duration {
+        let now = Instant.now()
+        now.duration_since(self)
+    }
+
+    fn duration_since(self, earlier: Instant) -> Duration {
+        if self.nanos >= earlier.nanos {
+            Duration.from_nanos((self.nanos - earlier.nanos) as u64)
+        } else {
+            Duration.ZERO
+        }
+    }
+
+    fn checked_duration_since(self, earlier: Instant) -> Option<Duration> {
+        if self.nanos >= earlier.nanos {
+            some(Duration.from_nanos((self.nanos - earlier.nanos) as u64))
+        } else {
+            none
+        }
+    }
+
+    fn saturating_duration_since(self, earlier: Instant) -> Duration {
+        self.checked_duration_since(earlier).unwrap_or(Duration.ZERO)
+    }
+
+    fn checked_add(self, dur: Duration) -> Option<Instant> {
+        let total = self.nanos.checked_add(dur.as_nanos() as u128)?
+        some(Instant { nanos: total })
+    }
+
+    fn checked_sub(self, dur: Duration) -> Option<Instant> {
+        let ns = dur.as_nanos() as u128
+        if self.nanos >= ns {
+            some(Instant { nanos: self.nanos - ns })
+        } else {
+            none
+        }
+    }
+}
+
+impl Add<Duration> for Instant {
+    type Output = Instant
+    fn add(self, rhs: Duration) -> Instant {
+        self.checked_add(rhs).expect("overflow when adding duration to instant")
+    }
+}
+
+impl Sub<Duration> for Instant {
+    type Output = Instant
+    fn sub(self, rhs: Duration) -> Instant {
+        self.checked_sub(rhs).expect("overflow when subtracting duration from instant")
+    }
+}
+
+impl Sub<Instant> for Instant {
+    type Output = Duration
+    fn sub(self, rhs: Instant) -> Duration {
+        self.duration_since(rhs)
+    }
+}
+
+impl Ord for Instant {
+    fn cmp(self, other: &Instant) -> Ordering {
+        self.nanos.cmp(&other.nanos)
+    }
+}
+
+impl PartialOrd for Instant {
+    fn partial_cmp(self, other: &Instant) -> Option<Ordering> {
+        some(self.cmp(other))
+    }
+}
+
+impl Display for Instant {
+    fn fmt(self, f: &mut Formatter) -> Result<(), FmtError> {
+        let secs = self.nanos / 1_000_000_000
+        let frac = self.nanos % 1_000_000_000
+        f.write_str(&format!("Instant({}s {}ns)", secs, frac))
+    }
+}
+
+// Stopwatch utility built on Instant
+
+struct Stopwatch {
+    started: Option<Instant>,
+    accumulated: Duration,
+    running: bool,
+    laps: [Duration],
+}
+
+impl Stopwatch {
+    fn new() -> Stopwatch {
+        Stopwatch { started: none, accumulated: Duration.ZERO, running: false, laps: [] }
+    }
+
+    fn start(mut self) {
+        if !self.running {
+            self.started = some(Instant.now())
+            self.running = true
+        }
+    }
+
+    fn stop(mut self) {
+        if self.running {
+            if let some(start) = self.started {
+                self.accumulated = self.accumulated + start.elapsed()
+            }
+            self.started = none
+            self.running = false
+        }
+    }
+
+    fn reset(mut self) {
+        self.started = none
+        self.accumulated = Duration.ZERO
+        self.running = false
+        self.laps.clear()
+    }
+
+    fn restart(mut self) {
+        self.reset()
+        self.start()
+    }
+
+    fn elapsed(self) -> Duration {
+        if self.running {
+            if let some(start) = self.started {
+                self.accumulated + start.elapsed()
+            } else {
+                self.accumulated
+            }
+        } else {
+            self.accumulated
+        }
+    }
+
+    fn is_running(self) -> bool { self.running }
+
+    fn lap(mut self) -> Duration {
+        let current = self.elapsed()
+        let last_total: Duration = self.laps.iter().sum().unwrap_or(Duration.ZERO)
+        let lap_time = current - last_total
+        self.laps.push(lap_time)
+        lap_time
+    }
+
+    fn laps(self) -> &[Duration] { &self.laps }
+    fn lap_count(self) -> usize { self.laps.len() }
+}
+
+// Timeout helper
+
+struct Deadline {
+    target: Instant,
+}
+
+impl Deadline {
+    fn after(dur: Duration) -> Deadline {
+        Deadline { target: Instant.now() + dur }
+    }
+
+    fn at(instant: Instant) -> Deadline {
+        Deadline { target: instant }
+    }
+
+    fn is_expired(self) -> bool {
+        Instant.now() >= self.target
+    }
+
+    fn remaining(self) -> Duration {
+        self.target.saturating_duration_since(Instant.now())
+    }
+
+    fn target(self) -> Instant { self.target }
+}
+
+fn main() {
+    // Instant basic
+    let t1 = Instant { nanos: 1_000_000_000 }
+    let t2 = Instant { nanos: 2_500_000_000 }
+    let d = t2.duration_since(t1)
+    assert(d == Duration.from_millis(1500))
+    print("duration_since ✓")
+
+    // Ordering
+    assert(t2 > t1)
+    assert(t1 < t2)
+    assert(t1 == t1)
+    print("Ordering ✓")
+
+    // Sub/Add Duration
+    let t3 = t1 + Duration.from_secs(1)
+    assert(t3.nanos == 2_000_000_000)
+    let t4 = t3 - Duration.from_millis(500)
+    assert(t4.nanos == 1_500_000_000)
+    print("Add/Sub Duration ✓")
+
+    // Sub Instant = Duration
+    let diff = t2 - t1
+    assert(diff == Duration.from_millis(1500))
+    print("Sub Instant ✓")
+
+    // checked_add / checked_sub
+    let t5 = Instant { nanos: 100 }
+    assert(t5.checked_sub(Duration.from_nanos(50)).is_some())
+    assert(t5.checked_sub(Duration.from_nanos(200)).is_none())
+    assert(t5.checked_add(Duration.from_nanos(50)) == some(Instant { nanos: 150 }))
+    print("Checked ops ✓")
+
+    // saturating_duration_since
+    let early = Instant { nanos: 500 }
+    let late = Instant { nanos: 100 }
+    assert(late.saturating_duration_since(early) == Duration.ZERO)
+    assert(early.saturating_duration_since(late) == Duration.from_nanos(400))
+    print("Saturating ✓")
+
+    // Display
+    let disp = Instant { nanos: 3_141_592_653 }
+    let s = disp.to_string()
+    assert(s.contains("3s"))
+    assert(s.contains("141592653ns"))
+    print("Display ✓")
+
+    // Stopwatch
+    let mut sw = Stopwatch.new()
+    assert(!sw.is_running())
+    sw.start()
+    assert(sw.is_running())
+    sw.stop()
+    assert(!sw.is_running())
+    let e = sw.elapsed()
+    assert(e >= Duration.ZERO)
+    print("Stopwatch start/stop ✓")
+
+    // Stopwatch reset
+    sw.reset()
+    assert(sw.elapsed() == Duration.ZERO)
+    assert(sw.lap_count() == 0)
+    print("Stopwatch reset ✓")
+
+    // Stopwatch laps (simulated)
+    let mut sw2 = Stopwatch.new()
+    sw2.start()
+    sw2.lap()
+    sw2.lap()
+    assert(sw2.lap_count() == 2)
+    print("Stopwatch laps ✓")
+
+    // Deadline
+    let dl = Deadline.after(Duration.from_secs(60))
+    assert(!dl.is_expired())
+    assert(dl.remaining() > Duration.ZERO)
+    assert(dl.remaining() <= Duration.from_secs(60))
+    print("Deadline ✓")
+
+    // Deadline expired
+    let past = Deadline.at(Instant { nanos: 0 })
+    assert(past.is_expired())
+    assert(past.remaining() == Duration.ZERO)
+    print("Expired deadline ✓")
+
+    print("Instant/Monotonic Clock complete ✓")
+}
