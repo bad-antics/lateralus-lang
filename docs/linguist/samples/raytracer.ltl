@@ -1,0 +1,197 @@
+// examples/niche/raytracer.ltl
+//
+// Minimal recursive ray tracer: spheres, planes, Phong shading, shadow
+// rays, and reflection. Renders a 512x512 PPM to stdout.
+//
+// Graphics is one of the few domains where pipeline-oriented code feels
+// awkward at first — rays, shaders, and pixel loops tend to be nested
+// rather than linear. This sample deliberately uses pipelines at the
+// image-level ("for each pixel |> trace |> tonemap |> write") while
+// keeping the inner intersection math imperative.
+//
+// Batch 82 / graphics niche. First ray tracer in the ecosystem.
+
+import std::io
+import std::math
+import std::fmt
+
+// -- Vector math -------------------------------------------------------------
+
+pub struct Vec3 { x: Float, y: Float, z: Float }
+
+fn v(x: Float, y: Float, z: Float) -> Vec3 { Vec3 { x, y, z } }
+
+fn vadd(a: Vec3, b: Vec3) -> Vec3 { v(a.x + b.x, a.y + b.y, a.z + b.z) }
+fn vsub(a: Vec3, b: Vec3) -> Vec3 { v(a.x - b.x, a.y - b.y, a.z - b.z) }
+fn vmul(a: Vec3, s: Float) -> Vec3 { v(a.x * s, a.y * s, a.z * s) }
+fn vhad(a: Vec3, b: Vec3) -> Vec3 { v(a.x * b.x, a.y * b.y, a.z * b.z) }
+fn vdot(a: Vec3, b: Vec3) -> Float { a.x * b.x + a.y * b.y + a.z * b.z }
+fn vlen(a: Vec3) -> Float { math::sqrt(vdot(a, a)) }
+fn vnorm(a: Vec3) -> Vec3 { let l = vlen(a); vmul(a, 1.0 / l) }
+fn vneg(a: Vec3) -> Vec3 { v(-a.x, -a.y, -a.z) }
+
+fn reflect(d: Vec3, n: Vec3) -> Vec3 {
+    vsub(d, vmul(n, 2.0 * vdot(d, n)))
+}
+
+// -- Scene primitives --------------------------------------------------------
+
+pub struct Material {
+    diffuse:    Vec3,
+    specular:   Float,
+    shininess:  Float,
+    reflect:    Float,
+}
+
+pub enum Shape {
+    Sphere { center: Vec3, radius: Float, mat: Material },
+    Plane  { point: Vec3, normal: Vec3, mat: Material },
+}
+
+pub struct Hit {
+    t:      Float,
+    point:  Vec3,
+    normal: Vec3,
+    mat:    Material,
+}
+
+pub struct Ray { origin: Vec3, dir: Vec3 }
+
+// -- Intersection ------------------------------------------------------------
+
+fn intersect_sphere(r: Ray, c: Vec3, radius: Float) -> Option[Float] {
+    let oc = vsub(r.origin, c)
+    let b = vdot(oc, r.dir)
+    let cc = vdot(oc, oc) - radius * radius
+    let disc = b * b - cc
+    if disc < 0.0 { return None }
+    let sq = math::sqrt(disc)
+    let t1 = -b - sq
+    if t1 > 0.001 { Some(t1) } else {
+        let t2 = -b + sq
+        if t2 > 0.001 { Some(t2) } else { None }
+    }
+}
+
+fn intersect_plane(r: Ray, p: Vec3, n: Vec3) -> Option[Float] {
+    let denom = vdot(n, r.dir)
+    if math::abs(denom) < 1e-6 { return None }
+    let t = vdot(vsub(p, r.origin), n) / denom
+    if t > 0.001 { Some(t) } else { None }
+}
+
+fn trace_scene(r: Ray, scene: [Shape]) -> Option[Hit] {
+    let mut best: Option[Hit] = None
+    for s in scene {
+        match s {
+            Shape::Sphere { center, radius, mat } => {
+                match intersect_sphere(r, center, radius) {
+                    Some(t) => {
+                        if best.is_none() || t < best.unwrap().t {
+                            let p = vadd(r.origin, vmul(r.dir, t))
+                            let n = vnorm(vsub(p, center))
+                            best = Some(Hit { t, point: p, normal: n, mat })
+                        }
+                    }
+                    None => {}
+                }
+            }
+            Shape::Plane { point, normal, mat } => {
+                match intersect_plane(r, point, normal) {
+                    Some(t) => {
+                        if best.is_none() || t < best.unwrap().t {
+                            let p = vadd(r.origin, vmul(r.dir, t))
+                            best = Some(Hit { t, point: p, normal, mat })
+                        }
+                    }
+                    None => {}
+                }
+            }
+        }
+    }
+    best
+}
+
+// -- Shading -----------------------------------------------------------------
+
+const LIGHT: Vec3 = Vec3 { x: 4.0, y: 8.0, z: -3.0 }
+const AMBIENT: Vec3 = Vec3 { x: 0.1, y: 0.1, z: 0.15 }
+const BG: Vec3 = Vec3 { x: 0.52, y: 0.78, z: 0.92 }
+const MAX_DEPTH: Int = 4
+
+fn shade(hit: Hit, view: Vec3, scene: [Shape], depth: Int) -> Vec3 {
+    let ldir = vnorm(vsub(LIGHT, hit.point))
+    let shadow_ray = Ray { origin: vadd(hit.point, vmul(hit.normal, 1e-4)), dir: ldir }
+    let shadowed = match trace_scene(shadow_ray, scene) {
+        Some(_) => true,
+        None    => false,
+    }
+
+    let mut color = vhad(hit.mat.diffuse, AMBIENT)
+    if !shadowed {
+        let diff = math::max(0.0, vdot(hit.normal, ldir))
+        color = vadd(color, vmul(hit.mat.diffuse, diff))
+        let half = vnorm(vadd(ldir, vneg(view)))
+        let spec = math::pow(math::max(0.0, vdot(hit.normal, half)), hit.mat.shininess)
+        color = vadd(color, vmul(v(1.0, 1.0, 1.0), hit.mat.specular * spec))
+    }
+
+    if depth < MAX_DEPTH && hit.mat.reflect > 0.0 {
+        let rdir = reflect(view, hit.normal)
+        let rray = Ray { origin: vadd(hit.point, vmul(hit.normal, 1e-4)), dir: rdir }
+        let rcol = trace(rray, scene, depth + 1)
+        color = vadd(color, vmul(rcol, hit.mat.reflect))
+    }
+    color
+}
+
+fn trace(r: Ray, scene: [Shape], depth: Int) -> Vec3 {
+    match trace_scene(r, scene) {
+        Some(hit) => shade(hit, r.dir, scene, depth),
+        None      => BG,
+    }
+}
+
+// -- Camera + tonemap --------------------------------------------------------
+
+fn tonemap(c: Vec3) -> (Int, Int, Int) {
+    let clamp = fn(x: Float) -> Int {
+        let y = math::pow(math::min(1.0, math::max(0.0, x)), 1.0 / 2.2)
+        (y * 255.0) as Int
+    }
+    (clamp(c.x), clamp(c.y), clamp(c.z))
+}
+
+// -- Render pipeline ---------------------------------------------------------
+
+pub fn render(width: Int, height: Int, scene: [Shape]) {
+    io::println(fmt::format("P3\n{} {}\n255", width, height))
+    let aspect = (width as Float) / (height as Float)
+    let origin = v(0.0, 1.0, -4.0)
+
+    for py in 0..height {
+        for px in 0..width {
+            let u = ((px as Float) / (width as Float)) * 2.0 - 1.0
+            let vv = 1.0 - ((py as Float) / (height as Float)) * 2.0
+            let dir = vnorm(v(u * aspect, vv, 1.5))
+            let ray = Ray { origin, dir }
+            let rgb = trace(ray, scene, 0) |> tonemap()
+            io::println(fmt::format("{} {} {}", rgb.0, rgb.1, rgb.2))
+        }
+    }
+}
+
+fn main() {
+    let red   = Material { diffuse: v(0.9, 0.2, 0.2), specular: 0.6, shininess: 32.0, reflect: 0.1 }
+    let green = Material { diffuse: v(0.2, 0.8, 0.3), specular: 0.4, shininess: 16.0, reflect: 0.0 }
+    let mirror = Material { diffuse: v(0.6, 0.6, 0.7), specular: 0.9, shininess: 128.0, reflect: 0.7 }
+    let floor  = Material { diffuse: v(0.8, 0.8, 0.8), specular: 0.1, shininess: 4.0, reflect: 0.15 }
+
+    let scene = [
+        Shape::Plane  { point: v(0.0, 0.0, 0.0), normal: v(0.0, 1.0, 0.0), mat: floor },
+        Shape::Sphere { center: v(-1.4, 1.0, 0.0), radius: 1.0, mat: red },
+        Shape::Sphere { center: v( 1.4, 1.0, 0.0), radius: 1.0, mat: mirror },
+        Shape::Sphere { center: v( 0.0, 0.6, -1.5), radius: 0.6, mat: green },
+    ]
+    render(512, 512, scene)
+}

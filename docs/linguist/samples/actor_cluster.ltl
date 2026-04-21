@@ -1,0 +1,234 @@
+// examples/niche/actor_cluster.ltl
+//
+// Actor-model concurrent runtime with supervision trees, message
+// mailboxes, and a distributed-cluster layer on top. Each actor runs
+// on a lightweight green thread, communicates exclusively via
+// typed messages, and is restarted by its supervisor on crash using
+// Erlang/OTP-style strategies (one_for_one, one_for_all, rest_for_one).
+//
+// This is the v4.2 ROADMAP target lowered to a self-contained sample:
+// enough to show the language's concurrent shape to the Linguist
+// classifier without pulling in the runtime crate.
+//
+// Batch 83 / concurrent-programming niche.
+
+import std::sync
+import std::io
+import std::fmt
+
+// -- Actor primitives --------------------------------------------------------
+
+pub enum RestartStrategy {
+    OneForOne,              // restart only the crashed child
+    OneForAll,              // restart all siblings on any crash
+    RestForOne,             // restart the crashed child + everyone defined after it
+}
+
+pub enum ActorSignal {
+    Msg       { payload: Any },
+    Shutdown  { reason: str },
+    ChildExit { pid: Pid, reason: str },
+}
+
+pub struct Mailbox {
+    mut queue: [ActorSignal],
+    lock:      sync::Mutex,
+    notify:    sync::Condvar,
+}
+
+pub struct Pid { id: Int }
+
+pub struct Actor {
+    pid:         Pid,
+    mailbox:     Mailbox,
+    behaviour:   fn(ActorSignal, Any) -> Any,
+    mut state:   Any,
+    supervisor:  Option[Pid],
+    children:    [Pid],
+}
+
+let mut next_pid: Int = 0
+let mut registry: Map[Int, Actor] = Map::new()
+let registry_lock = sync::Mutex::new()
+
+pub fn spawn(behaviour: fn(ActorSignal, Any) -> Any, initial: Any) -> Pid {
+    registry_lock.lock()
+    next_pid = next_pid + 1
+    let pid = Pid { id: next_pid }
+    let a = Actor {
+        pid,
+        mailbox: Mailbox {
+            queue: [], lock: sync::Mutex::new(), notify: sync::Condvar::new(),
+        },
+        behaviour, state: initial, supervisor: None, children: [],
+    }
+    registry.set(pid.id, a)
+    registry_lock.unlock()
+
+    sync::spawn_thread(fn() { actor_loop(pid) })
+    pid
+}
+
+fn actor_loop(pid: Pid) {
+    loop {
+        let a = registry.get(pid.id).unwrap()
+        let msg = recv(a.mailbox)
+        match msg {
+            ActorSignal::Shutdown { reason } => {
+                io::println(fmt::format("actor {} shutdown: {}", pid.id, reason))
+                break
+            }
+            _ => {
+                let new_state = try_behaviour(a.behaviour, msg, a.state)
+                match new_state {
+                    Ok(s)     => a.state = s,
+                    Err(msg)  => {
+                        io::println(fmt::format("actor {} crashed: {}", pid.id, msg))
+                        match a.supervisor {
+                            Some(sup) => send(sup, ActorSignal::ChildExit {
+                                pid, reason: msg,
+                            }),
+                            None      => panic(fmt::format("unsupervised actor crashed: {}", msg)),
+                        }
+                        break
+                    },
+                }
+            },
+        }
+    }
+}
+
+pub fn send(target: Pid, signal: ActorSignal) {
+    let a = registry.get(target.id).unwrap()
+    a.mailbox.lock.lock()
+    a.mailbox.queue.push(signal)
+    a.mailbox.notify.notify_one()
+    a.mailbox.lock.unlock()
+}
+
+fn recv(m: Mailbox) -> ActorSignal {
+    m.lock.lock()
+    while m.queue.len() == 0 { m.notify.wait(m.lock) }
+    let sig = m.queue.remove(0)
+    m.lock.unlock()
+    sig
+}
+
+// -- Supervisor --------------------------------------------------------------
+
+pub struct Supervisor {
+    strategy:     RestartStrategy,
+    max_restarts: Int,
+    time_window:  Int,       // seconds
+    mut restarts: [Int],     // timestamps
+    children:     [ChildSpec],
+}
+
+pub struct ChildSpec {
+    name:       str,
+    behaviour:  fn(ActorSignal, Any) -> Any,
+    initial:    Any,
+    mut pid:    Option[Pid],
+}
+
+pub fn supervisor_start(spec: Supervisor) -> Pid {
+    let sup_pid = spawn(supervisor_behaviour, spec)
+    let sup = registry.get(sup_pid.id).unwrap()
+    for c in spec.children {
+        let child = spawn(c.behaviour, c.initial)
+        let ch = registry.get(child.id).unwrap()
+        ch.supervisor = Some(sup_pid)
+        c.pid = Some(child)
+        sup.children.push(child)
+    }
+    sup_pid
+}
+
+fn supervisor_behaviour(sig: ActorSignal, state: Any) -> Any {
+    let sup = state as Supervisor
+    match sig {
+        ActorSignal::ChildExit { pid, reason } => {
+            let now = sync::now_s()
+            sup.restarts = sup.restarts |> filter(fn(t) { now - t <= sup.time_window })
+            sup.restarts.push(now)
+            if sup.restarts.len() > sup.max_restarts {
+                panic(fmt::format("supervisor flooded: {} restarts in {}s", sup.restarts.len(), sup.time_window))
+            }
+            match sup.strategy {
+                RestartStrategy::OneForOne => restart_one(sup, pid),
+                RestartStrategy::OneForAll => restart_all(sup),
+                RestartStrategy::RestForOne => restart_rest(sup, pid),
+            }
+        },
+        _ => {},
+    }
+    sup
+}
+
+fn restart_one(sup: Supervisor, crashed: Pid) {
+    for c in sup.children {
+        if c.pid.unwrap().id == crashed.id {
+            let new_pid = spawn(c.behaviour, c.initial)
+            registry.get(new_pid.id).unwrap().supervisor = Some(crashed)
+            c.pid = Some(new_pid)
+        }
+    }
+}
+
+fn restart_all(sup: Supervisor) {
+    for c in sup.children {
+        send(c.pid.unwrap(), ActorSignal::Shutdown { reason: "sibling-crashed" })
+    }
+    for c in sup.children {
+        c.pid = Some(spawn(c.behaviour, c.initial))
+    }
+}
+
+fn restart_rest(sup: Supervisor, crashed: Pid) {
+    let mut seen = false
+    for c in sup.children {
+        if seen { send(c.pid.unwrap(), ActorSignal::Shutdown { reason: "earlier-sibling-crashed" }) }
+        if c.pid.unwrap().id == crashed.id { seen = true }
+    }
+}
+
+// -- Cluster layer (remote send over TCP) -----------------------------------
+
+pub struct RemotePid { node: str, pid: Pid }
+
+pub fn cluster_spawn(node: str, beh: fn(ActorSignal, Any) -> Any, init: Any) -> RemotePid {
+    let conn = cluster::connect(node)
+    conn.send_rpc("spawn", (beh, init))
+    let pid = conn.recv_reply().as_pid()
+    RemotePid { node, pid }
+}
+
+pub fn cluster_send(rpid: RemotePid, signal: ActorSignal) {
+    let conn = cluster::connect(rpid.node)
+    conn.send_rpc("send", (rpid.pid, signal))
+}
+
+// -- Demo: a counter actor under a supervisor ------------------------------
+
+fn counter_beh(sig: ActorSignal, state: Any) -> Any {
+    let mut n = state as Int
+    match sig {
+        ActorSignal::Msg { payload } => match payload {
+            "inc"        => n = n + 1,
+            "crash"      => panic("simulated-crash"),
+            ("get", reply_to) => send(reply_to, ActorSignal::Msg { payload: n }),
+            _            => {},
+        },
+        _ => {},
+    }
+    n
+}
+
+fn main() {
+    let sup = supervisor_start(Supervisor {
+        strategy: RestartStrategy::OneForOne,
+        max_restarts: 5, time_window: 60, restarts: [],
+        children: [ChildSpec { name: "counter", behaviour: counter_beh, initial: 0, pid: None }],
+    })
+    // ... run forever
+}

@@ -25,7 +25,7 @@ Per [CONTRIBUTING.md](https://github.com/github-linguist/linguist/blob/main/CONT
 - [x] A suitable grammar is referenced. The grammar is **MIT-licensed**, lives at `bad-antics/lateralus-grammar`, and has a stable `source.ltl` scope used in production by [this VS Code extension](https://marketplace.visualstudio.com/items?itemName=lateralus.lateralus-lang).
 - [x] I've added the grammar as a git submodule under `vendor/grammars/lateralus-grammar`.
 - [x] I've regenerated `grammars.yml` (`script/convert-grammars --add vendor/grammars/lateralus-grammar`).
-- [x] I've added samples in `samples/Lateralus/` (11 files, 4.3k LoC, 6 domains: network, crypto, retro-computing, bioinformatics, industrial-protocol, compiler-pass).
+- [x] I've added samples in `samples/Lateralus/` (20 files, 7.5k LoC, 15 domains: network, crypto, retro-computing, bioinformatics, industrial-protocol, compiler-pass, graphics/raytracing, CPU-emulation, language-implementation, probabilistic-data-structures, WebAssembly-JIT, digital-signal-processing, concurrent/actor-supervision, GPU/shader-DSL, build-system-DSL).
 - [x] I've added the `Lateralus:` entry to `lib/linguist/languages.yml` alphabetically.
 - [x] No collisions: `.ltl` is currently unused in `languages.yml`.
 - [x] `bundle exec rake test` passes locally on my branch (ruby 3.3, grammars converted, tokens extracted, classifier trained, samples classified with 100% accuracy).

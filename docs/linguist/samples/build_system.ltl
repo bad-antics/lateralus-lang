@@ -1,0 +1,289 @@
+// examples/niche/build_system.ltl
+//
+// Self-contained build-system DSL: declarative target graph with
+// hashed inputs, content-addressed output cache, parallel execution,
+// watch mode, and a small query language ("which targets depend on
+// shader.vert?"). Reads a `lateralus.build` manifest and produces a
+// reproducible build plan — roughly Bazel/Buck semantics in ~300 lines.
+//
+// Build systems are one of the densest uses of DSL-style code in any
+// language, and their file-hashing + dependency-graph shape is very
+// different from the compiler/emulator/interpreter samples. Good
+// classifier corpus diversity.
+//
+// Batch 83 / build-system DSL niche.
+
+import std::io
+import std::fmt
+import std::crypto::sha256
+import std::fs
+import std::sync
+import std::collections::Map
+
+// -- Target graph ------------------------------------------------------------
+
+pub enum TargetKind {
+    File         { path: str },
+    Compile      { sources: [str], toolchain: str, flags: [str] },
+    Link         { objects: [str], linker: str, output: str },
+    Shell        { command: str },
+    Pipeline     { stages: [Target] },
+    Bundle       { items: [str], archive: str },
+}
+
+pub struct Target {
+    name:     str,
+    kind:     TargetKind,
+    deps:     [str],          // other target names
+    outputs:  [str],          // files this target produces
+}
+
+pub struct Graph {
+    targets: Map[str, Target],
+}
+
+pub fn graph_new() -> Graph { Graph { targets: Map::new() } }
+
+pub fn add_target(g: Graph, t: Target) {
+    if g.targets.contains(t.name) {
+        panic(fmt::format("duplicate target: {}", t.name))
+    }
+    g.targets.set(t.name, t)
+}
+
+// -- Hashing -----------------------------------------------------------------
+
+pub fn hash_inputs(g: Graph, t: Target) -> str {
+    let mut h = sha256::new()
+    h.update(t.name.bytes())
+    match t.kind {
+        TargetKind::File { path } => h.update(fs::hash_file(path).bytes()),
+        TargetKind::Compile { sources, toolchain, flags } => {
+            h.update(toolchain.bytes())
+            for flag in flags { h.update(flag.bytes()) }
+            for s in sources { h.update(fs::hash_file(s).bytes()) }
+        },
+        TargetKind::Link { objects, linker, output } => {
+            h.update(linker.bytes())
+            h.update(output.bytes())
+            for o in objects { h.update(fs::hash_file(o).bytes()) }
+        },
+        TargetKind::Shell { command } => h.update(command.bytes()),
+        TargetKind::Pipeline { stages } => {
+            for s in stages { h.update(hash_inputs(g, s).bytes()) }
+        },
+        TargetKind::Bundle { items, archive } => {
+            h.update(archive.bytes())
+            for it in items { h.update(fs::hash_file(it).bytes()) }
+        },
+    }
+    for dep in t.deps {
+        let d = g.targets.get(dep).unwrap()
+        h.update(hash_inputs(g, d).bytes())
+    }
+    h.finalise_hex()
+}
+
+// -- Topological plan --------------------------------------------------------
+
+pub fn plan(g: Graph, root: str) -> [Target] {
+    let mut visited: Map[str, Bool] = Map::new()
+    let mut stack: [Target] = []
+    visit(g, root, visited, stack)
+    stack
+}
+
+fn visit(g: Graph, name: str, visited: Map[str, Bool], stack: [Target]) {
+    if visited.get(name).unwrap_or(false) { return }
+    visited.set(name, true)
+    let t = g.targets.get(name).unwrap()
+    for dep in t.deps { visit(g, dep, visited, stack) }
+    stack.push(t)
+}
+
+// -- Content-addressed cache (disk-backed) ----------------------------------
+
+pub struct Cache { root: str }
+
+pub fn cache_lookup(c: Cache, hash: str) -> Option[[str]] {
+    let manifest = fs::path_join(c.root, hash + ".manifest")
+    if !fs::exists(manifest) { return None }
+    Some(fs::read_lines(manifest))
+}
+
+pub fn cache_store(c: Cache, hash: str, outputs: [str]) {
+    let manifest = fs::path_join(c.root, hash + ".manifest")
+    fs::write(manifest, outputs |> join("\n"))
+    for out in outputs {
+        let blob = fs::path_join(c.root, hash + "-" + fs::basename(out))
+        fs::copy(out, blob)
+    }
+}
+
+pub fn cache_restore(c: Cache, hash: str, dest_dir: str) {
+    let manifest = fs::path_join(c.root, hash + ".manifest")
+    for out in fs::read_lines(manifest) {
+        let blob = fs::path_join(c.root, hash + "-" + fs::basename(out))
+        fs::copy(blob, fs::path_join(dest_dir, fs::basename(out)))
+    }
+}
+
+// -- Parallel executor ------------------------------------------------------
+
+pub struct Runner {
+    graph:    Graph,
+    cache:    Cache,
+    workers:  Int,
+    mut done: Map[str, Bool],
+    mut inflight: Map[str, sync::Future[Bool]],
+}
+
+pub fn build(r: Runner, roots: [str]) -> Bool {
+    let all_targets = roots |> map(fn(name) { plan(r.graph, name) })
+                            |> flatten
+                            |> unique_by(fn(t) { t.name })
+    let pool = sync::ThreadPool::new(r.workers)
+    for t in all_targets {
+        let fut = pool.submit(fn() { build_one(r, t) })
+        r.inflight.set(t.name, fut)
+    }
+    let mut all_ok = true
+    for t in all_targets {
+        let ok = r.inflight.get(t.name).unwrap().wait()
+        if !ok { all_ok = false }
+    }
+    all_ok
+}
+
+fn build_one(r: Runner, t: Target) -> Bool {
+    // Wait for deps
+    for dep in t.deps {
+        let ok = r.inflight.get(dep).unwrap().wait()
+        if !ok { return false }
+    }
+    let h = hash_inputs(r.graph, t)
+    match cache_lookup(r.cache, h) {
+        Some(_) => {
+            cache_restore(r.cache, h, fs::dirname(t.outputs[0]))
+            io::println(fmt::format("CACHED   {}", t.name))
+            true
+        },
+        None    => {
+            io::println(fmt::format("BUILD    {}", t.name))
+            let ok = execute(t)
+            if ok { cache_store(r.cache, h, t.outputs) }
+            ok
+        },
+    }
+}
+
+fn execute(t: Target) -> Bool {
+    match t.kind {
+        TargetKind::File { .. }             => true,
+        TargetKind::Compile { sources, toolchain, flags } => {
+            let cmd = fmt::format("{} {} -c {}", toolchain, flags |> join(" "), sources |> join(" "))
+            io::shell(cmd) == 0
+        },
+        TargetKind::Link { objects, linker, output } => {
+            let cmd = fmt::format("{} -o {} {}", linker, output, objects |> join(" "))
+            io::shell(cmd) == 0
+        },
+        TargetKind::Shell { command }       => io::shell(command) == 0,
+        TargetKind::Pipeline { stages }     => {
+            for s in stages { if !execute(s) { return false } }; true
+        },
+        TargetKind::Bundle { items, archive } => {
+            let cmd = fmt::format("tar czf {} {}", archive, items |> join(" "))
+            io::shell(cmd) == 0
+        },
+    }
+}
+
+// -- Watch mode (inotify-driven incremental rebuild) ------------------------
+
+pub fn watch(r: Runner, roots: [str]) {
+    let sources = collect_sources(r.graph, roots)
+    let watcher = fs::inotify_watch(sources)
+    build(r, roots)
+    loop {
+        let ev = watcher.next_event()
+        let invalidated = downstream_of(r.graph, ev.path)
+        io::println(fmt::format("CHANGED {} -> rebuild {} targets", ev.path, invalidated.len()))
+        build(r, invalidated)
+    }
+}
+
+// -- Query DSL ("who depends on X?") ----------------------------------------
+
+pub fn deps_of(g: Graph, name: str) -> [str] {
+    let mut out: [str] = []
+    let mut stack = [name]
+    while stack.len() > 0 {
+        let n = stack.pop().unwrap()
+        let t = g.targets.get(n).unwrap()
+        for d in t.deps { out.push(d); stack.push(d) }
+    }
+    out |> unique
+}
+
+pub fn downstream_of(g: Graph, file: str) -> [str] {
+    let mut result: [str] = []
+    for (name, t) in g.targets.items() {
+        let sources = match t.kind {
+            TargetKind::Compile { sources, .. } => sources,
+            TargetKind::File    { path }        => [path],
+            _                                   => [],
+        }
+        if sources |> any(fn(s) { s == file }) {
+            result.push(name)
+            result.extend(downstream_of_target(g, name))
+        }
+    }
+    result |> unique
+}
+
+fn downstream_of_target(g: Graph, name: str) -> [str] {
+    let mut out: [str] = []
+    for (other_name, t) in g.targets.items() {
+        if t.deps |> any(fn(d) { d == name }) {
+            out.push(other_name)
+            out.extend(downstream_of_target(g, other_name))
+        }
+    }
+    out
+}
+
+fn collect_sources(g: Graph, roots: [str]) -> [str] {
+    let mut srcs: [str] = []
+    for r in roots {
+        for d in deps_of(g, r) {
+            let t = g.targets.get(d).unwrap()
+            match t.kind {
+                TargetKind::Compile { sources, .. } => srcs.extend(sources),
+                TargetKind::File { path }           => srcs.push(path),
+                _                                   => {},
+            }
+        }
+    }
+    srcs |> unique
+}
+
+fn main() {
+    let g = graph_new()
+    add_target(g, Target { name: "hello.c", kind: TargetKind::File { path: "hello.c" },
+                           deps: [], outputs: ["hello.c"] })
+    add_target(g, Target { name: "hello.o",
+                           kind: TargetKind::Compile {
+                               sources: ["hello.c"], toolchain: "cc", flags: ["-O2", "-Wall"]
+                           },
+                           deps: ["hello.c"], outputs: ["hello.o"] })
+    add_target(g, Target { name: "hello",
+                           kind: TargetKind::Link {
+                               objects: ["hello.o"], linker: "cc", output: "hello"
+                           },
+                           deps: ["hello.o"], outputs: ["hello"] })
+
+    let r = Runner { graph: g, cache: Cache { root: ".cache" },
+                     workers: 4, done: Map::new(), inflight: Map::new() }
+    build(r, ["hello"])
+}

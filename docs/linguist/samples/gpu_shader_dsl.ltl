@@ -1,0 +1,197 @@
+// examples/niche/gpu_shader_dsl.ltl
+//
+// GPU shader DSL: a typed embedded language for authoring GLSL/SPIR-V
+// fragment, vertex, and compute shaders in Lateralus. AST nodes are
+// first-class values so shader programs can be partially evaluated,
+// specialised for known constants, and then emitted either as text
+// GLSL or directly as SPIR-V binary words.
+//
+// The interesting twist: the DSL round-trips through the language's
+// pipeline operators, so a shader is literally a `|>`-chain of stages:
+//
+//     frag: ShaderFragment =
+//         inputs |> shade(noise) |> dither(16) |> gamma_correct(2.2)
+//
+// Batch 83 / GPU / shader-DSL niche.
+
+import std::io
+import std::math
+import std::fmt
+
+// -- Typed AST ---------------------------------------------------------------
+
+pub enum GType {
+    TFloat, TVec2, TVec3, TVec4, TMat4, TSampler2D, TBool, TInt,
+}
+
+pub enum Expr {
+    Lit         { t: GType, text: str },
+    Var         { t: GType, name: str },
+    Swizzle     { t: GType, base: Expr, components: str },
+    BinOp       { t: GType, op: str, lhs: Expr, rhs: Expr },
+    Call        { t: GType, name: str, args: [Expr] },
+    Ctor        { t: GType, args: [Expr] },
+    If          { t: GType, cond: Expr, then: Expr, else_: Expr },
+}
+
+fn type_of(e: Expr) -> GType {
+    match e {
+        Expr::Lit { t, .. }      => t,
+        Expr::Var { t, .. }      => t,
+        Expr::Swizzle { t, .. }  => t,
+        Expr::BinOp { t, .. }    => t,
+        Expr::Call { t, .. }     => t,
+        Expr::Ctor { t, .. }     => t,
+        Expr::If { t, .. }       => t,
+    }
+}
+
+// -- Combinators (these are the user-facing DSL) ----------------------------
+
+pub fn uniform(t: GType, name: str) -> Expr { Expr::Var { t, name } }
+pub fn attr(t: GType, name: str)    -> Expr { Expr::Var { t, name } }
+
+pub fn f(v: Float) -> Expr { Expr::Lit { t: GType::TFloat, text: fmt::format("{:.6}", v) } }
+pub fn i(v: Int)   -> Expr { Expr::Lit { t: GType::TInt,   text: fmt::format("{}", v) } }
+
+pub fn vec3(a: Expr, b: Expr, c: Expr) -> Expr {
+    Expr::Ctor { t: GType::TVec3, args: [a, b, c] }
+}
+pub fn vec4(a: Expr, b: Expr, c: Expr, d: Expr) -> Expr {
+    Expr::Ctor { t: GType::TVec4, args: [a, b, c, d] }
+}
+
+pub fn dot(a: Expr, b: Expr) -> Expr {
+    Expr::Call { t: GType::TFloat, name: "dot", args: [a, b] }
+}
+pub fn mix(a: Expr, b: Expr, t: Expr) -> Expr {
+    Expr::Call { t: type_of(a), name: "mix", args: [a, b, t] }
+}
+pub fn texture(s: Expr, uv: Expr) -> Expr {
+    Expr::Call { t: GType::TVec4, name: "texture", args: [s, uv] }
+}
+pub fn pow(a: Expr, b: Expr) -> Expr {
+    Expr::Call { t: type_of(a), name: "pow", args: [a, b] }
+}
+
+pub fn add(a: Expr, b: Expr) -> Expr {
+    Expr::BinOp { t: type_of(a), op: "+", lhs: a, rhs: b }
+}
+pub fn mul(a: Expr, b: Expr) -> Expr {
+    Expr::BinOp { t: type_of(a), op: "*", lhs: a, rhs: b }
+}
+
+pub fn swiz(base: Expr, components: str) -> Expr {
+    let t = match components.len() {
+        1 => GType::TFloat,
+        2 => GType::TVec2,
+        3 => GType::TVec3,
+        4 => GType::TVec4,
+        _ => panic("bad swizzle"),
+    }
+    Expr::Swizzle { t, base, components }
+}
+
+// -- GLSL emitter ------------------------------------------------------------
+
+fn type_str(t: GType) -> str {
+    match t {
+        GType::TFloat     => "float",
+        GType::TVec2      => "vec2",
+        GType::TVec3      => "vec3",
+        GType::TVec4      => "vec4",
+        GType::TMat4      => "mat4",
+        GType::TSampler2D => "sampler2D",
+        GType::TBool      => "bool",
+        GType::TInt       => "int",
+    }
+}
+
+pub fn emit_glsl(e: Expr) -> str {
+    match e {
+        Expr::Lit { text, .. } => text,
+        Expr::Var { name, .. } => name,
+        Expr::Swizzle { base, components, .. } =>
+            fmt::format("({}).{}", emit_glsl(base), components),
+        Expr::BinOp { op, lhs, rhs, .. } =>
+            fmt::format("({} {} {})", emit_glsl(lhs), op, emit_glsl(rhs)),
+        Expr::Call { name, args, .. } =>
+            fmt::format("{}({})", name, args |> map(emit_glsl) |> join(", ")),
+        Expr::Ctor { t, args, .. } =>
+            fmt::format("{}({})", type_str(t), args |> map(emit_glsl) |> join(", ")),
+        Expr::If { cond, then, else_, .. } =>
+            fmt::format("({} ? {} : {})", emit_glsl(cond), emit_glsl(then), emit_glsl(else_)),
+    }
+}
+
+// -- Partial evaluation (constant folding on literal nodes) ----------------
+
+pub fn fold(e: Expr) -> Expr {
+    match e {
+        Expr::BinOp { t, op, lhs, rhs } => {
+            let l = fold(lhs)
+            let r = fold(rhs)
+            match (l, r, op) {
+                (Expr::Lit { text: lt, .. }, Expr::Lit { text: rt, .. }, "+") => {
+                    let lv = fmt::parse_float(lt).unwrap()
+                    let rv = fmt::parse_float(rt).unwrap()
+                    Expr::Lit { t, text: fmt::format("{:.6}", lv + rv) }
+                },
+                (Expr::Lit { text: lt, .. }, Expr::Lit { text: rt, .. }, "*") => {
+                    let lv = fmt::parse_float(lt).unwrap()
+                    let rv = fmt::parse_float(rt).unwrap()
+                    Expr::Lit { t, text: fmt::format("{:.6}", lv * rv) }
+                },
+                _ => Expr::BinOp { t, op, lhs: l, rhs: r },
+            }
+        },
+        Expr::Call { t, name, args } => Expr::Call {
+            t, name, args: args |> map(fold),
+        },
+        _ => e,
+    }
+}
+
+// -- Pipeline-style shader construction ------------------------------------
+
+pub fn gamma(color: Expr, exponent: Float) -> Expr {
+    let inv = 1.0 / exponent
+    vec4(
+        pow(swiz(color, "r"), f(inv)),
+        pow(swiz(color, "g"), f(inv)),
+        pow(swiz(color, "b"), f(inv)),
+        swiz(color, "a"),
+    )
+}
+
+pub fn dither(color: Expr, levels: Int) -> Expr {
+    let q = f((levels as Float) / 255.0)
+    Expr::Call {
+        t: GType::TVec4, name: "floor",
+        args: [mul(color, Expr::Lit { t: GType::TFloat, text: fmt::format("{}", levels) })],
+    } |> then(fn(x) { mul(x, q) })
+}
+
+fn then(e: Expr, k: fn(Expr) -> Expr) -> Expr { k(e) }
+
+pub fn build_fragment_shader() -> str {
+    let uv   = attr(GType::TVec2, "v_uv")
+    let tex  = uniform(GType::TSampler2D, "u_tex")
+    let sun  = uniform(GType::TVec3,      "u_sun_dir")
+    let norm = attr(GType::TVec3,         "v_normal")
+
+    let base = texture(tex, uv)
+    let lambert = Expr::Call {
+        t: GType::TFloat, name: "max",
+        args: [dot(norm, sun), f(0.0)],
+    }
+    let lit = mul(base, Expr::Ctor { t: GType::TVec4,
+                                     args: [lambert, lambert, lambert, f(1.0)] })
+    let final_color = lit |> (fn(c) { gamma(c, 2.2) }) |> (fn(c) { dither(c, 16) })
+    emit_glsl(fold(final_color))
+}
+
+fn main() {
+    let glsl = build_fragment_shader()
+    io::println(glsl)
+}

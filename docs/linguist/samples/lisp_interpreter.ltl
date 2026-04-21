@@ -1,0 +1,278 @@
+// examples/niche/lisp_interpreter.ltl
+//
+// Scheme-subset interpreter: lexer, S-expression reader, tree-walking
+// evaluator with tail-call elimination, lexical closures, and a small
+// numeric tower. Supports define, lambda, let, if, cond, quote, set!,
+// begin, and proper tail calls for loop-style recursion.
+//
+// Distinct from postscript_interpreter.ltl (stack-based forth-like) —
+// this is a classical AST evaluator with environments. Together they
+// cover the two major small-language implementation shapes.
+//
+// Batch 82 / language-implementation niche.
+
+import std::io
+import std::fmt
+import std::collections::Map
+
+// -- AST ---------------------------------------------------------------------
+
+pub enum Sexp {
+    Num    { v: Float },
+    Sym    { name: str },
+    Str    { v: str },
+    Bool   { v: Bool },
+    List   { items: [Sexp] },
+    Nil,
+}
+
+pub enum Value {
+    VNum      { v: Float },
+    VStr      { v: str },
+    VBool     { v: Bool },
+    VSym      { name: str },
+    VList     { items: [Value] },
+    VNil,
+    VClosure  { params: [str], body: [Sexp], env: Env },
+    VBuiltin  { name: str, f: fn([Value]) -> Value },
+}
+
+pub struct Env {
+    bindings: Map[str, Value],
+    parent:   Option[Env],
+}
+
+fn env_new(parent: Option[Env]) -> Env {
+    Env { bindings: Map::new(), parent }
+}
+
+fn env_get(e: Env, name: str) -> Option[Value] {
+    match e.bindings.get(name) {
+        Some(v) => Some(v),
+        None => match e.parent {
+            Some(p) => env_get(p, name),
+            None    => None,
+        }
+    }
+}
+
+fn env_define(e: Env, name: str, v: Value) { e.bindings.set(name, v) }
+
+fn env_set(e: Env, name: str, v: Value) -> Bool {
+    if e.bindings.contains(name) {
+        e.bindings.set(name, v); true
+    } else {
+        match e.parent {
+            Some(p) => env_set(p, name, v),
+            None    => false,
+        }
+    }
+}
+
+// -- Lexer -------------------------------------------------------------------
+
+fn tokenize(src: str) -> [str] {
+    let mut out: [str] = []
+    let mut i = 0
+    let n = src.len()
+    while i < n {
+        let c = src[i]
+        if c == ' ' || c == '\n' || c == '\t' { i = i + 1; continue }
+        if c == ';' {
+            while i < n && src[i] != '\n' { i = i + 1 }
+            continue
+        }
+        if c == '(' || c == ')' || c == '\'' {
+            out.push(str::from_char(c)); i = i + 1; continue
+        }
+        if c == '"' {
+            let start = i; i = i + 1
+            while i < n && src[i] != '"' { i = i + 1 }
+            out.push(src[start..=i]); i = i + 1; continue
+        }
+        let start = i
+        while i < n && !is_delim(src[i]) { i = i + 1 }
+        out.push(src[start..i])
+    }
+    out
+}
+
+fn is_delim(c: Char) -> Bool {
+    c == ' ' || c == '\n' || c == '\t' || c == '(' || c == ')' || c == ';'
+}
+
+// -- Reader ------------------------------------------------------------------
+
+fn read_from(tokens: [str], pos: Int) -> (Sexp, Int) {
+    let tok = tokens[pos]
+    match tok {
+        "(" => {
+            let mut items: [Sexp] = []
+            let mut p = pos + 1
+            while tokens[p] != ")" {
+                let (s, np) = read_from(tokens, p)
+                items.push(s); p = np
+            }
+            (Sexp::List { items }, p + 1)
+        },
+        "'" => {
+            let (s, np) = read_from(tokens, pos + 1)
+            (Sexp::List { items: [Sexp::Sym { name: "quote" }, s] }, np)
+        },
+        _ => (atom(tok), pos + 1),
+    }
+}
+
+fn atom(tok: str) -> Sexp {
+    match tok {
+        "#t"  => Sexp::Bool { v: true },
+        "#f"  => Sexp::Bool { v: false },
+        "nil" => Sexp::Nil,
+        _ => if tok.starts_with("\"") {
+            Sexp::Str { v: tok[1..tok.len() - 1] }
+        } else {
+            match fmt::parse_float(tok) {
+                Some(n) => Sexp::Num { v: n },
+                None    => Sexp::Sym { name: tok },
+            }
+        },
+    }
+}
+
+// -- Evaluator (with TCE via trampoline) ------------------------------------
+
+pub fn eval(expr: Sexp, env: Env) -> Value {
+    let mut e = expr
+    let mut en = env
+    loop {
+        match e {
+            Sexp::Num  { v } => return Value::VNum { v },
+            Sexp::Str  { v } => return Value::VStr { v },
+            Sexp::Bool { v } => return Value::VBool { v },
+            Sexp::Nil        => return Value::VNil,
+            Sexp::Sym  { name } => return match env_get(en, name) {
+                Some(v) => v,
+                None    => panic(fmt::format("unbound: {}", name)),
+            },
+            Sexp::List { items } => {
+                if items.len() == 0 { return Value::VNil }
+                let head = items[0]
+                match head {
+                    Sexp::Sym { name: "quote"  } => return sexp_to_value(items[1]),
+                    Sexp::Sym { name: "if"     } => {
+                        let cond = eval(items[1], en)
+                        e = if truthy(cond) { items[2] } else { items[3] }
+                        continue
+                    },
+                    Sexp::Sym { name: "define" } => {
+                        let n = sym_name(items[1])
+                        let v = eval(items[2], en)
+                        env_define(en, n, v)
+                        return Value::VNil
+                    },
+                    Sexp::Sym { name: "set!"   } => {
+                        let n = sym_name(items[1])
+                        let v = eval(items[2], en)
+                        env_set(en, n, v)
+                        return Value::VNil
+                    },
+                    Sexp::Sym { name: "lambda" } => {
+                        let params = extract_params(items[1])
+                        return Value::VClosure { params, body: items[2..], env: en }
+                    },
+                    Sexp::Sym { name: "begin"  } => {
+                        for k in 1..items.len() - 1 { eval(items[k], en) }
+                        e = items[items.len() - 1]
+                        continue
+                    },
+                    _ => {
+                        let func = eval(head, en)
+                        let args = items[1..] |> map(fn(s) { eval(s, en) })
+                        match func {
+                            Value::VBuiltin { f, .. } => return f(args),
+                            Value::VClosure { params, body, env: cenv } => {
+                                let new_env = env_new(Some(cenv))
+                                for k in 0..params.len() {
+                                    env_define(new_env, params[k], args[k])
+                                }
+                                for k in 0..body.len() - 1 { eval(body[k], new_env) }
+                                e = body[body.len() - 1]
+                                en = new_env
+                                continue
+                            },
+                            _ => panic("not callable"),
+                        }
+                    },
+                }
+            },
+        }
+    }
+}
+
+fn truthy(v: Value) -> Bool {
+    match v {
+        Value::VBool { v } => v,
+        Value::VNil        => false,
+        _                  => true,
+    }
+}
+
+fn sym_name(s: Sexp) -> str {
+    match s { Sexp::Sym { name } => name, _ => panic("expected symbol") }
+}
+
+fn extract_params(s: Sexp) -> [str] {
+    match s {
+        Sexp::List { items } => items |> map(sym_name),
+        _                    => panic("expected param list"),
+    }
+}
+
+fn sexp_to_value(s: Sexp) -> Value {
+    match s {
+        Sexp::Num  { v } => Value::VNum { v },
+        Sexp::Str  { v } => Value::VStr { v },
+        Sexp::Bool { v } => Value::VBool { v },
+        Sexp::Sym  { name } => Value::VSym { name },
+        Sexp::Nil        => Value::VNil,
+        Sexp::List { items } => Value::VList { items: items |> map(sexp_to_value) },
+    }
+}
+
+// -- Built-ins & REPL --------------------------------------------------------
+
+fn make_global() -> Env {
+    let e = env_new(None)
+    env_define(e, "+", Value::VBuiltin { name: "+", f: fn(xs) {
+        let mut s = 0.0
+        for x in xs { match x { Value::VNum { v } => s = s + v, _ => panic("+: number") } }
+        Value::VNum { v: s }
+    }})
+    env_define(e, "*", Value::VBuiltin { name: "*", f: fn(xs) {
+        let mut p = 1.0
+        for x in xs { match x { Value::VNum { v } => p = p * v, _ => panic("*: number") } }
+        Value::VNum { v: p }
+    }})
+    env_define(e, "=", Value::VBuiltin { name: "=", f: fn(xs) {
+        match (xs[0], xs[1]) {
+            (Value::VNum { v: a }, Value::VNum { v: b }) => Value::VBool { v: a == b },
+            _                                            => Value::VBool { v: false },
+        }
+    }})
+    env_define(e, "print", Value::VBuiltin { name: "print", f: fn(xs) {
+        for x in xs { io::println(fmt::format("{}", x)) }; Value::VNil
+    }})
+    e
+}
+
+fn main() {
+    let global = make_global()
+    let src = io::read_to_string("program.scm")
+    let tokens = tokenize(src)
+    let mut pos = 0
+    while pos < tokens.len() {
+        let (s, np) = read_from(tokens, pos)
+        eval(s, global)
+        pos = np
+    }
+}

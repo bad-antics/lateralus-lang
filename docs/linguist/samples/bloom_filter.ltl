@@ -1,0 +1,223 @@
+// examples/niche/bloom_filter.ltl
+//
+// Bloom filter, counting Bloom filter, and scalable (SBF) variant.
+// Includes murmur3 and fnv1a hash families, optimal (m, k) derivation
+// from expected n and target false-positive rate, and a union operator
+// for merging independently-built filters that share parameters.
+//
+// Probabilistic data structures are common in observability, network
+// security (malicious-domain pre-filter), and DB layer caches. This
+// file is a reference-quality implementation in pure Lateralus.
+//
+// Batch 82 / probabilistic-DS niche. Uses the bitops stdlib heavily.
+
+import std::bitops
+import std::math
+import std::io
+
+// -- Hash functions ----------------------------------------------------------
+
+fn fnv1a_64(data: [Byte], seed: Int) -> Int {
+    let mut h: Int = 0xCBF29CE484222325 ^ seed
+    for b in data {
+        h = h ^ (b as Int)
+        h = (h * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    }
+    h
+}
+
+fn rotl32(x: Int, r: Int) -> Int {
+    ((x << r) | (x >> (32 - r))) & 0xFFFFFFFF
+}
+
+fn murmur3_32(data: [Byte], seed: Int) -> Int {
+    let c1 = 0xcc9e2d51
+    let c2 = 0x1b873593
+    let mut h1 = seed
+    let len = data.len()
+    let nblocks = len / 4
+    for i in 0..nblocks {
+        let k = (data[i*4] as Int) |
+                ((data[i*4+1] as Int) << 8) |
+                ((data[i*4+2] as Int) << 16) |
+                ((data[i*4+3] as Int) << 24)
+        let k1 = (rotl32((k * c1) & 0xFFFFFFFF, 15) * c2) & 0xFFFFFFFF
+        h1 = h1 ^ k1
+        h1 = (rotl32(h1, 13) * 5 + 0xe6546b64) & 0xFFFFFFFF
+    }
+    let tail = len - nblocks * 4
+    let mut k1 = 0
+    if tail >= 3 { k1 = k1 ^ ((data[nblocks*4 + 2] as Int) << 16) }
+    if tail >= 2 { k1 = k1 ^ ((data[nblocks*4 + 1] as Int) << 8) }
+    if tail >= 1 {
+        k1 = k1 ^ (data[nblocks*4] as Int)
+        k1 = (rotl32((k1 * c1) & 0xFFFFFFFF, 15) * c2) & 0xFFFFFFFF
+        h1 = h1 ^ k1
+    }
+    h1 = h1 ^ len
+    h1 = h1 ^ (h1 >> 16)
+    h1 = (h1 * 0x85ebca6b) & 0xFFFFFFFF
+    h1 = h1 ^ (h1 >> 13)
+    h1 = (h1 * 0xc2b2ae35) & 0xFFFFFFFF
+    h1 = h1 ^ (h1 >> 16)
+    h1
+}
+
+// -- Parameter derivation ----------------------------------------------------
+
+pub fn optimal_m(n: Int, p: Float) -> Int {
+    // m = -(n * ln p) / (ln 2)^2
+    let num = -(n as Float) * math::ln(p)
+    let den = math::ln(2.0) * math::ln(2.0)
+    (num / den) as Int + 1
+}
+
+pub fn optimal_k(m: Int, n: Int) -> Int {
+    // k = (m/n) * ln 2
+    let k = ((m as Float) / (n as Float)) * math::ln(2.0)
+    math::max(1, k as Int)
+}
+
+// -- Plain Bloom filter ------------------------------------------------------
+
+pub struct Bloom {
+    bits: [Byte],       // ceil(m/8) bytes
+    m:    Int,          // bit count
+    k:    Int,          // hash count
+    mut inserted: Int,  // for fpr estimation
+}
+
+pub fn bloom_new(n: Int, p: Float) -> Bloom {
+    let m = optimal_m(n, p)
+    let k = optimal_k(m, n)
+    let bytes = (m + 7) / 8
+    Bloom { bits: [0; bytes], m, k, inserted: 0 }
+}
+
+fn positions(b: Bloom, item: [Byte]) -> [Int] {
+    // double hashing: h_i = h1 + i * h2, per Kirsch-Mitzenmacher
+    let h1 = murmur3_32(item, 0x9747B28C)
+    let h2 = fnv1a_64(item, 0xC6A4A793)
+    let mut out: [Int] = []
+    for i in 0..b.k {
+        let p = (h1 + i * h2) % b.m
+        out.push(p)
+    }
+    out
+}
+
+pub fn bloom_add(b: Bloom, item: [Byte]) {
+    for p in positions(b, item) {
+        let byte_idx = p / 8
+        let bit_idx  = p % 8
+        b.bits[byte_idx] = b.bits[byte_idx] | (1 << bit_idx)
+    }
+    b.inserted = b.inserted + 1
+}
+
+pub fn bloom_contains(b: Bloom, item: [Byte]) -> Bool {
+    for p in positions(b, item) {
+        let byte_idx = p / 8
+        let bit_idx  = p % 8
+        if (b.bits[byte_idx] & (1 << bit_idx)) == 0 { return false }
+    }
+    true
+}
+
+pub fn bloom_fpr(b: Bloom) -> Float {
+    // (1 - e^(-k*n/m))^k
+    let kn_m = ((b.k * b.inserted) as Float) / (b.m as Float)
+    math::pow(1.0 - math::exp(-kn_m), b.k as Float)
+}
+
+pub fn bloom_union(a: Bloom, b: Bloom) -> Option[Bloom] {
+    if a.m != b.m || a.k != b.k { return None }
+    let bytes = a.bits.len()
+    let mut out = [0; bytes]
+    for i in 0..bytes { out[i] = a.bits[i] | b.bits[i] }
+    Some(Bloom { bits: out, m: a.m, k: a.k, inserted: a.inserted + b.inserted })
+}
+
+// -- Counting Bloom filter (supports deletion) ------------------------------
+
+pub struct CountingBloom { counts: [Int], m: Int, k: Int }
+
+pub fn cbloom_new(n: Int, p: Float) -> CountingBloom {
+    let m = optimal_m(n, p)
+    let k = optimal_k(m, n)
+    CountingBloom { counts: [0; m], m, k }
+}
+
+pub fn cbloom_add(b: CountingBloom, item: [Byte]) {
+    let h1 = murmur3_32(item, 0x9747B28C)
+    let h2 = fnv1a_64(item, 0xC6A4A793)
+    for i in 0..b.k {
+        let p = (h1 + i * h2) % b.m
+        b.counts[p] = b.counts[p] + 1
+    }
+}
+
+pub fn cbloom_remove(b: CountingBloom, item: [Byte]) -> Bool {
+    let h1 = murmur3_32(item, 0x9747B28C)
+    let h2 = fnv1a_64(item, 0xC6A4A793)
+    let mut positions: [Int] = []
+    for i in 0..b.k {
+        let p = (h1 + i * h2) % b.m
+        if b.counts[p] == 0 { return false }
+        positions.push(p)
+    }
+    for p in positions { b.counts[p] = b.counts[p] - 1 }
+    true
+}
+
+pub fn cbloom_contains(b: CountingBloom, item: [Byte]) -> Bool {
+    let h1 = murmur3_32(item, 0x9747B28C)
+    let h2 = fnv1a_64(item, 0xC6A4A793)
+    for i in 0..b.k {
+        let p = (h1 + i * h2) % b.m
+        if b.counts[p] == 0 { return false }
+    }
+    true
+}
+
+// -- Scalable Bloom filter (SBF, Almeida 2007) ------------------------------
+
+pub struct SBF {
+    mut slices: [Bloom],
+    cap0:       Int,
+    p0:         Float,
+    r:          Float,     // tightening ratio, typically 0.9
+    s:          Float,     // scale factor,       typically 2.0
+}
+
+pub fn sbf_new(cap0: Int, p0: Float) -> SBF {
+    SBF { slices: [bloom_new(cap0, p0)], cap0, p0, r: 0.9, s: 2.0 }
+}
+
+pub fn sbf_add(s: SBF, item: [Byte]) {
+    let last = s.slices[s.slices.len() - 1]
+    let cap_i = ((s.cap0 as Float) * math::pow(s.s, (s.slices.len() - 1) as Float)) as Int
+    if last.inserted >= cap_i {
+        let p_i = s.p0 * math::pow(s.r, s.slices.len() as Float)
+        s.slices.push(bloom_new(cap_i * 2, p_i))
+    }
+    bloom_add(s.slices[s.slices.len() - 1], item)
+}
+
+pub fn sbf_contains(s: SBF, item: [Byte]) -> Bool {
+    for b in s.slices { if bloom_contains(b, item) { return true } }
+    false
+}
+
+// -- Demo --------------------------------------------------------------------
+
+fn main() {
+    let b = bloom_new(10_000, 0.001)
+    for s in ["alpha", "beta", "gamma", "delta", "epsilon"] {
+        bloom_add(b, s.bytes())
+    }
+    io::println(fmt::format("alpha:  {}", bloom_contains(b, "alpha".bytes())))
+    io::println(fmt::format("zeta:   {}", bloom_contains(b, "zeta".bytes())))
+    io::println(fmt::format("fpr:    {:.6}", bloom_fpr(b)))
+    io::println(fmt::format("bits/n: {:.2}", (b.m as Float) / (b.inserted as Float)))
+}

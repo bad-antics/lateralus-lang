@@ -14,7 +14,7 @@ Status as of 2026-04-20:
 | Used in ≥ 200 unique `:user/:repo` repositories on GitHub    | ⏳ in progress | see `repo-search.md` — current count: **47** |
 | TextMate grammar (or tree-sitter) with stable scope name     | ✅ done | `source.ltl`, [bad-antics/lateralus-grammar](https://github.com/bad-antics/lateralus-grammar) |
 | File extension registered                                    | ✅ done | `.ltl` |
-| Representative samples (≥ 10, ideally ≥ 20 non-trivial)      | ✅ done | `samples/` — 11 files, 4.3k LoC, 6 domains |
+| Representative samples (≥ 10, ideally ≥ 20 non-trivial)      | ✅ done (ideal hit) | `samples/` — 20 files, 7.5k LoC, 15 domains |
 | No ambiguity with existing languages on that extension       | ✅ done | `.ltl` is unclaimed in `languages.yml` |
 | Grammar licensed MIT/Apache-2.0/similar                      | ✅ done | MIT |
 | Follows Linguist PR checklist                                | ✅ done | see `pr-checklist.md` |
@@ -50,7 +50,7 @@ After merge, these overrides stay put as a belt-and-braces fallback.
 
 - `meta/languages-yml-entry.yml` — proposed `languages.yml` patch
 - `meta/heuristics-yml-entry.yml` — disambiguation heuristics (none needed; `.ltl` is unique)
-- `samples/*.ltl` — 11 representative samples for Linguist's bayesian classifier
+- `samples/*.ltl` — 20 representative samples for Linguist's bayesian classifier
 - `grammar_repo/` — contents staged for `bad-antics/lateralus-grammar`
 - `pr-checklist.md` — Linguist PR body
 - `repo-search.md` — current discoverable-repo inventory
