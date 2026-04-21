@@ -1,0 +1,190 @@
+// graph_algos/main.ltl
+//
+// BFS, DFS, Dijkstra, A*, and Bellman-Ford on a shared graph API.
+// All algorithms operate on the same adjacency-list representation
+// so you can swap between them to compare trade-offs.
+
+import std::io
+import std::fmt
+import std::math
+import std::collections::Map
+import std::collections::PriorityQueue
+
+pub struct Edge { dst: Int, weight: Float }
+
+pub struct Graph {
+    n: Int,
+    adj: [[Edge]],
+}
+
+pub fn graph_new(n: Int) -> Graph {
+    Graph { n, adj: [[]; n] }
+}
+
+pub fn add_edge(g: Graph, src: Int, dst: Int, w: Float) {
+    g.adj[src].push(Edge { dst, weight: w })
+}
+
+pub fn add_undirected(g: Graph, a: Int, b: Int, w: Float) {
+    add_edge(g, a, b, w)
+    add_edge(g, b, a, w)
+}
+
+// -- BFS: unweighted shortest path ----------------------------------------
+
+pub fn bfs(g: Graph, src: Int, dst: Int) -> Option[[Int]] {
+    let mut visited = [false; g.n]
+    let mut parent  = [-1; g.n]
+    let mut queue   = [src]
+    visited[src] = true
+    while queue.len() > 0 {
+        let node = queue.remove(0)
+        if node == dst { return Some(reconstruct(parent, dst)) }
+        for e in g.adj[node] {
+            if !visited[e.dst] {
+                visited[e.dst] = true
+                parent[e.dst]  = node
+                queue.push(e.dst)
+            }
+        }
+    }
+    None
+}
+
+// -- DFS: reachability + topological order --------------------------------
+
+pub fn dfs_topo(g: Graph) -> [Int] {
+    let mut visited = [false; g.n]
+    let mut order: [Int] = []
+    for s in 0..g.n { if !visited[s] { dfs_visit(g, s, visited, order) } }
+    order.reverse()
+    order
+}
+
+fn dfs_visit(g: Graph, node: Int, visited: [Bool], order: [Int]) {
+    visited[node] = true
+    for e in g.adj[node] { if !visited[e.dst] { dfs_visit(g, e.dst, visited, order) } }
+    order.push(node)
+}
+
+// -- Dijkstra: non-negative weighted shortest path ------------------------
+
+pub fn dijkstra(g: Graph, src: Int) -> ([Float], [Int]) {
+    let mut dist   = [math::INFINITY; g.n]
+    let mut parent = [-1; g.n]
+    dist[src] = 0.0
+    let pq = PriorityQueue::new()
+    pq.push((0.0, src))
+    while !pq.is_empty() {
+        let (d, node) = pq.pop()
+        if d > dist[node] { continue }
+        for e in g.adj[node] {
+            let nd = d + e.weight
+            if nd < dist[e.dst] {
+                dist[e.dst]   = nd
+                parent[e.dst] = node
+                pq.push((nd, e.dst))
+            }
+        }
+    }
+    (dist, parent)
+}
+
+// -- A*: heuristic-driven shortest path -----------------------------------
+
+pub fn astar(g: Graph, src: Int, dst: Int, h: fn(Int) -> Float) -> Option[[Int]] {
+    let mut g_score = [math::INFINITY; g.n]
+    let mut parent  = [-1; g.n]
+    g_score[src] = 0.0
+    let open = PriorityQueue::new()
+    open.push((h(src), src))
+    while !open.is_empty() {
+        let (_, node) = open.pop()
+        if node == dst { return Some(reconstruct(parent, dst)) }
+        for e in g.adj[node] {
+            let tentative = g_score[node] + e.weight
+            if tentative < g_score[e.dst] {
+                parent[e.dst]  = node
+                g_score[e.dst] = tentative
+                open.push((tentative + h(e.dst), e.dst))
+            }
+        }
+    }
+    None
+}
+
+// -- Bellman-Ford: handles negative weights, detects negative cycles ------
+
+pub fn bellman_ford(g: Graph, src: Int) -> Result[[Float], str] {
+    let mut dist = [math::INFINITY; g.n]
+    dist[src] = 0.0
+    for _ in 0..(g.n - 1) {
+        let mut changed = false
+        for u in 0..g.n {
+            if dist[u] == math::INFINITY { continue }
+            for e in g.adj[u] {
+                if dist[u] + e.weight < dist[e.dst] {
+                    dist[e.dst] = dist[u] + e.weight
+                    changed = true
+                }
+            }
+        }
+        if !changed { break }
+    }
+    // Negative-cycle check
+    for u in 0..g.n {
+        if dist[u] == math::INFINITY { continue }
+        for e in g.adj[u] {
+            if dist[u] + e.weight < dist[e.dst] {
+                return Err("negative cycle detected")
+            }
+        }
+    }
+    Ok(dist)
+}
+
+// -- Common utilities -----------------------------------------------------
+
+fn reconstruct(parent: [Int], dst: Int) -> [Int] {
+    let mut path = [dst]
+    let mut cur = dst
+    while parent[cur] != -1 {
+        cur = parent[cur]
+        path.push(cur)
+    }
+    path.reverse()
+    path
+}
+
+// -- Demo -----------------------------------------------------------------
+
+pub fn main(args: [str]) -> Int {
+    // Small example graph:  0 --2-- 1 --3-- 2
+    //                       |              |
+    //                       4              1
+    //                       |              |
+    //                       3 --5-- 4 -----+
+    let g = graph_new(5)
+    add_undirected(g, 0, 1, 2.0)
+    add_undirected(g, 1, 2, 3.0)
+    add_undirected(g, 0, 3, 4.0)
+    add_undirected(g, 3, 4, 5.0)
+    add_undirected(g, 4, 2, 1.0)
+
+    io::println("-- BFS 0 -> 2 --")
+    match bfs(g, 0, 2) {
+        Some(path) => io::println(fmt::format("path: {:?}", path)),
+        None       => io::println("unreachable"),
+    }
+
+    io::println("-- Dijkstra from 0 --")
+    let (dist, _) = dijkstra(g, 0)
+    for i in 0..g.n { io::println(fmt::format("  dist[{}] = {:.2}", i, dist[i])) }
+
+    io::println("-- Bellman-Ford --")
+    match bellman_ford(g, 0) {
+        Ok(d)    => for i in 0..g.n { io::println(fmt::format("  dist[{}] = {:.2}", i, d[i])) },
+        Err(msg) => io::eprintln(msg),
+    }
+    0
+}

@@ -1,0 +1,240 @@
+// json_cli/main.ltl
+//
+// Streaming JSON pretty-printer and query CLI. Parses stdin as JSON,
+// applies an optional JSONPath-like selector, and emits either a
+// compact one-line form or a 2-space indented form. Designed to be
+// the middle stage of a unix pipeline: `curl ... | json-cli .users`.
+
+import std::io
+import std::fmt
+
+pub enum Json {
+    JNull,
+    JBool   { v: Bool },
+    JNum    { v: Float },
+    JStr    { v: str },
+    JArr    { items: [Json] },
+    JObj    { fields: [(str, Json)] },
+}
+
+// -- Parser ------------------------------------------------------------------
+
+pub struct Parser { src: str, mut pos: Int }
+
+fn new_parser(s: str) -> Parser { Parser { src: s, pos: 0 } }
+
+fn peek(p: Parser) -> Char { p.src[p.pos] }
+fn advance(p: Parser) -> Char { let c = p.src[p.pos]; p.pos = p.pos + 1; c }
+fn skip_ws(p: Parser) { while p.pos < p.src.len() && p.src[p.pos].is_whitespace() { p.pos = p.pos + 1 } }
+
+pub fn parse_json(src: str) -> Json {
+    let p = new_parser(src)
+    skip_ws(p)
+    parse_value(p)
+}
+
+fn parse_value(p: Parser) -> Json {
+    skip_ws(p)
+    match peek(p) {
+        '{' => parse_object(p),
+        '[' => parse_array(p),
+        '"' => parse_string(p),
+        't' | 'f' => parse_bool(p),
+        'n' => parse_null(p),
+        _   => parse_number(p),
+    }
+}
+
+fn parse_object(p: Parser) -> Json {
+    advance(p)  // '{'
+    let mut fields: [(str, Json)] = []
+    skip_ws(p)
+    if peek(p) == '}' { advance(p); return Json::JObj { fields } }
+    loop {
+        skip_ws(p)
+        let key = match parse_string(p) { Json::JStr { v } => v, _ => panic("expected string key") }
+        skip_ws(p); advance(p)  // ':'
+        let val = parse_value(p)
+        fields.push((key, val))
+        skip_ws(p)
+        match advance(p) {
+            ',' => continue,
+            '}' => break,
+            _   => panic("expected , or }"),
+        }
+    }
+    Json::JObj { fields }
+}
+
+fn parse_array(p: Parser) -> Json {
+    advance(p)  // '['
+    let mut items: [Json] = []
+    skip_ws(p)
+    if peek(p) == ']' { advance(p); return Json::JArr { items } }
+    loop {
+        items.push(parse_value(p))
+        skip_ws(p)
+        match advance(p) {
+            ',' => continue,
+            ']' => break,
+            _   => panic("expected , or ]"),
+        }
+    }
+    Json::JArr { items }
+}
+
+fn parse_string(p: Parser) -> Json {
+    advance(p)  // '"'
+    let mut out = ""
+    while peek(p) != '"' {
+        let c = advance(p)
+        if c == '\\' {
+            let esc = advance(p)
+            out = out + match esc {
+                'n' => "\n",  't' => "\t",  'r' => "\r",
+                '"' => "\"",  '\\' => "\\", '/'  => "/",
+                _   => str::from_char(esc),
+            }
+        } else {
+            out = out + str::from_char(c)
+        }
+    }
+    advance(p)  // '"'
+    Json::JStr { v: out }
+}
+
+fn parse_number(p: Parser) -> Json {
+    let start = p.pos
+    if peek(p) == '-' { advance(p) }
+    while p.pos < p.src.len() && (peek(p).is_digit() || peek(p) == '.' || peek(p) == 'e' || peek(p) == 'E' || peek(p) == '+' || peek(p) == '-') {
+        advance(p)
+    }
+    Json::JNum { v: fmt::parse_float(p.src[start..p.pos]).unwrap() }
+}
+
+fn parse_bool(p: Parser) -> Json {
+    if p.src[p.pos..p.pos + 4] == "true" { p.pos = p.pos + 4; Json::JBool { v: true } }
+    else                                  { p.pos = p.pos + 5; Json::JBool { v: false } }
+}
+
+fn parse_null(p: Parser) -> Json { p.pos = p.pos + 4; Json::JNull }
+
+// -- Pretty printer ----------------------------------------------------------
+
+pub fn pretty(j: Json, indent: Int) -> str {
+    render(j, 0, indent)
+}
+
+fn render(j: Json, depth: Int, indent: Int) -> str {
+    let pad  = str::repeat(" ", depth * indent)
+    let pad2 = str::repeat(" ", (depth + 1) * indent)
+    match j {
+        Json::JNull      => "null",
+        Json::JBool { v } => if v { "true" } else { "false" },
+        Json::JNum  { v } => fmt::format("{}", v),
+        Json::JStr  { v } => fmt::format("\"{}\"", escape(v)),
+        Json::JArr  { items } => {
+            if items.len() == 0 { return "[]" }
+            let inner = items |> map(fn(x) { pad2 + render(x, depth + 1, indent) })
+                             |> join(",\n")
+            fmt::format("[\n{}\n{}]", inner, pad)
+        },
+        Json::JObj  { fields } => {
+            if fields.len() == 0 { return "{}" }
+            let inner = fields |> map(fn(kv) {
+                fmt::format("{}\"{}\": {}", pad2, kv.0, render(kv.1, depth + 1, indent))
+            }) |> join(",\n")
+            fmt::format("{{\n{}\n{}}}", inner, pad)
+        },
+    }
+}
+
+fn escape(s: str) -> str {
+    s |> replace("\\", "\\\\") |> replace("\"", "\\\"") |> replace("\n", "\\n")
+}
+
+// -- Query language: dot-path like `.users[0].name` ------------------------
+
+pub fn query(j: Json, path: str) -> Option[Json] {
+    if path == "" || path == "." { return Some(j) }
+    let parts = parse_path(path)
+    let mut cur = j
+    for part in parts {
+        cur = match (cur, part) {
+            (Json::JObj { fields }, PathStep::Field { name }) => {
+                let m = fields |> find(fn(kv) { kv.0 == name })
+                match m { Some(kv) => kv.1, None => return None }
+            },
+            (Json::JArr { items }, PathStep::Index { i }) => {
+                if i < 0 || i >= items.len() { return None }
+                items[i]
+            },
+            _ => return None,
+        }
+    }
+    Some(cur)
+}
+
+pub enum PathStep { Field { name: str }, Index { i: Int } }
+
+fn parse_path(s: str) -> [PathStep] {
+    let mut out: [PathStep] = []
+    let mut i = 0
+    while i < s.len() {
+        match s[i] {
+            '.' => {
+                i = i + 1
+                let start = i
+                while i < s.len() && s[i] != '.' && s[i] != '[' { i = i + 1 }
+                if i > start { out.push(PathStep::Field { name: s[start..i] }) }
+            },
+            '[' => {
+                i = i + 1
+                let start = i
+                while s[i] != ']' { i = i + 1 }
+                let idx = fmt::parse_int(s[start..i]).unwrap()
+                out.push(PathStep::Index { i: idx })
+                i = i + 1
+            },
+            _ => i = i + 1,
+        }
+    }
+    out
+}
+
+// -- CLI entry point --------------------------------------------------------
+
+pub fn main(args: [str]) -> Int {
+    let mut indent = 2
+    let mut path = ""
+    let mut compact = false
+    let mut i = 1
+    while i < args.len() {
+        match args[i] {
+            "-c" | "--compact" => compact = true,
+            "-i" | "--indent"  => { i = i + 1; indent = fmt::parse_int(args[i]).unwrap() },
+            "-h" | "--help"    => { usage(); return 0 },
+            p => path = p,
+        }
+        i = i + 1
+    }
+    let src = io::read_stdin()
+    let parsed = parse_json(src)
+    let selected = match query(parsed, path) {
+        Some(v) => v,
+        None    => { io::eprintln(fmt::format("no match for path: {}", path)); return 1 },
+    }
+    let out = if compact { pretty(selected, 0) } else { pretty(selected, indent) }
+    io::println(out)
+    0
+}
+
+fn usage() {
+    io::println("usage: json-cli [--compact] [--indent N] [PATH]")
+    io::println("  Pretty-prints JSON from stdin. Optional PATH is a dotted selector.")
+    io::println("")
+    io::println("  examples:")
+    io::println("    curl -s api.github.com/repos/foo/bar | json-cli")
+    io::println("    curl -s api.github.com/repos/foo/bar | json-cli .stargazers_count")
+    io::println("    cat data.json | json-cli .users[0].email")
+}

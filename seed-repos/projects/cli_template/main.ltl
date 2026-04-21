@@ -1,0 +1,93 @@
+// cli_template/main.ltl
+//
+// Starter template: `lateralus new cli`
+//
+// This is what you get when you scaffold a new CLI project. It
+// includes:
+//   * argparse-style command-line parsing
+//   * structured logging (info/warn/error) with colour
+//   * a tiny test-runner stub
+//   * exit codes following `sysexits.h`
+//
+// Customise: delete this block, rename greet() to your command,
+// and register further subcommands in main().
+
+import std::io
+import std::fmt
+import std::time
+
+// -- Logging --------------------------------------------------------------
+
+pub enum Level { Info, Warn, Error, Debug }
+
+pub fn log(lvl: Level, msg: str) {
+    let (prefix, colour) = match lvl {
+        Level::Info  => ("INFO",  "\x1b[36m"),
+        Level::Warn  => ("WARN",  "\x1b[33m"),
+        Level::Error => ("ERROR", "\x1b[31m"),
+        Level::Debug => ("DEBUG", "\x1b[90m"),
+    }
+    let reset = "\x1b[0m"
+    let ts = time::now_iso8601()
+    io::eprintln(fmt::format("{}{} {} {}{}", colour, ts, prefix, msg, reset))
+}
+
+// -- Sub-commands --------------------------------------------------------
+
+fn cmd_greet(args: [str]) -> Int {
+    let name = if args.len() > 0 { args[0] } else { "world" }
+    io::println(fmt::format("Hello, {}!", name))
+    0
+}
+
+fn cmd_version(args: [str]) -> Int {
+    io::println("0.1.0")
+    0
+}
+
+fn cmd_help(args: [str]) -> Int {
+    io::println("usage: my-cli COMMAND [ARGS...]")
+    io::println("")
+    io::println("commands:")
+    io::println("  greet NAME     say hello")
+    io::println("  version        show version")
+    io::println("  help           show this message")
+    0
+}
+
+// -- Entry point ---------------------------------------------------------
+
+pub fn main(args: [str]) -> Int {
+    if args.len() < 2 {
+        return cmd_help([])
+    }
+    match args[1] {
+        "greet"   => cmd_greet(args[2..].to_vec()),
+        "version" => cmd_version([]),
+        "help" | "-h" | "--help" => cmd_help([]),
+        _ => {
+            log(Level::Error, fmt::format("unknown command: {}", args[1]))
+            cmd_help([])
+            64       // EX_USAGE from sysexits.h
+        },
+    }
+}
+
+// -- Tests ---------------------------------------------------------------
+// Run with:  lateralus test main.ltl
+
+#[test]
+fn test_greet_default() {
+    // cmd_greet is expected to return 0 on success
+    assert_eq(cmd_greet([]), 0)
+}
+
+#[test]
+fn test_greet_named() {
+    assert_eq(cmd_greet(["Alice"]), 0)
+}
+
+#[test]
+fn test_version() {
+    assert_eq(cmd_version([]), 0)
+}

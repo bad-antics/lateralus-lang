@@ -1,0 +1,47 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Lateralus WASM demo</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 2rem; }
+    canvas { border: 1px solid #444; image-rendering: pixelated; }
+    pre    { background: #222; color: #eee; padding: 1em; }
+  </style>
+</head>
+<body>
+  <h1>Lateralus → WebAssembly</h1>
+  <p>Compiled from <code>main.ltl</code> with <code>lateralus build --target wasm32 --release</code>.</p>
+  <pre id="out">loading …</pre>
+  <canvas id="mandel" width="320" height="240"></canvas>
+
+  <script type="module">
+    const mod = await WebAssembly.instantiateStreaming(fetch("wasm-template.wasm"));
+    const { add, fibonacci, mandelbrot } = mod.instance.exports;
+
+    const out = document.getElementById("out");
+    const lines = [];
+    lines.push(`add(2, 40) = ${add(2, 40)}`);
+    lines.push(`fibonacci(20) = ${fibonacci(20)}`);
+    out.textContent = lines.join("\n");
+
+    const cv = document.getElementById("mandel");
+    const ctx = cv.getContext("2d");
+    const img = ctx.createImageData(cv.width, cv.height);
+    for (let y = 0; y < cv.height; y++) {
+      for (let x = 0; x < cv.width; x++) {
+        const cx = -2.0 + (x / cv.width)  * 3.0;
+        const cy = -1.2 + (y / cv.height) * 2.4;
+        const i = mandelbrot(cx, cy, 100);
+        const v = i === 100 ? 0 : (i * 2) & 0xff;
+        const off = (y * cv.width + x) * 4;
+        img.data[off + 0] = v;
+        img.data[off + 1] = v * 2 & 0xff;
+        img.data[off + 2] = 255 - v;
+        img.data[off + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+  </script>
+</body>
+</html>

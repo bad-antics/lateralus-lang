@@ -1,0 +1,75 @@
+// wasm_template/main.ltl
+//
+// Starter template: `lateralus new wasm`
+//
+// Compiles to a .wasm module exporting a handful of pure functions
+// suitable for embedding in a browser or edge runtime. No syscalls,
+// no stdin; just allocator + compute.
+//
+// Build:
+//     lateralus build --target wasm32 --release
+// Run in browser:
+//     see host/index.html
+
+import std::io
+import std::math
+
+// ============================================================
+// EXPORTED FUNCTIONS — visible to the WebAssembly host
+// ============================================================
+
+#[wasm_export]
+pub fn add(a: Int, b: Int) -> Int { a + b }
+
+#[wasm_export]
+pub fn fibonacci(n: Int) -> Int {
+    if n < 2 { return n }
+    let mut a = 0
+    let mut b = 1
+    for _ in 0..n {
+        let tmp = a + b
+        a = b
+        b = tmp
+    }
+    a
+}
+
+#[wasm_export]
+pub fn mandelbrot(cx: Float, cy: Float, max_iter: Int) -> Int {
+    let mut x = 0.0
+    let mut y = 0.0
+    let mut i = 0
+    while i < max_iter && x * x + y * y < 4.0 {
+        let xt = x * x - y * y + cx
+        y = 2.0 * x * y + cy
+        x = xt
+        i = i + 1
+    }
+    i
+}
+
+// Simple bump allocator so the host can pass byte buffers in/out
+
+#[wasm_export]
+pub fn alloc(n_bytes: Int) -> Int {
+    let ptr = bump_alloc(n_bytes)
+    ptr
+}
+
+#[wasm_export]
+pub fn free(ptr: Int) { /* bump allocator never frees */ }
+
+fn bump_alloc(n: Int) -> Int {
+    // bump pointer lives at a fixed linear-memory offset
+    let head_addr = 0x10000
+    let head = mem::load_i32(head_addr)
+    mem::store_i32(head_addr, head + n)
+    head
+}
+
+#[wasm_export]
+pub fn sum_bytes(ptr: Int, len: Int) -> Int {
+    let mut total = 0
+    for i in 0..len { total = total + mem::load_u8(ptr + i) as Int }
+    total
+}

@@ -1,0 +1,162 @@
+// brainfuck/main.ltl
+//
+// Brainfuck interpreter + template JIT.
+//
+// Two modes:
+//     brainfuck interp  file.bf     --  tree-walking interpreter, ~20x slower than native
+//     brainfuck jit     file.bf     --  template JIT to x86-64 machine code
+//
+// Pairs nicely with the docs/linguist/samples/wasm_jit.ltl sample
+// (same single-pass codegen philosophy, smaller instruction set).
+
+import std::io
+import std::fmt
+import std::mmap
+
+// -- Interpreter ---------------------------------------------------------
+
+pub struct Machine {
+    tape: [Byte],       // 30_000 cells
+    mut ptr: Int,
+}
+
+pub fn interp(src: str) {
+    let m = Machine { tape: [0; 30000], ptr: 0 }
+    let bracket_map = build_bracket_map(src)
+    let mut pc = 0
+    while pc < src.len() {
+        match src[pc] {
+            '>' => m.ptr = m.ptr + 1,
+            '<' => m.ptr = m.ptr - 1,
+            '+' => m.tape[m.ptr] = m.tape[m.ptr] + 1,
+            '-' => m.tape[m.ptr] = m.tape[m.ptr] - 1,
+            '.' => io::putchar(m.tape[m.ptr] as Char),
+            ',' => m.tape[m.ptr] = io::getchar() as Byte,
+            '[' => if m.tape[m.ptr] == 0 { pc = bracket_map[pc] },
+            ']' => if m.tape[m.ptr] != 0 { pc = bracket_map[pc] },
+            _   => {},
+        }
+        pc = pc + 1
+    }
+}
+
+fn build_bracket_map(src: str) -> [Int] {
+    let mut map = [0; src.len()]
+    let mut stack: [Int] = []
+    for i in 0..src.len() {
+        match src[i] {
+            '[' => stack.push(i),
+            ']' => {
+                let open = stack.pop().unwrap()
+                map[open] = i
+                map[i]    = open
+            },
+            _   => {},
+        }
+    }
+    map
+}
+
+// -- Template JIT --------------------------------------------------------
+
+pub fn jit(src: str) {
+    let code = compile(src)
+    let region = mmap::map_rw(code.len())
+    region.write(0, code)
+    mmap::flip_rx(region)
+    let tape = mmap::alloc_zeroed(30000)
+    let entry = mmap::as_fn(region)
+    entry(tape)
+}
+
+fn compile(src: str) -> [Byte] {
+    let mut out: [Byte] = []
+    let mut bracket_stack: [Int] = []
+
+    // Prologue:  mov r12, rdi   (r12 = tape pointer)
+    out.extend([0x49, 0x89, 0xFC])
+
+    for i in 0..src.len() {
+        match src[i] {
+            '>' => {
+                // add r12, 1
+                out.extend([0x49, 0x83, 0xC4, 0x01])
+            },
+            '<' => {
+                // sub r12, 1
+                out.extend([0x49, 0x83, 0xEC, 0x01])
+            },
+            '+' => {
+                // add byte ptr [r12], 1
+                out.extend([0x41, 0x80, 0x04, 0x24, 0x01])
+            },
+            '-' => {
+                // sub byte ptr [r12], 1
+                out.extend([0x41, 0x80, 0x2C, 0x24, 0x01])
+            },
+            '.' => {
+                // mov dil, [r12]; call putchar
+                out.extend([0x41, 0x8A, 0x3C, 0x24])
+                emit_call_extern(out, "putchar")
+            },
+            ',' => {
+                // call getchar; mov [r12], al
+                emit_call_extern(out, "getchar")
+                out.extend([0x41, 0x88, 0x04, 0x24])
+            },
+            '[' => {
+                // cmp byte ptr [r12], 0; je <fixup>
+                out.extend([0x41, 0x80, 0x3C, 0x24, 0x00])
+                out.extend([0x0F, 0x84, 0x00, 0x00, 0x00, 0x00])
+                bracket_stack.push(out.len())  // fixup position = offset after je
+            },
+            ']' => {
+                // cmp byte ptr [r12], 0; jne <matching_open>
+                out.extend([0x41, 0x80, 0x3C, 0x24, 0x00])
+                let open = bracket_stack.pop().unwrap()
+                let rel = open - (out.len() + 6)  // jne is 6 bytes
+                out.extend([0x0F, 0x85])
+                emit_i32_le(out, rel)
+                // Back-patch forward jump at `open - 4`
+                let forward_rel = out.len() - open
+                let bytes = i32_le(forward_rel)
+                for k in 0..4 { out[open - 4 + k] = bytes[k] }
+            },
+            _ => {},
+        }
+    }
+
+    // Epilogue: ret
+    out.push(0xC3)
+    out
+}
+
+fn emit_call_extern(out: [Byte], name: str) {
+    // Simplified: real JIT would resolve via PLT / fix-up table
+    out.extend([0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0])   // mov rax, <addr>
+    out.extend([0xFF, 0xD0])                            // call rax
+}
+
+fn emit_i32_le(out: [Byte], v: Int) {
+    for b in i32_le(v) { out.push(b) }
+}
+
+fn i32_le(v: Int) -> [Byte] {
+    [(v & 0xFF) as Byte, ((v >> 8) & 0xFF) as Byte,
+     ((v >> 16) & 0xFF) as Byte, ((v >> 24) & 0xFF) as Byte]
+}
+
+// -- CLI -----------------------------------------------------------------
+
+pub fn main(args: [str]) -> Int {
+    if args.len() < 3 {
+        io::println("usage: brainfuck (interp|jit) FILE.bf"); return 2
+    }
+    let src = io::read_file(args[2])
+    match args[1] {
+        "interp" => interp(src),
+        "jit"    => jit(src),
+        _        => { io::eprintln("unknown mode"); return 2 },
+    }
+    0
+}

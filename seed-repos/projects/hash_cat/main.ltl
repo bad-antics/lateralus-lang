@@ -1,0 +1,182 @@
+// hash_cat/main.ltl
+//
+// Multi-algorithm file hasher. Streams files through SHA-2, SHA-3,
+// Blake2b, or Blake3, printing the result in hex or base64.
+//
+// Usage:
+//     hash-cat [--algo ALGO] [--format hex|b64] FILE...
+//
+// Supported algorithms: sha256, sha512, sha3-256, sha3-512,
+// blake2b, blake3 (default: sha256).
+
+import std::io
+import std::fmt
+import std::crypto::sha2
+import std::crypto::sha3
+import std::crypto::blake2
+import std::crypto::blake3
+
+pub enum Algo { Sha256, Sha512, Sha3_256, Sha3_512, Blake2b, Blake3 }
+pub enum Format { Hex, Base64 }
+
+fn parse_algo(s: str) -> Option[Algo] {
+    match s {
+        "sha256"   => Some(Algo::Sha256),
+        "sha512"   => Some(Algo::Sha512),
+        "sha3-256" => Some(Algo::Sha3_256),
+        "sha3-512" => Some(Algo::Sha3_512),
+        "blake2b"  => Some(Algo::Blake2b),
+        "blake3"   => Some(Algo::Blake3),
+        _          => None,
+    }
+}
+
+pub struct Hasher {
+    algo:   Algo,
+    mut s2: sha2::State,
+    mut s3: sha3::State,
+    mut b2: blake2::State,
+    mut b3: blake3::State,
+}
+
+pub fn new(algo: Algo) -> Hasher {
+    Hasher {
+        algo,
+        s2: match algo {
+            Algo::Sha256 => sha2::sha256_new(),
+            Algo::Sha512 => sha2::sha512_new(),
+            _            => sha2::sha256_new(),
+        },
+        s3: match algo {
+            Algo::Sha3_256 => sha3::sha3_256_new(),
+            Algo::Sha3_512 => sha3::sha3_512_new(),
+            _              => sha3::sha3_256_new(),
+        },
+        b2: blake2::blake2b_new(64),
+        b3: blake3::blake3_new(),
+    }
+}
+
+pub fn update(h: Hasher, chunk: [Byte]) {
+    match h.algo {
+        Algo::Sha256   | Algo::Sha512   => sha2::update(h.s2, chunk),
+        Algo::Sha3_256 | Algo::Sha3_512 => sha3::update(h.s3, chunk),
+        Algo::Blake2b                   => blake2::update(h.b2, chunk),
+        Algo::Blake3                    => blake3::update(h.b3, chunk),
+    }
+}
+
+pub fn finalize(h: Hasher) -> [Byte] {
+    match h.algo {
+        Algo::Sha256   | Algo::Sha512   => sha2::finalize(h.s2),
+        Algo::Sha3_256 | Algo::Sha3_512 => sha3::finalize(h.s3),
+        Algo::Blake2b                   => blake2::finalize(h.b2),
+        Algo::Blake3                    => blake3::finalize(h.b3),
+    }
+}
+
+// -- Streaming -------------------------------------------------------------
+
+pub fn hash_file(path: str, algo: Algo) -> [Byte] {
+    let h = new(algo)
+    let f = io::open(path)
+    let chunk_size = 64 * 1024
+    loop {
+        let chunk = io::read_chunk(f, chunk_size)
+        if chunk.len() == 0 { break }
+        update(h, chunk)
+    }
+    io::close(f)
+    finalize(h)
+}
+
+pub fn hash_bytes(data: [Byte], algo: Algo) -> [Byte] {
+    let h = new(algo)
+    update(h, data)
+    finalize(h)
+}
+
+// -- Formatting ------------------------------------------------------------
+
+pub fn format_bytes(b: [Byte], f: Format) -> str {
+    match f {
+        Format::Hex    => hex_encode(b),
+        Format::Base64 => base64_encode(b),
+    }
+}
+
+fn hex_encode(b: [Byte]) -> str {
+    let digits = "0123456789abcdef"
+    let mut out = ""
+    for x in b {
+        out = out + str::from_char(digits[(x >> 4) as Int])
+                  + str::from_char(digits[(x & 0xF) as Int])
+    }
+    out
+}
+
+fn base64_encode(b: [Byte]) -> str {
+    let alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    let mut out = ""
+    let mut i = 0
+    while i + 2 < b.len() {
+        let v = ((b[i] as Int) << 16) | ((b[i+1] as Int) << 8) | (b[i+2] as Int)
+        out = out + str::from_char(alpha[(v >> 18) & 0x3F])
+                  + str::from_char(alpha[(v >> 12) & 0x3F])
+                  + str::from_char(alpha[(v >> 6)  & 0x3F])
+                  + str::from_char(alpha[v & 0x3F])
+        i = i + 3
+    }
+    // Padding
+    if i < b.len() {
+        let v = (b[i] as Int) << 16
+              | (if i + 1 < b.len() { (b[i+1] as Int) << 8 } else { 0 })
+        out = out + str::from_char(alpha[(v >> 18) & 0x3F])
+                  + str::from_char(alpha[(v >> 12) & 0x3F])
+                  + (if i + 1 < b.len() { str::from_char(alpha[(v >> 6) & 0x3F]) } else { "=" })
+                  + "="
+    }
+    out
+}
+
+// -- CLI ------------------------------------------------------------------
+
+pub fn main(args: [str]) -> Int {
+    let mut algo = Algo::Sha256
+    let mut fmt_opt = Format::Hex
+    let mut files: [str] = []
+    let mut i = 1
+    while i < args.len() {
+        match args[i] {
+            "--algo" | "-a" => { i = i + 1;
+                algo = match parse_algo(args[i]) {
+                    Some(a) => a,
+                    None    => { io::eprintln("unknown algorithm"); return 2 },
+                } },
+            "--format" | "-f" => { i = i + 1;
+                fmt_opt = match args[i] {
+                    "hex" => Format::Hex,
+                    "b64" => Format::Base64,
+                    _     => { io::eprintln("bad format"); return 2 },
+                } },
+            "--help" | "-h" => { usage(); return 0 },
+            f => files.push(f),
+        }
+        i = i + 1
+    }
+    if files.len() == 0 {
+        let out = hash_bytes(io::read_stdin_bytes(), algo)
+        io::println(format_bytes(out, fmt_opt))
+    } else {
+        for f in files {
+            let digest = hash_file(f, algo)
+            io::println(fmt::format("{}  {}", format_bytes(digest, fmt_opt), f))
+        }
+    }
+    0
+}
+
+fn usage() {
+    io::println("usage: hash-cat [--algo ALGO] [--format hex|b64] FILE...")
+    io::println("  algorithms: sha256, sha512, sha3-256, sha3-512, blake2b, blake3")
+}

@@ -1,0 +1,182 @@
+// snake/main.ltl
+//
+// Terminal snake game with a BFS auto-pilot AI. Uses VT100 escape
+// sequences for cursor positioning and color, raw-mode keyboard
+// input, and a 15 FPS fixed tick.
+
+import std::io
+import std::term
+import std::time
+import std::fmt
+
+pub enum Dir { Up, Down, Left, Right }
+
+pub struct Snake {
+    mut body:  [(Int, Int)],    // head is body[0]
+    mut dir:   Dir,
+    mut food:  (Int, Int),
+    mut score: Int,
+    mut dead:  Bool,
+    width:     Int,
+    height:    Int,
+    mut rng:   Int,
+}
+
+pub fn new(w: Int, h: Int) -> Snake {
+    Snake {
+        body: [(w / 2, h / 2), (w / 2 - 1, h / 2), (w / 2 - 2, h / 2)],
+        dir: Dir::Right,
+        food: (w / 4, h / 4),
+        score: 0,
+        dead: false,
+        width: w,
+        height: h,
+        rng: 0xDEADBEEF,
+    }
+}
+
+fn rand(s: Snake) -> Int {
+    s.rng = (s.rng * 1103515245 + 12345) & 0x7FFFFFFF
+    s.rng
+}
+
+pub fn step(s: Snake) {
+    if s.dead { return }
+    let (hx, hy) = s.body[0]
+    let (nx, ny) = match s.dir {
+        Dir::Up    => (hx, hy - 1),
+        Dir::Down  => (hx, hy + 1),
+        Dir::Left  => (hx - 1, hy),
+        Dir::Right => (hx + 1, hy),
+    }
+    // Wall collision
+    if nx < 0 || nx >= s.width || ny < 0 || ny >= s.height {
+        s.dead = true; return
+    }
+    // Self collision
+    for seg in s.body { if seg == (nx, ny) { s.dead = true; return } }
+
+    s.body.insert(0, (nx, ny))
+    if (nx, ny) == s.food {
+        s.score = s.score + 1
+        spawn_food(s)
+    } else {
+        s.body.pop()
+    }
+}
+
+fn spawn_food(s: Snake) {
+    loop {
+        let fx = rand(s) % s.width
+        let fy = rand(s) % s.height
+        if !s.body.contains((fx, fy)) { s.food = (fx, fy); return }
+    }
+}
+
+pub fn turn(s: Snake, d: Dir) {
+    // Reject 180-degree turns
+    match (s.dir, d) {
+        (Dir::Up, Dir::Down) | (Dir::Down, Dir::Up) |
+        (Dir::Left, Dir::Right) | (Dir::Right, Dir::Left) => {},
+        _ => s.dir = d,
+    }
+}
+
+// -- BFS auto-pilot AI ----------------------------------------------------
+
+pub fn ai_choose(s: Snake) -> Dir {
+    let (hx, hy) = s.body[0]
+    let path = bfs_to_food(s, hx, hy)
+    match path {
+        Some(dir) => dir,
+        None      => s.dir,       // no path; continue and hope
+    }
+}
+
+fn bfs_to_food(s: Snake, hx: Int, hy: Int) -> Option[Dir] {
+    let mut visited: [[Bool]] = [[false; s.width]; s.height]
+    for seg in s.body {
+        let (x, y) = seg
+        visited[y][x] = true
+    }
+    visited[hy][hx] = false
+    let mut queue: [(Int, Int, Dir)] = []
+    for (dx, dy, d) in [(0, -1, Dir::Up), (0, 1, Dir::Down),
+                        (-1, 0, Dir::Left), (1, 0, Dir::Right)] {
+        let nx = hx + dx; let ny = hy + dy
+        if nx >= 0 && nx < s.width && ny >= 0 && ny < s.height && !visited[ny][nx] {
+            queue.push((nx, ny, d))
+            visited[ny][nx] = true
+        }
+    }
+    while queue.len() > 0 {
+        let (x, y, first_dir) = queue.remove(0)
+        if (x, y) == s.food { return Some(first_dir) }
+        for (dx, dy, _) in [(0, -1, Dir::Up), (0, 1, Dir::Down),
+                            (-1, 0, Dir::Left), (1, 0, Dir::Right)] {
+            let nx = x + dx; let ny = y + dy
+            if nx >= 0 && nx < s.width && ny >= 0 && ny < s.height && !visited[ny][nx] {
+                queue.push((nx, ny, first_dir))
+                visited[ny][nx] = true
+            }
+        }
+    }
+    None
+}
+
+// -- Rendering ------------------------------------------------------------
+
+pub fn render(s: Snake) {
+    term::clear_screen()
+    term::move_cursor(1, 1)
+    io::print(fmt::format("Score: {}   [q = quit]\n", s.score))
+    // Border
+    io::print("+")
+    for _ in 0..s.width { io::print("-") }
+    io::println("+")
+    for y in 0..s.height {
+        io::print("|")
+        for x in 0..s.width {
+            if s.body[0] == (x, y)             { io::print("@") }
+            else if s.body.contains((x, y))    { io::print("o") }
+            else if s.food == (x, y)           { io::print("*") }
+            else                               { io::print(" ") }
+        }
+        io::println("|")
+    }
+    io::print("+")
+    for _ in 0..s.width { io::print("-") }
+    io::println("+")
+    if s.dead {
+        io::println(fmt::format("GAME OVER — final score: {}", s.score))
+    }
+}
+
+// -- Main loop ------------------------------------------------------------
+
+pub fn main(args: [str]) -> Int {
+    let ai_mode = args.len() > 1 && args[1] == "--ai"
+    let s = new(40, 20)
+    term::raw_mode(true)
+    term::hide_cursor()
+    while !s.dead {
+        if ai_mode {
+            turn(s, ai_choose(s))
+        } else {
+            match term::read_key_nonblock() {
+                Some('w') => turn(s, Dir::Up),
+                Some('s') => turn(s, Dir::Down),
+                Some('a') => turn(s, Dir::Left),
+                Some('d') => turn(s, Dir::Right),
+                Some('q') => break,
+                _         => {},
+            }
+        }
+        step(s)
+        render(s)
+        time::sleep_ms(66)            // ~15 FPS
+    }
+    term::raw_mode(false)
+    term::show_cursor()
+    0
+}
