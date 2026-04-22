@@ -1,0 +1,757 @@
+// ===========================================================================
+// n01d-notes — Markdown Notes App for LateralusOS
+// ===========================================================================
+// Copyright (c) 2025-2026 bad-antics. All rights reserved.
+//
+// Native port of n01d-notes (Python/markdown) to Lateralus.
+// Split-pane markdown editor with live preview, notebooks,
+// and full filesystem integration via LateralusFS.
+//
+// Features:
+//   • Split view: left=editor (ltled-based), right=rendered preview
+//   • Notebook concept: ~/.notes/ directory, one file per note
+//   • Full markdown: headings, bold, italic, code, links, tables, lists
+//   • Search across all notes (full-text)
+//   • N01D dark-green theme
+//   • Keyboard shortcuts (Ctrl+N new, Ctrl+S save, Ctrl+F search)
+//   • Word count, reading-time estimate
+//   • Auto-save every 30 seconds
+//
+// Usage:  n01d-notes             — open note browser
+//         n01d-notes <file>      — open specific note
+//         n01d-notes new         — create new note
+// ===========================================================================
+
+import sys
+import gui
+import gui::widgets
+import fs::vfs
+import fs::ltlfs
+
+// ── Constants ────────────────────────────────────────────────────────────────
+
+const APP_TITLE   = "n01d-notes"
+const NOTES_DIR   = "~/.notes"
+const AUTO_SAVE_S = 30
+
+// N01D palette
+const N_BG      = 0x0D0D0D
+const N_BG2     = 0x111111
+const N_BG3     = 0x161616
+const N_FG      = 0xCCCCCC
+const N_ACCENT  = 0x00FF88
+const N_DIM     = 0x555555
+const N_BORDER  = 0x222222
+const N_SEL_BG  = 0x1A3A2A
+const N_WARN    = 0xFFAA00
+
+// Markdown render colors
+const MD_H1     = 0x00FF88    // green
+const MD_H2     = 0x44FF99
+const MD_H3     = 0x88FFBB
+const MD_CODE   = 0xA6E3A1
+const MD_CODE_BG = 0x151515
+const MD_LINK   = 0x06B6D4
+const MD_BOLD   = 0xEEEEEE
+const MD_EM     = 0xCCCCCC
+const MD_TABLE  = 0x2A2A2A
+const MD_LIST   = 0x888888
+const MD_QUOTE  = 0x666666
+const MD_QUOTE_BAR = 0x00FF88
+
+// ── Markdown Parser ───────────────────────────────────────────────────────────
+
+enum BlockKind {
+    Heading(int)   // level 1-6
+    Paragraph
+    CodeBlock(str) // language hint
+    Quote
+    UnorderedList
+    OrderedList
+    Table
+    HRule
+    Blank
+}
+
+struct Block {
+    kind:  BlockKind
+    lines: [str]
+}
+
+enum InlineKind {
+    Text
+    Bold
+    Italic
+    BoldItalic
+    Code
+    Link(str)    // url
+    Image(str)   // url
+    Strikethrough
+}
+
+struct Span {
+    text: str
+    kind: InlineKind
+}
+
+// Block-level parsing
+fn parse_blocks(text: str) -> [Block] {
+    let lines = text.split("\n")
+    let mut blocks: [Block] = []
+    let mut i = 0
+
+    while i < lines.len() {
+        let line = lines[i]
+
+        // Blank
+        if line.trim() == "" {
+            blocks = blocks ++ [Block { kind: BlockKind::Blank, lines: [] }]
+            i = i + 1
+            continue
+        }
+
+        // ATX Heading # ## ### etc
+        if line.starts_with("#") {
+            let mut lvl = 0
+            while lvl < line.len() && line[lvl] == "#" { lvl = lvl + 1 }
+            if lvl <= 6 && (lvl == line.len() || line[lvl] == " ") {
+                let content = line.slice(lvl + 1, line.len()).trim()
+                blocks = blocks ++ [Block { kind: BlockKind::Heading(lvl), lines: [content] }]
+                i = i + 1
+                continue
+            }
+        }
+
+        // Fenced code block ```
+        if line.starts_with("```") {
+            let lang = line.slice(3, line.len()).trim()
+            let mut code_lines: [str] = []
+            i = i + 1
+            while i < lines.len() && !lines[i].starts_with("```") {
+                code_lines = code_lines ++ [lines[i]]
+                i = i + 1
+            }
+            blocks = blocks ++ [Block { kind: BlockKind::CodeBlock(lang), lines: code_lines }]
+            i = i + 1
+            continue
+        }
+
+        // Blockquote
+        if line.starts_with("> ") {
+            let mut q_lines: [str] = []
+            while i < lines.len() && lines[i].starts_with("> ") {
+                q_lines = q_lines ++ [lines[i].slice(2, lines[i].len())]
+                i = i + 1
+            }
+            blocks = blocks ++ [Block { kind: BlockKind::Quote, lines: q_lines }]
+            continue
+        }
+
+        // Horizontal rule --- ***
+        if line.trim() == "---" || line.trim() == "***" || line.trim() == "===" {
+            blocks = blocks ++ [Block { kind: BlockKind::HRule, lines: [] }]
+            i = i + 1
+            continue
+        }
+
+        // Unordered list  - * +
+        if line.starts_with("- ") || line.starts_with("* ") || line.starts_with("+ ") {
+            let mut items: [str] = []
+            while i < lines.len() && (lines[i].starts_with("- ") || lines[i].starts_with("* ") || lines[i].starts_with("+ ")) {
+                items = items ++ [lines[i].slice(2, lines[i].len())]
+                i = i + 1
+            }
+            blocks = blocks ++ [Block { kind: BlockKind::UnorderedList, lines: items }]
+            continue
+        }
+
+        // Ordered list  1. 2. etc
+        if line.len() >= 3 && line[0] >= "0" && line[0] <= "9" && line[1] == "." {
+            let mut items: [str] = []
+            let mut j = i
+            while j < lines.len() && lines[j].len() >= 3 && lines[j][0] >= "0" && lines[j][0] <= "9" && lines[j][1] == "." {
+                items = items ++ [lines[j].slice(3, lines[j].len())]
+                j = j + 1
+            }
+            blocks = blocks ++ [Block { kind: BlockKind::OrderedList, lines: items }]
+            i = j
+            continue
+        }
+
+        // Table  | col | col |
+        if line.starts_with("|") && line.ends_with("|") {
+            let mut t_lines: [str] = []
+            while i < lines.len() && lines[i].starts_with("|") {
+                t_lines = t_lines ++ [lines[i]]
+                i = i + 1
+            }
+            blocks = blocks ++ [Block { kind: BlockKind::Table, lines: t_lines }]
+            continue
+        }
+
+        // Paragraph — accumulate until blank or block-starter
+        let mut para_lines: [str] = []
+        while i < lines.len() {
+            let l = lines[i]
+            if l.trim() == "" || l.starts_with("#") || l.starts_with("```") ||
+               l.starts_with("> ") || l.starts_with("- ") || l.starts_with("* ") ||
+               l.starts_with("| ") { break }
+            para_lines = para_lines ++ [l]
+            i = i + 1
+        }
+        if para_lines.len() > 0 {
+            blocks = blocks ++ [Block { kind: BlockKind::Paragraph, lines: para_lines }]
+        }
+    }
+
+    blocks
+}
+
+// Inline parsing — returns flat list of Spans
+fn parse_inline(text: str) -> [Span] {
+    let mut spans: [Span] = []
+    let mut i = 0
+    let mut buf = ""
+
+    while i < text.len() {
+        // Bold+italic ***
+        if i + 2 < text.len() && text[i] == "*" && text[i+1] == "*" && text[i+2] == "*" {
+            if buf.len() > 0 { spans = spans ++ [Span { text: buf, kind: InlineKind::Text }]; buf = "" }
+            let end = text.find("***", i + 3)
+            let inner = if end >= 0 { text.slice(i + 3, end) } else { text.slice(i + 3, text.len()) }
+            spans = spans ++ [Span { text: inner, kind: InlineKind::BoldItalic }]
+            i = if end >= 0 { end + 3 } else { text.len() }
+            continue
+        }
+        // Bold **
+        if i + 1 < text.len() && text[i] == "*" && text[i+1] == "*" {
+            if buf.len() > 0 { spans = spans ++ [Span { text: buf, kind: InlineKind::Text }]; buf = "" }
+            let end = text.find("**", i + 2)
+            let inner = if end >= 0 { text.slice(i + 2, end) } else { text.slice(i + 2, text.len()) }
+            spans = spans ++ [Span { text: inner, kind: InlineKind::Bold }]
+            i = if end >= 0 { end + 2 } else { text.len() }
+            continue
+        }
+        // Italic *
+        if text[i] == "*" {
+            if buf.len() > 0 { spans = spans ++ [Span { text: buf, kind: InlineKind::Text }]; buf = "" }
+            let end = text.find("*", i + 1)
+            let inner = if end >= 0 { text.slice(i + 1, end) } else { text.slice(i + 1, text.len()) }
+            spans = spans ++ [Span { text: inner, kind: InlineKind::Italic }]
+            i = if end >= 0 { end + 1 } else { text.len() }
+            continue
+        }
+        // Inline code `
+        if text[i] == "`" {
+            if buf.len() > 0 { spans = spans ++ [Span { text: buf, kind: InlineKind::Text }]; buf = "" }
+            let end = text.find("`", i + 1)
+            let inner = if end >= 0 { text.slice(i + 1, end) } else { text.slice(i + 1, text.len()) }
+            spans = spans ++ [Span { text: inner, kind: InlineKind::Code }]
+            i = if end >= 0 { end + 1 } else { text.len() }
+            continue
+        }
+        // Link [text](url)
+        if text[i] == "[" {
+            let close_bracket = text.find("]", i + 1)
+            if close_bracket >= 0 && close_bracket + 1 < text.len() && text[close_bracket + 1] == "(" {
+                let close_paren = text.find(")", close_bracket + 2)
+                if close_paren >= 0 {
+                    if buf.len() > 0 { spans = spans ++ [Span { text: buf, kind: InlineKind::Text }]; buf = "" }
+                    let link_text = text.slice(i + 1, close_bracket)
+                    let url = text.slice(close_bracket + 2, close_paren)
+                    spans = spans ++ [Span { text: link_text, kind: InlineKind::Link(url) }]
+                    i = close_paren + 1
+                    continue
+                }
+            }
+        }
+        buf = buf ++ text[i]
+        i = i + 1
+    }
+
+    if buf.len() > 0 { spans = spans ++ [Span { text: buf, kind: InlineKind::Text }] }
+    spans
+}
+
+// ── Render Model ─────────────────────────────────────────────────────────────
+
+struct RenderLine {
+    spans: [Span]
+    font:  str
+    y:     int
+    indent: int
+    bg:    Option[int]
+    is_separator: bool
+}
+
+fn layout_blocks(blocks: [Block], x_off: int, y_off: int, w: int) -> [RenderLine] {
+    let mut lines: [RenderLine] = []
+    let mut y = y_off
+
+    for block in blocks {
+        match block.kind {
+            BlockKind::Blank => { y = y + 8 }
+
+            BlockKind::HRule => {
+                lines = lines ++ [RenderLine {
+                    spans: [], font: "", y: y, indent: x_off, bg: None, is_separator: true
+                }]
+                y = y + 12
+            }
+
+            BlockKind::Heading(lvl) => {
+                let (font, color, spacing) = match lvl {
+                    1 => ("mono-bold-20", MD_H1, 14)
+                    2 => ("mono-bold-16", MD_H2, 12)
+                    3 => ("mono-bold-13", MD_H3, 10)
+                    _ => ("mono-bold-11", MD_H3, 8)
+                }
+                for line_text in block.lines {
+                    let mut spans = parse_inline(line_text)
+                    spans = spans |> map(|s| match s.kind {
+                        InlineKind::Text => Span { ..s, kind: InlineKind::Text }
+                        _ => s
+                    })
+                    // Override text color for headings
+                    let heading_spans = [Span { text: line_text, kind: InlineKind::Text }]
+                    lines = lines ++ [RenderLine { spans: heading_spans, font: font, y: y, indent: x_off, bg: None, is_separator: false }]
+                    y = y + spacing + 16
+                }
+            }
+
+            BlockKind::Paragraph => {
+                let text = block.lines.join(" ")
+                let spans = parse_inline(text)
+                lines = lines ++ [RenderLine { spans: spans, font: "mono-11", y: y, indent: x_off, bg: None, is_separator: false }]
+                y = y + 20
+            }
+
+            BlockKind::CodeBlock(_lang) => {
+                for code_line in block.lines {
+                    let spans = [Span { text: code_line, kind: InlineKind::Code }]
+                    lines = lines ++ [RenderLine { spans: spans, font: "mono-10", y: y, indent: x_off + 8, bg: Some(MD_CODE_BG), is_separator: false }]
+                    y = y + 16
+                }
+                y = y + 4
+            }
+
+            BlockKind::Quote => {
+                for q_line in block.lines {
+                    let spans = [Span { text: q_line, kind: InlineKind::Text }]
+                    lines = lines ++ [RenderLine { spans: spans, font: "mono-italic-11", y: y, indent: x_off + 16, bg: None, is_separator: false }]
+                    y = y + 18
+                }
+            }
+
+            BlockKind::UnorderedList => {
+                for item in block.lines {
+                    let spans = [Span { text: "• " ++ item, kind: InlineKind::Text }]
+                    lines = lines ++ [RenderLine { spans: spans, font: "mono-11", y: y, indent: x_off + 12, bg: None, is_separator: false }]
+                    y = y + 18
+                }
+            }
+
+            BlockKind::OrderedList => {
+                for (i, item) in block.lines.enumerate() {
+                    let spans = [Span { text: str(i + 1) ++ ". " ++ item, kind: InlineKind::Text }]
+                    lines = lines ++ [RenderLine { spans: spans, font: "mono-11", y: y, indent: x_off + 12, bg: None, is_separator: false }]
+                    y = y + 18
+                }
+            }
+
+            BlockKind::Table => {
+                for t_line in block.lines {
+                    if t_line.contains("---") { continue }
+                    let cells = t_line.split("|") |> filter(|c| c.trim().len() > 0)
+                    let row_spans = cells |> flat_map(|c| [
+                        Span { text: c.trim(), kind: InlineKind::Text },
+                        Span { text: "  │  ", kind: InlineKind::Text },
+                    ])
+                    lines = lines ++ [RenderLine { spans: row_spans, font: "mono-10", y: y, indent: x_off, bg: Some(MD_TABLE), is_separator: false }]
+                    y = y + 18
+                }
+            }
+        }
+    }
+
+    lines
+}
+
+// ── Note List ─────────────────────────────────────────────────────────────────
+
+struct Note {
+    filename: str
+    title:    str
+    preview:  str
+    modified: int     // unix timestamp
+    word_count: int
+}
+
+fn load_note_list() -> [Note] {
+    let files = vfs::list_dir(NOTES_DIR)
+        |> filter(|f| f.ends_with(".md") || f.ends_with(".ltlnote"))
+        |> sort_by(|a, b| vfs::mtime(NOTES_DIR ++ "/" ++ b) - vfs::mtime(NOTES_DIR ++ "/" ++ a))
+
+    files |> map(|f| {
+        let path = NOTES_DIR ++ "/" ++ f
+        let content = vfs::read_file(path)
+        let lines = content.split("\n")
+        let title = if lines.len() > 0 && lines[0].starts_with("# ") {
+            lines[0].slice(2, lines[0].len())
+        } else {
+            f.replace(".md", "").replace(".ltlnote", "")
+        }
+        let preview = if lines.len() > 1 {
+            let p = lines[1..].join(" ").trim()
+            if p.len() > 80 { p.slice(0, 80) ++ "…" } else { p }
+        } else { "" }
+        let words = content.split_whitespace().len()
+
+        Note {
+            filename:   f,
+            title:      title,
+            preview:    preview,
+            modified:   vfs::mtime(path),
+            word_count: words,
+        }
+    })
+}
+
+fn word_count(text: str) -> int {
+    text.split_whitespace().len()
+}
+
+fn reading_time_str(words: int) -> str {
+    let mins = words / 200
+    if mins == 0 { "< 1 min read" }
+    else if mins == 1 { "1 min read" }
+    else { str(mins) ++ " min read" }
+}
+
+// ── App State ─────────────────────────────────────────────────────────────────
+
+enum Panel { NoteList, Editor, Preview, Split }
+
+struct AppState {
+    notes:        [Note]
+    selected:     int         // index in notes list
+    current_file: Option[str]
+    content:      str
+    dirty:        bool
+    search_query: str
+    search_mode:  bool
+    render_lines: [RenderLine]
+    scroll_editor: int
+    scroll_preview: int
+    panel:        Panel
+    window:       gui::Window
+    auto_save_tick: int
+    status_msg:   str
+    running:      bool
+}
+
+fn load_note(state: AppState, filename: str) -> AppState {
+    let path = NOTES_DIR ++ "/" ++ filename
+    let content = vfs::read_file(path)
+    let blocks = parse_blocks(content)
+    let render_lines = layout_blocks(blocks, 8, 8, 440)
+    AppState {
+        ..state,
+        current_file:   Some(filename),
+        content:        content,
+        dirty:          false,
+        render_lines:   render_lines,
+        scroll_editor:  0,
+        scroll_preview: 0,
+        status_msg:     "Opened " ++ filename,
+    }
+}
+
+fn save_current_note(state: AppState) -> AppState {
+    match state.current_file {
+        None => AppState { ..state, status_msg: "No file open" }
+        Some(f) => {
+            let path = NOTES_DIR ++ "/" ++ f
+            vfs::write_file(path, state.content)
+            let words = word_count(state.content)
+            AppState { ..state, dirty: false, status_msg: "Saved " ++ f ++ " — " ++ str(words) ++ " words" }
+        }
+    }
+}
+
+fn new_note(state: AppState) -> AppState {
+    let ts = sys::timestamp()
+    let filename = "note-" ++ str(ts) ++ ".md"
+    let content = "# New Note\n\n"
+    let path = NOTES_DIR ++ "/" ++ filename
+    vfs::write_file(path, content)
+    let notes = load_note_list()
+    let state2 = AppState { ..state, notes: notes }
+    load_note(state2, filename)
+}
+
+fn update_content(state: AppState, new_content: str) -> AppState {
+    let blocks = parse_blocks(new_content)
+    let render_lines = layout_blocks(blocks, 8, 8, 440)
+    AppState {
+        ..state,
+        content:      new_content,
+        dirty:        true,
+        render_lines: render_lines,
+    }
+}
+
+// ── Rendering ────────────────────────────────────────────────────────────────
+
+const LIST_W   = 200
+const EDITOR_W = 440
+const PREV_W   = 440
+const WINDOW_W = LIST_W + EDITOR_W + PREV_W
+const WINDOW_H = 660
+const HEADER_H = 36
+
+fn draw_header(ctx: gui::Context, state: AppState) {
+    ctx.fill_rect(0, 0, WINDOW_W, HEADER_H, N_BG2)
+    ctx.draw_line(0, HEADER_H, WINDOW_W, HEADER_H, N_BORDER, 1)
+    ctx.draw_text(12, 10, APP_TITLE, N_ACCENT, "mono-bold-13")
+    ctx.draw_text(140, 12, "Ctrl+N new  Ctrl+S save  Ctrl+F search  Ctrl+Q quit", N_DIM, "mono-9")
+    // Status
+    let wc = word_count(state.content)
+    let wc_str = str(wc) ++ " words · " ++ reading_time_str(wc)
+    ctx.draw_text(WINDOW_W - 200, 12, wc_str, N_DIM, "mono-9")
+    let dirty_flag = if state.dirty { " ●" } else { "" }
+    let title = match state.current_file {
+        Some(f) => f ++ dirty_flag
+        None    => "—"
+    }
+    ctx.draw_text(WINDOW_W / 2 - 100, 11, title, N_FG, "mono-bold-11")
+
+    // Status bar
+    ctx.fill_rect(0, WINDOW_H - 22, WINDOW_W, 22, N_BG2)
+    ctx.draw_line(0, WINDOW_H - 22, WINDOW_W, WINDOW_H - 22, N_BORDER, 1)
+    ctx.draw_text(12, WINDOW_H - 14, state.status_msg, N_DIM, "mono-9")
+}
+
+fn draw_note_list(ctx: gui::Context, state: AppState) {
+    ctx.fill_rect(0, HEADER_H, LIST_W, WINDOW_H - HEADER_H - 22, N_BG2)
+    ctx.draw_line(LIST_W, HEADER_H, LIST_W, WINDOW_H - 22, N_BORDER, 1)
+
+    // Search box
+    let query_box_y = HEADER_H + 8
+    ctx.fill_rect(8, query_box_y, LIST_W - 16, 22, N_BG3)
+    ctx.draw_rect(8, query_box_y, LIST_W - 16, 22, if state.search_mode { N_ACCENT } else { N_BORDER }, 1)
+    let query_display = if state.search_query.len() > 0 { state.search_query } else { "search notes…" }
+    ctx.draw_text(12, query_box_y + 6, query_display, if state.search_query.len() > 0 { N_FG } else { N_DIM }, "mono-9")
+
+    let notes = if state.search_query.len() > 0 {
+        state.notes |> filter(|n| {
+            n.title.to_lower().contains(state.search_query.to_lower()) ||
+            n.preview.to_lower().contains(state.search_query.to_lower())
+        })
+    } else {
+        state.notes
+    }
+
+    let mut y = HEADER_H + 38
+    for (i, note) in notes.enumerate() {
+        let active = state.current_file == Some(note.filename)
+        let bg = if active { N_SEL_BG } else { N_BG2 }
+        ctx.fill_rect(0, y, LIST_W, 52, bg)
+        if active {
+            ctx.fill_rect(0, y, 3, 52, N_ACCENT)
+        }
+        ctx.draw_text(10, y + 6, note.title, if active { N_ACCENT } else { N_FG }, "mono-bold-10")
+        ctx.draw_text(10, y + 20, note.preview, N_DIM, "mono-9")
+        ctx.draw_text(10, y + 36, reading_time_str(note.word_count), N_DIM, "mono-9")
+        ctx.draw_line(0, y + 52, LIST_W, y + 52, N_BORDER, 1)
+        y = y + 53
+    }
+}
+
+fn draw_editor(ctx: gui::Context, state: AppState) {
+    let ex = LIST_W
+    ctx.fill_rect(ex, HEADER_H, EDITOR_W, WINDOW_H - HEADER_H - 22, N_BG)
+    ctx.draw_line(ex + EDITOR_W, HEADER_H, ex + EDITOR_W, WINDOW_H - 22, N_BORDER, 1)
+
+    // Line numbers + content
+    let lines = state.content.split("\n")
+    let mut y = HEADER_H + 8 - state.scroll_editor
+    let lnum_w = 36
+
+    for (i, line) in lines.enumerate() {
+        if y + 14 < HEADER_H { y = y + 14; continue }
+        if y > WINDOW_H - 22 { break }
+        ctx.draw_text(ex + 4, y, str(i + 1), N_DIM, "mono-9")
+        ctx.draw_text(ex + lnum_w, y, line, N_FG, "mono-11")
+        y = y + 14
+    }
+}
+
+fn draw_preview(ctx: gui::Context, state: AppState) {
+    let px = LIST_W + EDITOR_W
+    ctx.fill_rect(px, HEADER_H, PREV_W, WINDOW_H - HEADER_H - 22, N_BG)
+
+    for rl in state.render_lines {
+        let ry = rl.y + HEADER_H - state.scroll_preview
+        if ry + 20 < HEADER_H || ry > WINDOW_H - 22 { continue }
+
+        if rl.is_separator {
+            ctx.draw_line(px + 8, ry + 4, px + PREV_W - 8, ry + 4, N_BORDER, 1)
+            continue
+        }
+
+        match rl.bg {
+            Some(bg) => ctx.fill_rect(px + rl.indent - 4, ry - 2, PREV_W - rl.indent, 16, bg)
+            None     => ()
+        }
+
+        let mut x = px + rl.indent
+        for span in rl.spans {
+            let (color, font) = match span.kind {
+                InlineKind::Text         => (N_FG,   rl.font)
+                InlineKind::Bold         => (MD_BOLD, "mono-bold-11")
+                InlineKind::Italic       => (N_FG,   "mono-italic-11")
+                InlineKind::BoldItalic   => (MD_BOLD, "mono-bold-italic-11")
+                InlineKind::Code         => (MD_CODE, "mono-10")
+                InlineKind::Link(_url)   => (MD_LINK, "mono-11")
+                InlineKind::Image(_url)  => (MD_LINK, "mono-11")
+                InlineKind::Strikethrough => (N_DIM,  "mono-11")
+            }
+            ctx.draw_text(x, ry, span.text, color, font)
+            let tw = ctx.measure_text(span.text, font)
+            x = x + tw
+        }
+    }
+}
+
+fn render(ctx: gui::Context, state: AppState) {
+    ctx.clear(N_BG)
+    draw_header(ctx, state)
+    draw_note_list(ctx, state)
+    draw_editor(ctx, state)
+    draw_preview(ctx, state)
+}
+
+// ── Input ─────────────────────────────────────────────────────────────────────
+
+fn handle_event(state: AppState, ev: gui::Event) -> AppState {
+    match ev {
+        gui::Event::KeyDown(key, mods) => {
+            if mods.ctrl {
+                match key {
+                    gui::Key::N => new_note(state)
+                    gui::Key::S => save_current_note(state)
+                    gui::Key::Q => AppState { ..state, running: false }
+                    gui::Key::F => AppState { ..state, search_mode: true, search_query: "" }
+                    _ => state
+                }
+            } else if state.search_mode {
+                match key {
+                    gui::Key::ESCAPE => AppState { ..state, search_mode: false, search_query: "" }
+                    gui::Key::BACKSPACE => AppState { ..state, search_query: state.search_query.slice(0, max(0, state.search_query.len() - 1)) }
+                    gui::Key::CHAR(c) => AppState { ..state, search_query: state.search_query ++ c }
+                    _ => state
+                }
+            } else {
+                // Text editing in editor pane — append/remove character
+                match key {
+                    gui::Key::BACKSPACE => {
+                        let new_content = if state.content.len() > 0 {
+                            state.content.slice(0, state.content.len() - 1)
+                        } else { state.content }
+                        update_content(state, new_content)
+                    }
+                    gui::Key::ENTER => update_content(state, state.content ++ "\n")
+                    gui::Key::TAB   => update_content(state, state.content ++ "    ")
+                    gui::Key::CHAR(c) => update_content(state, state.content ++ c)
+                    _ => state
+                }
+            }
+        }
+        gui::Event::MouseDown(x, y, _btn) => {
+            if x < LIST_W {
+                // Click in note list
+                if y >= HEADER_H + 38 {
+                    let idx = (y - HEADER_H - 38) / 53
+                    let notes = state.notes
+                    if idx < notes.len() {
+                        load_note(state, notes[idx].filename)
+                    } else { state }
+                } else { state }
+            } else { state }
+        }
+        gui::Event::Scroll(x, y, dy) => {
+            if x < LIST_W { state }
+            else if x < LIST_W + EDITOR_W {
+                AppState { ..state, scroll_editor: max(0, state.scroll_editor + dy * 14) }
+            } else {
+                AppState { ..state, scroll_preview: max(0, state.scroll_preview + dy * 14) }
+            }
+        }
+        gui::Event::WindowClose => AppState { ..state, running: false }
+        _ => state
+    }
+}
+
+// ── Entry Point ──────────────────────────────────────────────────────────────
+
+fn main(args: [str]) -> int {
+    vfs::mkdir_p(NOTES_DIR)
+
+    let win = gui::create_window(APP_TITLE, WINDOW_W, WINDOW_H, gui::Flags::RESIZABLE)
+    win.set_bg(N_BG)
+
+    let notes = load_note_list()
+
+    let initial_file = if args.len() > 1 && args[1] != "new" {
+        Some(args[1])
+    } else { None }
+
+    let mut state = AppState {
+        notes:          notes,
+        selected:       0,
+        current_file:   None,
+        content:        "",
+        dirty:          false,
+        search_query:   "",
+        search_mode:    false,
+        render_lines:   [],
+        scroll_editor:  0,
+        scroll_preview: 0,
+        panel:          Panel::Split,
+        window:         win,
+        auto_save_tick: 0,
+        status_msg:     "Ready  —  " ++ str(notes.len()) ++ " notes",
+        running:        true,
+    }
+
+    state = if args.len() > 1 && args[1] == "new" {
+        new_note(state)
+    } else {
+        match initial_file {
+            Some(f) => load_note(state, f)
+            None    => if notes.len() > 0 { load_note(state, notes[0].filename) } else { state }
+        }
+    }
+
+    while state.running {
+        let events = state.window.poll_events()
+        for ev in events { state = handle_event(state, ev) }
+
+        // Auto-save
+        state = AppState { ..state, auto_save_tick: state.auto_save_tick + 1 }
+        if state.auto_save_tick >= AUTO_SAVE_S * 60 && state.dirty {
+            state = save_current_note(state)
+            state = AppState { ..state, auto_save_tick: 0 }
+        }
+
+        let ctx = state.window.get_context()
+        render(ctx, state)
+        state.window.swap_buffers()
+        sys::sleep_ms(16)
+    }
+
+    if state.dirty { save_current_note(state) }
+    state.window.close()
+    return 0
+}

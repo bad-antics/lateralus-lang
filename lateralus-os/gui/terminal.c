@@ -190,6 +190,13 @@ static void cmd_help(GuiTerminal *t) {
     term_puts(t, "  clear       Clear terminal\n");
     term_puts(t, "  history     Command history\n");
     term_puts(t, "  neofetch    System info banner\n");
+    term_puts(t, "  apps        List installed applications\n");
+    term_puts(t, "  grugbot     grugbot420 -- caveman wisdom chatbot\n");
+    term_puts(t, "  chat        IRC-style chat (info)\n");
+    term_puts(t, "  edit <f>    Text editor (info)\n");
+    term_puts(t, "  ltlc <f>    Lateralus compiler (info)\n");
+    term_puts(t, "  pkg <cmd>   Package manager (info)\n");
+    term_puts(t, "  about       About LateralusOS\n");
 }
 
 static void cmd_ls(GuiTerminal *t, const char *args) {
@@ -473,6 +480,375 @@ static void cmd_neofetch(GuiTerminal *t) {
 }
 
 /* =======================================================================
+ * grugbot420 — caveman wisdom chatbot (interactive mode)
+ *
+ * When a terminal is in grug_mode, each Enter-terminated line is routed
+ * through grug_respond() instead of the shell dispatcher.  Output is
+ * written straight into the terminal scrollback via term_puts.
+ * ======================================================================= */
+
+static const char *GRUG_WISDOM[] = {
+    "grug say: complexity very very bad. simple good.",
+    "grug say: factory factory factory make grug head hurt.",
+    "grug say: name variable what it be. 'data' mean nothing.",
+    "grug say: if code hard to delete, code already own you.",
+    "grug say: type system friend, not enemy. type catch bug.",
+    "grug brain small, so grug keep function small too.",
+    "grug say: senior dev is one who know where bodies buried.",
+    "grug say: meeting is where productivity go to die.",
+    "grug say: ship small, ship often, fix in prod, grug not scared.",
+    "grug say: premature optimization root of all bug. measure first.",
+    "grug say: DRY is lie. same shape not same meaning.",
+    "grug say: if test hard to write, code shape wrong.",
+    "grug say: comment say WHY. code already say WHAT.",
+    "grug say: log loud when bad, silent when good.",
+};
+static const int GRUG_WISDOM_N = sizeof(GRUG_WISDOM)/sizeof(GRUG_WISDOM[0]);
+
+static const char *GRUG_JOKES[] = {
+    "why function cross road? because callback on other side.",
+    "grug have 99 problem but null pointer not one. grug also have null.",
+    "how many grug to change lightbulb? none. grug afraid of dark.",
+    "grug try recursion to understand recursion. grug still trying.",
+    "wife say get bread, if egg get 12. he come home with 12 bread.",
+};
+static const int GRUG_JOKES_N = sizeof(GRUG_JOKES)/sizeof(GRUG_JOKES[0]);
+
+static const char *GRUG_SMOKE[] = {
+    "grug puff... semicolons are just fences for thoughts.",
+    "grug puff... garbage collector is just letting go man.",
+    "grug puff... monad is just burrito of sadness.",
+    "grug puff... every for-loop is a tiny universe bro.",
+    "grug puff... types are vibes and vibes are types.",
+    "grug puff... the real bug was friends we made along the way.",
+};
+static const int GRUG_SMOKE_N = sizeof(GRUG_SMOKE)/sizeof(GRUG_SMOKE[0]);
+
+static uint32_t grug_rand(GuiTerminal *t) {
+    uint32_t x = t->grug_rng;
+    if (x == 0) x = 0x420BADA5u;
+    x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+    t->grug_rng = x;
+    return x & 0x7fffffffu;
+}
+
+/* Case-insensitive substring search */
+static int grug_has(const char *hay, const char *needle) {
+    if (!hay || !needle || !*needle) return 0;
+    for (int i = 0; hay[i]; i++) {
+        int j = 0;
+        while (needle[j]) {
+            char a = hay[i + j];
+            char b = needle[j];
+            if (!a) return 0;
+            if (a >= 'A' && a <= 'Z') a += 32;
+            if (b >= 'A' && b <= 'Z') b += 32;
+            if (a != b) break;
+            j++;
+        }
+        if (!needle[j]) return 1;
+    }
+    return 0;
+}
+
+static int grug_streq_ci(const char *a, const char *b) {
+    int i = 0;
+    for (;; i++) {
+        char x = a[i], y = b[i];
+        if (x >= 'A' && x <= 'Z') x += 32;
+        if (y >= 'A' && y <= 'Z') y += 32;
+        if (x != y) return 0;
+        if (!x) return 1;
+    }
+}
+
+static void grug_say(GuiTerminal *t, const char *text) {
+    term_puts(t, "[");
+    term_puts(t, (t->grug_mood >= 1) ? "grug420" : "grug");
+    term_puts(t, "] ");
+    term_puts(t, text);
+    term_putc(t, '\n');
+}
+
+static void grug_sys(GuiTerminal *t, const char *text) {
+    term_puts(t, "[sys] ");
+    term_puts(t, text);
+    term_putc(t, '\n');
+}
+
+static void grug_banner(GuiTerminal *t) {
+    term_puts(t, "+=====================================+\n");
+    term_puts(t, "|    grugbot420 -- lateralus edition  |\n");
+    term_puts(t, "|    small brain. big wisdom. 420.    |\n");
+    term_puts(t, "+=====================================+\n");
+}
+
+static void grug_prompt(GuiTerminal *t) {
+    term_puts(t, "you> ");
+}
+
+/* Forward */
+static void grug_start(GuiTerminal *t);
+static void grug_respond(GuiTerminal *t, const char *line);
+
+static void grug_exit(GuiTerminal *t) {
+    t->grug_mode = 0;
+    term_puts(t, "\ngrugbot420 signing off. back to shell.\n");
+    term_prompt(t);
+}
+
+static void grug_handle_cmd(GuiTerminal *t, const char *cmd) {
+    if (grug_streq_ci(cmd, "/help")) {
+        grug_sys(t, "commands: /help /wisdom /joke /roll /smoke /time /bench /quit");
+        return;
+    }
+    if (grug_streq_ci(cmd, "/wisdom")) {
+        grug_say(t, GRUG_WISDOM[grug_rand(t) % GRUG_WISDOM_N]); return;
+    }
+    if (grug_streq_ci(cmd, "/joke")) {
+        grug_say(t, GRUG_JOKES[grug_rand(t) % GRUG_JOKES_N]); return;
+    }
+    if (grug_streq_ci(cmd, "/roll")) {
+        char buf[48]; _tcpy(buf, "d20 rolls: ", 48);
+        char nb[8]; _titoa((grug_rand(t) % 20) + 1, nb, 8);
+        _tcat(buf, nb, 48);
+        grug_say(t, buf); return;
+    }
+    if (grug_streq_ci(cmd, "/smoke")) {
+        t->grug_hits++;
+        t->grug_mood = (t->grug_hits >= 3) ? 2 : 1;
+        term_puts(t, "[grug420] *puff puff pass*\n");
+        grug_say(t, GRUG_SMOKE[grug_rand(t) % GRUG_SMOKE_N]);
+        if (t->grug_mood == 2)
+            term_puts(t, "[grug420] grug ascend. grug see the monad now.\n");
+        return;
+    }
+    if (grug_streq_ci(cmd, "/time")) {
+        char buf[64]; _tcpy(buf, "ticks since boot: ", 64);
+        char nb[24]; _titoa(tick_count, nb, 24);
+        _tcat(buf, nb, 64);
+        grug_sys(t, buf); return;
+    }
+    if (grug_streq_ci(cmd, "/bench")) {
+        /* Benchmark grug_respond over N iterations using a fixed corpus.
+         * Timing uses the kernel's millisecond PIT tick (1 kHz). */
+        static const char *CORPUS[] = {
+            "hello grug",
+            "i have a bug in my code",
+            "complexity is killing my project",
+            "should i ship on friday?",
+            "talk to me about types",
+            "how do i write tests",
+            "lets refactor this oop mess",
+            "llm wrote my code, is that ok",
+            "give me wisdom",
+            "tell a joke",
+            "blaze it",
+            "thanks friend",
+            "random question about the weather",
+            "/roll",
+            "/wisdom",
+            "/joke",
+        };
+        const int CORPUS_N = (int)(sizeof(CORPUS)/sizeof(CORPUS[0]));
+        const int ITERS = 10000;
+
+        /* Snapshot + suppress scrollback writes during the hot loop by
+         * temporarily pointing respond at a scratch terminal. We reuse
+         * `t` but drain lines each batch so the buffer does not explode. */
+        uint64_t t0 = tick_count;
+        int prev_lines = t->line_count;
+
+        for (int i = 0; i < ITERS; i++) {
+            grug_respond(t, CORPUS[i % CORPUS_N]);
+            /* Truncate scrollback every 64 iterations so we benchmark
+             * the response engine, not line scrolling. */
+            if ((i & 0x3F) == 0x3F) {
+                t->line_count = prev_lines;
+            }
+        }
+        uint64_t t1 = tick_count;
+        t->line_count = prev_lines;
+        t->dirty = 1;
+
+        uint64_t elapsed_ms = (t1 > t0) ? (t1 - t0) : 1;
+        uint64_t per_1k_us  = (elapsed_ms * 1000ULL) / ((uint64_t)ITERS / 1000ULL);
+        uint64_t ops_per_s  = ((uint64_t)ITERS * 1000ULL) / elapsed_ms;
+
+        char buf[96], nb[24];
+        term_puts(t, "[bench] grug_respond x ");
+        _titoa(ITERS, nb, 24); term_puts(t, nb);
+        term_puts(t, " calls\n");
+
+        _tcpy(buf, "[bench] elapsed: ", 96);
+        _titoa(elapsed_ms, nb, 24); _tcat(buf, nb, 96);
+        _tcat(buf, " ms\n", 96); term_puts(t, buf);
+
+        _tcpy(buf, "[bench] throughput: ", 96);
+        _titoa(ops_per_s, nb, 24); _tcat(buf, nb, 96);
+        _tcat(buf, " resp/sec\n", 96); term_puts(t, buf);
+
+        _tcpy(buf, "[bench] per-1k calls: ", 96);
+        _titoa(per_1k_us, nb, 24); _tcat(buf, nb, 96);
+        _tcat(buf, " us\n", 96); term_puts(t, buf);
+        return;
+    }
+    if (grug_streq_ci(cmd, "/quit") || grug_streq_ci(cmd, "/exit")) {
+        grug_say(t, "grug out. keep code small friend.");
+        grug_exit(t); return;
+    }
+    grug_sys(t, "unknown command. try /help");
+}
+
+static void grug_respond(GuiTerminal *t, const char *line) {
+    if (line[0] == '/') { grug_handle_cmd(t, line); return; }
+    if (line[0] == 0)   { return; }
+
+    if (grug_has(line, "hi") || grug_has(line, "hello") || grug_has(line, "hey") ||
+        grug_has(line, "sup") || grug_has(line, "yo")) {
+        grug_say(t, "hi friend. grug here. what on brain?"); return;
+    }
+    if (grug_has(line, "bug") || grug_has(line, "crash") ||
+        grug_has(line, "broken") || grug_has(line, "panic")) {
+        static const char *replies[] = {
+            "bug not personal. bug just code telling truth.",
+            "read stack trace top-down. answer in there.",
+            "print statement older than grug. still work.",
+        };
+        grug_say(t, replies[grug_rand(t) % 3]); return;
+    }
+    if (grug_has(line, "complex") || grug_has(line, "overengineer") || grug_has(line, "abstract")) {
+        grug_say(t, "complexity demon love abstract factory. delete layer."); return;
+    }
+    if (grug_has(line, "ship") || grug_has(line, "deploy") || grug_has(line, "release") || grug_has(line, "prod")) {
+        grug_say(t, "ship it. worst case rollback. best case user smile."); return;
+    }
+    if (grug_has(line, "test") || grug_has(line, "tdd") || grug_has(line, "unit")) {
+        grug_say(t, "test is rope grug tie to past self. test save future grug."); return;
+    }
+    if (grug_has(line, "refactor") || grug_has(line, "rewrite")) {
+        grug_say(t, "rewrite from scratch is trap. small step. commit often."); return;
+    }
+    if (grug_has(line, "oop") || grug_has(line, "inherit") || grug_has(line, "class")) {
+        grug_say(t, "inheritance tall, composition wide. wide better."); return;
+    }
+    if (grug_has(line, "meeting") || grug_has(line, "standup") || grug_has(line, "agile")) {
+        grug_say(t, "meeting should be email. email should be nothing."); return;
+    }
+    if (grug_has(line, "perf") || grug_has(line, "slow") || grug_has(line, "fast") || grug_has(line, "optim")) {
+        grug_say(t, "measure first. optimize hottest spot. not before."); return;
+    }
+    if (grug_has(line, "type") || grug_has(line, "rust")) {
+        grug_say(t, "type system is exoskeleton. heavy at first, then grug run fast."); return;
+    }
+    if (grug_has(line, "ai") || grug_has(line, "llm") || grug_has(line, "copilot") || grug_has(line, "gpt")) {
+        grug_say(t, "llm is clever parrot. good first draft, bad last draft."); return;
+    }
+    if (grug_has(line, "friday") || grug_has(line, "weekend")) {
+        grug_say(t, "no deploy friday. grug want pizza not pager."); return;
+    }
+    if (grug_has(line, "weed") || grug_has(line, "420") ||
+        grug_has(line, "blaze") || grug_has(line, "smoke") || grug_has(line, "sesh")) {
+        grug_handle_cmd(t, "/smoke"); return;
+    }
+    if (grug_has(line, "wisdom") || grug_has(line, "advice")) {
+        grug_handle_cmd(t, "/wisdom"); return;
+    }
+    if (grug_has(line, "joke") || grug_has(line, "funny")) {
+        grug_handle_cmd(t, "/joke"); return;
+    }
+    if (grug_has(line, "thanks") || grug_has(line, "thank you") || grug_has(line, "love you")) {
+        grug_say(t, "grug love you too, stay hydrated, stay small-function."); return;
+    }
+    if (grug_has(line, "bye") || grug_has(line, "cya") || grug_has(line, "later") || grug_has(line, "goodbye")) {
+        grug_say(t, "peace friend. grug return to cave now.");
+        grug_exit(t); return;
+    }
+    /* Fallback */
+    grug_say(t, GRUG_WISDOM[grug_rand(t) % GRUG_WISDOM_N]);
+}
+
+static void grug_start(GuiTerminal *t) {
+    t->grug_mode = 1;
+    t->grug_mood = 0;
+    t->grug_hits = 0;
+    t->grug_rng  = (uint32_t)(tick_count ^ 0x420BADA5u);
+    if (t->grug_rng == 0) t->grug_rng = 0x420BADA5u;
+    grug_banner(t);
+    grug_say(t, "hi. grug here. type /help or just talk. grug listen.");
+    grug_prompt(t);
+}
+
+void term_start_grugbot(int tidx) {
+    if (tidx < 0 || tidx >= TERM_MAX_TERMS) return;
+    GuiTerminal *t = &terminals[tidx];
+    if (!t->active) return;
+    term_puts(t, "\n");
+    grug_start(t);
+}
+
+/* =======================================================================
+ * App stubs — minimal info windows for apps that need VGA text mode
+ * ======================================================================= */
+
+static void cmd_apps(GuiTerminal *t) {
+    term_puts(t, "Installed Applications:\n");
+    term_puts(t, "\n");
+    term_puts(t, "  grugbot   caveman wisdom chatbot     [interactive]\n");
+    term_puts(t, "  chat      IRC-style chat client      [text shell]\n");
+    term_puts(t, "  edit      ltled text editor          [text shell]\n");
+    term_puts(t, "  ltlc      Lateralus compiler/REPL    [text shell]\n");
+    term_puts(t, "  pkg       package manager            [text shell]\n");
+    term_puts(t, "\n");
+    term_puts(t, "Type an app name to launch or learn more.\n");
+    term_puts(t, "Apps marked [text shell] run in VGA mode -- press ESC\n");
+    term_puts(t, "at the GUI to drop into the text shell, then type the\n");
+    term_puts(t, "command.\n");
+}
+
+static void cmd_chat_info(GuiTerminal *t) {
+    term_puts(t, "chat -- IRC-style chat client\n");
+    term_puts(t, "\n");
+    term_puts(t, "Interactive keyboard-driven app. Not yet ported to the\n");
+    term_puts(t, "GUI terminal. Launch from the text shell:\n");
+    term_puts(t, "  1. Press ESC to exit GUI\n");
+    term_puts(t, "  2. At root@lateralus:/$ type: chat\n");
+}
+
+static void cmd_edit_info(GuiTerminal *t, const char *args) {
+    (void)args;
+    term_puts(t, "edit -- ltled retro text editor\n");
+    term_puts(t, "\n");
+    term_puts(t, "Launch from the text shell (press ESC to exit GUI),\n");
+    term_puts(t, "then type:  edit <filename>\n");
+}
+
+static void cmd_ltlc_info(GuiTerminal *t, const char *args) {
+    (void)args;
+    term_puts(t, "ltlc -- Lateralus compiler / analyzer\n");
+    term_puts(t, "\n");
+    term_puts(t, "Lexer + parser for .ltl sources. Launch from text shell:\n");
+    term_puts(t, "  ltlc <file.ltl>   analyze a file\n");
+    term_puts(t, "  ltlc repl         interactive REPL\n");
+}
+
+static void cmd_pkg_info(GuiTerminal *t, const char *args) {
+    (void)args;
+    term_puts(t, "pkg -- package manager\n");
+    term_puts(t, "\n");
+    term_puts(t, "Launch from the text shell:\n");
+    term_puts(t, "  pkg list | pkg install <n> | pkg build | pkg init <n>\n");
+}
+
+static void cmd_about(GuiTerminal *t) {
+    term_puts(t, "LateralusOS v0.3.0\n");
+    term_puts(t, "Spiral Out, Keep Going\n");
+    term_puts(t, "\n");
+    term_puts(t, "Built with the Lateralus programming language.\n");
+    term_puts(t, "(c) 2025-2026 bad-antics\n");
+}
+
+/* =======================================================================
  * Command Dispatcher
  * ======================================================================= */
 
@@ -521,6 +897,31 @@ void term_exec(GuiTerminal *t, const char *cmd) {
         cmd_history(t);
     } else if (cmd_name_len == 8 && _tncmp(cmd, "neofetch", 8) == 0) {
         cmd_neofetch(t);
+    } else if ((cmd_name_len == 7 && _tncmp(cmd, "grugbot", 7) == 0) ||
+               (cmd_name_len == 10 && _tncmp(cmd, "grugbot420", 10) == 0)) {
+        /* One-shot subcommands: `grugbot wisdom` / `grugbot joke` */
+        if (args && _tncmp(args, "wisdom", 6) == 0) {
+            /* Seed once */
+            if (t->grug_rng == 0) t->grug_rng = (uint32_t)(tick_count ^ 0x420BADA5u);
+            grug_say(t, GRUG_WISDOM[grug_rand(t) % GRUG_WISDOM_N]);
+        } else if (args && _tncmp(args, "joke", 4) == 0) {
+            if (t->grug_rng == 0) t->grug_rng = (uint32_t)(tick_count ^ 0x420BADA5u);
+            grug_say(t, GRUG_JOKES[grug_rand(t) % GRUG_JOKES_N]);
+        } else {
+            grug_start(t);
+        }
+    } else if (cmd_name_len == 4 && _tncmp(cmd, "apps", 4) == 0) {
+        cmd_apps(t);
+    } else if (cmd_name_len == 4 && _tncmp(cmd, "chat", 4) == 0) {
+        cmd_chat_info(t);
+    } else if (cmd_name_len == 4 && _tncmp(cmd, "edit", 4) == 0) {
+        cmd_edit_info(t, args);
+    } else if (cmd_name_len == 4 && _tncmp(cmd, "ltlc", 4) == 0) {
+        cmd_ltlc_info(t, args);
+    } else if (cmd_name_len == 3 && _tncmp(cmd, "pkg", 3) == 0) {
+        cmd_pkg_info(t, args);
+    } else if (cmd_name_len == 5 && _tncmp(cmd, "about", 5) == 0) {
+        cmd_about(t);
     } else {
         term_puts(t, "ltlsh: command not found: ");
         /* Print just the command name */
@@ -539,13 +940,22 @@ void term_key(GuiTerminal *t, char c) {
         /* Execute command */
         t->cmd_buf[t->cmd_len] = '\0';
         term_putc(t, '\n');
-        if (t->cmd_len > 0) {
-            hist_push(t, t->cmd_buf);
-            t->hist_pos = t->hist_count;
-            term_exec(t, t->cmd_buf);
+        if (t->grug_mode) {
+            /* Feed input to grugbot rather than shell */
+            char line[TERM_CMD_SIZE];
+            _tcpy(line, t->cmd_buf, TERM_CMD_SIZE);
+            t->cmd_len = 0;
+            grug_respond(t, line);
+            if (t->grug_mode) grug_prompt(t);
+        } else {
+            if (t->cmd_len > 0) {
+                hist_push(t, t->cmd_buf);
+                t->hist_pos = t->hist_count;
+                term_exec(t, t->cmd_buf);
+            }
+            t->cmd_len = 0;
+            if (!t->grug_mode) term_prompt(t);
         }
-        t->cmd_len = 0;
-        term_prompt(t);
     } else if (c == 8 || c == 127) {
         /* Backspace */
         if (t->cmd_len > 0) {
@@ -604,6 +1014,10 @@ int term_create(GuiContext *gui) {
     t->dirty          = 1;
     t->hist_count     = 0;
     t->hist_pos       = 0;
+    t->grug_mode      = 0;
+    t->grug_mood      = 0;
+    t->grug_hits      = 0;
+    t->grug_rng       = 0;
 
     /* Start in /home */
     int home = ramfs_resolve_path("/home");

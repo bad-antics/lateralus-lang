@@ -1,0 +1,658 @@
+// ===========================================================================
+// n01d-sysmon — System Monitor for LateralusOS
+// ===========================================================================
+// Copyright (c) 2025-2026 bad-antics. All rights reserved.
+//
+// Native port of n01d-sysmon (Python/customtkinter) to Lateralus.
+// Displays real-time CPU, memory, disk, network, and process stats
+// in a themed GUI window using the LateralusOS GUI compositor.
+//
+// Usage:  n01d-sysmon            — launch GUI monitor
+//         n01d-sysmon --tui      — TUI mode (terminal)
+//         n01d-sysmon --once     — print snapshot and exit
+//
+// Features:
+//   • Live CPU per-core graph (ring buffer, 60s history)
+//   • Memory & swap usage bars
+//   • Disk I/O read/write rates
+//   • Network rx/tx rates per interface
+//   • Top-10 process list by CPU
+//   • N01D dark-green theme matching original
+// ===========================================================================
+
+import sys
+import gui
+import gui::widgets
+import services::monitor
+import drivers::network
+
+// ── Constants ────────────────────────────────────────────────────────────────
+
+const APP_TITLE   = "n01d-sysmon v2.0"
+const WINDOW_W    = 900
+const WINDOW_H    = 620
+const GRAPH_H     = 80
+const GRAPH_BINS  = 60          // 60 seconds of history
+const REFRESH_MS  = 1000        // update every second
+
+// N01D colour palette (matches original Python dark theme)
+const N01D_BG        = 0x0D0D0D
+const N01D_FG        = 0xE0E0E0
+const N01D_ACCENT    = 0x00FF88  // bright green
+const N01D_ACCENT2   = 0x00CC66  // darker green
+const N01D_WARN      = 0xFFAA00
+const N01D_CRIT      = 0xFF4444
+const N01D_PANEL     = 0x151515
+const N01D_BORDER    = 0x2A2A2A
+const N01D_DIM       = 0x555555
+const N01D_GRAPH_CPU = 0x00FF88
+const N01D_GRAPH_MEM = 0x06B6D4
+const N01D_GRAPH_NET = 0xA855F7
+const N01D_GRAPH_DSK = 0xF59E0B
+
+// ── Data Structures ───────────────────────────────────────────────────────────
+
+struct CoreStat {
+    id:     int
+    usage:  float       // 0.0 – 100.0 %
+    freq:   int         // MHz
+    temp:   float       // °C
+}
+
+struct MemStat {
+    total:    int       // bytes
+    used:     int
+    free:     int
+    cached:   int
+    swap_total: int
+    swap_used:  int
+}
+
+struct DiskStat {
+    device:  str
+    mount:   str
+    total:   int
+    used:    int
+    free:    int
+    read_bps:  int
+    write_bps: int
+}
+
+struct NetStat {
+    iface:   str
+    rx_bps:  int
+    tx_bps:  int
+    rx_pkts: int
+    tx_pkts: int
+    up:      bool
+}
+
+struct ProcEntry {
+    pid:    int
+    name:   str
+    cpu:    float
+    mem_mb: float
+    state:  str
+}
+
+struct SysStats {
+    cores:    [CoreStat]
+    mem:      MemStat
+    disks:    [DiskStat]
+    nets:     [NetStat]
+    procs:    [ProcEntry]
+    uptime_s: int
+    load_avg: [float]      // 1, 5, 15 min
+}
+
+struct GraphBuffer {
+    values: [float]        // ring buffer, GRAPH_BINS entries
+    head:   int
+    color:  int
+    label:  str
+    max:    float
+}
+
+struct AppState {
+    stats:      SysStats
+    cpu_graphs: [GraphBuffer]   // one per core
+    mem_graph:  GraphBuffer
+    net_rx_graph: GraphBuffer
+    net_tx_graph: GraphBuffer
+    dsk_r_graph:  GraphBuffer
+    dsk_w_graph:  GraphBuffer
+    window:     gui::Window
+    scroll_y:   int
+    tab:        int             // 0=CPU 1=Mem 2=Disk 3=Net 4=Procs
+    running:    bool
+    tick:       int
+}
+
+// ── Graph Buffer ─────────────────────────────────────────────────────────────
+
+fn new_graph(label: str, color: int, max: float) -> GraphBuffer {
+    GraphBuffer {
+        values: [0.0] * GRAPH_BINS,
+        head:   0,
+        color:  color,
+        label:  label,
+        max:    max,
+    }
+}
+
+fn graph_push(g: GraphBuffer, val: float) -> GraphBuffer {
+    let mut values = g.values
+    values[g.head % GRAPH_BINS] = val
+    GraphBuffer { ..g, values: values, head: g.head + 1 }
+}
+
+fn graph_get_ordered(g: GraphBuffer) -> [float] {
+    let start = g.head % GRAPH_BINS
+    g.values.slice(start, GRAPH_BINS) ++ g.values.slice(0, start)
+}
+
+// ── Sampling ─────────────────────────────────────────────────────────────────
+
+fn sample_stats() -> SysStats {
+    let raw = sys::stats()
+    let cores = raw.cpus |> map(|c| CoreStat {
+        id:    c.id,
+        usage: c.usage_pct,
+        freq:  c.freq_mhz,
+        temp:  c.temp_c,
+    })
+    let mem_raw = raw.memory
+    let mem = MemStat {
+        total:      mem_raw.total,
+        used:       mem_raw.used,
+        free:       mem_raw.free,
+        cached:     mem_raw.cached,
+        swap_total: mem_raw.swap_total,
+        swap_used:  mem_raw.swap_used,
+    }
+    let disks = raw.disks |> map(|d| DiskStat {
+        device:    d.device,
+        mount:     d.mount,
+        total:     d.total,
+        used:      d.used,
+        free:      d.free,
+        read_bps:  d.read_bps,
+        write_bps: d.write_bps,
+    })
+    let nets = raw.ifaces |> map(|n| NetStat {
+        iface:   n.name,
+        rx_bps:  n.rx_bps,
+        tx_bps:  n.tx_bps,
+        rx_pkts: n.rx_pkts,
+        tx_pkts: n.tx_pkts,
+        up:      n.up,
+    })
+    let procs = raw.processes
+        |> map(|p| ProcEntry {
+            pid:    p.pid,
+            name:   p.name,
+            cpu:    p.cpu_pct,
+            mem_mb: p.mem_bytes / 1_048_576.0,
+            state:  p.state,
+        })
+        |> sort(|(a, b)| b.cpu - a.cpu)
+        |> take(10)
+
+    SysStats {
+        cores:    cores,
+        mem:      mem,
+        disks:    disks,
+        nets:     nets,
+        procs:    procs,
+        uptime_s: raw.uptime_s,
+        load_avg: raw.load_avg,
+    }
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+
+fn init_app(core_count: int) -> AppState {
+    let win = gui::create_window(APP_TITLE, WINDOW_W, WINDOW_H, gui::Flags::RESIZABLE)
+    win.set_bg(N01D_BG)
+
+    let stats = sample_stats()
+
+    let cpu_graphs = range(0, core_count)
+        |> map(|i| new_graph("CPU" ++ str(i), N01D_GRAPH_CPU, 100.0))
+
+    AppState {
+        stats:        stats,
+        cpu_graphs:   cpu_graphs,
+        mem_graph:    new_graph("MEM", N01D_GRAPH_MEM, 100.0),
+        net_rx_graph: new_graph("RX",  N01D_GRAPH_NET, 1_000_000.0),
+        net_tx_graph: new_graph("TX",  N01D_GRAPH_NET, 1_000_000.0),
+        dsk_r_graph:  new_graph("R",   N01D_GRAPH_DSK, 500_000.0),
+        dsk_w_graph:  new_graph("W",   N01D_GRAPH_DSK, 500_000.0),
+        window:       win,
+        scroll_y:     0,
+        tab:          0,
+        running:      true,
+        tick:         0,
+    }
+}
+
+// ── Update ───────────────────────────────────────────────────────────────────
+
+fn update_state(state: AppState) -> AppState {
+    let stats = sample_stats()
+
+    // Update CPU ring buffers
+    let mut cpu_graphs = state.cpu_graphs
+    for (i, g) in cpu_graphs.enumerate() {
+        let usage = if i < stats.cores.len() { stats.cores[i].usage } else { 0.0 }
+        cpu_graphs[i] = graph_push(g, usage)
+    }
+
+    // Avg CPU for mem-tab graph
+    let avg_cpu = if stats.cores.len() == 0 { 0.0 } else {
+        stats.cores |> map(|c| c.usage) |> sum() / float(stats.cores.len())
+    }
+
+    let mem_pct = if stats.mem.total == 0 { 0.0 } else {
+        float(stats.mem.used) / float(stats.mem.total) * 100.0
+    }
+
+    // Net: sum all interfaces
+    let total_rx = stats.nets |> map(|n| float(n.rx_bps)) |> sum()
+    let total_tx = stats.nets |> map(|n| float(n.tx_bps)) |> sum()
+
+    // Disk: sum primary disk
+    let primary_disk = stats.disks |> filter(|d| d.mount == "/") |> first()
+    let dsk_r = match primary_disk {
+        Some(d) => float(d.read_bps)
+        None    => 0.0
+    }
+    let dsk_w = match primary_disk {
+        Some(d) => float(d.write_bps)
+        None    => 0.0
+    }
+
+    AppState {
+        ..state,
+        stats:        stats,
+        cpu_graphs:   cpu_graphs,
+        mem_graph:    graph_push(state.mem_graph, mem_pct),
+        net_rx_graph: graph_push(state.net_rx_graph, total_rx),
+        net_tx_graph: graph_push(state.net_tx_graph, total_tx),
+        dsk_r_graph:  graph_push(state.dsk_r_graph, dsk_r),
+        dsk_w_graph:  graph_push(state.dsk_w_graph, dsk_w),
+        tick:         state.tick + 1,
+    }
+}
+
+// ── Formatting helpers ───────────────────────────────────────────────────────
+
+fn fmt_bytes(b: int) -> str {
+    if b >= 1_073_741_824 {
+        fmt_float(float(b) / 1_073_741_824.0, 2) ++ " GB"
+    } else if b >= 1_048_576 {
+        fmt_float(float(b) / 1_048_576.0, 1) ++ " MB"
+    } else if b >= 1024 {
+        fmt_float(float(b) / 1024.0, 1) ++ " KB"
+    } else {
+        str(b) ++ " B"
+    }
+}
+
+fn fmt_bps(b: int) -> str {
+    if b >= 1_000_000 { fmt_float(float(b) / 1_000_000.0, 1) ++ " MB/s" }
+    else if b >= 1000  { fmt_float(float(b) / 1000.0, 1) ++ " KB/s" }
+    else               { str(b) ++ " B/s" }
+}
+
+fn fmt_uptime(s: int) -> str {
+    let days = s / 86400
+    let hrs  = (s % 86400) / 3600
+    let mins = (s % 3600) / 60
+    if days > 0 {
+        str(days) ++ "d " ++ str(hrs) ++ "h " ++ str(mins) ++ "m"
+    } else {
+        str(hrs) ++ "h " ++ str(mins) ++ "m"
+    }
+}
+
+fn pct_color(pct: float) -> int {
+    if pct >= 90.0 { N01D_CRIT }
+    else if pct >= 70.0 { N01D_WARN }
+    else { N01D_ACCENT }
+}
+
+// ── Rendering ────────────────────────────────────────────────────────────────
+
+fn draw_header(ctx: gui::Context, state: AppState) {
+    ctx.fill_rect(0, 0, WINDOW_W, 40, N01D_PANEL)
+    ctx.draw_line(0, 40, WINDOW_W, 40, N01D_BORDER, 1)
+
+    // Title
+    ctx.draw_text(12, 10, APP_TITLE, N01D_ACCENT, "mono-bold-14")
+
+    // Load average
+    let load = state.stats.load_avg
+    let load_str = "load: " ++ fmt_float(load[0], 2) ++ " " ++ fmt_float(load[1], 2) ++ " " ++ fmt_float(load[2], 2)
+    ctx.draw_text(220, 12, load_str, N01D_DIM, "mono-10")
+
+    // Uptime
+    let up_str = "up " ++ fmt_uptime(state.stats.uptime_s)
+    ctx.draw_text(460, 12, up_str, N01D_DIM, "mono-10")
+
+    // Tick indicator
+    let tick_char = if state.tick % 2 == 0 { "●" } else { "○" }
+    ctx.draw_text(WINDOW_W - 30, 12, tick_char, N01D_ACCENT, "mono-12")
+
+    // Tabs
+    let tabs = ["CPU", "MEM", "DISK", "NET", "PROCS"]
+    for (i, tab) in tabs.enumerate() {
+        let tx = 600 + i * 60
+        let active = i == state.tab
+        let bg = if active { N01D_ACCENT } else { N01D_PANEL }
+        let fg = if active { N01D_BG }     else { N01D_DIM }
+        ctx.fill_rect(tx, 5, 50, 30, bg)
+        ctx.draw_text(tx + 8, 13, tab, fg, "mono-bold-10")
+    }
+}
+
+fn draw_graph(ctx: gui::Context, x: int, y: int, w: int, h: int, g: GraphBuffer) {
+    ctx.fill_rect(x, y, w, h, N01D_BG)
+    ctx.draw_rect(x, y, w, h, N01D_BORDER, 1)
+
+    let values = graph_get_ordered(g)
+    let step = float(w) / float(GRAPH_BINS)
+
+    for i in 1..GRAPH_BINS {
+        let v0 = values[i - 1]
+        let v1 = values[i]
+        let max = if g.max == 0.0 { 1.0 } else { g.max }
+        let y0 = y + h - int(v0 / max * float(h - 2)) - 1
+        let y1 = y + h - int(v1 / max * float(h - 2)) - 1
+        let x0 = x + int(float(i - 1) * step)
+        let x1 = x + int(float(i) * step)
+        ctx.draw_line(x0, y0, x1, y1, g.color, 1)
+    }
+
+    // Current value label
+    let last_val = values[GRAPH_BINS - 1]
+    let pct_str = if g.max == 100.0 {
+        fmt_float(last_val, 1) ++ "%"
+    } else {
+        fmt_bytes(int(last_val)) ++ "/s"
+    }
+    ctx.draw_text(x + 4, y + 4, g.label ++ " " ++ pct_str, g.color, "mono-9")
+}
+
+fn draw_bar(ctx: gui::Context, x: int, y: int, w: int, h: int, pct: float, color: int) {
+    ctx.fill_rect(x, y, w, h, N01D_PANEL)
+    ctx.draw_rect(x, y, w, h, N01D_BORDER, 1)
+    let fill = int(float(w - 2) * pct / 100.0)
+    ctx.fill_rect(x + 1, y + 1, fill, h - 2, color)
+}
+
+fn draw_cpu_tab(ctx: gui::Context, state: AppState) {
+    let cols = 2
+    let gw   = (WINDOW_W - 40) / cols
+    let gh   = GRAPH_H + 20
+
+    for (i, g) in state.cpu_graphs.enumerate() {
+        let col = i % cols
+        let row = i / cols
+        let gx = 20 + col * gw
+        let gy = 55 + row * (gh + 8)
+
+        // Background panel
+        ctx.fill_rect(gx, gy, gw - 8, gh + 8, N01D_PANEL)
+        ctx.draw_rect(gx, gy, gw - 8, gh + 8, N01D_BORDER, 1)
+
+        // Core label
+        let core_stat = if i < state.stats.cores.len() { Some(state.stats.cores[i]) } else { None }
+        let (freq_str, temp_str, usage_pct) = match core_stat {
+            Some(c) => (str(c.freq) ++ " MHz", fmt_float(c.temp, 1) ++ "°C", c.usage)
+            None    => ("—", "—", 0.0)
+        }
+        let color = pct_color(usage_pct)
+        ctx.draw_text(gx + 6, gy + 6, "Core " ++ str(i), N01D_FG, "mono-bold-11")
+        ctx.draw_text(gx + 70, gy + 6, freq_str, N01D_DIM, "mono-9")
+        ctx.draw_text(gx + 140, gy + 6, temp_str, N01D_WARN, "mono-9")
+
+        // Usage bar
+        draw_bar(ctx, gx + 6, gy + 20, gw - 20, 10, usage_pct, color)
+
+        // Graph
+        draw_graph(ctx, gx + 6, gy + 34, gw - 20, GRAPH_H, GraphBuffer { ..g, color: color })
+    }
+}
+
+fn draw_mem_tab(ctx: gui::Context, state: AppState) {
+    let m = state.stats.mem
+    let mem_pct  = if m.total == 0 { 0.0 } else { float(m.used) / float(m.total) * 100.0 }
+    let swap_pct = if m.swap_total == 0 { 0.0 } else { float(m.swap_used) / float(m.swap_total) * 100.0 }
+
+    ctx.draw_text(20, 55, "MEMORY", N01D_ACCENT, "mono-bold-13")
+    ctx.draw_text(200, 57, fmt_bytes(m.used) ++ " / " ++ fmt_bytes(m.total), N01D_FG, "mono-11")
+    draw_bar(ctx, 20, 75, WINDOW_W - 40, 24, mem_pct, pct_color(mem_pct))
+    ctx.draw_text(20 + WINDOW_W - 60, 79, fmt_float(mem_pct, 1) ++ "%", N01D_BG, "mono-bold-10")
+
+    ctx.draw_text(20, 115, "CACHED", N01D_DIM, "mono-10")
+    ctx.draw_text(120, 115, fmt_bytes(m.cached), N01D_FG, "mono-10")
+
+    ctx.draw_text(20, 140, "SWAP", N01D_ACCENT, "mono-bold-13")
+    ctx.draw_text(200, 142, fmt_bytes(m.swap_used) ++ " / " ++ fmt_bytes(m.swap_total), N01D_FG, "mono-11")
+    draw_bar(ctx, 20, 162, WINDOW_W - 40, 24, swap_pct, pct_color(swap_pct))
+
+    // Mem history graph
+    draw_graph(ctx, 20, 210, WINDOW_W - 40, 120, state.mem_graph)
+}
+
+fn draw_disk_tab(ctx: gui::Context, state: AppState) {
+    ctx.draw_text(20, 55, "DISK I/O", N01D_ACCENT, "mono-bold-13")
+
+    let gw = (WINDOW_W - 50) / 2
+    draw_graph(ctx, 20,        90, gw, 100, state.dsk_r_graph)
+    draw_graph(ctx, 25 + gw,   90, gw, 100, state.dsk_w_graph)
+
+    // Disk list
+    let mut y = 210
+    ctx.draw_text(20, y, "DEVICE", N01D_DIM, "mono-bold-10")
+    ctx.draw_text(160, y, "MOUNT", N01D_DIM, "mono-bold-10")
+    ctx.draw_text(280, y, "TOTAL", N01D_DIM, "mono-bold-10")
+    ctx.draw_text(370, y, "USED", N01D_DIM, "mono-bold-10")
+    ctx.draw_text(460, y, "FREE", N01D_DIM, "mono-bold-10")
+    ctx.draw_text(560, y, "READ", N01D_DIM, "mono-bold-10")
+    ctx.draw_text(650, y, "WRITE", N01D_DIM, "mono-bold-10")
+    y = y + 18
+    ctx.draw_line(20, y, WINDOW_W - 20, y, N01D_BORDER, 1)
+    y = y + 8
+
+    for d in state.stats.disks {
+        let used_pct = if d.total == 0 { 0.0 } else { float(d.used) / float(d.total) * 100.0 }
+        ctx.draw_text(20,  y, d.device,             N01D_FG,    "mono-10")
+        ctx.draw_text(160, y, d.mount,              N01D_FG,    "mono-10")
+        ctx.draw_text(280, y, fmt_bytes(d.total),   N01D_FG,    "mono-10")
+        ctx.draw_text(370, y, fmt_bytes(d.used),    pct_color(used_pct), "mono-10")
+        ctx.draw_text(460, y, fmt_bytes(d.free),    N01D_DIM,   "mono-10")
+        ctx.draw_text(560, y, fmt_bps(d.read_bps),  N01D_GRAPH_DSK, "mono-10")
+        ctx.draw_text(650, y, fmt_bps(d.write_bps), N01D_WARN,  "mono-10")
+        y = y + 20
+    }
+}
+
+fn draw_net_tab(ctx: gui::Context, state: AppState) {
+    ctx.draw_text(20, 55, "NETWORK", N01D_ACCENT, "mono-bold-13")
+
+    let gw = (WINDOW_W - 50) / 2
+    draw_graph(ctx, 20,       90, gw, 100, state.net_rx_graph)
+    draw_graph(ctx, 25 + gw,  90, gw, 100, state.net_tx_graph)
+
+    let mut y = 210
+    ctx.draw_text(20,  y, "IFACE",   N01D_DIM, "mono-bold-10")
+    ctx.draw_text(120, y, "STATUS",  N01D_DIM, "mono-bold-10")
+    ctx.draw_text(220, y, "RX",      N01D_DIM, "mono-bold-10")
+    ctx.draw_text(340, y, "TX",      N01D_DIM, "mono-bold-10")
+    ctx.draw_text(460, y, "RX PKT",  N01D_DIM, "mono-bold-10")
+    ctx.draw_text(580, y, "TX PKT",  N01D_DIM, "mono-bold-10")
+    y = y + 18
+    ctx.draw_line(20, y, WINDOW_W - 20, y, N01D_BORDER, 1)
+    y = y + 8
+
+    for n in state.stats.nets {
+        let status_color = if n.up { N01D_ACCENT } else { N01D_CRIT }
+        let status_str   = if n.up { "UP" } else { "DOWN" }
+        ctx.draw_text(20,  y, n.iface,               N01D_FG,  "mono-10")
+        ctx.draw_text(120, y, status_str,             status_color, "mono-bold-10")
+        ctx.draw_text(220, y, fmt_bps(n.rx_bps),      N01D_GRAPH_NET, "mono-10")
+        ctx.draw_text(340, y, fmt_bps(n.tx_bps),      N01D_GRAPH_NET, "mono-10")
+        ctx.draw_text(460, y, str(n.rx_pkts) ++ "/s", N01D_DIM, "mono-10")
+        ctx.draw_text(580, y, str(n.tx_pkts) ++ "/s", N01D_DIM, "mono-10")
+        y = y + 20
+    }
+}
+
+fn draw_procs_tab(ctx: gui::Context, state: AppState) {
+    ctx.draw_text(20, 55, "TOP PROCESSES", N01D_ACCENT, "mono-bold-13")
+
+    let mut y = 82
+    ctx.draw_text(20,  y, "PID",   N01D_DIM, "mono-bold-10")
+    ctx.draw_text(80,  y, "NAME",  N01D_DIM, "mono-bold-10")
+    ctx.draw_text(300, y, "CPU%",  N01D_DIM, "mono-bold-10")
+    ctx.draw_text(380, y, "MEM",   N01D_DIM, "mono-bold-10")
+    ctx.draw_text(480, y, "STATE", N01D_DIM, "mono-bold-10")
+    y = y + 16
+    ctx.draw_line(20, y, WINDOW_W - 20, y, N01D_BORDER, 1)
+    y = y + 6
+
+    for (i, p) in state.stats.procs.enumerate() {
+        let row_bg = if i % 2 == 0 { N01D_PANEL } else { N01D_BG }
+        ctx.fill_rect(20, y - 2, WINDOW_W - 40, 22, row_bg)
+        let cpu_color = pct_color(p.cpu)
+        ctx.draw_text(20,  y, str(p.pid),                            N01D_DIM, "mono-10")
+        ctx.draw_text(80,  y, p.name,                                N01D_FG,  "mono-10")
+        ctx.draw_text(300, y, fmt_float(p.cpu, 1) ++ "%",             cpu_color, "mono-bold-10")
+        ctx.draw_text(380, y, fmt_float(p.mem_mb, 1) ++ " MB",        N01D_GRAPH_MEM, "mono-10")
+        ctx.draw_text(480, y, p.state,                               N01D_DIM, "mono-10")
+        y = y + 22
+    }
+}
+
+fn render(ctx: gui::Context, state: AppState) {
+    ctx.clear(N01D_BG)
+    draw_header(ctx, state)
+    match state.tab {
+        0 => draw_cpu_tab(ctx, state)
+        1 => draw_mem_tab(ctx, state)
+        2 => draw_disk_tab(ctx, state)
+        3 => draw_net_tab(ctx, state)
+        4 => draw_procs_tab(ctx, state)
+        _ => ()
+    }
+}
+
+// ── Input ────────────────────────────────────────────────────────────────────
+
+fn handle_input(state: AppState, ev: gui::Event) -> AppState {
+    match ev {
+        gui::Event::KeyDown(key) => match key {
+            gui::Key::Q     => AppState { ..state, running: false }
+            gui::Key::LEFT  => AppState { ..state, tab: if state.tab > 0 { state.tab - 1 } else { 4 } }
+            gui::Key::RIGHT => AppState { ..state, tab: if state.tab < 4 { state.tab + 1 } else { 0 } }
+            gui::Key::NUM(n) => if n >= 1 && n <= 5 { AppState { ..state, tab: n - 1 } } else { state }
+            _ => state
+        }
+        gui::Event::MouseDown(x, y, _btn) => {
+            // Tab click
+            for i in 0..5 {
+                let tx = 600 + i * 60
+                if x >= tx && x <= tx + 50 && y >= 5 && y <= 35 {
+                    return AppState { ..state, tab: i }
+                }
+            }
+            state
+        }
+        gui::Event::WindowClose => AppState { ..state, running: false }
+        _                       => state
+    }
+}
+
+// ── TUI Mode ─────────────────────────────────────────────────────────────────
+
+fn tui_render(stats: SysStats) {
+    sys::tui_clear()
+    sys::tui_set_color(N01D_ACCENT)
+    println("╔══════════════════════════════════════════════════════════════╗")
+    println("║  n01d-sysmon v2.0  │  up " ++ fmt_uptime(stats.uptime_s) ++ "  │  q to quit")
+    println("╠══════════════════════════════════════════════════════════════╣")
+
+    // CPU
+    println("║  CPU CORES")
+    for (i, c) in stats.cores.enumerate() {
+        let bar_len = int(c.usage / 5.0)
+        let bar = "█".repeat(bar_len) ++ "░".repeat(20 - bar_len)
+        println("║  Core " ++ str(i) ++ "  [" ++ bar ++ "]  " ++ fmt_float(c.usage, 1) ++ "%  " ++ fmt_float(c.temp, 1) ++ "°C")
+    }
+
+    // Memory
+    println("║")
+    println("║  MEMORY")
+    let mem_pct = float(stats.mem.used) / float(stats.mem.total) * 100.0
+    let bar_len = int(mem_pct / 5.0)
+    let bar = "█".repeat(bar_len) ++ "░".repeat(20 - bar_len)
+    println("║  RAM   [" ++ bar ++ "]  " ++ fmt_bytes(stats.mem.used) ++ " / " ++ fmt_bytes(stats.mem.total))
+
+    println("╚══════════════════════════════════════════════════════════════╝")
+    sys::tui_reset_color()
+}
+
+// ── Entry Point ──────────────────────────────────────────────────────────────
+
+fn main(args: [str]) -> int {
+    let tui_mode  = args.contains("--tui")
+    let once_mode = args.contains("--once")
+
+    if once_mode {
+        let stats = sample_stats()
+        tui_render(stats)
+        return 0
+    }
+
+    if tui_mode {
+        while true {
+            let stats = sample_stats()
+            tui_render(stats)
+            sys::sleep_ms(REFRESH_MS)
+            if sys::key_pressed() == gui::Key::Q { break }
+        }
+        return 0
+    }
+
+    // GUI mode
+    let core_count = sys::cpu_count()
+    let mut state = init_app(core_count)
+    let mut timer = 0
+
+    while state.running {
+        // Poll events
+        let events = state.window.poll_events()
+        for ev in events {
+            state = handle_input(state, ev)
+        }
+
+        // Tick every REFRESH_MS
+        if timer >= REFRESH_MS {
+            state = update_state(state)
+            timer = 0
+        }
+
+        // Draw
+        let ctx = state.window.get_context()
+        render(ctx, state)
+        state.window.swap_buffers()
+
+        sys::sleep_ms(16)   // ~60 fps
+        timer = timer + 16
+    }
+
+    state.window.close()
+    return 0
+}

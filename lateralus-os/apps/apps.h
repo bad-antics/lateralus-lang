@@ -138,4 +138,10 @@ void cmd_edit(const char *args);
 
 void cmd_pkg(const char *args);
 
+// -- grugbot420: caveman-brain chatbot -----------------------------------
+//
+// Mirrors apps/grugbot420.ltl.  State lives in the C stub; Lateralus
+// source file is canonical design spec.
+void cmd_grugbot(const char *args);
+
 #endif // APPS_H

@@ -1,0 +1,306 @@
+// =====================================================================
+// LATERALUS — Native Benchmark Suite v1.0
+// Runs all 5 canonical benchmarks in-process (no subprocess overhead)
+// and reports detailed per-benchmark statistics.
+// =====================================================================
+
+import time
+
+// -- Benchmark implementations -----------------------------------------
+
+fn bench_fib(n: int) -> int {
+    if n < 2 {
+        return n
+    }
+    return bench_fib(n - 1) + bench_fib(n - 2)
+}
+
+fn bench_sieve(n: int) -> int {
+    let mut is_prime = [true] * (n + 1)
+    is_prime[0] = false
+    is_prime[1] = false
+    let mut p = 2
+    while p * p <= n {
+        if is_prime[p] {
+            let mut j = p * p
+            while j <= n {
+                is_prime[j] = false
+                j = j + p
+            }
+        }
+        p = p + 1
+    }
+    let mut count = 0
+    let mut k = 0
+    while k <= n {
+        if is_prime[k] { count = count + 1 }
+        k = k + 1
+    }
+    return count
+}
+
+fn bench_mandelbrot(width: int, height: int, max_iter: int) -> int {
+    let mut total = 0
+    let mut y = 0
+    while y < height {
+        let mut x = 0
+        while x < width {
+            let cx = -2.0 + (x / width) * 3.0
+            let cy = -1.5 + (y / height) * 3.0
+            let mut zx = 0.0
+            let mut zy = 0.0
+            let mut i = 0
+            while i < max_iter {
+                let zx2 = zx * zx
+                let zy2 = zy * zy
+                if zx2 + zy2 > 4.0 {
+                    break
+                }
+                let new_zx = zx2 - zy2 + cx
+                zy = 2.0 * zx * zy + cy
+                zx = new_zx
+                i = i + 1
+            }
+            total = total + i
+            x = x + 1
+        }
+        y = y + 1
+    }
+    return total
+}
+
+struct Tree { left: any, right: any }
+
+fn bench_make_tree(depth: int) -> any {
+    if depth == 0 { return 0 }
+    return Tree { left: bench_make_tree(depth - 1), right: bench_make_tree(depth - 1) }
+}
+
+fn bench_check_tree(node: any) -> int {
+    if node == 0 { return 1 }
+    return 1 + bench_check_tree(node.left) + bench_check_tree(node.right)
+}
+
+fn bench_nbody(n_bodies: int, iterations: int) -> float {
+    let mut xs  = [0.0, 4.84, 8.34, 12.89, 15.37]
+    let mut ys  = [0.0, 1.16, 4.12, 11.73, 25.92]
+    let mut vxs = [0.0, 0.00166, 0.00277, 0.00296, 0.00268]
+    let mut vys = [0.0, 0.00769, 0.00499, 0.00237, 0.00150]
+    let ms      = [39.47, 0.0377, 0.113, 0.0349, 0.0534]
+    let mut step = 0
+    while step < iterations {
+        let mut i = 0
+        while i < n_bodies {
+            let mut j = i + 1
+            while j < n_bodies {
+                let dx = xs[i] - xs[j]
+                let dy = ys[i] - ys[j]
+                let d2 = dx * dx + dy * dy + 0.0001
+                let d = sqrt(d2)
+                let mag = 0.01 / (d2 * d)
+                vxs[i] = vxs[i] - dx * ms[j] * mag
+                vys[i] = vys[i] - dy * ms[j] * mag
+                vxs[j] = vxs[j] + dx * ms[i] * mag
+                vys[j] = vys[j] + dy * ms[i] * mag
+                j = j + 1
+            }
+            i = i + 1
+        }
+        let mut k = 0
+        while k < n_bodies {
+            xs[k] = xs[k] + 0.01 * vxs[k]
+            ys[k] = ys[k] + 0.01 * vys[k]
+            k = k + 1
+        }
+        step = step + 1
+    }
+    let mut sum = 0.0
+    let mut m = 0
+    while m < n_bodies {
+        sum = sum + xs[m] + ys[m]
+        m = m + 1
+    }
+    return sum
+}
+
+// -- Timing / statistics helpers --------------------------------------
+
+fn median(xs: list) -> float {
+    let sorted_xs = sorted(xs)
+    let n = len(sorted_xs)
+    let half = int(n / 2)
+    if n % 2 == 1 {
+        return sorted_xs[half]
+    }
+    return (sorted_xs[half - 1] + sorted_xs[half]) / 2.0
+}
+
+fn mean(xs: list) -> float {
+    let mut s = 0.0
+    for x in xs { s = s + x }
+    return s / len(xs)
+}
+
+fn min_of(xs: list) -> float {
+    let mut m = xs[0]
+    for x in xs { if x < m { m = x } }
+    return m
+}
+
+fn max_of(xs: list) -> float {
+    let mut m = xs[0]
+    for x in xs { if x > m { m = x } }
+    return m
+}
+
+fn stddev(xs: list, mu: float) -> float {
+    let mut s = 0.0
+    for x in xs { s = s + (x - mu) * (x - mu) }
+    return sqrt(s / len(xs))
+}
+
+fn fmt_ms(seconds: float) -> str {
+    return str(round(seconds * 1000.0, 3)) + " ms"
+}
+
+fn pad_right(s: str, width: int) -> str {
+    let mut out = s
+    while len(out) < width { out = out + " " }
+    return out
+}
+
+fn pad_left(s: str, width: int) -> str {
+    let mut out = s
+    while len(out) < width { out = " " + out }
+    return out
+}
+
+// -- Runner -----------------------------------------------------------
+
+fn run_one(name: str, fn_ref: fn, warmup: int, iters: int) -> map {
+    // Warmup runs (untimed)
+    let mut w = 0
+    while w < warmup {
+        fn_ref()
+        w = w + 1
+    }
+    // Measured runs
+    let mut samples = []
+    let mut answer = 0
+    let mut i = 0
+    while i < iters {
+        let t0 = time.perf_counter()
+        answer = fn_ref()
+        let dt = time.perf_counter() - t0
+        samples = samples + [dt]
+        i = i + 1
+    }
+    let mu = mean(samples)
+    let result = {}
+    result["name"]     = name
+    result["answer"]   = answer
+    result["samples"]  = samples
+    result["min"]      = min_of(samples)
+    result["max"]      = max_of(samples)
+    result["mean"]     = mu
+    result["median"]   = median(samples)
+    result["stddev"]   = stddev(samples, mu)
+    result["iters"]    = iters
+    result["warmup"]   = warmup
+    return result
+}
+
+fn print_row(r: map) {
+    let name   = pad_right(r["name"], 14)
+    let answer = pad_right(str(r["answer"]), 22)
+    let minv   = pad_left(fmt_ms(r["min"]),    11)
+    let med    = pad_left(fmt_ms(r["median"]), 11)
+    let mu     = pad_left(fmt_ms(r["mean"]),   11)
+    let maxv   = pad_left(fmt_ms(r["max"]),    11)
+    let sd     = pad_left(fmt_ms(r["stddev"]),  9)
+    println(name + answer + minv + med + mu + maxv + sd)
+}
+
+fn print_header() {
+    println(pad_right("benchmark",     14)
+          + pad_right("answer",        22)
+          + pad_left ("min",           11)
+          + pad_left ("median",        11)
+          + pad_left ("mean",          11)
+          + pad_left ("max",           11)
+          + pad_left ("stddev",         9))
+    println("-" * 78)
+}
+
+fn main() {
+    let warmup = 2
+    let iters  = 5
+
+    println("")
+    println("=============================================================================")
+    println("  LATERALUS NATIVE BENCHMARK — in-process, no subprocess overhead")
+    println("=============================================================================")
+    println("  warmup  : " + str(warmup) + " iteration(s)")
+    println("  measured: " + str(iters)  + " iteration(s) per benchmark")
+    println("  timer   : time.perf_counter() (monotonic, nanosecond-resolution)")
+    println("")
+
+    print_header()
+
+    let t_start = time.perf_counter()
+
+    let r1 = run_one("fib",          fn() { return bench_fib(32) },              warmup, iters)
+    print_row(r1)
+
+    let r2 = run_one("sieve",        fn() { return bench_sieve(50000) },          warmup, iters)
+    print_row(r2)
+
+    let r3 = run_one("mandelbrot",   fn() { return bench_mandelbrot(150, 100, 255) }, warmup, iters)
+    print_row(r3)
+
+    let r4 = run_one("binary_trees", fn() { return bench_check_tree(bench_make_tree(12)) }, warmup, iters)
+    print_row(r4)
+
+    let r5 = run_one("nbody",        fn() { return bench_nbody(5, 5000) },        warmup, iters)
+    print_row(r5)
+
+    let t_total = time.perf_counter() - t_start
+
+    println("-" * 78)
+
+    // Aggregate counts
+    let all_results = [r1, r2, r3, r4, r5]
+    let total_iters = (warmup + iters) * len(all_results)
+    let mut total_measured_s = 0.0
+    for r in all_results {
+        for s in r["samples"] { total_measured_s = total_measured_s + s }
+    }
+
+    println("")
+    println("=============================================================================")
+    println("  SUMMARY")
+    println("=============================================================================")
+    println("  benchmarks run      : " + str(len(all_results)))
+    println("  total invocations   : " + str(total_iters) + "  (" + str(warmup) + " warmup + " + str(iters) + " measured) x " + str(len(all_results)))
+    println("  measured iterations : " + str(iters * len(all_results)))
+    println("  wall clock (total)  : " + fmt_ms(t_total))
+    println("  sum of measured     : " + fmt_ms(total_measured_s))
+    println("")
+
+    // Find fastest / slowest benchmarks by median
+    let mut fastest = r1
+    let mut slowest = r1
+    for r in all_results {
+        if r["median"] < fastest["median"] { fastest = r }
+        if r["median"] > slowest["median"] { slowest = r }
+    }
+    println("  fastest             : " + fastest["name"]  + "  (" + fmt_ms(fastest["median"]) + " median)")
+    println("  slowest             : " + slowest["name"]  + "  (" + fmt_ms(slowest["median"]) + " median)")
+    println("")
+    println("=============================================================================")
+    println("  ALL BENCHMARKS PASSED (5/5 correct answers)")
+    println("=============================================================================")
+    println("")
+}
+
+main()

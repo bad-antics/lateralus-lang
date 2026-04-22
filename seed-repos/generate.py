@@ -16,7 +16,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import os
 import shutil
 import sys
 from pathlib import Path
@@ -88,7 +87,7 @@ pub fn main(args: [str]) -> Int {{
 def render_tree(files: dict[str, str]) -> str:
     lines = []
     for path in sorted(files.keys()):
-        lines.append(f".\n├── .gitattributes\n├── LICENSE\n├── README.md\n")
+        lines.append(".\n├── .gitattributes\n├── LICENSE\n├── README.md\n")
         break
     for path in sorted(files.keys()):
         lines.append(f"└── {path}")

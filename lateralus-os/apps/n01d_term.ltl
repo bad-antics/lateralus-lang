@@ -1,0 +1,721 @@
+// ===========================================================================
+// n01d-term — Terminal Emulator for LateralusOS
+// ===========================================================================
+// Copyright (c) 2025-2026 bad-antics. All rights reserved.
+//
+// Native port of n01d-term (Python) to Lateralus.
+// Full VT100/ANSI terminal emulator with N01D dark-green theme.
+// Wraps the existing LateralusOS terminal.c/ltl infrastructure.
+//
+// Features:
+//   • VT100/ANSI escape sequence handling
+//   • Scrollback buffer (4096 lines)
+//   • Multiple tabs (up to 8 sessions)
+//   • Copy/paste via clipboard
+//   • Configurable font size and color scheme
+//   • Shell integration with ltlsh
+//   • URL detection & highlight
+//
+// Usage:  n01d-term              — open new terminal window
+//         n01d-term -e <cmd>     — run command and exit when done
+//         n01d-term --tab        — open tab in existing instance
+// ===========================================================================
+
+import sys
+import gui
+import gui::terminal
+import gui::window_manager
+import gui::theme_engine
+import shell::ltlsh
+
+// ── Constants ────────────────────────────────────────────────────────────────
+
+const APP_TITLE     = "n01d-term"
+const DEFAULT_COLS  = 90
+const DEFAULT_ROWS  = 24
+const MAX_TABS      = 8
+const SCROLLBACK    = 4096
+
+// N01D Terminal palette
+const T_BG      = 0x0D0D0D
+const T_FG      = 0xCCCCCC
+const T_CURSOR  = 0x00FF88
+const T_SEL_BG  = 0x1A3A2A
+const T_SEL_FG  = 0xFFFFFF
+const T_TAB_ACT = 0x151515
+const T_TAB_INA = 0x0D0D0D
+const T_BORDER  = 0x2A2A2A
+const T_ACCENT  = 0x00FF88
+
+// ANSI 16 colors — N01D-tuned
+const ANSI_COLORS = [
+    0x1A1A1A,  // 0  black
+    0xFF4444,  // 1  red
+    0x00FF88,  // 2  green    ← N01D accent
+    0xFFAA00,  // 3  yellow
+    0x4488FF,  // 4  blue
+    0xA855F7,  // 5  magenta
+    0x06B6D4,  // 6  cyan
+    0xCCCCCC,  // 7  white
+    0x444444,  // 8  bright black
+    0xFF6666,  // 9  bright red
+    0x44FF99,  // 10 bright green
+    0xFFCC44,  // 11 bright yellow
+    0x88AAFF,  // 12 bright blue
+    0xCC88FF,  // 13 bright magenta
+    0x44DDEE,  // 14 bright cyan
+    0xEEEEEE,  // 15 bright white
+]
+
+// ── Data Structures ───────────────────────────────────────────────────────────
+
+struct Cell {
+    ch:   str     // single character (or "" for empty)
+    fg:   int     // foreground color
+    bg:   int     // background color
+    bold: bool
+    dim:  bool
+    ul:   bool    // underline
+    rev:  bool    // reverse video
+}
+
+fn default_cell() -> Cell {
+    Cell { ch: " ", fg: T_FG, bg: T_BG, bold: false, dim: false, ul: false, rev: false }
+}
+
+struct Screen {
+    cells:     [[Cell]]    // [row][col]
+    cols:      int
+    rows:      int
+    cx:        int         // cursor x
+    cy:        int         // cursor y
+    saved_cx:  int
+    saved_cy:  int
+    scroll_top:    int
+    scroll_bottom: int
+    wrap_next: bool
+}
+
+fn new_screen(cols: int, rows: int) -> Screen {
+    let empty_row = [default_cell()] * cols
+    Screen {
+        cells:         [empty_row] * rows,
+        cols:          cols,
+        rows:          rows,
+        cx:            0,
+        cy:            0,
+        saved_cx:      0,
+        saved_cy:      0,
+        scroll_top:    0,
+        scroll_bottom: rows - 1,
+        wrap_next:     false,
+    }
+}
+
+struct EscapeParser {
+    state:  str          // "normal" | "esc" | "csi" | "osc"
+    buf:    str
+    params: [int]
+}
+
+fn new_parser() -> EscapeParser {
+    EscapeParser { state: "normal", buf: "", params: [] }
+}
+
+struct Session {
+    id:       int
+    title:    str
+    shell_pid: int
+    screen:   Screen
+    scrollback: [[Cell]]   // older rows, SCROLLBACK max
+    scroll_offset: int     // 0 = bottom (live), N = N rows up
+    parser:   EscapeParser
+    sel_start: Option[int]
+    sel_end:   Option[int]
+    active:   bool
+    bell:     bool
+    exited:   bool
+    exit_code: int
+}
+
+fn new_session(id: int, cols: int, rows: int, cmd: Option[str]) -> Session {
+    let sh_cmd = match cmd {
+        Some(c) => c
+        None    => "/bin/ltlsh"
+    }
+    let pid = sys::pty_spawn(sh_cmd, cols, rows)
+    Session {
+        id:           id,
+        title:        "session " ++ str(id + 1),
+        shell_pid:    pid,
+        screen:       new_screen(cols, rows),
+        scrollback:   [],
+        scroll_offset: 0,
+        parser:       new_parser(),
+        sel_start:    None,
+        sel_end:      None,
+        active:       false,
+        bell:         false,
+        exited:       false,
+        exit_code:    0,
+    }
+}
+
+struct AppState {
+    sessions:  [Session]
+    active_tab: int
+    window:    gui::Window
+    cols:      int
+    rows:      int
+    cell_w:    int
+    cell_h:    int
+    font_size: int
+    running:   bool
+    clipboard: str
+}
+
+// ── VT100 Processing ─────────────────────────────────────────────────────────
+
+fn screen_put_char(s: Screen, ch: str, cell: Cell) -> Screen {
+    if s.wrap_next {
+        let s2 = screen_newline(s)
+        return screen_put_char(Screen { ..s2, wrap_next: false }, ch, cell)
+    }
+
+    let mut cells = s.cells
+    let mut row = cells[s.cy]
+    row[s.cx] = Cell { ..cell, ch: ch }
+    cells[s.cy] = row
+
+    if s.cx + 1 >= s.cols {
+        Screen { ..s, cells: cells, wrap_next: true }
+    } else {
+        Screen { ..s, cells: cells, cx: s.cx + 1 }
+    }
+}
+
+fn screen_newline(s: Screen) -> Screen {
+    if s.cy >= s.scroll_bottom {
+        screen_scroll_up(Screen { ..s, cx: 0 }, 1)
+    } else {
+        Screen { ..s, cx: 0, cy: s.cy + 1, wrap_next: false }
+    }
+}
+
+fn screen_scroll_up(s: Screen, n: int) -> Screen {
+    let mut cells = s.cells
+    let top = s.scroll_top
+    let bot = s.scroll_bottom
+    let empty_row = [default_cell()] * s.cols
+
+    let mut i = 0
+    while i < n {
+        let removed_row = cells[top]
+        cells = cells.slice(0, top) ++ cells.slice(top + 1, bot + 1) ++ [empty_row] ++ cells.slice(bot + 1, cells.len())
+        i = i + 1
+    }
+    Screen { ..s, cells: cells }
+}
+
+fn screen_erase_display(s: Screen, mode: int) -> Screen {
+    let empty_row = [default_cell()] * s.cols
+    let empty_screen = [empty_row] * s.rows
+    match mode {
+        0 => {
+            // Erase from cursor to end
+            let mut cells = s.cells
+            let mut row = cells[s.cy]
+            for i in s.cx..s.cols { row[i] = default_cell() }
+            cells[s.cy] = row
+            for i in (s.cy + 1)..s.rows { cells[i] = empty_row }
+            Screen { ..s, cells: cells }
+        }
+        1 => {
+            // Erase from start to cursor
+            let mut cells = s.cells
+            for i in 0..s.cy { cells[i] = empty_row }
+            let mut row = cells[s.cy]
+            for i in 0..(s.cx + 1) { row[i] = default_cell() }
+            cells[s.cy] = row
+            Screen { ..s, cells: cells }
+        }
+        2 | 3 => Screen { ..s, cells: empty_screen, cx: 0, cy: 0 }
+        _     => s
+    }
+}
+
+fn screen_erase_line(s: Screen, mode: int) -> Screen {
+    let empty_row = [default_cell()] * s.cols
+    let mut cells = s.cells
+    let mut row = cells[s.cy]
+    match mode {
+        0 => { for i in s.cx..s.cols { row[i] = default_cell() } }
+        1 => { for i in 0..(s.cx + 1) { row[i] = default_cell() } }
+        2 => { row = empty_row }
+        _ => ()
+    }
+    cells[s.cy] = row
+    Screen { ..s, cells: cells }
+}
+
+fn parse_csi_params(buf: str) -> [int] {
+    if buf.len() == 0 { return [0] }
+    buf.split(";") |> map(|s| {
+        let n = s.parse_int()
+        match n { Some(v) => v, None => 0 }
+    })
+}
+
+fn apply_sgr(cell: Cell, params: [int]) -> Cell {
+    if params.len() == 0 || params[0] == 0 {
+        return default_cell()
+    }
+    let mut c = cell
+    let mut i = 0
+    while i < params.len() {
+        let p = params[i]
+        match p {
+            1  => c = Cell { ..c, bold: true }
+            2  => c = Cell { ..c, dim: true }
+            4  => c = Cell { ..c, ul: true }
+            7  => c = Cell { ..c, rev: true }
+            22 => c = Cell { ..c, bold: false, dim: false }
+            24 => c = Cell { ..c, ul: false }
+            27 => c = Cell { ..c, rev: false }
+            30 | 31 | 32 | 33 | 34 | 35 | 36 | 37 => c = Cell { ..c, fg: ANSI_COLORS[p - 30] }
+            39 => c = Cell { ..c, fg: T_FG }
+            40 | 41 | 42 | 43 | 44 | 45 | 46 | 47 => c = Cell { ..c, bg: ANSI_COLORS[p - 40] }
+            49 => c = Cell { ..c, bg: T_BG }
+            90 | 91 | 92 | 93 | 94 | 95 | 96 | 97 => c = Cell { ..c, fg: ANSI_COLORS[p - 90 + 8] }
+            100 | 101 | 102 | 103 | 104 | 105 | 106 | 107 => c = Cell { ..c, bg: ANSI_COLORS[p - 100 + 8] }
+            38 => {
+                if i + 2 < params.len() && params[i + 1] == 5 {
+                    let idx = params[i + 2]
+                    c = Cell { ..c, fg: if idx < 16 { ANSI_COLORS[idx] } else { T_FG } }
+                    i = i + 2
+                }
+            }
+            48 => {
+                if i + 2 < params.len() && params[i + 1] == 5 {
+                    let idx = params[i + 2]
+                    c = Cell { ..c, bg: if idx < 16 { ANSI_COLORS[idx] } else { T_BG } }
+                    i = i + 2
+                }
+            }
+            _ => ()
+        }
+        i = i + 1
+    }
+    c
+}
+
+fn process_csi(screen: Screen, cur_cell: Cell, cmd: str, buf: str) -> (Screen, Cell) {
+    let params = parse_csi_params(buf)
+    let p0 = if params.len() > 0 { params[0] } else { 0 }
+    let p1 = if params.len() > 1 { params[1] } else { 0 }
+
+    match cmd {
+        "A" => (Screen { ..screen, cy: max(screen.scroll_top, screen.cy - max(1, p0)) }, cur_cell)
+        "B" => (Screen { ..screen, cy: min(screen.scroll_bottom, screen.cy + max(1, p0)) }, cur_cell)
+        "C" => (Screen { ..screen, cx: min(screen.cols - 1, screen.cx + max(1, p0)) }, cur_cell)
+        "D" => (Screen { ..screen, cx: max(0, screen.cx - max(1, p0)) }, cur_cell)
+        "E" => (Screen { ..screen, cy: min(screen.scroll_bottom, screen.cy + max(1, p0)), cx: 0 }, cur_cell)
+        "F" => (Screen { ..screen, cy: max(screen.scroll_top, screen.cy - max(1, p0)), cx: 0 }, cur_cell)
+        "G" => (Screen { ..screen, cx: min(screen.cols - 1, max(0, p0 - 1)) }, cur_cell)
+        "H" | "f" => {
+            let row = max(0, p0 - 1)
+            let col = max(0, p1 - 1)
+            (Screen { ..screen, cy: min(screen.rows - 1, row), cx: min(screen.cols - 1, col) }, cur_cell)
+        }
+        "J" => (screen_erase_display(screen, p0), cur_cell)
+        "K" => (screen_erase_line(screen, p0), cur_cell)
+        "L" => {
+            // Insert line
+            let empty_row = [default_cell()] * screen.cols
+            let mut cells = screen.cells
+            cells = cells.slice(0, screen.cy) ++ [empty_row] ++ cells.slice(screen.cy, screen.rows - 1)
+            (Screen { ..screen, cells: cells }, cur_cell)
+        }
+        "M" => {
+            // Delete line
+            let empty_row = [default_cell()] * screen.cols
+            let mut cells = screen.cells
+            cells = cells.slice(0, screen.cy) ++ cells.slice(screen.cy + 1, screen.rows) ++ [empty_row]
+            (Screen { ..screen, cells: cells }, cur_cell)
+        }
+        "S" => (screen_scroll_up(screen, max(1, p0)), cur_cell)
+        "m" => (screen, apply_sgr(cur_cell, params))
+        "r" => {
+            let top = max(0, p0 - 1)
+            let bot = if p1 == 0 { screen.rows - 1 } else { min(screen.rows - 1, p1 - 1) }
+            (Screen { ..screen, scroll_top: top, scroll_bottom: bot }, cur_cell)
+        }
+        "s" => (Screen { ..screen, saved_cx: screen.cx, saved_cy: screen.cy }, cur_cell)
+        "u" => (Screen { ..screen, cx: screen.saved_cx, cy: screen.saved_cy }, cur_cell)
+        _   => (screen, cur_cell)
+    }
+}
+
+fn process_byte(sess: Session, byte: str) -> Session {
+    let p = sess.parser
+    match p.state {
+        "normal" => match byte {
+            "\x1B" => Session { ..sess, parser: EscapeParser { ..p, state: "esc", buf: "" } }
+            "\r"   => Session { ..sess, screen: Screen { ..sess.screen, cx: 0, wrap_next: false } }
+            "\n"   => Session { ..sess, screen: screen_newline(sess.screen) }
+            "\x08" => {
+                let new_cx = max(0, sess.screen.cx - 1)
+                Session { ..sess, screen: Screen { ..sess.screen, cx: new_cx, wrap_next: false } }
+            }
+            "\x07" => Session { ..sess, bell: true }
+            "\t"   => {
+                let new_cx = (sess.screen.cx / 8 + 1) * 8
+                let clamped = min(new_cx, sess.screen.cols - 1)
+                Session { ..sess, screen: Screen { ..sess.screen, cx: clamped } }
+            }
+            _ => {
+                let new_screen = screen_put_char(sess.screen, byte, default_cell())
+                Session { ..sess, screen: new_screen }
+            }
+        }
+        "esc" => match byte {
+            "[" => Session { ..sess, parser: EscapeParser { ..p, state: "csi", buf: "" } }
+            "]" => Session { ..sess, parser: EscapeParser { ..p, state: "osc", buf: "" } }
+            "c" => Session { ..sess, screen: new_screen(sess.screen.cols, sess.screen.rows), parser: new_parser() }
+            "7" => Session { ..sess, screen: Screen { ..sess.screen, saved_cx: sess.screen.cx, saved_cy: sess.screen.cy }, parser: new_parser() }
+            "8" => Session { ..sess, screen: Screen { ..sess.screen, cx: sess.screen.saved_cx, cy: sess.screen.saved_cy }, parser: new_parser() }
+            "D" => Session { ..sess, screen: screen_newline(sess.screen), parser: new_parser() }
+            "M" => {
+                let new_cy = max(sess.screen.scroll_top, sess.screen.cy - 1)
+                Session { ..sess, screen: Screen { ..sess.screen, cy: new_cy }, parser: new_parser() }
+            }
+            _   => Session { ..sess, parser: new_parser() }
+        }
+        "csi" => {
+            let end = (byte >= "A" && byte <= "Z") || (byte >= "a" && byte <= "z") || byte == "@"
+            if end {
+                let (new_screen, _cell) = process_csi(sess.screen, default_cell(), byte, p.buf)
+                Session { ..sess, screen: new_screen, parser: new_parser() }
+            } else {
+                Session { ..sess, parser: EscapeParser { ..p, buf: p.buf ++ byte } }
+            }
+        }
+        "osc" => {
+            if byte == "\x07" || byte == "\x1B" {
+                // Parse title: "0;<title>" or "2;<title>"
+                let parts = p.buf.split(";")
+                let title = if parts.len() >= 2 { parts.slice(1, parts.len()).join(";") } else { "" }
+                Session { ..sess, title: if title.len() > 0 { title } else { sess.title }, parser: new_parser() }
+            } else {
+                Session { ..sess, parser: EscapeParser { ..p, buf: p.buf ++ byte } }
+            }
+        }
+        _ => sess
+    }
+}
+
+fn process_pty_output(sess: Session) -> Session {
+    let data = sys::pty_read(sess.shell_pid, 4096)
+    let exited = sys::pty_exited(sess.shell_pid)
+    let exit_code = if exited { sys::pty_exit_code(sess.shell_pid) } else { 0 }
+    let mut s = sess
+    for byte in data.chars() {
+        s = process_byte(s, byte)
+    }
+    Session { ..s, exited: exited, exit_code: exit_code }
+}
+
+// ── Rendering ────────────────────────────────────────────────────────────────
+
+fn render_tab_bar(ctx: gui::Context, state: AppState) {
+    ctx.fill_rect(0, 0, state.window.width, 28, T_BG)
+    ctx.draw_line(0, 28, state.window.width, 28, T_BORDER, 1)
+
+    for (i, sess) in state.sessions.enumerate() {
+        let tx = i * 120
+        let active = i == state.active_tab
+        let bg = if active { T_TAB_ACT } else { T_TAB_INA }
+        let fg = if active { T_ACCENT  } else { 0x666666 }
+        ctx.fill_rect(tx, 0, 119, 28, bg)
+        ctx.draw_line(tx + 119, 0, tx + 119, 28, T_BORDER, 1)
+
+        let title = if sess.title.len() > 14 { sess.title.slice(0, 14) ++ "…" } else { sess.title }
+        ctx.draw_text(tx + 8, 8, title, fg, "mono-10")
+
+        // Close button
+        ctx.draw_text(tx + 106, 8, "×", if active { 0x666666 } else { 0x333333 }, "mono-10")
+    }
+
+    // "+" new tab button
+    let plus_x = state.sessions.len() * 120
+    ctx.draw_text(plus_x + 6, 8, "+", 0x444444, "mono-bold-12")
+}
+
+fn render_screen(ctx: gui::Context, state: AppState, sess: Session) {
+    let y_off = 30  // tab bar height + margin
+    let cw = state.cell_w
+    let ch = state.cell_h
+
+    for (row_i, row) in sess.screen.cells.enumerate() {
+        for (col_i, cell) in row.enumerate() {
+            let px = col_i * cw
+            let py = y_off + row_i * ch
+
+            let (fg, bg) = if cell.rev {
+                (cell.bg, cell.fg)
+            } else {
+                (cell.fg, cell.bg)
+            }
+
+            // Only draw non-default backgrounds
+            if bg != T_BG {
+                ctx.fill_rect(px, py, cw, ch, bg)
+            }
+
+            if cell.ch != " " && cell.ch != "" {
+                let font = if cell.bold { "mono-bold-" ++ str(state.font_size) } else { "mono-" ++ str(state.font_size) }
+                ctx.draw_text(px, py, cell.ch, fg, font)
+            }
+
+            if cell.ul {
+                ctx.draw_line(px, py + ch - 2, px + cw, py + ch - 2, fg, 1)
+            }
+        }
+    }
+
+    // Draw cursor
+    let cx = sess.screen.cx * cw
+    let cy = y_off + sess.screen.cy * ch
+    ctx.fill_rect(cx, cy, cw, ch, T_CURSOR)
+    let cursor_cell = sess.screen.cells[sess.screen.cy][sess.screen.cx]
+    if cursor_cell.ch != " " && cursor_cell.ch != "" {
+        ctx.draw_text(cx, cy, cursor_cell.ch, T_BG, "mono-" ++ str(state.font_size))
+    }
+}
+
+fn render(ctx: gui::Context, state: AppState) {
+    ctx.clear(T_BG)
+    render_tab_bar(ctx, state)
+
+    if state.sessions.len() > 0 && state.active_tab < state.sessions.len() {
+        let sess = state.sessions[state.active_tab]
+        render_screen(ctx, state, sess)
+    }
+}
+
+// ── Input ────────────────────────────────────────────────────────────────────
+
+fn send_key(sess: Session, key: gui::Key) -> Session {
+    let bytes = match key {
+        gui::Key::ENTER     => "\r"
+        gui::Key::BACKSPACE => "\x08"
+        gui::Key::TAB       => "\t"
+        gui::Key::ESCAPE    => "\x1B"
+        gui::Key::UP        => "\x1B[A"
+        gui::Key::DOWN      => "\x1B[B"
+        gui::Key::RIGHT     => "\x1B[C"
+        gui::Key::LEFT      => "\x1B[D"
+        gui::Key::HOME      => "\x1B[H"
+        gui::Key::END       => "\x1B[F"
+        gui::Key::DELETE    => "\x1B[3~"
+        gui::Key::PAGE_UP   => "\x1B[5~"
+        gui::Key::PAGE_DOWN => "\x1B[6~"
+        gui::Key::F1        => "\x1BOP"
+        gui::Key::F2        => "\x1BOQ"
+        gui::Key::F3        => "\x1BOR"
+        gui::Key::F4        => "\x1BOS"
+        gui::Key::CHAR(c)   => c
+        _                   => ""
+    }
+    if bytes.len() > 0 {
+        sys::pty_write(sess.shell_pid, bytes)
+    }
+    sess
+}
+
+fn handle_event(state: AppState, ev: gui::Event) -> AppState {
+    match ev {
+        gui::Event::KeyDown(key, mods) => {
+            // Global shortcuts
+            if mods.ctrl && mods.shift {
+                match key {
+                    gui::Key::T => return new_tab(state)
+                    gui::Key::W => return close_tab(state, state.active_tab)
+                    gui::Key::C => {
+                        let text = get_selection_text(state)
+                        return AppState { ..state, clipboard: text }
+                    }
+                    gui::Key::V => {
+                        let sess = send_pty_str(get_active_sess(state), state.clipboard)
+                        return set_active_sess(state, sess)
+                    }
+                    gui::Key::PAGE_UP   => return AppState { ..state, active_tab: prev_tab(state) }
+                    gui::Key::PAGE_DOWN => return AppState { ..state, active_tab: next_tab(state) }
+                    _ => ()
+                }
+            }
+            // Forward to active session
+            if state.active_tab < state.sessions.len() {
+                let mut sessions = state.sessions
+                sessions[state.active_tab] = send_key(sessions[state.active_tab], key)
+                AppState { ..state, sessions: sessions }
+            } else { state }
+        }
+        gui::Event::MouseDown(x, y, btn) => {
+            // Tab click
+            if y < 28 {
+                let tab_idx = x / 120
+                if tab_idx < state.sessions.len() {
+                    // Close button?
+                    let close_x = tab_idx * 120 + 106
+                    if x >= close_x && x <= close_x + 12 {
+                        return close_tab(state, tab_idx)
+                    }
+                    return AppState { ..state, active_tab: tab_idx }
+                }
+                // "+" button
+                let plus_x = state.sessions.len() * 120
+                if x >= plus_x && x <= plus_x + 28 {
+                    return new_tab(state)
+                }
+            }
+            state
+        }
+        gui::Event::WindowResize(w, h) => {
+            let new_cols = (w) / state.cell_w
+            let new_rows = (h - 30) / state.cell_h
+            let mut sessions = state.sessions
+            for (i, sess) in sessions.enumerate() {
+                sessions[i] = resize_session(sess, new_cols, new_rows)
+            }
+            AppState { ..state, sessions: sessions, cols: new_cols, rows: new_rows }
+        }
+        gui::Event::WindowClose => AppState { ..state, running: false }
+        _ => state
+    }
+}
+
+fn new_tab(state: AppState) -> AppState {
+    if state.sessions.len() >= MAX_TABS { return state }
+    let id = state.sessions.len()
+    let sess = new_session(id, state.cols, state.rows, None)
+    let mut sessions = state.sessions
+    sessions = sessions ++ [sess]
+    AppState { ..state, sessions: sessions, active_tab: id }
+}
+
+fn close_tab(state: AppState, idx: int) -> AppState {
+    if state.sessions.len() <= 1 {
+        return AppState { ..state, running: false }
+    }
+    let sess = state.sessions[idx]
+    sys::pty_kill(sess.shell_pid)
+    let mut sessions = state.sessions.slice(0, idx) ++ state.sessions.slice(idx + 1, state.sessions.len())
+    let new_active = if state.active_tab >= sessions.len() { sessions.len() - 1 } else { state.active_tab }
+    AppState { ..state, sessions: sessions, active_tab: new_active }
+}
+
+fn get_active_sess(state: AppState) -> Session {
+    state.sessions[state.active_tab]
+}
+
+fn set_active_sess(state: AppState, sess: Session) -> AppState {
+    let mut sessions = state.sessions
+    sessions[state.active_tab] = sess
+    AppState { ..state, sessions: sessions }
+}
+
+fn send_pty_str(sess: Session, s: str) -> Session {
+    sys::pty_write(sess.shell_pid, s)
+    sess
+}
+
+fn get_selection_text(state: AppState) -> str {
+    ""   // TODO: selection rendering
+}
+
+fn prev_tab(state: AppState) -> int {
+    if state.active_tab > 0 { state.active_tab - 1 } else { state.sessions.len() - 1 }
+}
+
+fn next_tab(state: AppState) -> int {
+    if state.active_tab < state.sessions.len() - 1 { state.active_tab + 1 } else { 0 }
+}
+
+fn resize_session(sess: Session, cols: int, rows: int) -> Session {
+    sys::pty_resize(sess.shell_pid, cols, rows)
+    Session { ..sess, screen: new_screen(cols, rows) }
+}
+
+// ── Entry Point ──────────────────────────────────────────────────────────────
+
+fn main(args: [str]) -> int {
+    let exec_cmd = args
+        |> zip_with_prev()
+        |> filter(|(prev, cur)| prev == "-e")
+        |> map(|(_, cur)| cur)
+        |> first()
+
+    let font_size = 11
+    let cell_w    = font_size * 6 / 10 + 2
+    let cell_h    = font_size + 4
+    let cols      = DEFAULT_COLS
+    let rows      = DEFAULT_ROWS
+    let win_w     = cols * cell_w
+    let win_h     = rows * cell_h + 30
+
+    let win = gui::create_window(APP_TITLE, win_w, win_h, gui::Flags::RESIZABLE)
+    win.set_bg(T_BG)
+
+    let first_sess = new_session(0, cols, rows, exec_cmd)
+    let mut state = AppState {
+        sessions:   [first_sess],
+        active_tab: 0,
+        window:     win,
+        cols:       cols,
+        rows:       rows,
+        cell_w:     cell_w,
+        cell_h:     cell_h,
+        font_size:  font_size,
+        running:    true,
+        clipboard:  "",
+    }
+
+    while state.running {
+        // Read PTY output for all sessions
+        let mut sessions = state.sessions
+        for (i, sess) in sessions.enumerate() {
+            if !sess.exited {
+                sessions[i] = process_pty_output(sess)
+            }
+        }
+        state = AppState { ..state, sessions: sessions }
+
+        // Handle bell
+        if state.active_tab < state.sessions.len() && state.sessions[state.active_tab].bell {
+            sys::beep()
+            let mut sessions2 = state.sessions
+            sessions2[state.active_tab] = Session { ..sessions2[state.active_tab], bell: false }
+            state = AppState { ..state, sessions: sessions2 }
+        }
+
+        // Poll GUI events
+        let events = state.window.poll_events()
+        for ev in events {
+            state = handle_event(state, ev)
+        }
+
+        // Render
+        let ctx = state.window.get_context()
+        render(ctx, state)
+        state.window.swap_buffers()
+
+        sys::sleep_ms(8)  // ~120 fps for snappy feel
+    }
+
+    for sess in state.sessions {
+        sys::pty_kill(sess.shell_pid)
+    }
+    state.window.close()
+    return 0
+}

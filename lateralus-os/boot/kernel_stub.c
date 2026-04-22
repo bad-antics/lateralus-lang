@@ -729,6 +729,7 @@ static void cmd_help(void) {
     k_print("  chat        IRC-style chat client\n");
     k_print("  edit <file> Text editor (syntax highlighting)\n");
     k_print("  pkg <cmd>   Package manager (list/install/build)\n");
+    k_print("  grugbot     grugbot420 — caveman wisdom chatbot\n");
     k_set_color(0x0E, 0x00);
     k_print("Utilities:\n");
     k_set_color(0x0F, 0x00);
@@ -3056,6 +3057,11 @@ static void shell_exec_simple(char *line) {
     else if (k_strcmp(line, "edit") == 0)        { cmd_edit(""); }
     else if (k_strncmp(line, "pkg ", 4) == 0)   { cmd_pkg(line + 4); }
     else if (k_strcmp(line, "pkg") == 0)         { cmd_pkg(""); }
+    /* -- grugbot420 — caveman wisdom chatbot ----------------------- */
+    else if (k_strncmp(line, "grugbot420 ", 11) == 0) { cmd_grugbot(line + 11); }
+    else if (k_strcmp(line, "grugbot420") == 0)        { cmd_grugbot(""); }
+    else if (k_strncmp(line, "grugbot ", 8) == 0)     { cmd_grugbot(line + 8); }
+    else if (k_strcmp(line, "grugbot") == 0)           { cmd_grugbot(""); }
     /* -- v2.3 utilities -------------------------------------------- */
     else if (k_strcmp(line, "top") == 0)          { cmd_top(); }
     else if (k_strcmp(line, "df") == 0)           { cmd_df(); }

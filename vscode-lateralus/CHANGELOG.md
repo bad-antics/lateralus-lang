@@ -2,6 +2,18 @@
 
 All notable changes to the Lateralus Language extension will be documented in this file.
 
+## [3.1.0] — 2026-04-21
+
+### Changed
+- **Version alignment** with Lateralus language core (3.1.0). Extension and
+  language now share a single version number for clarity.
+- Updated README VSIX install examples to reference `lateralus-lang-3.1.0.vsix`.
+
+### Notes on marketplace state
+A one-off build was published as 2.6.0 on 2026-04-04 without being committed
+back to the repository. This 3.1.0 release supersedes it and re-syncs the
+repository as the single source of truth for the extension.
+
 ## [2.5.1] — 2026-04-03
 
 ### Fixed

@@ -1,0 +1,533 @@
+// ===========================================================================
+// n01d-media — Media Player for LateralusOS
+// ===========================================================================
+// Copyright (c) 2025-2026 bad-antics. All rights reserved.
+//
+// Native port of n01d-media (Python) to Lateralus.
+// Audio/video player using the LateralusOS audio service and GPU driver.
+//
+// Features:
+//   • Audio: MP3, OGG, FLAC, WAV, OPUS
+//   • Video: MP4, MKV, WEBM (software decode → framebuffer)
+//   • Playlist: drag-and-drop, shuffle, repeat
+//   • Album art display
+//   • Waveform / spectrum visualizer
+//   • Keyboard: space=play/pause, n/p=next/prev, +/-=volume, f=fullscreen
+//   • N01D dark-green theme
+//
+// Usage:  n01d-media                   — open file browser
+//         n01d-media <file|dir>        — play file or entire directory
+//         n01d-media --shuffle <dir>   — shuffle-play directory
+// ===========================================================================
+
+import sys
+import gui
+import gui::widgets
+import services::audio
+import drivers::sound
+
+// ── Constants ────────────────────────────────────────────────────────────────
+
+const APP_TITLE   = "n01d-media"
+const WINDOW_W    = 820
+const WINDOW_H    = 560
+const VIS_H       = 80     // visualizer height
+const WAVEFORM_BINS = 128
+
+// N01D palette
+const M_BG      = 0x0A0A0A
+const M_BG2     = 0x111111
+const M_BG3     = 0x181818
+const M_FG      = 0xCCCCCC
+const M_ACCENT  = 0x00FF88
+const M_DIM     = 0x444444
+const M_BORDER  = 0x1E1E1E
+const M_PROG_BG = 0x1A1A1A
+const M_PROG_FG = 0x00FF88
+const M_WARN    = 0xFF4444
+
+// Supported extensions
+const AUDIO_EXTS = [".mp3", ".ogg", ".flac", ".wav", ".opus", ".m4a", ".aac"]
+const VIDEO_EXTS = [".mp4", ".mkv", ".webm", ".avi", ".mov"]
+
+// ── Data Structures ───────────────────────────────────────────────────────────
+
+enum RepeatMode { Off, One, All }
+
+struct TrackMeta {
+    path:     str
+    title:    str
+    artist:   str
+    album:    str
+    duration: float    // seconds
+    is_video: bool
+    art:      Option[gui::Image]
+}
+
+fn meta_from_path(path: str) -> TrackMeta {
+    let tags = audio::read_tags(path)
+    let ext = path.rsplit(".").first().map(|s| "." ++ s.to_lower()).unwrap_or("")
+    TrackMeta {
+        path:     path,
+        title:    tags.get("title").unwrap_or(path_basename(path)),
+        artist:   tags.get("artist").unwrap_or("Unknown Artist"),
+        album:    tags.get("album").unwrap_or("Unknown Album"),
+        duration: tags.duration,
+        is_video: VIDEO_EXTS.contains(ext),
+        art:      tags.art |> map(|data| gui::decode_image(data)),
+    }
+}
+
+fn path_basename(p: str) -> str {
+    let parts = p.split("/")
+    if parts.len() == 0 { p } else { parts[parts.len() - 1] }
+}
+
+struct SpectrumBar {
+    value:   float     // 0.0–1.0
+    peak:    float
+    decay:   float
+}
+
+struct PlayerState {
+    playlist:  [TrackMeta]
+    current:   int
+    playing:   bool
+    position:  float       // current time (seconds)
+    volume:    float       // 0.0–1.0
+    muted:     bool
+    shuffle:   bool
+    repeat:    RepeatMode
+    spectrum:  [SpectrumBar]
+    waveform:  [float]
+    stream_id: Option[int]   // audio service stream handle
+    video_frame: Option[gui::Image]
+    fullscreen: bool
+    status_msg: str
+}
+
+struct AppState {
+    player:   PlayerState
+    window:   gui::Window
+    show_playlist: bool
+    scroll_pl: int
+    running:  bool
+}
+
+// ── Playlist helpers ──────────────────────────────────────────────────────────
+
+fn load_dir_playlist(dir: str) -> [TrackMeta] {
+    vfs::list_dir(dir)
+        |> filter(|f| {
+            let ext = "." ++ f.rsplit(".").first().unwrap_or("").to_lower()
+            AUDIO_EXTS.contains(ext) || VIDEO_EXTS.contains(ext)
+        })
+        |> sort()
+        |> map(|f| meta_from_path(dir ++ "/" ++ f))
+}
+
+fn player_open(p: PlayerState, idx: int) -> PlayerState {
+    // Stop current stream
+    let p2 = player_stop(p)
+
+    if idx < 0 || idx >= p2.playlist.len() { return p2 }
+
+    let track = p2.playlist[idx]
+    let sid = audio::open_stream(track.path, p2.volume)
+    audio::play(sid)
+
+    PlayerState {
+        ..p2,
+        current:    idx,
+        playing:    true,
+        position:   0.0,
+        stream_id:  Some(sid),
+        status_msg: track.artist ++ " — " ++ track.title,
+    }
+}
+
+fn player_stop(p: PlayerState) -> PlayerState {
+    match p.stream_id {
+        Some(sid) => {
+            audio::stop(sid)
+            audio::close_stream(sid)
+            PlayerState { ..p, playing: false, stream_id: None }
+        }
+        None => PlayerState { ..p, playing: false }
+    }
+}
+
+fn player_play_pause(p: PlayerState) -> PlayerState {
+    match p.stream_id {
+        Some(sid) => {
+            if p.playing {
+                audio::pause(sid)
+                PlayerState { ..p, playing: false }
+            } else {
+                audio::resume(sid)
+                PlayerState { ..p, playing: true }
+            }
+        }
+        None => player_open(p, p.current)
+    }
+}
+
+fn player_seek(p: PlayerState, pos: float) -> PlayerState {
+    match p.stream_id {
+        Some(sid) => {
+            audio::seek(sid, pos)
+            PlayerState { ..p, position: pos }
+        }
+        None => p
+    }
+}
+
+fn player_set_volume(p: PlayerState, vol: float) -> PlayerState {
+    let clamped = if vol < 0.0 { 0.0 } else if vol > 1.0 { 1.0 } else { vol }
+    match p.stream_id {
+        Some(sid) => audio::set_volume(sid, clamped)
+        None => ()
+    }
+    PlayerState { ..p, volume: clamped, muted: false }
+}
+
+fn player_next(p: PlayerState) -> PlayerState {
+    if p.playlist.len() == 0 { return p }
+    let next_idx = if p.shuffle {
+        sys::rand_int(0, p.playlist.len())
+    } else {
+        match p.repeat {
+            RepeatMode::One => p.current
+            RepeatMode::All => (p.current + 1) % p.playlist.len()
+            RepeatMode::Off => if p.current + 1 < p.playlist.len() { p.current + 1 } else { p.current }
+        }
+    }
+    player_open(p, next_idx)
+}
+
+fn player_prev(p: PlayerState) -> PlayerState {
+    if p.playlist.len() == 0 { return p }
+    let prev_idx = if p.position > 3.0 {
+        p.current  // rewind if >3s into track
+    } else {
+        if p.current > 0 { p.current - 1 } else { p.playlist.len() - 1 }
+    }
+    player_open(p, prev_idx)
+}
+
+// ── Spectrum / Waveform ───────────────────────────────────────────────────────
+
+fn update_spectrum(p: PlayerState) -> PlayerState {
+    let raw = match p.stream_id {
+        Some(sid) => audio::get_spectrum(sid, WAVEFORM_BINS)
+        None      => [0.0] * WAVEFORM_BINS
+    }
+    let new_bars = p.spectrum.enumerate() |> map(|(i, bar)| {
+        let val = if i < raw.len() { raw[i] } else { 0.0 }
+        let new_peak = if val > bar.peak { val } else { bar.peak * 0.97 }
+        let decayed  = if val > bar.value { val } else { bar.value * 0.88 }
+        SpectrumBar { value: decayed, peak: new_peak, decay: bar.decay }
+    })
+    let waveform = match p.stream_id {
+        Some(sid) => audio::get_waveform(sid, WAVEFORM_BINS)
+        None      => [0.0] * WAVEFORM_BINS
+    }
+    PlayerState { ..p, spectrum: new_bars, waveform: waveform }
+}
+
+fn update_position(p: PlayerState) -> PlayerState {
+    match p.stream_id {
+        Some(sid) => {
+            let pos = audio::get_position(sid)
+            let ended = audio::stream_ended(sid)
+            if ended {
+                player_next(p)
+            } else {
+                PlayerState { ..p, position: pos }
+            }
+        }
+        None => p
+    }
+}
+
+// ── Rendering ────────────────────────────────────────────────────────────────
+
+fn fmt_time(s: float) -> str {
+    let total = int(s)
+    let mins = total / 60
+    let secs = total % 60
+    let sec_str = if secs < 10 { "0" ++ str(secs) } else { str(secs) }
+    str(mins) ++ ":" ++ sec_str
+}
+
+fn draw_album_art(ctx: gui::Context, p: PlayerState, x: int, y: int, size: int) {
+    ctx.fill_rect(x, y, size, size, M_BG2)
+    ctx.draw_rect(x, y, size, size, M_BORDER, 1)
+    match p.playlist |> index(p.current) {
+        Some(track) => match track.art {
+            Some(img) => ctx.draw_image_scaled(img, x, y, size, size)
+            None => {
+                // Default music note icon
+                ctx.draw_text(x + size / 2 - 16, y + size / 2 - 16, "♪", M_DIM, "mono-bold-32")
+            }
+        }
+        None => ctx.draw_text(x + size / 2 - 16, y + size / 2 - 16, "♪", M_DIM, "mono-bold-32")
+    }
+}
+
+fn draw_spectrum(ctx: gui::Context, p: PlayerState, x: int, y: int, w: int, h: int) {
+    ctx.fill_rect(x, y, w, h, M_BG)
+    let bar_w = w / WAVEFORM_BINS
+    for (i, bar) in p.spectrum.enumerate() {
+        let bx = x + i * bar_w
+        let bh = int(bar.value * float(h - 4))
+        let ph = int(bar.peak  * float(h - 4))
+        // Bar gradient: green→cyan at high values
+        let intensity = int(bar.value * 255.0)
+        let color = (intensity << 8) | (min(255, intensity / 2) << 16) | 0xFF00  // G channel
+        ctx.fill_rect(bx, y + h - bh - 2, max(1, bar_w - 1), bh, M_ACCENT)
+        // Peak marker
+        ctx.fill_rect(bx, y + h - ph - 4, max(1, bar_w - 1), 2, 0x00CC66)
+    }
+}
+
+fn draw_controls(ctx: gui::Context, state: AppState, y: int) {
+    let p = state.player
+    let cw = WINDOW_W
+    ctx.fill_rect(0, y, cw, 110, M_BG2)
+    ctx.draw_line(0, y, cw, y, M_BORDER, 1)
+
+    // Progress bar
+    let prog_y = y + 12
+    let prog_w = cw - 200
+    let prog_x = 100
+    ctx.fill_rect(prog_x, prog_y, prog_w, 6, M_PROG_BG)
+    let dur = if p.playlist.len() > 0 { p.playlist[p.current].duration } else { 0.0 }
+    let filled = if dur > 0.0 { int(p.position / dur * float(prog_w)) } else { 0 }
+    ctx.fill_rect(prog_x, prog_y, filled, 6, M_PROG_FG)
+    // Scrubber dot
+    ctx.fill_circle(prog_x + filled, prog_y + 3, 6, M_ACCENT)
+
+    // Time
+    ctx.draw_text(8,       prog_y - 2, fmt_time(p.position), M_DIM, "mono-10")
+    ctx.draw_text(cw - 60, prog_y - 2, fmt_time(dur),        M_DIM, "mono-10")
+
+    // Track info
+    let title = if p.playlist.len() > 0 { p.playlist[p.current].title } else { "—" }
+    let artist = if p.playlist.len() > 0 { p.playlist[p.current].artist } else { "" }
+    ctx.draw_text(prog_x, y + 28, title,  M_FG, "mono-bold-12")
+    ctx.draw_text(prog_x, y + 46, artist, M_DIM, "mono-10")
+
+    // Control buttons  |< ▶ >|
+    let btn_y = y + 68
+    let btn_cx = cw / 2
+
+    let prev_txt = "|◀"
+    let play_txt = if p.playing { "❚❚" } else { "▶" }
+    let next_txt = "▶|"
+
+    ctx.draw_text(btn_cx - 80, btn_y, prev_txt, M_FG, "mono-bold-16")
+    ctx.fill_rect(btn_cx - 20, btn_y - 4, 40, 28, if p.playing { M_ACCENT } else { M_BG3 })
+    ctx.draw_text(btn_cx - 8, btn_y, play_txt, if p.playing { M_BG } else { M_ACCENT }, "mono-bold-16")
+    ctx.draw_text(btn_cx + 50, btn_y, next_txt, M_FG, "mono-bold-16")
+
+    // Shuffle / Repeat / Mute
+    let shuf_color = if p.shuffle { M_ACCENT } else { M_DIM }
+    ctx.draw_text(btn_cx - 160, btn_y, "⇄", shuf_color, "mono-bold-14")
+    let rep_txt = match p.repeat {
+        RepeatMode::Off => "↺"
+        RepeatMode::One => "↻¹"
+        RepeatMode::All => "↻"
+    }
+    ctx.draw_text(btn_cx + 120, btn_y, rep_txt, M_ACCENT, "mono-bold-14")
+
+    // Volume
+    let vol_x = cw - 90
+    let vol_label = if p.muted { "🔇" } else { "🔊" }
+    ctx.draw_text(vol_x, btn_y, vol_label, M_DIM, "mono-10")
+    ctx.fill_rect(vol_x + 20, btn_y + 4, 60, 4, M_PROG_BG)
+    let vol_fill = if p.muted { 0 } else { int(p.volume * 60.0) }
+    ctx.fill_rect(vol_x + 20, btn_y + 4, vol_fill, 4, M_ACCENT)
+}
+
+fn draw_playlist(ctx: gui::Context, state: AppState) {
+    let pl_x = WINDOW_W - 260
+    ctx.fill_rect(pl_x, 0, 260, WINDOW_H, M_BG2)
+    ctx.draw_line(pl_x, 0, pl_x, WINDOW_H, M_BORDER, 1)
+    ctx.draw_text(pl_x + 10, 10, "PLAYLIST", M_ACCENT, "mono-bold-11")
+
+    let mut y = 34
+    for (i, track) in state.player.playlist.enumerate() {
+        let active = i == state.player.current
+        let bg = if active { 0x1A3A2A } else { M_BG2 }
+        ctx.fill_rect(pl_x, y - state.scroll_pl, 260, 42, bg)
+        if active { ctx.fill_rect(pl_x, y - state.scroll_pl, 3, 42, M_ACCENT) }
+
+        let title_short = if track.title.len() > 24 { track.title.slice(0, 24) ++ "…" } else { track.title }
+        let color = if active { M_ACCENT } else { M_FG }
+        ctx.draw_text(pl_x + 10, y - state.scroll_pl + 6, title_short, color, "mono-bold-10")
+        ctx.draw_text(pl_x + 10, y - state.scroll_pl + 22, track.artist, M_DIM, "mono-9")
+        ctx.draw_text(pl_x + 200, y - state.scroll_pl + 22, fmt_time(track.duration), M_DIM, "mono-9")
+        ctx.draw_line(pl_x, y - state.scroll_pl + 42, pl_x + 260, y - state.scroll_pl + 42, M_BORDER, 1)
+        y = y + 43
+    }
+}
+
+fn render(ctx: gui::Context, state: AppState) {
+    let p = state.player
+    let pw = if state.show_playlist { WINDOW_W - 260 } else { WINDOW_W }
+
+    ctx.clear(M_BG)
+
+    // Album art (left)
+    let art_size = 200
+    draw_album_art(ctx, p, 16, 16, art_size)
+
+    // Spectrum visualizer
+    let vis_x = 240
+    let vis_y = 16
+    let vis_w = pw - 260
+    draw_spectrum(ctx, p, vis_x, vis_y, vis_w, VIS_H)
+
+    // Controls
+    draw_controls(ctx, state, WINDOW_H - 120)
+
+    // Playlist sidebar
+    if state.show_playlist {
+        draw_playlist(ctx, state)
+    }
+
+    // Header bar
+    ctx.fill_rect(0, 0, pw, 0, M_BG2)  // no header needed — clean
+}
+
+// ── Input ─────────────────────────────────────────────────────────────────────
+
+fn handle_event(state: AppState, ev: gui::Event) -> AppState {
+    let p = state.player
+    match ev {
+        gui::Event::KeyDown(key, mods) => {
+            let new_p = match key {
+                gui::Key::SPACE     => player_play_pause(p)
+                gui::Key::N         => player_next(p)
+                gui::Key::P         => player_prev(p)
+                gui::Key::PLUS      => player_set_volume(p, p.volume + 0.05)
+                gui::Key::MINUS     => player_set_volume(p, p.volume - 0.05)
+                gui::Key::M         => PlayerState { ..p, muted: !p.muted }
+                gui::Key::S         => PlayerState { ..p, shuffle: !p.shuffle }
+                gui::Key::R         => PlayerState { ..p, repeat: match p.repeat {
+                    RepeatMode::Off => RepeatMode::All
+                    RepeatMode::All => RepeatMode::One
+                    RepeatMode::One => RepeatMode::Off
+                }}
+                gui::Key::LEFT      => player_seek(p, max(0.0, p.position - 5.0))
+                gui::Key::RIGHT     => player_seek(p, p.position + 5.0)
+                gui::Key::F         => { return AppState { ..state, player: p, running: state.running } } // fullscreen toggle
+                gui::Key::Q         => { return AppState { ..state, running: false } }
+                _                   => p
+            }
+            AppState { ..state, player: new_p }
+        }
+        gui::Event::MouseDown(x, y, _btn) => {
+            // Progress bar click  (y ≈ WINDOW_H-108, x in 100..WINDOW_W-100)
+            let prog_y_range = (WINDOW_H - 120 + 12)..(WINDOW_H - 120 + 20)
+            if y >= prog_y_range.start && y <= prog_y_range.end && x >= 100 && x < WINDOW_W - 100 {
+                let frac = float(x - 100) / float(WINDOW_W - 200)
+                let dur  = if p.playlist.len() > 0 { p.playlist[p.current].duration } else { 0.0 }
+                let new_p = player_seek(p, frac * dur)
+                return AppState { ..state, player: new_p }
+            }
+            // Playlist click
+            if x > WINDOW_W - 260 && state.show_playlist {
+                let idx = (y - 34 + state.scroll_pl) / 43
+                if idx >= 0 && idx < p.playlist.len() {
+                    return AppState { ..state, player: player_open(p, idx) }
+                }
+            }
+            // Play/pause button click area
+            let btn_cy = WINDOW_H - 120 + 68
+            if x >= WINDOW_W / 2 - 20 && x <= WINDOW_W / 2 + 20 && y >= btn_cy - 4 && y <= btn_cy + 24 {
+                return AppState { ..state, player: player_play_pause(p) }
+            }
+            state
+        }
+        gui::Event::Scroll(x, y, dy) => {
+            if x > WINDOW_W - 260 {
+                AppState { ..state, scroll_pl: max(0, state.scroll_pl + dy * 43) }
+            } else { state }
+        }
+        gui::Event::WindowClose => AppState { ..state, running: false }
+        _ => state
+    }
+}
+
+// ── Entry Point ──────────────────────────────────────────────────────────────
+
+fn main(args: [str]) -> int {
+    let shuffle = args.contains("--shuffle")
+    let paths = args |> filter(|a| !a.starts_with("-"))
+
+    let win = gui::create_window(APP_TITLE, WINDOW_W, WINDOW_H, gui::Flags::RESIZABLE)
+    win.set_bg(M_BG)
+
+    let playlist: [TrackMeta] = if paths.len() > 0 {
+        paths |> flat_map(|path| {
+            if vfs::is_dir(path) { load_dir_playlist(path) }
+            else { [meta_from_path(path)] }
+        })
+    } else { [] }
+
+    let spectrum_bars = [SpectrumBar { value: 0.0, peak: 0.0, decay: 0.0 }] * WAVEFORM_BINS
+
+    let mut player = PlayerState {
+        playlist:    playlist,
+        current:     0,
+        playing:     false,
+        position:    0.0,
+        volume:      0.75,
+        muted:       false,
+        shuffle:     shuffle,
+        repeat:      RepeatMode::All,
+        spectrum:    spectrum_bars,
+        waveform:    [0.0] * WAVEFORM_BINS,
+        stream_id:   None,
+        video_frame: None,
+        fullscreen:  false,
+        status_msg:  if playlist.len() > 0 { str(playlist.len()) ++ " tracks" } else { "No files loaded" },
+    }
+
+    // Auto-play first track if playlist loaded
+    if playlist.len() > 0 {
+        player = if shuffle {
+            player_open(player, sys::rand_int(0, playlist.len()))
+        } else {
+            player_open(player, 0)
+        }
+    }
+
+    let mut state = AppState {
+        player:        player,
+        window:        win,
+        show_playlist: true,
+        scroll_pl:     0,
+        running:       true,
+    }
+
+    while state.running {
+        let events = state.window.poll_events()
+        for ev in events { state = handle_event(state, ev) }
+
+        // Tick: update position + spectrum
+        let updated_player = update_position(update_spectrum(state.player))
+        state = AppState { ..state, player: updated_player }
+
+        let ctx = state.window.get_context()
+        render(ctx, state)
+        state.window.swap_buffers()
+        sys::sleep_ms(16)
+    }
+
+    player_stop(state.player)
+    state.window.close()
+    return 0
+}

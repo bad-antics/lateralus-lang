@@ -1,0 +1,306 @@
+// ===========================================================================
+// LateralusOS — grugbot420
+// ===========================================================================
+// Copyright (c) 2025-2026 bad-antics. All rights reserved.
+//
+// grugbot420 — caveman-brain programming-wisdom chatbot for LateralusOS.
+//
+// grugbot live in /dev/shell.  grugbot hit from pipe, no demon thread.
+// grugbot think slow, talk simple.  grugbot smoke big thinking, keep
+// complexity small.  complexity demon always come back — grug always ready.
+//
+// Features:
+//   • IRC-style prompt  (grug> ...)
+//   • Keyword-driven response engine: code, bug, complexity, ship, test,
+//     refactor, oop, meeting, senior, perf, type-system, ai, friday,
+//     motivate, wisdom, joke, weed, 420, etc.
+//   • Built-in commands:
+//         /help    show command list
+//         /wisdom  random grug wisdom
+//         /joke    dad-tier joke
+//         /roll    1d20
+//         /smoke   take a puff, get deeper wisdom
+//         /time    uptime in ticks
+//         /quit    leave grug alone
+//
+// Usage:  grugbot            — chat in loopback with grug
+//         grugbot wisdom     — one-shot wisdom and exit
+//         grugbot420         — alias, extra 420 energy
+// ===========================================================================
+
+import hal::serial
+
+// ── Colors (Catppuccin Mocha) ────────────────────────────────────────────
+
+const COLOR_BG     = 0x1E1E2E
+const COLOR_FG     = 0xCDD6F4
+const COLOR_GRUG   = 0xA6E3A1    // green — grug speak
+const COLOR_USER   = 0x89B4FA    // blue  — user
+const COLOR_SYS    = 0xF9E2AF    // yellow — system
+const COLOR_SMOKE  = 0xF5C2E7    // pink  — 420 mode
+const COLOR_ERR    = 0xF38BA8    // red
+
+// ── Bot state ────────────────────────────────────────────────────────────
+
+struct GrugState {
+    nick:      str,
+    mood:      int,     // 0 chill, 1 blazed, 2 enlightened
+    hits:      int,     // /smoke counter
+    rng:       int,     // xorshift seed
+    running:   bool,
+}
+
+fn new_grug() -> GrugState {
+    GrugState {
+        nick:    "grug",
+        mood:    0,
+        hits:    0,
+        rng:     0x420BADA55,
+        running: true,
+    }
+}
+
+// ── Deterministic PRNG (xorshift32) ──────────────────────────────────────
+
+fn grug_rand(s: GrugState) -> (GrugState, int) {
+    let mut x = s.rng
+    x = x ^ (x << 13)
+    x = x ^ (x >> 17)
+    x = x ^ (x << 5)
+    let ns = GrugState { nick: s.nick, mood: s.mood, hits: s.hits,
+                         rng: x, running: s.running }
+    (ns, x & 0x7fffffff)
+}
+
+fn pick(s: GrugState, table: [str]) -> (GrugState, str) {
+    let (ns, r) = grug_rand(s)
+    let idx = r % table.len()
+    (ns, table[idx])
+}
+
+// ── Wisdom tables ────────────────────────────────────────────────────────
+
+const WISDOM: [str] = [
+    "grug say: complexity very very bad. simple good.",
+    "grug say: factory factory factory pattern make grug head hurt.",
+    "grug say: always name variable what it be. 'data' mean nothing.",
+    "grug say: if code hard to delete, code already own you.",
+    "grug say: type system friend, not enemy. type catch bug while grug sleep.",
+    "grug brain small, so grug keep function small too.",
+    "grug say: senior dev is one who know where bodies buried.",
+    "grug say: meeting is where productivity go to die.",
+    "grug say: ship small, ship often, fix in prod, grug not scared.",
+    "grug say: premature optimization is root of all bug. measure first.",
+    "grug say: DRY is lie. same shape not same meaning. duplicate sometime ok.",
+    "grug say: if test hard to write, code shape wrong.",
+    "grug say: comment say WHY. code already say WHAT.",
+    "grug say: log loud when bad, silent when good.",
+]
+
+const JOKES: [str] = [
+    "why function cross road? because callback on other side.",
+    "grug have 99 problem but null pointer not one. grug also have null pointer.",
+    "programmer wife say: get bread, if egg, get 12. programmer come home with 12 bread.",
+    "how many grug to change lightbulb? none. grug afraid of dark, live with it.",
+    "grug try recursion to understand recursion. grug still trying.",
+]
+
+const SMOKE_WISDOM: [str] = [
+    "grug puff... whoa. semicolons are just fences for thoughts.",
+    "grug puff... what if garbage collector is just... letting go?",
+    "grug puff... monad is just burrito of sadness man.",
+    "grug puff... every `for` loop is a tiny universe, bro.",
+    "grug puff... types are vibes and vibes are types.",
+    "grug puff... the real bug was the friends we made along the way.",
+]
+
+// ── Message primitives ───────────────────────────────────────────────────
+
+fn say(color: int, speaker: str, text: str) {
+    print_color(color, "[" ++ speaker ++ "] ")
+    print_color(COLOR_FG, text ++ "\n")
+}
+
+fn grug_say(s: GrugState, text: str) {
+    let name = if s.mood >= 1 { "grug420" } else { "grug" }
+    say(COLOR_GRUG, name, text)
+}
+
+// ── Keyword matcher ──────────────────────────────────────────────────────
+
+fn contains_any(haystack: str, needles: [str]) -> bool {
+    let h = haystack.to_lower()
+    for n in needles { if h.contains(n) { return true } }
+    false
+}
+
+fn respond(s: GrugState, input: str) -> GrugState {
+    // Built-in slash commands
+    if input.starts_with("/") { return handle_cmd(s, input) }
+
+    let msg = input.trim()
+    if msg == "" { return s }
+
+    // Keyword dispatch
+    if contains_any(msg, ["hi", "hello", "hey", "sup", "yo"]) {
+        grug_say(s, "hi friend. grug here. what on brain?")
+        return s
+    }
+    if contains_any(msg, ["bug", "crash", "broken", "panic"]) {
+        let (ns, w) = pick(s, [
+            "bug not personal. bug just code telling truth.",
+            "read stack trace top-down. grug promise answer in there.",
+            "print statement older than grug. print statement still work.",
+        ])
+        grug_say(ns, w); return ns
+    }
+    if contains_any(msg, ["complexity", "complex", "overengineer", "abstract"]) {
+        grug_say(s, "complexity demon love abstract factory. delete layer. grug happy.")
+        return s
+    }
+    if contains_any(msg, ["ship", "deploy", "release", "prod"]) {
+        grug_say(s, "ship it. worst case: rollback. best case: user smile.")
+        return s
+    }
+    if contains_any(msg, ["test", "tdd", "unit"]) {
+        grug_say(s, "test is rope grug tie to past self. test save future grug.")
+        return s
+    }
+    if contains_any(msg, ["refactor", "rewrite"]) {
+        grug_say(s, "rewrite from scratch is trap. refactor in small step. commit often.")
+        return s
+    }
+    if contains_any(msg, ["oop", "inheritance", "class"]) {
+        grug_say(s, "inheritance tree grow tall. composition tree grow wide. wide better.")
+        return s
+    }
+    if contains_any(msg, ["meeting", "standup", "agile"]) {
+        grug_say(s, "meeting should be email. email should be nothing. grug need code time.")
+        return s
+    }
+    if contains_any(msg, ["perf", "slow", "fast", "optim"]) {
+        grug_say(s, "measure. measure again. THEN optimize hottest spot. not before.")
+        return s
+    }
+    if contains_any(msg, ["type", "typescript", "rust"]) {
+        grug_say(s, "type system is exoskeleton. feel heavy at first. then grug run fast.")
+        return s
+    }
+    if contains_any(msg, ["ai", "llm", "copilot", "gpt"]) {
+        grug_say(s, "llm is clever parrot. good for first draft, bad for last draft.")
+        return s
+    }
+    if contains_any(msg, ["friday", "weekend", "deploy friday"]) {
+        grug_say(s, "no deploy friday. grug want pizza not pager.")
+        return s
+    }
+    if contains_any(msg, ["weed", "420", "blaze", "smoke", "sesh"]) {
+        return handle_cmd(s, "/smoke")
+    }
+    if contains_any(msg, ["wisdom", "advice", "help me"]) {
+        return handle_cmd(s, "/wisdom")
+    }
+    if contains_any(msg, ["joke", "funny"]) {
+        return handle_cmd(s, "/joke")
+    }
+    if contains_any(msg, ["love you", "thanks", "thank you", "ty"]) {
+        grug_say(s, "grug love you too, stay hydrated, stay small-function.")
+        return s
+    }
+    if contains_any(msg, ["bye", "cya", "later", "exit"]) {
+        grug_say(s, "peace friend. grug return to cave now.")
+        let ns = GrugState { nick: s.nick, mood: s.mood, hits: s.hits,
+                             rng: s.rng, running: false }
+        return ns
+    }
+
+    // Fallback
+    let (ns, w) = pick(s, WISDOM)
+    grug_say(ns, w)
+    ns
+}
+
+fn handle_cmd(s: GrugState, input: str) -> GrugState {
+    let cmd = input.to_lower().trim()
+
+    if cmd == "/help" {
+        say(COLOR_SYS, "sys", "commands: /help /wisdom /joke /roll /smoke /time /quit")
+        return s
+    }
+    if cmd == "/wisdom" {
+        let (ns, w) = pick(s, WISDOM); grug_say(ns, w); return ns
+    }
+    if cmd == "/joke" {
+        let (ns, w) = pick(s, JOKES); grug_say(ns, w); return ns
+    }
+    if cmd == "/roll" {
+        let (ns, r) = grug_rand(s)
+        grug_say(ns, "d20 rolls: " ++ str((r % 20) + 1))
+        return ns
+    }
+    if cmd == "/smoke" {
+        let new_hits = s.hits + 1
+        let new_mood = if new_hits >= 3 { 2 } else { 1 }
+        let s2 = GrugState { nick: s.nick, mood: new_mood, hits: new_hits,
+                             rng: s.rng, running: s.running }
+        let (ns, w) = pick(s2, SMOKE_WISDOM)
+        say(COLOR_SMOKE, "grug420", "*puff puff pass*")
+        grug_say(ns, w)
+        if new_mood == 2 {
+            say(COLOR_SMOKE, "grug420", "grug ascend. grug see the monad now.")
+        }
+        return ns
+    }
+    if cmd == "/time" {
+        say(COLOR_SYS, "sys", "ticks since boot: " ++ str(uptime_ticks()))
+        return s
+    }
+    if cmd == "/quit" || cmd == "/exit" {
+        grug_say(s, "grug out. keep code small friend.")
+        return GrugState { nick: s.nick, mood: s.mood, hits: s.hits,
+                           rng: s.rng, running: false }
+    }
+
+    say(COLOR_ERR, "sys", "unknown command. try /help")
+    s
+}
+
+// ── REPL ─────────────────────────────────────────────────────────────────
+
+pub fn launch(args: str) {
+    serial::log("[grugbot420] starting")
+
+    // One-shot mode: `grugbot wisdom`
+    if args.trim() == "wisdom" {
+        let s = new_grug()
+        let (_, w) = pick(s, WISDOM)
+        grug_say(s, w)
+        return
+    }
+
+    print_banner()
+    let mut state = new_grug()
+    grug_say(state, "hi. grug here. type /help or just talk. grug listen.")
+
+    while state.running {
+        print_color(COLOR_USER, "you> ")
+        let line = read_line()
+        if line.len() == 0 { continue }
+        state = respond(state, line)
+    }
+
+    serial::log("[grugbot420] exited")
+}
+
+fn print_banner() {
+    print_color(COLOR_SMOKE, "+=====================================+\n")
+    print_color(COLOR_SMOKE, "|    grugbot420 — lateralus edition   |\n")
+    print_color(COLOR_SMOKE, "|    small brain. big wisdom. 420.    |\n")
+    print_color(COLOR_SMOKE, "+=====================================+\n")
+}
+
+// ── Host-provided externs (wired via apps/apps.c) ────────────────────────
+
+extern fn print_color(color: int, s: str)
+extern fn read_line() -> str
+extern fn uptime_ticks() -> int

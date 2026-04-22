@@ -103,7 +103,7 @@ Live indicator showing the LSP server state (`running` / `error` / `stopped`). C
 ### From VSIX
 
 ```bash
-code --install-extension lateralus-lang-2.5.0.vsix
+code --install-extension lateralus-lang-3.1.0.vsix
 ```
 
 ### From Source
@@ -113,7 +113,7 @@ git clone https://github.com/bad-antics/lateralus-lang.git
 cd lateralus-lang/vscode-lateralus
 npm install -g @vscode/vsce
 vsce package
-code --install-extension lateralus-lang-2.5.0.vsix
+code --install-extension lateralus-lang-3.1.0.vsix
 ```
 
 ---

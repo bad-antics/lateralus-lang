@@ -15,8 +15,8 @@
 #define MAX_WINDOWS      16
 #define MAX_BUTTONS      32
 #define MAX_LABELS       64
-#define MAX_MENU_ITEMS    8
-#define MAX_DESKTOP_ICONS 8
+#define MAX_MENU_ITEMS   16
+#define MAX_DESKTOP_ICONS 16
 #define TITLE_BAR_H      28
 #define TASKBAR_H        36
 #define BTN_CIRCLE_R      6

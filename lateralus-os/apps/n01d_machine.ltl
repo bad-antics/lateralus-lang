@@ -1,0 +1,919 @@
+// ===========================================================================
+// n01d-machine — VM Manager for LateralusOS
+// ===========================================================================
+// Copyright (c) 2025-2026 bad-antics. All rights reserved.
+//
+// Native port of n01d-machine (Rust) to Lateralus.
+// Creates and manages QEMU/KVM virtual machines directly from
+// within LateralusOS. Uses LateralusOS services for IPC and display.
+//
+// Features:
+//   • Create/start/stop/delete VMs
+//   • Import ISOs and disk images
+//   • Display VM console in a GUI window (VNC/SPICE backend)
+//   • Snapshot management
+//   • Network: NAT, bridged, host-only, isolated
+//   • Shared folders via virtio-fs
+//   • CLI and GUI modes
+//   • VM config stored as TOML in ~/.n01d-machine/
+//
+// CLI Usage:
+//   n01d-machine list                       — list VMs
+//   n01d-machine create <name> [opts]       — create VM
+//   n01d-machine start  <name>              — start VM
+//   n01d-machine stop   <name>              — stop VM
+//   n01d-machine delete <name>              — delete VM
+//   n01d-machine snapshot <name> <snap>     — create snapshot
+//   n01d-machine restore  <name> <snap>     — restore snapshot
+//
+// GUI Usage:
+//   n01d-machine                            — open VM manager GUI
+// ===========================================================================
+
+import sys
+import gui
+import gui::widgets
+import fs::vfs
+import services::network_manager
+
+// ── Constants ────────────────────────────────────────────────────────────────
+
+const APP_TITLE  = "n01d-machine"
+const VM_DIR     = "~/.n01d-machine/vms"
+const IMG_DIR    = "~/.n01d-machine/images"
+const WINDOW_W   = 860
+const WINDOW_H   = 580
+
+// N01D palette
+const VM_BG      = 0x0A0A0A
+const VM_BG2     = 0x101010
+const VM_BG3     = 0x161616
+const VM_FG      = 0xCCCCCC
+const VM_ACCENT  = 0x00FF88
+const VM_DIM     = 0x444444
+const VM_BORDER  = 0x1E1E1E
+const VM_RUN     = 0x00FF88
+const VM_STOP    = 0xFF4444
+const VM_PAUSE   = 0xFFAA00
+const VM_SNAP    = 0x06B6D4
+
+// ── Data Structures ───────────────────────────────────────────────────────────
+
+enum VmState { Stopped, Running, Paused, Saving, Restoring }
+enum NetMode  { NAT, Bridged(str), HostOnly, Isolated, None }
+enum DriveKind { Disk, CDROM }
+
+struct Drive {
+    kind:  DriveKind
+    path:  str
+    size:  int     // bytes (0 for CDROM)
+    bus:   str     // "virtio" | "ide" | "nvme"
+}
+
+struct Snapshot {
+    name:     str
+    created:  int    // unix timestamp
+    size:     int
+}
+
+struct VmConfig {
+    name:      str
+    ram_mb:    int
+    cpus:      int
+    drives:    [Drive]
+    net:       NetMode
+    usb:       bool
+    kvm:       bool
+    efi:       bool
+    display:   str     // "spice" | "vnc" | "gtk" | "none"
+    spice_port: int
+    vnc_port:  int
+    extra_args: [str]
+}
+
+struct VmEntry {
+    config:    VmConfig
+    state:     VmState
+    pid:       Option[int]
+    snapshots: [Snapshot]
+}
+
+fn vm_state_str(s: VmState) -> str {
+    match s {
+        VmState::Stopped   => "stopped"
+        VmState::Running   => "running"
+        VmState::Paused    => "paused"
+        VmState::Saving    => "saving…"
+        VmState::Restoring => "restoring…"
+    }
+}
+
+fn vm_state_color(s: VmState) -> int {
+    match s {
+        VmState::Running   => VM_RUN
+        VmState::Paused    => VM_PAUSE
+        VmState::Stopped   => VM_DIM
+        _                  => VM_DIM
+    }
+}
+
+// ── TOML Serialization ───────────────────────────────────────────────────────
+
+fn drive_to_toml(d: Drive) -> str {
+    let kind_str = match d.kind { DriveKind::Disk => "disk", DriveKind::CDROM => "cdrom" }
+    "[[drive]]\nkind = \"" ++ kind_str ++ "\"\npath = \"" ++ d.path ++ "\"\nsize = " ++ str(d.size) ++ "\nbus = \"" ++ d.bus ++ "\"\n"
+}
+
+fn net_to_toml(n: NetMode) -> str {
+    "net = \"" ++ match n {
+        NetMode::NAT          => "nat"
+        NetMode::Bridged(br)  => "bridged:" ++ br
+        NetMode::HostOnly     => "host-only"
+        NetMode::Isolated     => "isolated"
+        NetMode::None         => "none"
+    } ++ "\"\n"
+}
+
+fn config_to_toml(c: VmConfig) -> str {
+    let mut t = ""
+    t = t ++ "name = \"" ++ c.name ++ "\"\n"
+    t = t ++ "ram_mb = " ++ str(c.ram_mb) ++ "\n"
+    t = t ++ "cpus = " ++ str(c.cpus) ++ "\n"
+    t = t ++ "kvm = " ++ str(c.kvm) ++ "\n"
+    t = t ++ "efi = " ++ str(c.efi) ++ "\n"
+    t = t ++ "usb = " ++ str(c.usb) ++ "\n"
+    t = t ++ "display = \"" ++ c.display ++ "\"\n"
+    t = t ++ "spice_port = " ++ str(c.spice_port) ++ "\n"
+    t = t ++ "vnc_port = " ++ str(c.vnc_port) ++ "\n"
+    t = t ++ net_to_toml(c.net)
+    for d in c.drives { t = t ++ drive_to_toml(d) }
+    t
+}
+
+fn load_vms() -> [VmEntry] {
+    vfs::mkdir_p(VM_DIR)
+    vfs::mkdir_p(IMG_DIR)
+
+    vfs::list_dir(VM_DIR)
+        |> filter(|f| f.ends_with(".toml"))
+        |> map(|f| {
+            let toml_str = vfs::read_file(VM_DIR ++ "/" ++ f)
+            let config = parse_vm_toml(toml_str)
+            let snapshots = load_snapshots(config.name)
+            let pid = find_vm_pid(config.name)
+            let state = match pid {
+                Some(_) => VmState::Running
+                None    => VmState::Stopped
+            }
+            VmEntry { config: config, state: state, pid: pid, snapshots: snapshots }
+        })
+}
+
+fn parse_vm_toml(toml: str) -> VmConfig {
+    let name     = toml_get_str(toml, "name", "unnamed")
+    let ram_mb   = toml_get_int(toml, "ram_mb", 2048)
+    let cpus     = toml_get_int(toml, "cpus", 2)
+    let kvm      = toml_get_bool(toml, "kvm", true)
+    let efi      = toml_get_bool(toml, "efi", false)
+    let usb      = toml_get_bool(toml, "usb", true)
+    let display  = toml_get_str(toml, "display", "spice")
+    let sp       = toml_get_int(toml, "spice_port", 5930)
+    let vp       = toml_get_int(toml, "vnc_port", 5900)
+    let net_str  = toml_get_str(toml, "net", "nat")
+    let net = match net_str {
+        "nat"      => NetMode::NAT
+        "host-only" => NetMode::HostOnly
+        "isolated" => NetMode::Isolated
+        "none"     => NetMode::None
+        _          => if net_str.starts_with("bridged:") {
+                          NetMode::Bridged(net_str.slice(8, net_str.len()))
+                      } else { NetMode::NAT }
+    }
+    VmConfig {
+        name: name, ram_mb: ram_mb, cpus: cpus, kvm: kvm, efi: efi, usb: usb,
+        display: display, spice_port: sp, vnc_port: vp, net: net,
+        drives: [], extra_args: [],
+    }
+}
+
+fn toml_get_str(toml: str, key: str, default: str) -> str {
+    for line in toml.split("\n") {
+        let parts = line.split(" = ")
+        if parts.len() >= 2 && parts[0].trim() == key {
+            let val = parts[1].trim()
+            if val.starts_with("\"") && val.ends_with("\"") {
+                return val.slice(1, val.len() - 1)
+            }
+        }
+    }
+    default
+}
+
+fn toml_get_int(toml: str, key: str, default: int) -> int {
+    for line in toml.split("\n") {
+        let parts = line.split(" = ")
+        if parts.len() >= 2 && parts[0].trim() == key {
+            match parts[1].trim().parse_int() {
+                Some(v) => return v
+                None    => ()
+            }
+        }
+    }
+    default
+}
+
+fn toml_get_bool(toml: str, key: str, default: bool) -> bool {
+    for line in toml.split("\n") {
+        let parts = line.split(" = ")
+        if parts.len() >= 2 && parts[0].trim() == key {
+            let val = parts[1].trim()
+            return val == "true"
+        }
+    }
+    default
+}
+
+fn load_snapshots(vm_name: str) -> [Snapshot] {
+    let snap_dir = VM_DIR ++ "/" ++ vm_name ++ "/snapshots"
+    if !vfs::exists(snap_dir) { return [] }
+    vfs::list_dir(snap_dir)
+        |> filter(|f| f.ends_with(".snap"))
+        |> map(|f| {
+            let name = f.replace(".snap", "")
+            let size = vfs::file_size(snap_dir ++ "/" ++ f)
+            let mtime = vfs::mtime(snap_dir ++ "/" ++ f)
+            Snapshot { name: name, created: mtime, size: size }
+        })
+}
+
+fn find_vm_pid(vm_name: str) -> Option[int] {
+    let pid_file = VM_DIR ++ "/" ++ vm_name ++ "/vm.pid"
+    if !vfs::exists(pid_file) { return None }
+    let pid_str = vfs::read_file(pid_file).trim()
+    match pid_str.parse_int() {
+        Some(pid) => if sys::process_exists(pid) { Some(pid) } else { None }
+        None      => None
+    }
+}
+
+fn save_vm_config(vm: VmEntry) {
+    let path = VM_DIR ++ "/" ++ vm.config.name ++ ".toml"
+    vfs::write_file(path, config_to_toml(vm.config))
+}
+
+// ── QEMU Launcher ─────────────────────────────────────────────────────────────
+
+fn build_qemu_args(c: VmConfig) -> [str] {
+    let mut args = [
+        "-name", c.name,
+        "-m", str(c.ram_mb),
+        "-smp", str(c.cpus),
+        "-nodefaults",
+    ]
+
+    if c.kvm { args = args ++ ["-enable-kvm", "-cpu", "host"] }
+    else      { args = args ++ ["-cpu", "max"] }
+
+    if c.efi { args = args ++ ["-bios", "/usr/share/OVMF/OVMF_CODE.fd"] }
+
+    for (i, d) in c.drives.enumerate() {
+        match d.kind {
+            DriveKind::Disk => {
+                if d.bus == "virtio" {
+                    args = args ++ ["-drive", "file=" ++ d.path ++ ",format=qcow2,if=virtio,id=disk" ++ str(i)]
+                } else {
+                    args = args ++ ["-drive", "file=" ++ d.path ++ ",format=qcow2,index=" ++ str(i) ++ ",media=disk"]
+                }
+            }
+            DriveKind::CDROM => {
+                args = args ++ ["-drive", "file=" ++ d.path ++ ",media=cdrom,readonly=on"]
+            }
+        }
+    }
+
+    match c.net {
+        NetMode::NAT => args = args ++ ["-nic", "user,model=virtio-net-pci"]
+        NetMode::Bridged(br) => args = args ++ ["-nic", "bridge,br=" ++ br ++ ",model=virtio-net-pci"]
+        NetMode::HostOnly    => args = args ++ ["-nic", "socket,listen=:4444,model=virtio-net-pci"]
+        NetMode::Isolated    => args = args ++ ["-nic", "none"]
+        NetMode::None        => ()
+    }
+
+    if c.usb { args = args ++ ["-device", "usb-ehci", "-device", "usb-tablet"] }
+
+    match c.display {
+        "spice" => args = args ++ [
+            "-spice", "port=" ++ str(c.spice_port) ++ ",disable-ticketing=on",
+            "-device", "virtio-serial",
+            "-chardev", "spicevmc,id=spicechannel0,name=vdagent",
+            "-device", "virtserialport,chardev=spicechannel0,name=com.redhat.spice.0",
+        ]
+        "vnc"   => args = args ++ ["-vnc", ":" ++ str(c.vnc_port - 5900)]
+        "gtk"   => args = args ++ ["-display", "gtk"]
+        _       => args = args ++ ["-display", "none"]
+    }
+
+    // Pidfile
+    args = args ++ ["-pidfile", VM_DIR ++ "/" ++ c.name ++ "/vm.pid"]
+
+    args ++ c.extra_args
+}
+
+fn vm_start(vm: VmEntry) -> VmEntry {
+    vfs::mkdir_p(VM_DIR ++ "/" ++ vm.config.name)
+    let qemu = if vm.config.kvm && sys::kvm_available() { "qemu-system-x86_64" } else { "qemu-system-x86_64" }
+    let args = build_qemu_args(vm.config)
+    let pid = sys::spawn_process(qemu, args, sys::ProcessFlags::DETACH)
+    sys::sleep_ms(500)  // let QEMU write pidfile
+    VmEntry { ..vm, state: VmState::Running, pid: Some(pid) }
+}
+
+fn vm_stop(vm: VmEntry, force: bool) -> VmEntry {
+    match vm.pid {
+        Some(pid) => {
+            if force { sys::kill(pid, sys::Signal::KILL) }
+            else     { sys::kill(pid, sys::Signal::TERM) }
+            vfs::remove(VM_DIR ++ "/" ++ vm.config.name ++ "/vm.pid")
+        }
+        None => ()
+    }
+    VmEntry { ..vm, state: VmState::Stopped, pid: None }
+}
+
+fn vm_snapshot(vm: VmEntry, snap_name: str) -> VmEntry {
+    // Use qemu-img snapshot
+    for d in vm.config.drives {
+        match d.kind {
+            DriveKind::Disk => {
+                sys::exec("qemu-img", ["snapshot", "-c", snap_name, d.path])
+            }
+            _ => ()
+        }
+    }
+    let snaps = load_snapshots(vm.config.name)
+    VmEntry { ..vm, snapshots: snaps }
+}
+
+fn vm_restore(vm: VmEntry, snap_name: str) -> VmEntry {
+    let vm2 = vm_stop(vm, false)
+    for d in vm2.config.drives {
+        match d.kind {
+            DriveKind::Disk => {
+                sys::exec("qemu-img", ["snapshot", "-a", snap_name, d.path])
+            }
+            _ => ()
+        }
+    }
+    VmEntry { ..vm2, state: VmState::Stopped }
+}
+
+fn create_disk_image(path: str, size_gb: int) {
+    sys::exec("qemu-img", ["create", "-f", "qcow2", path, str(size_gb) ++ "G"])
+}
+
+// ── App State ─────────────────────────────────────────────────────────────────
+
+enum View { VmList, VmDetail(str), CreateVm, Settings }
+
+struct AppState {
+    vms:       [VmEntry]
+    view:      View
+    selected:  int
+    window:    gui::Window
+    status:    str
+    log:       [str]
+    running:   bool
+    // Create VM form state
+    new_name:  str
+    new_ram:   int
+    new_cpus:  int
+    new_disk:  int
+    new_iso:   str
+    new_kvm:   bool
+    new_efi:   bool
+}
+
+fn add_log(state: AppState, msg: str) -> AppState {
+    let ts = sys::time_str()
+    let line = "[" ++ ts ++ "] " ++ msg
+    AppState { ..state, log: state.log ++ [line], status: msg }
+}
+
+// ── Rendering ────────────────────────────────────────────────────────────────
+
+fn fmt_bytes(b: int) -> str {
+    if b >= 1_073_741_824 { fmt_float(float(b) / 1_073_741_824.0, 1) ++ " GB" }
+    else if b >= 1_048_576 { fmt_float(float(b) / 1_048_576.0, 1) ++ " MB" }
+    else { str(b / 1024) ++ " KB" }
+}
+
+fn draw_header(ctx: gui::Context, state: AppState) {
+    ctx.fill_rect(0, 0, WINDOW_W, 40, VM_BG2)
+    ctx.draw_line(0, 40, WINDOW_W, 40, VM_BORDER, 1)
+    ctx.draw_text(12, 12, APP_TITLE, VM_ACCENT, "mono-bold-13")
+
+    let tabs = ["VMs", "Create", "Settings"]
+    for (i, tab) in tabs.enumerate() {
+        let tx = 160 + i * 90
+        let active = match state.view {
+            View::VmList | View::VmDetail(_) => i == 0
+            View::CreateVm                   => i == 1
+            View::Settings                   => i == 2
+        }
+        let fg = if active { VM_ACCENT } else { VM_DIM }
+        if active {
+            ctx.draw_line(tx, 36, tx + 80, 36, VM_ACCENT, 2)
+        }
+        ctx.draw_text(tx + 16, 14, tab, fg, "mono-bold-10")
+    }
+
+    ctx.draw_text(WINDOW_W - 180, 14, state.status, VM_DIM, "mono-9")
+}
+
+fn draw_vm_list(ctx: gui::Context, state: AppState) {
+    let lw = 240
+    ctx.fill_rect(0, 40, lw, WINDOW_H - 40, VM_BG2)
+    ctx.draw_line(lw, 40, lw, WINDOW_H, VM_BORDER, 1)
+
+    let mut y = 48
+    for (i, vm) in state.vms.enumerate() {
+        let active = i == state.selected
+        let bg = if active { 0x1A2A1A } else { VM_BG2 }
+        ctx.fill_rect(0, y, lw, 48, bg)
+        if active { ctx.fill_rect(0, y, 3, 48, VM_ACCENT) }
+
+        let state_color = vm_state_color(vm.state)
+        ctx.fill_circle(12, y + 16, 5, state_color)
+        ctx.draw_text(24, y + 8, vm.config.name, if active { VM_ACCENT } else { VM_FG }, "mono-bold-10")
+        ctx.draw_text(24, y + 24, str(vm.config.ram_mb) ++ " MB  " ++ str(vm.config.cpus) ++ " CPU  " ++ vm_state_str(vm.state), VM_DIM, "mono-9")
+        ctx.draw_line(0, y + 48, lw, y + 48, VM_BORDER, 1)
+        y = y + 49
+    }
+
+    // Add VM button
+    ctx.fill_rect(8, WINDOW_H - 44, lw - 16, 30, VM_BG3)
+    ctx.draw_rect(8, WINDOW_H - 44, lw - 16, 30, VM_ACCENT, 1)
+    ctx.draw_text(60, WINDOW_H - 32, "+ New VM", VM_ACCENT, "mono-bold-10")
+}
+
+fn draw_vm_detail(ctx: gui::Context, state: AppState, vm: VmEntry) {
+    let px = 248
+    let pw = WINDOW_W - px
+    ctx.fill_rect(px, 40, pw, WINDOW_H - 40, VM_BG)
+
+    let sc = vm_state_color(vm.state)
+    ctx.fill_circle(px + 16, 62, 8, sc)
+    ctx.draw_text(px + 32, 56, vm.config.name, VM_ACCENT, "mono-bold-16")
+    ctx.draw_text(px + 32, 74, vm_state_str(vm.state), sc, "mono-10")
+
+    // Specs
+    let specs = [
+        ("RAM",     str(vm.config.ram_mb) ++ " MB"),
+        ("CPUs",    str(vm.config.cpus)),
+        ("KVM",     if vm.config.kvm { "enabled" } else { "disabled" }),
+        ("EFI",     if vm.config.efi { "yes" } else { "no" }),
+        ("Display", vm.config.display),
+        ("Net",     match vm.config.net {
+            NetMode::NAT          => "NAT"
+            NetMode::Bridged(br)  => "bridged (" ++ br ++ ")"
+            NetMode::HostOnly     => "host-only"
+            NetMode::Isolated     => "isolated"
+            NetMode::None         => "none"
+        }),
+    ]
+    let mut sy = 98
+    for (label, val) in specs {
+        ctx.draw_text(px + 16, sy, label ++ ":", VM_DIM, "mono-9")
+        ctx.draw_text(px + 100, sy, val, VM_FG, "mono-9")
+        sy = sy + 16
+    }
+
+    // Drives
+    ctx.draw_text(px + 16, sy + 8, "DRIVES", VM_DIM, "mono-bold-9")
+    sy = sy + 22
+    for d in vm.config.drives {
+        let kind_str = match d.kind { DriveKind::Disk => "💿 disk" , DriveKind::CDROM => "📀 cdrom" }
+        ctx.draw_text(px + 16, sy, kind_str ++ "  " ++ d.path, VM_FG, "mono-9")
+        sy = sy + 14
+    }
+
+    // Snapshots
+    ctx.draw_text(px + 16, sy + 8, "SNAPSHOTS", VM_DIM, "mono-bold-9")
+    sy = sy + 22
+    if vm.snapshots.len() == 0 {
+        ctx.draw_text(px + 16, sy, "none", VM_DIM, "mono-9")
+        sy = sy + 14
+    }
+    for snap in vm.snapshots {
+        let date = sys::format_time(snap.created)
+        ctx.draw_text(px + 16, sy, snap.name ++ "  " ++ date ++ "  " ++ fmt_bytes(snap.size), VM_FG, "mono-9")
+        sy = sy + 14
+    }
+
+    // Action buttons
+    let btn_y = WINDOW_H - 52
+    let (start_label, start_color) = match vm.state {
+        VmState::Running => ("⏹  STOP",  VM_STOP)
+        VmState::Paused  => ("▶  RESUME", VM_RUN)
+        _                => ("▶  START", VM_RUN)
+    }
+    ctx.fill_rect(px + 12, btn_y, 120, 30, start_color)
+    ctx.draw_text(px + 20, btn_y + 9, start_label, VM_BG, "mono-bold-10")
+
+    ctx.fill_rect(px + 142, btn_y, 100, 30, VM_BG3)
+    ctx.draw_rect(px + 142, btn_y, 100, 30, VM_SNAP, 1)
+    ctx.draw_text(px + 152, btn_y + 9, "📸 SNAPSHOT", VM_SNAP, "mono-9")
+
+    ctx.fill_rect(px + 252, btn_y, 80, 30, VM_BG3)
+    ctx.draw_rect(px + 252, btn_y, 80, 30, VM_DIM, 1)
+    ctx.draw_text(px + 264, btn_y + 9, "DELETE", VM_STOP, "mono-9")
+}
+
+fn draw_create_vm(ctx: gui::Context, state: AppState) {
+    let px = 248
+    ctx.fill_rect(px, 40, WINDOW_W - px, WINDOW_H - 40, VM_BG)
+    ctx.draw_text(px + 16, 56, "CREATE NEW VIRTUAL MACHINE", VM_ACCENT, "mono-bold-12")
+
+    let fields: [(str, str, int)] = [
+        ("Name",           state.new_name,        72),
+        ("RAM (MB)",       str(state.new_ram),    104),
+        ("CPUs",           str(state.new_cpus),   136),
+        ("Disk size (GB)", str(state.new_disk),   168),
+        ("ISO path",       state.new_iso,         200),
+    ]
+    for (label, value, fy) in fields {
+        ctx.draw_text(px + 16, fy, label ++ ":", VM_DIM, "mono-9")
+        ctx.fill_rect(px + 120, fy - 4, 360, 22, VM_BG2)
+        ctx.draw_rect(px + 120, fy - 4, 360, 22, VM_BORDER, 1)
+        ctx.draw_text(px + 126, fy + 2, value, VM_FG, "mono-10")
+    }
+
+    // KVM / EFI toggles
+    let kvm_chk = if state.new_kvm { "☑" } else { "☐" }
+    let efi_chk = if state.new_efi { "☑" } else { "☐" }
+    ctx.draw_text(px + 16, 236, kvm_chk ++ " KVM acceleration", VM_FG, "mono-10")
+    ctx.draw_text(px + 200, 236, efi_chk ++ " EFI boot", VM_FG, "mono-10")
+
+    // Create button
+    ctx.fill_rect(px + 16, 268, 160, 32, VM_ACCENT)
+    ctx.draw_text(px + 44, 278, "▶  CREATE VM", VM_BG, "mono-bold-10")
+}
+
+fn render(ctx: gui::Context, state: AppState) {
+    ctx.clear(VM_BG)
+    draw_header(ctx, state)
+    draw_vm_list(ctx, state)
+
+    match state.view {
+        View::VmList => {
+            if state.selected < state.vms.len() {
+                draw_vm_detail(ctx, state, state.vms[state.selected])
+            }
+        }
+        View::VmDetail(name) => {
+            let vm = state.vms |> filter(|v| v.config.name == name) |> first()
+            match vm { Some(v) => draw_vm_detail(ctx, state, v), None => () }
+        }
+        View::CreateVm => draw_create_vm(ctx, state)
+        View::Settings => {
+            ctx.draw_text(260, 100, "Settings — coming soon", VM_DIM, "mono-12")
+        }
+    }
+
+    // Log strip at bottom
+    ctx.fill_rect(0, WINDOW_H - 22, WINDOW_W, 22, VM_BG2)
+    ctx.draw_line(0, WINDOW_H - 22, WINDOW_W, WINDOW_H - 22, VM_BORDER, 1)
+    let last_log = if state.log.len() > 0 { state.log[state.log.len() - 1] } else { "" }
+    ctx.draw_text(8, WINDOW_H - 14, last_log, VM_DIM, "mono-9")
+}
+
+// ── Input ─────────────────────────────────────────────────────────────────────
+
+fn handle_event(state: AppState, ev: gui::Event) -> AppState {
+    let lw = 240
+    let btn_y = WINDOW_H - 52
+    let px = 248
+
+    match ev {
+        gui::Event::MouseDown(x, y, _btn) => {
+            // Tab clicks
+            if y < 40 {
+                let tabs_x = [160, 250, 340]
+                for (i, tx) in tabs_x.enumerate() {
+                    if x >= tx && x < tx + 80 {
+                        return AppState { ..state, view: match i {
+                            0 => View::VmList
+                            1 => View::CreateVm
+                            2 => View::Settings
+                            _ => View::VmList
+                        }}
+                    }
+                }
+            }
+
+            // VM list selection
+            if x < lw && y >= 48 && y < WINDOW_H - 44 {
+                let idx = (y - 48) / 49
+                if idx < state.vms.len() {
+                    return AppState { ..state, selected: idx, view: View::VmList }
+                }
+            }
+
+            // New VM button
+            if x >= 8 && x < lw - 8 && y >= WINDOW_H - 44 && y < WINDOW_H - 14 {
+                return AppState { ..state, view: View::CreateVm }
+            }
+
+            // Detail view buttons
+            match state.view {
+                View::VmList => {
+                    if state.selected < state.vms.len() {
+                        let vm = state.vms[state.selected]
+                        // Start/Stop
+                        if x >= px + 12 && x < px + 132 && y >= btn_y && y < btn_y + 30 {
+                            let new_vm = match vm.state {
+                                VmState::Running => vm_stop(vm, false)
+                                _                => vm_start(vm)
+                            }
+                            let mut vms = state.vms
+                            vms[state.selected] = new_vm
+                            let msg = vm.config.name ++ " " ++ vm_state_str(new_vm.state)
+                            return add_log(AppState { ..state, vms: vms }, msg)
+                        }
+                        // Snapshot
+                        if x >= px + 142 && x < px + 242 && y >= btn_y && y < btn_y + 30 {
+                            let snap_name = "snap-" ++ sys::time_str()
+                            let new_vm = vm_snapshot(vm, snap_name)
+                            let mut vms = state.vms
+                            vms[state.selected] = new_vm
+                            return add_log(AppState { ..state, vms: vms }, "Snapshot: " ++ snap_name)
+                        }
+                        // Delete
+                        if x >= px + 252 && x < px + 332 && y >= btn_y && y < btn_y + 30 {
+                            let stopped = vm_stop(vm, true)
+                            vfs::remove(VM_DIR ++ "/" ++ vm.config.name ++ ".toml")
+                            vfs::remove_dir(VM_DIR ++ "/" ++ vm.config.name)
+                            let vms = state.vms.slice(0, state.selected) ++ state.vms.slice(state.selected + 1, state.vms.len())
+                            let new_sel = if state.selected >= vms.len() && vms.len() > 0 { vms.len() - 1 } else { state.selected }
+                            return add_log(AppState { ..state, vms: vms, selected: new_sel }, "Deleted: " ++ vm.config.name)
+                        }
+                    }
+                }
+                View::CreateVm => {
+                    // Create button
+                    if x >= px + 16 && x < px + 176 && y >= 268 && y < 300 {
+                        let name = if state.new_name.len() > 0 { state.new_name } else { "vm-" ++ sys::time_str() }
+                        let disk_path = VM_DIR ++ "/" ++ name ++ "/disk.qcow2"
+                        vfs::mkdir_p(VM_DIR ++ "/" ++ name)
+                        create_disk_image(disk_path, state.new_disk)
+
+                        let mut drives = [Drive { kind: DriveKind::Disk, path: disk_path, size: state.new_disk * 1_073_741_824, bus: "virtio" }]
+                        if state.new_iso.len() > 0 {
+                            drives = drives ++ [Drive { kind: DriveKind::CDROM, path: state.new_iso, size: 0, bus: "ide" }]
+                        }
+
+                        let config = VmConfig {
+                            name: name, ram_mb: state.new_ram, cpus: state.new_cpus,
+                            kvm: state.new_kvm, efi: state.new_efi, usb: true,
+                            display: "spice", spice_port: 5930, vnc_port: 5900,
+                            net: NetMode::NAT, drives: drives, extra_args: [],
+                        }
+                        let entry = VmEntry { config: config, state: VmState::Stopped, pid: None, snapshots: [] }
+                        save_vm_config(entry)
+                        let vms = state.vms ++ [entry]
+                        let msg = "Created VM: " ++ name
+                        return add_log(AppState { ..state, vms: vms, view: View::VmList, selected: vms.len() - 1 }, msg)
+                    }
+                    // KVM toggle
+                    if x >= px + 16 && x < px + 180 && y >= 230 && y < 248 {
+                        return AppState { ..state, new_kvm: !state.new_kvm }
+                    }
+                    // EFI toggle
+                    if x >= px + 200 && x < px + 340 && y >= 230 && y < 248 {
+                        return AppState { ..state, new_efi: !state.new_efi }
+                    }
+                    // ISO picker
+                    if x >= px + 120 && x < px + 480 && y >= 196 && y < 218 {
+                        let path = gui::file_picker("Select ISO", [("ISO Image", "*.iso"), ("All", "*")])
+                        return match path { Some(p) => AppState { ..state, new_iso: p }, None => state }
+                    }
+                }
+                _ => ()
+            }
+            state
+        }
+        gui::Event::KeyDown(key, _mods) => match key {
+            gui::Key::Q     => AppState { ..state, running: false }
+            gui::Key::UP    => AppState { ..state, selected: max(0, state.selected - 1) }
+            gui::Key::DOWN  => AppState { ..state, selected: min(state.selected + 1, state.vms.len() - 1) }
+            gui::Key::ENTER => {
+                if state.selected < state.vms.len() {
+                    let vm = state.vms[state.selected]
+                    let new_vm = match vm.state {
+                        VmState::Running => vm_stop(vm, false)
+                        _                => vm_start(vm)
+                    }
+                    let mut vms = state.vms
+                    vms[state.selected] = new_vm
+                    add_log(AppState { ..state, vms: vms }, vm.config.name ++ " " ++ vm_state_str(new_vm.state))
+                } else { state }
+            }
+            _ => state
+        }
+        gui::Event::WindowClose => AppState { ..state, running: false }
+        _ => state
+    }
+}
+
+// ── CLI ───────────────────────────────────────────────────────────────────────
+
+fn cli_list() {
+    let vms = load_vms()
+    if vms.len() == 0 { println("No VMs found."); return }
+    println("  " ++ pad("NAME", 20) ++ pad("STATE", 12) ++ pad("RAM", 8) ++ pad("CPUS", 6) ++ "DRIVES")
+    for vm in vms {
+        let drives_str = vm.config.drives |> map(|d| d.path) |> join(", ")
+        println("  " ++ pad(vm.config.name, 20) ++ pad(vm_state_str(vm.state), 12) ++ pad(str(vm.config.ram_mb) ++ "M", 8) ++ pad(str(vm.config.cpus), 6) ++ drives_str)
+    }
+}
+
+fn cli_start(name: str) -> int {
+    let vms = load_vms()
+    match vms |> filter(|v| v.config.name == name) |> first() {
+        Some(vm) => {
+            println("Starting " ++ name ++ "…")
+            vm_start(vm)
+            println("Started.")
+            0
+        }
+        None => { eprintln("VM not found: " ++ name); 1 }
+    }
+}
+
+fn cli_stop(name: str, force: bool) -> int {
+    let vms = load_vms()
+    match vms |> filter(|v| v.config.name == name) |> first() {
+        Some(vm) => {
+            println("Stopping " ++ name ++ "…")
+            vm_stop(vm, force)
+            println("Stopped.")
+            0
+        }
+        None => { eprintln("VM not found: " ++ name); 1 }
+    }
+}
+
+fn cli_create(name: str, ram: int, cpus: int, disk: int, iso: str) -> int {
+    vfs::mkdir_p(VM_DIR ++ "/" ++ name)
+    let disk_path = VM_DIR ++ "/" ++ name ++ "/disk.qcow2"
+    println("Creating disk image " ++ str(disk) ++ "GB…")
+    create_disk_image(disk_path, disk)
+    let mut drives = [Drive { kind: DriveKind::Disk, path: disk_path, size: disk * 1_073_741_824, bus: "virtio" }]
+    if iso.len() > 0 {
+        drives = drives ++ [Drive { kind: DriveKind::CDROM, path: iso, size: 0, bus: "ide" }]
+    }
+    let config = VmConfig {
+        name: name, ram_mb: ram, cpus: cpus, kvm: sys::kvm_available(),
+        efi: false, usb: true, display: "spice", spice_port: 5930, vnc_port: 5900,
+        net: NetMode::NAT, drives: drives, extra_args: [],
+    }
+    save_vm_config(VmEntry { config: config, state: VmState::Stopped, pid: None, snapshots: [] })
+    println("Created VM: " ++ name)
+    0
+}
+
+fn cli_delete(name: str) -> int {
+    let vms = load_vms()
+    match vms |> filter(|v| v.config.name == name) |> first() {
+        Some(vm) => {
+            vm_stop(vm, true)
+            vfs::remove(VM_DIR ++ "/" ++ name ++ ".toml")
+            vfs::remove_dir(VM_DIR ++ "/" ++ name)
+            println("Deleted: " ++ name)
+            0
+        }
+        None => { eprintln("VM not found: " ++ name); 1 }
+    }
+}
+
+fn cli_snapshot(name: str, snap_name: str) -> int {
+    let vms = load_vms()
+    match vms |> filter(|v| v.config.name == name) |> first() {
+        Some(vm) => {
+            vm_snapshot(vm, snap_name)
+            println("Snapshot created: " ++ snap_name)
+            0
+        }
+        None => { eprintln("VM not found: " ++ name); 1 }
+    }
+}
+
+fn cli_restore(name: str, snap_name: str) -> int {
+    let vms = load_vms()
+    match vms |> filter(|v| v.config.name == name) |> first() {
+        Some(vm) => {
+            vm_restore(vm, snap_name)
+            println("Restored: " ++ snap_name)
+            0
+        }
+        None => { eprintln("VM not found: " ++ name); 1 }
+    }
+}
+
+fn pad(s: str, n: int) -> str {
+    if s.len() >= n { s.slice(0, n) }
+    else { s ++ " ".repeat(n - s.len()) }
+}
+
+// ── Entry Point ──────────────────────────────────────────────────────────────
+
+fn main(args: [str]) -> int {
+    vfs::mkdir_p(VM_DIR)
+    vfs::mkdir_p(IMG_DIR)
+
+    if args.len() > 1 {
+        return match args[1] {
+            "list" => { cli_list(); 0 }
+            "start" => {
+                if args.len() < 3 { eprintln("Usage: n01d-machine start <name>"); 1 }
+                else { cli_start(args[2]) }
+            }
+            "stop" => {
+                if args.len() < 3 { eprintln("Usage: n01d-machine stop <name>"); 1 }
+                else { cli_stop(args[2], args.contains("--force")) }
+            }
+            "create" => {
+                if args.len() < 3 { eprintln("Usage: n01d-machine create <name> [--ram MB] [--cpus N] [--disk GB] [--iso PATH]"); 1 }
+                else {
+                    let name = args[2]
+                    let ram  = args |> zip_with_prev() |> filter(|(p,_)| p == "--ram")  |> first() |> map(|(_,v)| v.parse_int().unwrap_or(2048)) |> unwrap_or(2048)
+                    let cpus = args |> zip_with_prev() |> filter(|(p,_)| p == "--cpus") |> first() |> map(|(_,v)| v.parse_int().unwrap_or(2))    |> unwrap_or(2)
+                    let disk = args |> zip_with_prev() |> filter(|(p,_)| p == "--disk") |> first() |> map(|(_,v)| v.parse_int().unwrap_or(20))   |> unwrap_or(20)
+                    let iso  = args |> zip_with_prev() |> filter(|(p,_)| p == "--iso")  |> first() |> map(|(_,v)| v)                              |> unwrap_or("")
+                    cli_create(name, ram, cpus, disk, iso)
+                }
+            }
+            "delete" => {
+                if args.len() < 3 { eprintln("Usage: n01d-machine delete <name>"); 1 }
+                else { cli_delete(args[2]) }
+            }
+            "snapshot" => {
+                if args.len() < 4 { eprintln("Usage: n01d-machine snapshot <name> <snap>"); 1 }
+                else { cli_snapshot(args[2], args[3]) }
+            }
+            "restore" => {
+                if args.len() < 4 { eprintln("Usage: n01d-machine restore <name> <snap>"); 1 }
+                else { cli_restore(args[2], args[3]) }
+            }
+            "--help" | "-h" => {
+                println("n01d-machine — VM manager for LateralusOS")
+                println("  list                           list VMs")
+                println("  create <name> [opts]           create VM")
+                println("  start <name>                   start VM")
+                println("  stop <name> [--force]          stop VM")
+                println("  delete <name>                  delete VM")
+                println("  snapshot <name> <snap>         create snapshot")
+                println("  restore  <name> <snap>         restore snapshot")
+                println("  (no args)                      open GUI")
+                0
+            }
+            _ => { eprintln("Unknown command. Try --help"); 1 }
+        }
+    }
+
+    // GUI mode
+    let win = gui::create_window(APP_TITLE, WINDOW_W, WINDOW_H, gui::Flags::RESIZABLE)
+    win.set_bg(VM_BG)
+
+    let vms = load_vms()
+
+    let mut state = AppState {
+        vms:       vms,
+        view:      View::VmList,
+        selected:  0,
+        window:    win,
+        status:    str(vms.len()) ++ " VMs",
+        log:       ["n01d-machine ready"],
+        running:   true,
+        new_name:  "",
+        new_ram:   2048,
+        new_cpus:  2,
+        new_disk:  20,
+        new_iso:   "",
+        new_kvm:   sys::kvm_available(),
+        new_efi:   false,
+    }
+
+    while state.running {
+        let events = state.window.poll_events()
+        for ev in events { state = handle_event(state, ev) }
+
+        let ctx = state.window.get_context()
+        render(ctx, state)
+        state.window.swap_buffers()
+        sys::sleep_ms(32)
+    }
+
+    state.window.close()
+    return 0
+}

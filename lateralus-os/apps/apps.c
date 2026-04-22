@@ -1354,3 +1354,373 @@ void cmd_pkg(const char *args) {
     k_set_color(0x0F, 0x00);
     k_print("Type 'pkg help' for usage.\n");
 }
+
+/* ===========================================================================
+ *  GRUGBOT420 — caveman-brain programming-wisdom chatbot
+ *
+ *  Mirror of apps/grugbot420.ltl.  Lateralus source is the design spec;
+ *  this C stub is what the kernel actually executes.  Keyword dispatch,
+ *  slash commands, xorshift PRNG for wisdom shuffling, /smoke mood
+ *  escalator — all in pure freestanding C.
+ * =========================================================================== */
+
+/* VGA text attributes (fg | bg<<4) used by k_set_color */
+#define GRUG_COL_DEFAULT  0x0F  /* white on black */
+#define GRUG_COL_GRUG     0x0A  /* bright green   */
+#define GRUG_COL_USER     0x09  /* bright blue    */
+#define GRUG_COL_SYS      0x0E  /* yellow         */
+#define GRUG_COL_SMOKE    0x0D  /* magenta / pink */
+#define GRUG_COL_ERR      0x0C  /* red            */
+#define GRUG_COL_BANNER   0x0B  /* cyan           */
+
+typedef struct {
+    uint32_t rng;     /* xorshift32 seed */
+    int      mood;    /* 0 chill, 1 blazed, 2 enlightened */
+    int      hits;    /* /smoke counter */
+    int      running;
+} GrugState;
+
+static GrugState grug;
+
+static const char *GRUG_WISDOM[] = {
+    "grug say: complexity very very bad. simple good.",
+    "grug say: factory factory factory pattern make grug head hurt.",
+    "grug say: always name variable what it be. 'data' mean nothing.",
+    "grug say: if code hard to delete, code already own you.",
+    "grug say: type system friend, not enemy. type catch bug while grug sleep.",
+    "grug brain small, so grug keep function small too.",
+    "grug say: senior dev is one who know where bodies buried.",
+    "grug say: meeting is where productivity go to die.",
+    "grug say: ship small, ship often, fix in prod, grug not scared.",
+    "grug say: premature optimization root of all bug. measure first.",
+    "grug say: DRY is lie. same shape not same meaning. duplicate sometime ok.",
+    "grug say: if test hard to write, code shape wrong.",
+    "grug say: comment say WHY. code already say WHAT.",
+    "grug say: log loud when bad, silent when good.",
+};
+#define GRUG_WISDOM_N  (int)(sizeof(GRUG_WISDOM)/sizeof(GRUG_WISDOM[0]))
+
+static const char *GRUG_JOKES[] = {
+    "why function cross road? because callback on other side.",
+    "grug have 99 problem but null pointer not one. grug also have null pointer.",
+    "programmer wife say: get bread, if egg, get 12. he come home with 12 bread.",
+    "how many grug to change lightbulb? none. grug afraid of dark, live with it.",
+    "grug try recursion to understand recursion. grug still trying.",
+};
+#define GRUG_JOKES_N  (int)(sizeof(GRUG_JOKES)/sizeof(GRUG_JOKES[0]))
+
+static const char *GRUG_SMOKE[] = {
+    "grug puff... whoa. semicolons are just fences for thoughts.",
+    "grug puff... what if garbage collector is just... letting go?",
+    "grug puff... monad is just burrito of sadness man.",
+    "grug puff... every `for` loop is a tiny universe, bro.",
+    "grug puff... types are vibes and vibes are types.",
+    "grug puff... the real bug was the friends we made along the way.",
+};
+#define GRUG_SMOKE_N  (int)(sizeof(GRUG_SMOKE)/sizeof(GRUG_SMOKE[0]))
+
+/* xorshift32 — deterministic, freestanding */
+static uint32_t grug_rand(void) {
+    uint32_t x = grug.rng;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    grug.rng = x;
+    return x & 0x7fffffffu;
+}
+
+/* Case-insensitive substring check */
+static int grug_contains(const char *hay, const char *needle) {
+    if (!hay || !needle || !*needle) return 0;
+    for (int i = 0; hay[i]; i++) {
+        int j = 0;
+        while (needle[j]) {
+            char a = hay[i + j];
+            char b = needle[j];
+            if (!a) return 0;
+            if (a >= 'A' && a <= 'Z') a += 32;
+            if (b >= 'A' && b <= 'Z') b += 32;
+            if (a != b) break;
+            j++;
+        }
+        if (!needle[j]) return 1;
+    }
+    return 0;
+}
+
+/* Match any of NULL-terminated needle list */
+static int grug_contains_any(const char *hay, const char * const *needles) {
+    for (int i = 0; needles[i]; i++)
+        if (grug_contains(hay, needles[i])) return 1;
+    return 0;
+}
+
+static int grug_streq_ci(const char *a, const char *b) {
+    int i = 0;
+    for (;; i++) {
+        char x = a[i], y = b[i];
+        if (x >= 'A' && x <= 'Z') x += 32;
+        if (y >= 'A' && y <= 'Z') y += 32;
+        if (x != y) return 0;
+        if (!x) return 1;
+    }
+}
+
+static void grug_print_prefix(uint8_t color, const char *speaker) {
+    k_set_color(0x08, 0x00);
+    k_print("[");
+    k_set_color(color, 0x00);
+    k_print(speaker);
+    k_set_color(0x08, 0x00);
+    k_print("] ");
+    k_set_color(GRUG_COL_DEFAULT, 0x00);
+}
+
+static void grug_say(const char *text) {
+    const char *name = (grug.mood >= 1) ? "grug420" : "grug";
+    uint8_t col = (grug.mood >= 1) ? GRUG_COL_SMOKE : GRUG_COL_GRUG;
+    grug_print_prefix(col, name);
+    k_print(text);
+    k_putc('\n');
+}
+
+static void grug_sys(const char *text) {
+    grug_print_prefix(GRUG_COL_SYS, "sys");
+    k_print(text);
+    k_putc('\n');
+}
+
+static void grug_err(const char *text) {
+    grug_print_prefix(GRUG_COL_ERR, "sys");
+    k_print(text);
+    k_putc('\n');
+}
+
+static void grug_banner(void) {
+    k_set_color(GRUG_COL_BANNER, 0x00);
+    k_print("+=====================================+\n");
+    k_print("|    grugbot420 -- lateralus edition  |\n");
+    k_print("|    small brain. big wisdom. 420.    |\n");
+    k_print("+=====================================+\n");
+    k_set_color(GRUG_COL_DEFAULT, 0x00);
+}
+
+/* Trim leading spaces in-place, strip trailing spaces too */
+static char *grug_trim(char *s) {
+    while (*s == ' ' || *s == '\t') s++;
+    int n = k_strlen(s);
+    while (n > 0 && (s[n - 1] == ' ' || s[n - 1] == '\t')) { s[--n] = 0; }
+    return s;
+}
+
+/* Slash-command handler.  Returns 1 if handled. */
+static int grug_handle_cmd(const char *cmd) {
+    if (grug_streq_ci(cmd, "/help")) {
+        grug_sys("commands: /help /wisdom /joke /roll /smoke /time /quit");
+        return 1;
+    }
+    if (grug_streq_ci(cmd, "/wisdom")) {
+        grug_say(GRUG_WISDOM[grug_rand() % GRUG_WISDOM_N]);
+        return 1;
+    }
+    if (grug_streq_ci(cmd, "/joke")) {
+        grug_say(GRUG_JOKES[grug_rand() % GRUG_JOKES_N]);
+        return 1;
+    }
+    if (grug_streq_ci(cmd, "/roll")) {
+        int r = (int)(grug_rand() % 20) + 1;
+        char buf[48];
+        const char *p = "d20 rolls: ";
+        int o = 0;
+        for (int i = 0; p[i]; i++) buf[o++] = p[i];
+        char nb[8]; ltl_itoa(r, nb, 8);
+        for (int i = 0; nb[i]; i++) buf[o++] = nb[i];
+        buf[o] = 0;
+        grug_say(buf);
+        return 1;
+    }
+    if (grug_streq_ci(cmd, "/smoke")) {
+        grug.hits++;
+        grug.mood = (grug.hits >= 3) ? 2 : 1;
+        grug_print_prefix(GRUG_COL_SMOKE, "grug420");
+        k_print("*puff puff pass*\n");
+        grug_say(GRUG_SMOKE[grug_rand() % GRUG_SMOKE_N]);
+        if (grug.mood == 2) {
+            grug_print_prefix(GRUG_COL_SMOKE, "grug420");
+            k_print("grug ascend. grug see the monad now.\n");
+        }
+        return 1;
+    }
+    if (grug_streq_ci(cmd, "/time")) {
+        char buf[64];
+        const char *p = "ticks since boot: ";
+        int o = 0;
+        for (int i = 0; p[i]; i++) buf[o++] = p[i];
+        char nb[24]; ltl_itoa((int)(tick_count & 0x7fffffff), nb, 24);
+        for (int i = 0; nb[i]; i++) buf[o++] = nb[i];
+        buf[o] = 0;
+        grug_sys(buf);
+        return 1;
+    }
+    if (grug_streq_ci(cmd, "/quit") || grug_streq_ci(cmd, "/exit")) {
+        grug_say("grug out. keep code small friend.");
+        grug.running = 0;
+        return 1;
+    }
+    grug_err("unknown command. try /help");
+    return 1;
+}
+
+/* Top-level response logic — mirrors respond() in grugbot420.ltl */
+static void grug_respond(const char *line) {
+    if (line[0] == '/') { grug_handle_cmd(line); return; }
+
+    static const char * const HI[]        = {"hi", "hello", "hey", "sup", "yo", NULL};
+    static const char * const BUG[]       = {"bug", "crash", "broken", "panic", NULL};
+    static const char * const COMPLEX[]   = {"complex", "overengineer", "abstract", NULL};
+    static const char * const SHIP[]      = {"ship", "deploy", "release", "prod", NULL};
+    static const char * const TEST[]      = {"test", "tdd", "unit", NULL};
+    static const char * const REFAC[]     = {"refactor", "rewrite", NULL};
+    static const char * const OOP[]       = {"oop", "inherit", "class", NULL};
+    static const char * const MEETING[]   = {"meeting", "standup", "agile", NULL};
+    static const char * const PERF[]      = {"perf", "slow", "fast", "optim", NULL};
+    static const char * const TYPES[]     = {"type", "typescript", "rust", NULL};
+    static const char * const AI[]        = {"ai", "llm", "copilot", "gpt", NULL};
+    static const char * const FRIDAY[]    = {"friday", "weekend", NULL};
+    static const char * const WEED[]      = {"weed", "420", "blaze", "smoke", "sesh", NULL};
+    static const char * const WISDOM_K[]  = {"wisdom", "advice", "help me", NULL};
+    static const char * const JOKE_K[]    = {"joke", "funny", NULL};
+    static const char * const THANKS[]    = {"thanks", "thank you", " ty", "love you", NULL};
+    static const char * const BYE[]       = {"bye", "cya", "later", "goodbye", NULL};
+
+    if (grug_contains_any(line, HI)) {
+        grug_say("hi friend. grug here. what on brain?");
+        return;
+    }
+    if (grug_contains_any(line, BUG)) {
+        static const char *replies[] = {
+            "bug not personal. bug just code telling truth.",
+            "read stack trace top-down. grug promise answer in there.",
+            "print statement older than grug. print statement still work.",
+        };
+        grug_say(replies[grug_rand() % 3]); return;
+    }
+    if (grug_contains_any(line, COMPLEX)) {
+        grug_say("complexity demon love abstract factory. delete layer. grug happy.");
+        return;
+    }
+    if (grug_contains_any(line, SHIP)) {
+        grug_say("ship it. worst case: rollback. best case: user smile.");
+        return;
+    }
+    if (grug_contains_any(line, TEST)) {
+        grug_say("test is rope grug tie to past self. test save future grug.");
+        return;
+    }
+    if (grug_contains_any(line, REFAC)) {
+        grug_say("rewrite from scratch is trap. refactor in small step. commit often.");
+        return;
+    }
+    if (grug_contains_any(line, OOP)) {
+        grug_say("inheritance tree grow tall. composition tree grow wide. wide better.");
+        return;
+    }
+    if (grug_contains_any(line, MEETING)) {
+        grug_say("meeting should be email. email should be nothing. grug need code time.");
+        return;
+    }
+    if (grug_contains_any(line, PERF)) {
+        grug_say("measure. measure again. THEN optimize hottest spot. not before.");
+        return;
+    }
+    if (grug_contains_any(line, TYPES)) {
+        grug_say("type system is exoskeleton. feel heavy at first. then grug run fast.");
+        return;
+    }
+    if (grug_contains_any(line, AI)) {
+        grug_say("llm is clever parrot. good for first draft, bad for last draft.");
+        return;
+    }
+    if (grug_contains_any(line, FRIDAY)) {
+        grug_say("no deploy friday. grug want pizza not pager.");
+        return;
+    }
+    if (grug_contains_any(line, WEED)) {
+        grug_handle_cmd("/smoke"); return;
+    }
+    if (grug_contains_any(line, WISDOM_K)) {
+        grug_handle_cmd("/wisdom"); return;
+    }
+    if (grug_contains_any(line, JOKE_K)) {
+        grug_handle_cmd("/joke"); return;
+    }
+    if (grug_contains_any(line, THANKS)) {
+        grug_say("grug love you too, stay hydrated, stay small-function.");
+        return;
+    }
+    if (grug_contains_any(line, BYE)) {
+        grug_say("peace friend. grug return to cave now.");
+        grug.running = 0;
+        return;
+    }
+
+    /* Fallback — dispense wisdom */
+    grug_say(GRUG_WISDOM[grug_rand() % GRUG_WISDOM_N]);
+}
+
+void cmd_grugbot(const char *args) {
+    serial_puts("[grugbot420] starting\n");
+
+    /* Seed PRNG from tick_count so each invocation feels different */
+    k_memset(&grug, 0, sizeof(grug));
+    uint32_t seed = (uint32_t)(tick_count ^ 0x420BADA5u);
+    if (seed == 0) seed = 0x420BADA5u;
+    grug.rng = seed;
+    grug.running = 1;
+
+    /* One-shot mode: `grugbot wisdom` / `grugbot joke` */
+    char tmp[64];
+    int ti = 0;
+    while (args[ti] && ti < 63) { tmp[ti] = args[ti]; ti++; }
+    tmp[ti] = 0;
+    char *a = grug_trim(tmp);
+
+    if (k_strcmp(a, "wisdom") == 0) {
+        grug_say(GRUG_WISDOM[grug_rand() % GRUG_WISDOM_N]);
+        serial_puts("[grugbot420] one-shot wisdom\n");
+        return;
+    }
+    if (k_strcmp(a, "joke") == 0) {
+        grug_say(GRUG_JOKES[grug_rand() % GRUG_JOKES_N]);
+        serial_puts("[grugbot420] one-shot joke\n");
+        return;
+    }
+
+    /* Interactive REPL */
+    grug_banner();
+    grug_say("hi. grug here. type /help or just talk. grug listen.");
+
+    char line_buf[256];
+    while (grug.running) {
+        k_set_color(GRUG_COL_USER, 0x00);
+        k_print("you");
+        k_set_color(0x07, 0x00);
+        k_print("> ");
+        k_set_color(GRUG_COL_DEFAULT, 0x00);
+
+        int shift = 0;
+        int lp = app_read_line(line_buf, sizeof(line_buf), &shift);
+        if (lp < 0) { grug.running = 0; break; }   /* Esc = quit */
+        if (lp == 0) continue;
+
+        char *trimmed = grug_trim(line_buf);
+        if (*trimmed == 0) continue;
+
+        grug_respond(trimmed);
+    }
+
+    k_set_color(GRUG_COL_SMOKE, 0x00);
+    k_print("grugbot420 signing off. stay small-brained, friend.\n");
+    k_set_color(GRUG_COL_DEFAULT, 0x00);
+    serial_puts("[grugbot420] exited\n");
+}

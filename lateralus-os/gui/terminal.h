@@ -52,6 +52,12 @@ typedef struct {
 
     /* Dirty flag — set when content changes, cleared after refresh */
     uint8_t dirty;
+
+    /* grugbot420 interactive mode ------------------------------------- */
+    uint8_t  grug_mode;     /* 1 = input feeds grugbot, not shell */
+    uint8_t  grug_mood;     /* 0 chill, 1 blazed, 2 enlightened */
+    uint8_t  grug_hits;
+    uint32_t grug_rng;      /* xorshift32 seed */
 } GuiTerminal;
 
 /* -- Kernel info access (defined in kernel_stub.c / heap.c) ------------- */
@@ -96,5 +102,8 @@ void term_tick(GuiTerminal *t, uint32_t tick);
 
 /* Get number of active terminals */
 int term_count(void);
+
+/* Start grugbot420 mode inside a freshly created terminal (idx from term_create) */
+void term_start_grugbot(int tidx);
 
 #endif /* LATERALUS_TERMINAL_H */

@@ -52,7 +52,8 @@ LTL_SOURCES := \
     apps/package.ltl apps/browser.ltl apps/file_manager.ltl \
     apps/settings.ltl apps/calculator.ltl apps/calendar.ltl \
     apps/music.ltl apps/video.ltl apps/image_viewer.ltl \
-    apps/pdf_reader.ltl apps/screenshot.ltl
+    apps/pdf_reader.ltl apps/screenshot.ltl \
+    apps/grugbot420.ltl
 
 C_SOURCES := \
     boot/boot.c \

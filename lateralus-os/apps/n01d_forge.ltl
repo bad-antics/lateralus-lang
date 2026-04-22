@@ -1,0 +1,638 @@
+// ===========================================================================
+// n01d-forge — ISO Burner / Disk Imager for LateralusOS
+// ===========================================================================
+// Copyright (c) 2025-2026 bad-antics. All rights reserved.
+//
+// Native port of n01d-forge (Rust) to Lateralus.
+// Writes ISO images and raw disk images to block devices with
+// progress tracking, verify pass, and safety checks.
+//
+// Features:
+//   • List removable block devices via /dev + procfs
+//   • Write ISO/IMG to device with configurable block size
+//   • Real-time progress: bytes written, speed, ETA
+//   • Optional verify pass (re-read and SHA256 compare)
+//   • Safety: requires confirmation, refuses to write to mounted devices
+//   • Supports GPT/MBR detection and reports existing partitions
+//   • GUI mode (progress window) and CLI mode
+//
+// Usage:  n01d-forge                          — open GUI
+//         n01d-forge burn <iso> <device>      — CLI burn
+//         n01d-forge verify <iso> <device>    — verify only
+//         n01d-forge list                     — list devices
+// ===========================================================================
+
+import sys
+import gui
+import drivers::disk
+import fs::vfs
+import fs::procfs
+
+// ── Constants ────────────────────────────────────────────────────────────────
+
+const APP_TITLE   = "n01d-forge"
+const WINDOW_W    = 680
+const WINDOW_H    = 460
+const BLOCK_SIZE  = 4194304      // 4 MiB per write
+
+// N01D palette
+const F_BG      = 0x0A0A0A
+const F_BG2     = 0x111111
+const F_FG      = 0xCCCCCC
+const F_ACCENT  = 0x00FF88
+const F_DIM     = 0x444444
+const F_BORDER  = 0x1E1E1E
+const F_WARN    = 0xFFAA00
+const F_CRIT    = 0xFF4444
+const F_SAFE    = 0x00BB66
+
+// ── Data Structures ───────────────────────────────────────────────────────────
+
+struct BlockDevice {
+    path:       str    // /dev/sdb
+    name:       str    // sdb
+    size:       int    // bytes
+    model:      str
+    removable:  bool
+    mounted:    bool
+    partitions: [str]
+}
+
+enum BurnState {
+    Idle
+    Confirming
+    Burning
+    Verifying
+    Done(bool)   // success?
+    Failed(str)  // error message
+}
+
+struct BurnProgress {
+    bytes_written: int
+    total_bytes:   int
+    speed_bps:     int
+    elapsed_s:     float
+    eta_s:         float
+}
+
+fn progress_pct(p: BurnProgress) -> float {
+    if p.total_bytes == 0 { 0.0 }
+    else { float(p.bytes_written) / float(p.total_bytes) * 100.0 }
+}
+
+struct AppState {
+    devices:      [BlockDevice]
+    selected_dev: int
+    iso_path:     str
+    iso_size:     int
+    state:        BurnState
+    progress:     BurnProgress
+    do_verify:    bool
+    log_lines:    [str]
+    window:       gui::Window
+    running:      bool
+}
+
+// ── Device Discovery ──────────────────────────────────────────────────────────
+
+fn list_block_devices() -> [BlockDevice] {
+    let raw = procfs::read("/proc/partitions")
+    let mounted_raw = procfs::read("/proc/mounts")
+    let mounted_devs = mounted_raw.split("\n")
+        |> filter(|l| l.starts_with("/dev/"))
+        |> map(|l| l.split(" ")[0])
+        |> collect_set()
+
+    let devices: [BlockDevice] = []
+
+    let blk_dir = vfs::list_dir("/sys/block")
+    for dev_name in blk_dir {
+        // Skip loop, ram, zram devices
+        if dev_name.starts_with("loop") || dev_name.starts_with("ram") || dev_name.starts_with("zram") {
+            continue
+        }
+
+        let dev_path = "/dev/" ++ dev_name
+        let sys_path = "/sys/block/" ++ dev_name
+
+        let removable_str = vfs::read_file(sys_path ++ "/removable").trim()
+        let removable = removable_str == "1"
+
+        // Only show removable or whole-disk non-system devices
+        if !removable && dev_name.starts_with("nvme") == false && dev_name.starts_with("sd") == false {
+            continue
+        }
+
+        let size_str = vfs::read_file(sys_path ++ "/size").trim()
+        let size_sectors = size_str.parse_int().unwrap_or(0)
+        let size_bytes = size_sectors * 512
+
+        // Skip very large (> 128 GB) non-removable drives for safety
+        if !removable && size_bytes > 137_438_953_472 {
+            continue
+        }
+
+        let model = vfs::read_file(sys_path ++ "/device/model").trim()
+
+        // Check if any partition is mounted
+        let is_mounted = mounted_devs.contains(dev_path) ||
+            vfs::list_dir(sys_path)
+                |> filter(|p| p.starts_with(dev_name))
+                |> any(|p| mounted_devs.contains("/dev/" ++ p))
+
+        let partitions = vfs::list_dir(sys_path)
+            |> filter(|p| p.starts_with(dev_name) && p.len() > dev_name.len())
+
+        devices = devices ++ [BlockDevice {
+            path:       dev_path,
+            name:       dev_name,
+            size:       size_bytes,
+            model:      model,
+            removable:  removable,
+            mounted:    is_mounted,
+            partitions: partitions,
+        }]
+    }
+
+    devices |> sort_by(|a, b| a.name.cmp(b.name))
+}
+
+// ── SHA256 for verify ─────────────────────────────────────────────────────────
+
+fn sha256_file(path: str) -> str {
+    sys::sha256_file(path)
+}
+
+fn sha256_device(dev_path: str, size: int) -> str {
+    sys::sha256_block_device(dev_path, size)
+}
+
+// ── Burn Logic (runs in worker thread) ───────────────────────────────────────
+
+struct BurnTask {
+    iso_path: str
+    dev_path: str
+    iso_size: int
+    do_verify: bool
+}
+
+fn run_burn_task(task: BurnTask, progress_cb: fn(BurnProgress), done_cb: fn(bool, str)) {
+    let iso_fd = sys::open_file(task.iso_path, "r")
+    let dev_fd = disk::open_raw(task.dev_path, "w")
+
+    if iso_fd == -1 {
+        done_cb(false, "Cannot open ISO: " ++ task.iso_path)
+        return
+    }
+    if dev_fd == -1 {
+        done_cb(false, "Cannot open device: " ++ task.dev_path)
+        return
+    }
+
+    let mut written = 0
+    let start_ms = sys::time_ms()
+
+    while written < task.iso_size {
+        let chunk = sys::read_bytes(iso_fd, BLOCK_SIZE)
+        if chunk.len() == 0 { break }
+
+        let wrote = disk::write_raw(dev_fd, chunk)
+        if wrote < 0 {
+            sys::close_file(iso_fd)
+            disk::close_raw(dev_fd)
+            done_cb(false, "Write error at byte " ++ str(written))
+            return
+        }
+
+        written = written + chunk.len()
+        let elapsed_ms = sys::time_ms() - start_ms
+        let elapsed_s = float(elapsed_ms) / 1000.0
+        let speed = if elapsed_s > 0.0 { int(float(written) / elapsed_s) } else { 0 }
+        let remaining = task.iso_size - written
+        let eta = if speed > 0 { float(remaining) / float(speed) } else { 0.0 }
+
+        progress_cb(BurnProgress {
+            bytes_written: written,
+            total_bytes:   task.iso_size,
+            speed_bps:     speed,
+            elapsed_s:     elapsed_s,
+            eta_s:         eta,
+        })
+    }
+
+    disk::sync(dev_fd)
+    sys::close_file(iso_fd)
+
+    if !task.do_verify {
+        disk::close_raw(dev_fd)
+        done_cb(true, "")
+        return
+    }
+
+    // Verify pass
+    progress_cb(BurnProgress {
+        bytes_written: 0,
+        total_bytes:   task.iso_size,
+        speed_bps:     0,
+        elapsed_s:     0.0,
+        eta_s:         0.0,
+    })
+
+    let iso_hash = sha256_file(task.iso_path)
+    let dev_hash = sha256_device(task.dev_path, task.iso_size)
+
+    disk::close_raw(dev_fd)
+
+    if iso_hash == dev_hash {
+        done_cb(true, "")
+    } else {
+        done_cb(false, "Verification FAILED — hashes do not match")
+    }
+}
+
+fn add_log(state: AppState, msg: str) -> AppState {
+    let ts = sys::time_str()
+    let line = "[" ++ ts ++ "] " ++ msg
+    let mut lines = state.log_lines
+    if lines.len() > 100 { lines = lines.slice(lines.len() - 100, lines.len()) }
+    AppState { ..state, log_lines: lines ++ [line] }
+}
+
+// ── Formatting ───────────────────────────────────────────────────────────────
+
+fn fmt_bytes(b: int) -> str {
+    if b >= 1_073_741_824 {
+        fmt_float(float(b) / 1_073_741_824.0, 2) ++ " GB"
+    } else if b >= 1_048_576 {
+        fmt_float(float(b) / 1_048_576.0, 1) ++ " MB"
+    } else if b >= 1024 {
+        fmt_float(float(b) / 1024.0, 1) ++ " KB"
+    } else { str(b) ++ " B" }
+}
+
+fn fmt_speed(bps: int) -> str {
+    if bps >= 1_048_576 { fmt_float(float(bps) / 1_048_576.0, 1) ++ " MB/s" }
+    else                { fmt_float(float(bps) / 1024.0, 1) ++ " KB/s" }
+}
+
+fn fmt_eta(s: float) -> str {
+    let total = int(s)
+    let mins = total / 60
+    let secs = total % 60
+    if mins > 0 { str(mins) ++ "m " ++ str(secs) ++ "s" }
+    else { str(secs) ++ "s" }
+}
+
+// ── Rendering ────────────────────────────────────────────────────────────────
+
+fn draw_device_list(ctx: gui::Context, state: AppState) {
+    let w = 260
+    ctx.fill_rect(0, 40, w, WINDOW_H - 40, F_BG2)
+    ctx.draw_line(w, 40, w, WINDOW_H, F_BORDER, 1)
+    ctx.draw_text(10, 46, "DEVICES", F_ACCENT, "mono-bold-10")
+
+    let mut y = 64
+    for (i, dev) in state.devices.enumerate() {
+        let active = i == state.selected_dev
+        let bg = if active { 0x1A3A2A } else { F_BG2 }
+        ctx.fill_rect(0, y, w, 54, bg)
+        if active { ctx.fill_rect(0, y, 3, 54, F_ACCENT) }
+
+        let name_color = if dev.mounted { F_WARN } else if active { F_ACCENT } else { F_FG }
+        let model_short = if dev.model.len() > 22 { dev.model.slice(0, 22) ++ "…" } else { dev.model }
+        let mount_str = if dev.mounted { " [MOUNTED]" } else { "" }
+
+        ctx.draw_text(10, y + 6,  dev.path ++ mount_str, name_color, "mono-bold-10")
+        ctx.draw_text(10, y + 22, model_short,            F_DIM,      "mono-9")
+        ctx.draw_text(10, y + 38, fmt_bytes(dev.size),    F_DIM,      "mono-9")
+        let rem_str = if dev.removable { "removable" } else { "fixed" }
+        ctx.draw_text(150, y + 38, rem_str, if dev.removable { F_SAFE } else { F_DIM }, "mono-9")
+
+        ctx.draw_line(0, y + 54, w, y + 54, F_BORDER, 1)
+        y = y + 55
+    }
+}
+
+fn draw_main_panel(ctx: gui::Context, state: AppState) {
+    let px = 268
+    let pw = WINDOW_W - px
+
+    ctx.fill_rect(px, 40, pw, WINDOW_H - 40, F_BG)
+
+    // ISO path
+    ctx.draw_text(px + 10, 50, "SOURCE IMAGE", F_DIM, "mono-bold-10")
+    ctx.fill_rect(px + 10, 65, pw - 20, 26, F_BG2)
+    ctx.draw_rect(px + 10, 65, pw - 20, 26, F_BORDER, 1)
+    let iso_display = if state.iso_path.len() > 0 { state.iso_path } else { "Click to select ISO / IMG file…" }
+    let iso_color = if state.iso_path.len() > 0 { F_FG } else { F_DIM }
+    ctx.draw_text(px + 16, 73, iso_display, iso_color, "mono-10")
+    if state.iso_size > 0 {
+        ctx.draw_text(px + pw - 100, 73, fmt_bytes(state.iso_size), F_DIM, "mono-9")
+    }
+
+    // Target device summary
+    ctx.draw_text(px + 10, 106, "TARGET DEVICE", F_DIM, "mono-bold-10")
+    let dev_text = if state.selected_dev < state.devices.len() {
+        let dev = state.devices[state.selected_dev]
+        dev.path ++ "  (" ++ dev.model ++ ", " ++ fmt_bytes(dev.size) ++ ")"
+    } else { "No device selected" }
+    ctx.draw_text(px + 10, 122, dev_text, F_FG, "mono-10")
+
+    // Verify checkbox
+    let chk = if state.do_verify { "☑" } else { "☐" }
+    ctx.draw_text(px + 10, 145, chk ++ " Verify after burn", F_FG, "mono-10")
+
+    // Progress area
+    match state.state {
+        BurnState::Idle => {
+            let can_burn = state.iso_path.len() > 0 && state.selected_dev < state.devices.len()
+            let dev_ok = can_burn && !state.devices[state.selected_dev].mounted
+            let btn_color = if can_burn && dev_ok { F_ACCENT } else { F_DIM }
+            ctx.fill_rect(px + 10, 175, pw - 20, 36, btn_color)
+            let btn_label = if !can_burn { "Select ISO and device" }
+                            else if !dev_ok { "Device is mounted — unmount first" }
+                            else { "▶  BURN" }
+            ctx.draw_text(px + pw / 2 - 50, 186, btn_label, F_BG, "mono-bold-12")
+        }
+        BurnState::Confirming => {
+            ctx.fill_rect(px + 10, 170, pw - 20, 70, 0x1A0A0A)
+            ctx.draw_rect(px + 10, 170, pw - 20, 70, F_CRIT, 1)
+            ctx.draw_text(px + 20, 180, "⚠  ALL DATA ON TARGET WILL BE DESTROYED", F_CRIT, "mono-bold-10")
+            let dev = if state.selected_dev < state.devices.len() { state.devices[state.selected_dev].path } else { "?" }
+            ctx.draw_text(px + 20, 196, "Device: " ++ dev, F_WARN, "mono-10")
+            ctx.fill_rect(px + 20,      210, 100, 24, F_CRIT)
+            ctx.fill_rect(px + 140,     210, 100, 24, F_SAFE)
+            ctx.draw_text(px + 44,  219, "CANCEL", F_BG, "mono-bold-10")
+            ctx.draw_text(px + 164, 219, "CONFIRM", F_BG, "mono-bold-10")
+        }
+        BurnState::Burning | BurnState::Verifying => {
+            let p = state.progress
+            let pct = progress_pct(p)
+            let label = match state.state {
+                BurnState::Burning   => "BURNING…"
+                BurnState::Verifying => "VERIFYING…"
+                _                    => ""
+            }
+            ctx.draw_text(px + 10, 172, label, F_ACCENT, "mono-bold-11")
+            // Progress bar
+            ctx.fill_rect(px + 10, 192, pw - 20, 16, F_BG2)
+            ctx.fill_rect(px + 10, 192, int(float(pw - 20) * pct / 100.0), 16, F_ACCENT)
+            ctx.draw_text(px + 10, 215, fmt_float(pct, 1) ++ "%  " ++ fmt_bytes(p.bytes_written) ++ " / " ++ fmt_bytes(p.total_bytes), F_FG, "mono-10")
+            ctx.draw_text(px + 10, 232, "Speed: " ++ fmt_speed(p.speed_bps) ++ "  ETA: " ++ fmt_eta(p.eta_s), F_DIM, "mono-10")
+        }
+        BurnState::Done(success) => {
+            let (color, icon, msg) = if success {
+                (F_ACCENT, "✔", "Burn complete!")
+            } else {
+                (F_SAFE, "✔", "Burn & verify complete!")
+            }
+            ctx.draw_text(px + 10, 175, icon ++ "  " ++ msg, color, "mono-bold-14")
+            ctx.fill_rect(px + 10, 200, 120, 28, F_BG2)
+            ctx.draw_rect(px + 10, 200, 120, 28, F_ACCENT, 1)
+            ctx.draw_text(px + 26, 208, "Burn another", F_ACCENT, "mono-10")
+        }
+        BurnState::Failed(err) => {
+            ctx.draw_text(px + 10, 175, "✘  Error: " ++ err, F_CRIT, "mono-bold-10")
+            ctx.fill_rect(px + 10, 200, 80, 28, F_BG2)
+            ctx.draw_rect(px + 10, 200, 80, 28, F_ACCENT, 1)
+            ctx.draw_text(px + 22, 208, "Retry", F_ACCENT, "mono-10")
+        }
+    }
+
+    // Log
+    ctx.draw_text(px + 10, 260, "LOG", F_DIM, "mono-bold-10")
+    let log_y0 = 275
+    let max_lines = (WINDOW_H - log_y0 - 8) / 14
+    let log_start = if state.log_lines.len() > max_lines { state.log_lines.len() - max_lines } else { 0 }
+    let mut ly = log_y0
+    for line in state.log_lines.slice(log_start, state.log_lines.len()) {
+        ctx.draw_text(px + 10, ly, line, F_DIM, "mono-9")
+        ly = ly + 14
+    }
+}
+
+fn draw_header(ctx: gui::Context, state: AppState) {
+    ctx.fill_rect(0, 0, WINDOW_W, 40, F_BG2)
+    ctx.draw_line(0, 40, WINDOW_W, 40, F_BORDER, 1)
+    ctx.draw_text(12, 12, APP_TITLE, F_ACCENT, "mono-bold-13")
+    ctx.draw_text(160, 14, "write iso/img to block device", F_DIM, "mono-9")
+    // Reload button
+    ctx.draw_text(WINDOW_W - 80, 14, "↺ RESCAN", F_DIM, "mono-9")
+}
+
+fn render(ctx: gui::Context, state: AppState) {
+    ctx.clear(F_BG)
+    draw_header(ctx, state)
+    draw_device_list(ctx, state)
+    draw_main_panel(ctx, state)
+}
+
+// ── Input ─────────────────────────────────────────────────────────────────────
+
+fn handle_event(state: AppState, ev: gui::Event) -> AppState {
+    let px = 268
+    match ev {
+        gui::Event::MouseDown(x, y, _btn) => {
+            // Rescan
+            if x >= WINDOW_W - 80 && y < 40 {
+                let devices = list_block_devices()
+                return add_log(AppState { ..state, devices: devices }, "Rescanned devices: " ++ str(devices.len()) ++ " found")
+            }
+            // Device list
+            if x < 260 && y >= 64 {
+                let idx = (y - 64) / 55
+                if idx < state.devices.len() {
+                    return AppState { ..state, selected_dev: idx }
+                }
+            }
+            // ISO click
+            if x >= px + 10 && x < WINDOW_W - 10 && y >= 65 && y <= 91 {
+                let path = gui::file_picker("Select ISO/IMG", [("ISO Image", "*.iso"), ("Disk Image", "*.img"), ("All", "*")])
+                return match path {
+                    Some(p) => {
+                        let sz = vfs::file_size(p)
+                        add_log(AppState { ..state, iso_path: p, iso_size: sz }, "Selected: " ++ p ++ " (" ++ fmt_bytes(sz) ++ ")")
+                    }
+                    None => state
+                }
+            }
+            // Verify checkbox
+            if x >= px + 10 && x < px + 200 && y >= 140 && y <= 158 {
+                return AppState { ..state, do_verify: !state.do_verify }
+            }
+            // Burn button (Idle)
+            match state.state {
+                BurnState::Idle => {
+                    if x >= px + 10 && y >= 175 && y <= 211 {
+                        let can = state.iso_path.len() > 0 && state.selected_dev < state.devices.len()
+                        let mounted = can && state.devices[state.selected_dev].mounted
+                        if can && !mounted {
+                            return add_log(AppState { ..state, state: BurnState::Confirming }, "Awaiting confirmation…")
+                        }
+                    }
+                }
+                BurnState::Confirming => {
+                    // Cancel
+                    if x >= px + 20 && x <= px + 120 && y >= 210 && y <= 234 {
+                        return add_log(AppState { ..state, state: BurnState::Idle }, "Cancelled")
+                    }
+                    // Confirm
+                    if x >= px + 140 && x <= px + 240 && y >= 210 && y <= 234 {
+                        let dev = state.devices[state.selected_dev]
+                        let task = BurnTask {
+                            iso_path:  state.iso_path,
+                            dev_path:  dev.path,
+                            iso_size:  state.iso_size,
+                            do_verify: state.do_verify,
+                        }
+                        let state2 = add_log(AppState { ..state, state: BurnState::Burning }, "Burning " ++ state.iso_path ++ " → " ++ dev.path)
+                        sys::spawn_thread(|_| run_burn_task(task, |_prog| (), |_ok, _err| ()))
+                        return state2
+                    }
+                }
+                BurnState::Done(_) | BurnState::Failed(_) => {
+                    if x >= px + 10 && y >= 200 && y <= 228 {
+                        return AppState { ..state, state: BurnState::Idle, progress: BurnProgress { bytes_written: 0, total_bytes: 0, speed_bps: 0, elapsed_s: 0.0, eta_s: 0.0 } }
+                    }
+                }
+                _ => ()
+            }
+            state
+        }
+        gui::Event::KeyDown(key, _mods) => match key {
+            gui::Key::Q     => AppState { ..state, running: false }
+            gui::Key::R     => AppState { ..state, devices: list_block_devices() }
+            gui::Key::UP    => AppState { ..state, selected_dev: if state.selected_dev > 0 { state.selected_dev - 1 } else { 0 } }
+            gui::Key::DOWN  => AppState { ..state, selected_dev: if state.selected_dev < state.devices.len() - 1 { state.selected_dev + 1 } else { state.selected_dev } }
+            _ => state
+        }
+        gui::Event::ThreadMsg("progress", data) => {
+            let prog: BurnProgress = data
+            AppState { ..state, progress: prog }
+        }
+        gui::Event::ThreadMsg("done", data) => {
+            let (ok, err): (bool, str) = data
+            let new_state = if ok { BurnState::Done(true) } else { BurnState::Failed(err) }
+            add_log(AppState { ..state, state: new_state }, if ok { "Done! ✔" } else { "FAILED: " ++ err })
+        }
+        gui::Event::ThreadMsg("verify_progress", data) => {
+            let prog: BurnProgress = data
+            AppState { ..state, state: BurnState::Verifying, progress: prog }
+        }
+        gui::Event::WindowClose => AppState { ..state, running: false }
+        _ => state
+    }
+}
+
+// ── CLI Mode ──────────────────────────────────────────────────────────────────
+
+fn cli_list() {
+    let devices = list_block_devices()
+    println("Available block devices:")
+    println("  " ++ pad("DEVICE", 12) ++ pad("SIZE", 10) ++ pad("MODEL", 30) ++ "FLAGS")
+    for dev in devices {
+        let flags = (if dev.removable { "removable " } else { "" }) ++ (if dev.mounted { "MOUNTED" } else { "" })
+        println("  " ++ pad(dev.path, 12) ++ pad(fmt_bytes(dev.size), 10) ++ pad(dev.model, 30) ++ flags)
+    }
+}
+
+fn cli_burn(iso_path: str, dev_path: str, do_verify: bool) -> int {
+    let iso_size = vfs::file_size(iso_path)
+    if iso_size == 0 {
+        eprintln("Error: cannot read ISO: " ++ iso_path)
+        return 1
+    }
+
+    // Confirm
+    print("⚠  Write " ++ iso_path ++ " (" ++ fmt_bytes(iso_size) ++ ") to " ++ dev_path ++ "? [yes/N] ")
+    let confirm = sys::read_line().trim().to_lower()
+    if confirm != "yes" {
+        println("Aborted.")
+        return 0
+    }
+
+    println("Burning…")
+    let start = sys::time_ms()
+
+    run_burn_task(
+        BurnTask { iso_path: iso_path, dev_path: dev_path, iso_size: iso_size, do_verify: do_verify },
+        |prog| {
+            let pct = progress_pct(prog)
+            let bar_w = 40
+            let filled = int(pct / 100.0 * float(bar_w))
+            let bar = "█".repeat(filled) ++ "░".repeat(bar_w - filled)
+            print("\r  [" ++ bar ++ "] " ++ fmt_float(pct, 1) ++ "%  " ++ fmt_speed(prog.speed_bps) ++ "  ETA " ++ fmt_eta(prog.eta_s) ++ "  ")
+        },
+        |ok, err| {
+            println("")
+            if ok {
+                let elapsed = float(sys::time_ms() - start) / 1000.0
+                println("✔  Done! (" ++ fmt_float(elapsed, 1) ++ "s)")
+            } else {
+                eprintln("✘  Failed: " ++ err)
+            }
+        }
+    )
+    0
+}
+
+fn pad(s: str, n: int) -> str {
+    if s.len() >= n { s.slice(0, n) }
+    else { s ++ " ".repeat(n - s.len()) }
+}
+
+// ── Entry Point ──────────────────────────────────────────────────────────────
+
+fn main(args: [str]) -> int {
+    if args.len() > 1 {
+        match args[1] {
+            "list" => { cli_list(); return 0 }
+            "burn" => {
+                if args.len() < 4 { eprintln("Usage: n01d-forge burn <iso> <device>"); return 1 }
+                return cli_burn(args[2], args[3], args.contains("--verify"))
+            }
+            "verify" => {
+                if args.len() < 4 { eprintln("Usage: n01d-forge verify <iso> <device>"); return 1 }
+                // Just a verify — same as burn with skip_write flag but read-only
+                println("Verifying…")
+                let iso_hash = sha256_file(args[2])
+                let iso_size = vfs::file_size(args[2])
+                let dev_hash = sha256_device(args[3], iso_size)
+                if iso_hash == dev_hash { println("✔  Verified OK") ; return 0 }
+                else { eprintln("✘  Mismatch!"); return 1 }
+            }
+            _ => ()
+        }
+    }
+
+    // GUI mode
+    let win = gui::create_window(APP_TITLE, WINDOW_W, WINDOW_H, gui::Flags::FIXED_SIZE)
+    win.set_bg(F_BG)
+
+    let devices = list_block_devices()
+    let mut state = AppState {
+        devices:      devices,
+        selected_dev: 0,
+        iso_path:     "",
+        iso_size:     0,
+        state:        BurnState::Idle,
+        progress:     BurnProgress { bytes_written: 0, total_bytes: 0, speed_bps: 0, elapsed_s: 0.0, eta_s: 0.0 },
+        do_verify:    true,
+        log_lines:    ["n01d-forge ready", str(devices.len()) ++ " device(s) found"],
+        window:       win,
+        running:      true,
+    }
+
+    while state.running {
+        let events = state.window.poll_events()
+        for ev in events { state = handle_event(state, ev) }
+
+        let ctx = state.window.get_context()
+        render(ctx, state)
+        state.window.swap_buffers()
+        sys::sleep_ms(32)  // 30 fps (no animation needed here)
+    }
+
+    state.window.close()
+    return 0
+}

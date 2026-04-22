@@ -78,6 +78,7 @@ static void action_open_readme(void *ctx) {
             "  Ctrl+T   Open Terminal\n"
             "  Ctrl+A   Open About\n"
             "  Ctrl+S   Open System Monitor\n"
+            "  Ctrl+G   Open grugbot420\n"
             "  ESC      Exit GUI → text shell\n"
             "\n"
             "Copyright (c) 2025 bad-antics\n"
@@ -86,22 +87,166 @@ static void action_open_readme(void *ctx) {
     }
 }
 
+/* -- grugbot420 launcher: opens a terminal + auto-starts grug ---------- */
+
+static void action_open_grugbot(void *ctx) {
+    (void)ctx;
+    if (!g_desktop) return;
+    int tidx = term_create(&g_desktop->gui);
+    if (tidx < 0) return;
+    /* Rename window so it's clearly grugbot */
+    if (tidx < MAX_WINDOWS) {
+        /* Find the window we just created (most recent terminal) */
+        for (int i = g_desktop->gui.window_count - 1; i >= 0; i--) {
+            if (g_desktop->gui.windows[i].is_terminal) {
+                _dscpy(g_desktop->gui.windows[i].title, "grugbot420", 64);
+                break;
+            }
+        }
+    }
+    term_start_grugbot(tidx);
+    extern volatile uint64_t tick_count;
+    speaker_window_open(tick_count);
+}
+
+/* -- Additional info-window launchers ---------------------------------- */
+
+static void action_open_files(void *ctx) {
+    (void)ctx;
+    if (!g_desktop) return;
+    desktop_open_file_viewer(g_desktop, "Files",
+        "LateralusFS -- RAM File System\n"
+        "==============================\n"
+        "\n"
+        "Directories:\n"
+        "  /         root\n"
+        "  /home     user files\n"
+        "  /proc     process info (auto-generated)\n"
+        "  /dev      device nodes\n"
+        "  /tmp      scratch space\n"
+        "\n"
+        "Use Terminal + 'ls' / 'cat' / 'cd' to\n"
+        "navigate.\n"
+    );
+}
+
+static void action_open_editor(void *ctx) {
+    (void)ctx;
+    if (!g_desktop) return;
+    desktop_open_file_viewer(g_desktop, "ltled Editor",
+        "ltled -- Retro Text Editor\n"
+        "==========================\n"
+        "\n"
+        "Mode-based editor with syntax\n"
+        "highlighting for Lateralus.\n"
+        "\n"
+        "GUI port in progress. Launch from\n"
+        "text shell:\n"
+        "  1. Press ESC to exit the GUI\n"
+        "  2. Run:  edit <filename>\n"
+        "\n"
+        "Supported file types: .ltl, .md,\n"
+        ".txt, .cfg\n"
+    );
+}
+
+static void action_open_chat(void *ctx) {
+    (void)ctx;
+    if (!g_desktop) return;
+    desktop_open_file_viewer(g_desktop, "ltlchat",
+        "ltlchat -- IRC-style Chat Client\n"
+        "================================\n"
+        "\n"
+        "Terminal chat client with local\n"
+        "loopback bot and (future) TCP\n"
+        "network mode.\n"
+        "\n"
+        "Launch from text shell:\n"
+        "  1. Press ESC to exit the GUI\n"
+        "  2. Run:  chat\n"
+        "\n"
+        "Commands: /nick /join /msg /quit\n"
+        "          /users /help\n"
+    );
+}
+
+static void action_open_calc(void *ctx) {
+    (void)ctx;
+    if (!g_desktop) return;
+    desktop_open_file_viewer(g_desktop, "Calculator",
+        "Calculator\n"
+        "==========\n"
+        "\n"
+        " Scientific calculator with memory\n"
+        " and history.\n"
+        "\n"
+        " Keys: 0-9 . + - * /  = C  sqrt\n"
+        "       sin cos tan log ln pi e\n"
+        "\n"
+        " (GUI buttons forthcoming -- type\n"
+        "  expressions via keyboard for now)\n"
+    );
+}
+
+static void action_open_ltlc(void *ctx) {
+    (void)ctx;
+    if (!g_desktop) return;
+    desktop_open_file_viewer(g_desktop, "ltlc Compiler",
+        "ltlc -- Lateralus Compiler\n"
+        "==========================\n"
+        "\n"
+        "Built-in lexer + static analyzer\n"
+        "for .ltl sources.\n"
+        "\n"
+        "Launch from text shell:\n"
+        "  ltlc <file.ltl>  analyze a file\n"
+        "  ltlc repl        interactive REPL\n"
+        "\n"
+        "Reports token, function, struct,\n"
+        "and binding counts.\n"
+    );
+}
+
+static void action_open_package(void *ctx) {
+    (void)ctx;
+    if (!g_desktop) return;
+    desktop_open_file_viewer(g_desktop, "Package Manager",
+        "pkg -- Package Manager\n"
+        "======================\n"
+        "\n"
+        "Launch from text shell:\n"
+        "  pkg list            installed\n"
+        "  pkg install <name>  add package\n"
+        "  pkg build           compile src\n"
+        "  pkg init <name>     new project\n"
+    );
+}
+
 /* -- Setup start menu --------------------------------------------------- */
 
 void desktop_setup_menus(Desktop *dt) {
     Menu *sm = &dt->gui.start_menu;
     sm->item_count = 0;
-    gui_add_menu_item(sm, "Terminal",       COL_BLACK,   action_open_terminal);
-    gui_add_menu_item(sm, "System Monitor", COL_ACCENT2, action_open_sysmon);
-    gui_add_menu_item(sm, "README",         COL_ACCENT3, action_open_readme);
-    gui_add_menu_item(sm, "About",          COL_ACCENT,  action_open_about);
+    gui_add_menu_item(sm, "Terminal",       COL_BLACK,    action_open_terminal);
+    gui_add_menu_item(sm, "grugbot420",     COL_ACCENT2,  action_open_grugbot);
+    gui_add_menu_item(sm, "Files",          COL_ACCENT3,  action_open_files);
+    gui_add_menu_item(sm, "ltled Editor",   COL_ACCENT,   action_open_editor);
+    gui_add_menu_item(sm, "ltlchat",        COL_ACCENT4,  action_open_chat);
+    gui_add_menu_item(sm, "Calculator",     COL_LAVENDER, action_open_calc);
+    gui_add_menu_item(sm, "ltlc Compiler",  COL_ACCENT,   action_open_ltlc);
+    gui_add_menu_item(sm, "Packages",       COL_ACCENT3,  action_open_package);
+    gui_add_menu_item(sm, "System Monitor", COL_ACCENT2,  action_open_sysmon);
+    gui_add_menu_item(sm, "README",         COL_ACCENT3,  action_open_readme);
+    gui_add_menu_item(sm, "About",          COL_ACCENT,   action_open_about);
 
     Menu *cm = &dt->gui.context_menu;
     cm->item_count = 0;
-    gui_add_menu_item(cm, "New Terminal",    COL_BLACK,   action_open_terminal);
-    gui_add_menu_item(cm, "System Monitor",  COL_ACCENT2, action_open_sysmon);
-    gui_add_menu_item(cm, "About",           COL_ACCENT,  action_open_about);
-    gui_add_menu_item(cm, "README",          COL_ACCENT3, action_open_readme);
+    gui_add_menu_item(cm, "New Terminal",    COL_BLACK,    action_open_terminal);
+    gui_add_menu_item(cm, "grugbot420",      COL_ACCENT2,  action_open_grugbot);
+    gui_add_menu_item(cm, "Files",           COL_ACCENT3,  action_open_files);
+    gui_add_menu_item(cm, "System Monitor",  COL_ACCENT2,  action_open_sysmon);
+    gui_add_menu_item(cm, "About",           COL_ACCENT,   action_open_about);
+    gui_add_menu_item(cm, "README",          COL_ACCENT3,  action_open_readme);
 }
 
 /* -- Desktop icon callbacks --------------------------------------------- */
@@ -110,19 +255,35 @@ static void icon_terminal(void *ctx) { (void)ctx; action_open_terminal(0); }
 static void icon_sysmon(void *ctx)   { (void)ctx; action_open_sysmon(0); }
 static void icon_about(void *ctx)    { (void)ctx; action_open_about(0); }
 static void icon_readme(void *ctx)   { (void)ctx; action_open_readme(0); }
+static void icon_grugbot(void *ctx)  { (void)ctx; action_open_grugbot(0); }
+static void icon_files(void *ctx)    { (void)ctx; action_open_files(0); }
+static void icon_editor(void *ctx)   { (void)ctx; action_open_editor(0); }
+static void icon_chat(void *ctx)     { (void)ctx; action_open_chat(0); }
+static void icon_calc(void *ctx)     { (void)ctx; action_open_calc(0); }
+static void icon_ltlc(void *ctx)     { (void)ctx; action_open_ltlc(0); }
+static void icon_pkg(void *ctx)      { (void)ctx; action_open_package(0); }
 
 void desktop_setup_icons(Desktop *dt) {
     int32_t ix = 24, iy = 24;
     int32_t spacing = ICON_SIZE + ICON_PAD + FONT_H + 8;
 
-    gui_add_icon(&dt->gui, ix, iy,     "Terminal", '>', COL_BLACK,
-                 icon_terminal, 0);
-    gui_add_icon(&dt->gui, ix, iy + spacing, "Monitor", '#', COL_ACCENT2,
-                 icon_sysmon, 0);
-    gui_add_icon(&dt->gui, ix, iy + spacing * 2, "About",   '?', COL_ACCENT,
-                 icon_about, 0);
-    gui_add_icon(&dt->gui, ix, iy + spacing * 3, "README",  'R', COL_ACCENT3,
-                 icon_readme, 0);
+    /* Column 1 — system apps */
+    gui_add_icon(&dt->gui, ix, iy,                 "Terminal",  '>',  COL_BLACK,    icon_terminal, 0);
+    gui_add_icon(&dt->gui, ix, iy + spacing,       "grugbot",   '4',  COL_ACCENT2,  icon_grugbot,  0);
+    gui_add_icon(&dt->gui, ix, iy + spacing * 2,   "Files",     'F',  COL_ACCENT3,  icon_files,    0);
+    gui_add_icon(&dt->gui, ix, iy + spacing * 3,   "Editor",    'E',  COL_ACCENT,   icon_editor,   0);
+    gui_add_icon(&dt->gui, ix, iy + spacing * 4,   "Chat",      'C',  COL_ACCENT4,  icon_chat,     0);
+
+    /* Column 2 — tools */
+    int32_t ix2 = ix + ICON_SIZE + ICON_PAD * 2 + 48;
+    gui_add_icon(&dt->gui, ix2, iy,                "Calc",      '=',  COL_LAVENDER, icon_calc,     0);
+    gui_add_icon(&dt->gui, ix2, iy + spacing,      "ltlc",      'L',  COL_ACCENT,   icon_ltlc,     0);
+    gui_add_icon(&dt->gui, ix2, iy + spacing * 2,  "Packages",  'P',  COL_ACCENT3,  icon_pkg,      0);
+    gui_add_icon(&dt->gui, ix2, iy + spacing * 3,  "Monitor",   '#',  COL_ACCENT2,  icon_sysmon,   0);
+    gui_add_icon(&dt->gui, ix2, iy + spacing * 4,  "README",    'R',  COL_ACCENT3,  icon_readme,   0);
+
+    /* Also keep an About icon handy */
+    gui_add_icon(&dt->gui, ix2, iy + spacing * 5,  "About",     '?',  COL_ACCENT,   icon_about,    0);
 }
 
 /* -- Initialize desktop ------------------------------------------------ */
@@ -148,6 +309,9 @@ void desktop_init(Desktop *dt) {
 
     /* Open a welcome "About" window by default */
     desktop_open_about(dt);
+
+    /* And spin up grugbot420 so its interface is visible on desktop */
+    action_open_grugbot(0);
 }
 
 /* -- Find existing window by title and focus it ------------------------- */
@@ -428,6 +592,11 @@ void desktop_key_event(Desktop *dt, char ascii) {
     /* Ctrl+S = open system monitor */
     if (ascii == 19) {  /* ASCII 19 = ^S */
         desktop_open_sysmon(dt);
+        return;
+    }
+    /* Ctrl+G = launch grugbot420 */
+    if (ascii == 7) {   /* ASCII 7 = ^G */
+        action_open_grugbot(0);
         return;
     }
 
