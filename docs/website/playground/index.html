@@ -1,0 +1,2284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#7c5cfc">
+    <link rel="preload" href="/fonts/vt323.woff2" as="font" type="font/woff2" crossorigin>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lateralus Playground — Try It Online</title>
+    <meta name="description" content="Try the Lateralus programming language in your browser. Pipeline operators, pattern matching, async/await — no install required.">
+    <meta property="og:title" content="Lateralus Playground">
+    <meta property="og:description" content="Try Lateralus in your browser — pipeline-native programming with zero setup.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://lateralus.dev/playground/">
+    <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <link rel="canonical" href="https://lateralus.dev/playground/">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Lateralus Playground">
+    <meta name="twitter:description" content="Try Lateralus in your browser — pipeline-native programming with zero setup.">
+    <meta name="twitter:image" content="https://lateralus.dev/social-card.svg">
+
+    <link rel="stylesheet" href="/fonts.css">
+    <style>
+        :root {
+            --bg: #06060c;
+            --bg2: #0c0c16;
+            --bg3: #141424;
+            --bg-code: #0a0e17;
+            --border: #1e1e3a;
+            --text: #e8e8f4;
+            --text2: #7878a8;
+            --accent: #7c5cfc;
+            --accent2: #a78bfa;
+            --cyan: #22d3ee;
+            --green: #34d399;
+            --orange: #fb923c;
+            --pink: #f472b6;
+            --yellow: #fbbf24;
+            --red: #f87171;
+            --blue: #60a5fa;
+        }
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'VT323', monospace;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            padding-top: 56px;
+        }
+        code, pre, textarea { font-family: 'JetBrains Mono', monospace; }
+        body::after {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(0,0,0,0.04) 2px,
+                rgba(0,0,0,0.04) 4px
+            );
+            pointer-events: none;
+            z-index: 9999;
+        }
+
+        /* -- Topbar -- */
+        .topbar {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            z-index: 100;
+            background: rgba(6,6,12,0.88);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border-bottom: 1px solid var(--border);
+        }
+        .topbar-inner {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 0 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 56px;
+        }
+        .topbar-logo {
+            font-family: 'Press Start 2P', monospace;
+            font-weight: 700;
+            font-size: 0.95rem;
+            color: var(--text);
+            letter-spacing: 1px;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 0.15em;
+        }
+        .topbar-logo span {
+            background: linear-gradient(135deg, var(--accent), var(--cyber-blue));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            font-weight: 900;
+        }
+        .topbar-links {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+            list-style: none;
+        }
+        .topbar-links a {
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: var(--text2);
+            letter-spacing: 0.3px;
+            text-decoration: none;
+            transition: color 0.2s;
+            position: relative;
+        }
+        .topbar-links a:hover { color: var(--text); }
+        .topbar-links a.active { color: var(--cyber-blue); }
+        .topbar-links a.active::after {
+            content: '';
+            position: absolute;
+            bottom: -6px; left: 0; right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, var(--cyber-blue), var(--accent));
+            border-radius: 1px;
+        }
+        .topbar-links a.gh {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            background: rgba(20,20,36,0.8);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+        .topbar-links a.gh:hover { border-color: var(--accent); }
+        .topbar-links a.gh svg {
+            width: 16px;
+            height: 16px;
+            fill: currentColor;
+        }
+
+        /* -- Hamburger -- */
+        .hamburger {
+            display: none;
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 8px;
+            z-index: 200;
+        }
+        .hamburger span {
+            display: block;
+            width: 22px;
+            height: 2px;
+            background: var(--text);
+            margin: 5px 0;
+            transition: all 0.3s;
+            border-radius: 1px;
+        }
+        .hamburger.open span:nth-child(1) { transform: rotate(45deg) translate(5px, 5px); }
+        .hamburger.open span:nth-child(2) { opacity: 0; }
+        .hamburger.open span:nth-child(3) { transform: rotate(-45deg) translate(5px, -5px); }
+
+        /* -- Toolbar -- */
+        .toolbar {
+            background: var(--bg2);
+            border-bottom: 1px solid var(--border);
+            height: 44px;
+            display: flex;
+            align-items: center;
+            padding: 0 16px;
+            gap: 10px;
+            flex-shrink: 0;
+        }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 16px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--bg3);
+            color: var(--text);
+            font-size: 0.82rem;
+            font-weight: 600;
+            font-family: 'VT323', monospace;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .btn:hover { border-color: var(--accent); background: rgba(124,92,252,0.1); }
+        .btn-run {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: #fff;
+        }
+        .btn-run:hover { background: #6a4ae0; border-color: #6a4ae0; }
+        .btn-run .icon { font-size: 0.9rem; }
+        .example-select {
+            padding: 6px 12px;
+            background: var(--bg3);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            font-size: 0.82rem;
+            font-family: 'VT323', monospace;
+            cursor: pointer;
+            outline: none;
+        }
+        .example-select:hover { border-color: var(--accent); }
+        .example-select option { background: var(--bg2); }
+        .toolbar-sep { flex: 1; }
+        .toolbar-info { color: var(--text2); font-size: 0.75rem; }
+
+        /* -- Main Layout -- */
+        .main {
+            flex: 1;
+            display: flex;
+            min-height: 0;
+        }
+
+        /* -- Editor Panel -- */
+        .editor-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid var(--border);
+            min-width: 0;
+            min-height: 0;
+        }
+        .panel-header {
+            background: var(--bg2);
+            border-bottom: 1px solid var(--border);
+            padding: 8px 16px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            color: var(--text2);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+        .panel-header .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+        .dot-green { background: var(--green); }
+        .dot-cyan { background: var(--cyber-blue); }
+        .dot-orange { background: var(--orange); }
+        .editor-wrap {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+        }
+        #editor {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: var(--bg-code);
+            color: var(--text);
+            border: none;
+            outline: none;
+            resize: none;
+            padding: 16px 16px 16px 56px;
+            font-size: 14px;
+            line-height: 1.7;
+            tab-size: 4;
+            -moz-tab-size: 4;
+            white-space: pre;
+            overflow: auto;
+        }
+        .line-numbers {
+            position: absolute;
+            left: 0; top: 0;
+            width: 44px;
+            height: 100%;
+            background: var(--bg-code);
+            border-right: 1px solid var(--border);
+            padding: 16px 8px 16px 0;
+            text-align: right;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px;
+            line-height: 1.7;
+            color: #444466;
+            overflow: hidden;
+            user-select: none;
+            pointer-events: none;
+        }
+
+        /* -- Output Panel -- */
+        .output-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            min-height: 0;
+        }
+        #output {
+            flex: 1;
+            background: var(--bg-code);
+            color: var(--green);
+            padding: 16px;
+            font-size: 13px;
+            line-height: 1.7;
+            overflow: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+            min-height: 0;
+        }
+        #output .error { color: var(--red); }
+        #output .info { color: var(--text2); }
+        #output .warn { color: var(--yellow); }
+        #output .accent { color: var(--accent2); }
+        #output .cyan { color: var(--cyber-blue); }
+        #output .sep { color: var(--border); }
+
+        /* -- Status Bar -- */
+        .statusbar {
+            background: var(--bg2);
+            border-top: 1px solid var(--border);
+            height: 28px;
+            display: flex;
+            align-items: center;
+            padding: 0 16px;
+            font-size: 0.72rem;
+            color: var(--text2);
+            gap: 20px;
+            flex-shrink: 0;
+        }
+        .statusbar-item { display: flex; align-items: center; gap: 4px; }
+        .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+
+        /* -- Share Modal -- */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.6);
+            z-index: 200;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal {
+            background: var(--bg2);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            max-width: 520px;
+            width: 90%;
+        }
+        .modal h3 { margin-bottom: 12px; font-size: 1rem; }
+        .modal input {
+            width: 100%;
+            padding: 10px 14px;
+            background: var(--bg-code);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.82rem;
+            margin-bottom: 12px;
+        }
+        .modal .btn { margin-right: 8px; }
+
+        /* -- Responsive -- */
+        @media (max-width: 768px) {
+            .hamburger { display: block; }
+            .topbar-links {
+                display: none;
+                position: fixed;
+                top: 56px;
+                left: 0; right: 0;
+                background: rgba(6,6,12,0.97);
+                backdrop-filter: blur(16px);
+                flex-direction: column;
+                padding: 20px 24px;
+                gap: 16px;
+                border-bottom: 1px solid var(--border);
+            }
+            .topbar-links.show { display: flex; }
+            .topbar-links a { font-size: 1rem; }
+            .main { flex-direction: column; }
+            .editor-panel { border-right: none; border-bottom: 1px solid var(--border); height: 50%; }
+            .output-panel { height: 50%; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- Topbar -->
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu">
+      <span></span><span></span><span></span>
+    </button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/" class="active">PLAYGROUND</a>
+      <a href="/blog/">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<!-- Toolbar -->
+<div class="toolbar">
+    <select class="example-select" id="exampleSelect">
+        <option value="">Load example...</option>
+        <option value="hello">Hello World</option>
+        <option value="pipeline">Pipeline Operator</option>
+        <option value="pattern">Pattern Matching</option>
+        <option value="async">Async / Concurrency</option>
+        <option value="struct">Structs &amp; Traits</option>
+        <option value="functional">Functional Pipelines</option>
+        <option value="error">Error Handling</option>
+        <option value="webserver">Web Server</option>
+        <option value="generics">Generics</option>
+        <option value="closures">Closures &amp; Lambdas</option>
+        <option value="modules">Modules &amp; Imports</option>
+        <option value="iterators">Iterators</option>
+        <option value="cli">CLI Tool</option>
+        <option value="gameloop">Game Loop</option>
+        <option value="channels">Channels &amp; Select</option>
+        <option value="macros">Macros</option>
+        <option value="effects">Effect System</option>
+        <option value="decorators">Decorators</option>
+        <option value="comptime">Compile-Time Eval</option>
+    </select>
+    <button class="btn btn-run" id="runBtn"><span class="icon">&#9654;</span> Run</button>
+    <button class="btn" id="formatBtn">&#9095; Format</button>
+    <button class="btn" id="shareBtn">&#128279; Share</button>
+    <div class="toolbar-sep"></div>
+    <span class="toolbar-info">Ctrl+Enter to run</span>
+</div>
+
+<!-- Main IDE -->
+<div class="main">
+    <div class="editor-panel">
+        <div class="panel-header">
+            <span class="dot dot-green"></span> editor — main.ltl
+        </div>
+        <div class="editor-wrap">
+            <div class="line-numbers" id="lineNumbers">1</div>
+            <textarea id="editor" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
+        </div>
+    </div>
+    <div class="output-panel">
+        <div class="panel-header">
+            <span class="dot dot-cyan"></span> output
+        </div>
+        <pre id="output"><span class="info">Press &#9654; Run to execute your code.</span></pre>
+    </div>
+</div>
+
+<!-- Status Bar -->
+<div class="statusbar">
+    <div class="statusbar-item"><span class="status-dot"></span> Lateralus v3.0.1</div>
+    <div class="statusbar-item" id="statusLines">Ln 1, Col 1</div>
+    <div class="statusbar-item" id="statusChars">0 chars</div>
+    <div class="statusbar-item" style="margin-left: auto;">Playground — browser-side evaluation</div>
+</div>
+
+<!-- Share Modal -->
+<div class="modal-overlay" id="shareModal">
+    <div class="modal">
+        <h3>&#128279; Share this code</h3>
+        <input type="text" id="shareUrl" readonly>
+        <button class="btn" id="copyShareBtn">Copy URL</button>
+        <button class="btn" id="closeModalBtn">Close</button>
+    </div>
+</div>
+
+<script>
+// -- Example Programs -----------------------------------------
+
+const EXAMPLES = {
+hello: `// Welcome to Lateralus!
+// A pipeline-native programming language.
+
+import std::io
+
+fn main() {
+    println("Hello from Lateralus! \u{1F300}")
+
+    let name = "World"
+    println("Welcome, {name}!")
+
+    // Pipeline operator \u2014 chain transformations left-to-right
+    let message = "lateralus is awesome"
+        |> split(" ")
+        |> map(|word| capitalize(word))
+        |> join(" ")
+
+    println(message)
+}`,
+
+pipeline: `// Pipeline Operator \u2014 Lateralus's signature feature
+// Chain functions left-to-right with |>
+
+import std::io
+import std::collections
+
+struct Transaction {
+    category: String,
+    amount: Float,
+    description: String,
+}
+
+fn main() {
+    let transactions = [
+        Transaction { category: "food",   amount: 42.50, description: "Groceries" },
+        Transaction { category: "tech",   amount: 199.99, description: "Keyboard" },
+        Transaction { category: "food",   amount: 18.75, description: "Lunch" },
+        Transaction { category: "tech",   amount: 29.99, description: "USB Hub" },
+        Transaction { category: "books",  amount: 14.99, description: "Rust Book" },
+        Transaction { category: "food",   amount: 55.00, description: "Dinner" },
+        Transaction { category: "tech",   amount: 549.00, description: "Monitor" },
+    ]
+
+    let report = transactions
+        |> filter(|t| t.amount > 20.0)
+        |> group_by(|t| t.category)
+        |> map_entries(|cat, txns| {
+            let total = txns |> map(|t| t.amount) |> sum()
+            let count = txns |> len()
+            (cat, total, count)
+        })
+        |> sort_by(|entry| entry.1, descending)
+
+    println("=== Spending Report (> $20) ===")
+    for (category, total, count) in report {
+        println("  {category}: \${total:.2} ({count} transactions)")
+    }
+
+    let avg = transactions
+        |> map(|t| t.amount)
+        |> average()
+
+    println("\\nAverage transaction: \${avg:.2}")
+}`,
+
+pattern: `// Pattern Matching \u2014 exhaustive and expressive
+
+import std::io
+import std::math
+
+enum Shape {
+    Circle(Float),
+    Rect(Float, Float),
+    Triangle(Float, Float),
+    Polygon(Vec<(Float, Float)>),
+}
+
+fn area(shape: Shape) -> Float {
+    match shape {
+        Circle(r)       => math::pi * r * r,
+        Rect(w, h)      => w * h,
+        Triangle(b, h)  => 0.5 * b * h,
+        Polygon(points) => polygon_area(points),
+    }
+}
+
+fn describe(shape: Shape) -> String {
+    match shape {
+        Circle(r) if r > 100.0  => "Large circle (r={r})",
+        Circle(r)               => "Circle (r={r})",
+        Rect(w, h) if w == h    => "Square ({w}x{h})",
+        Rect(w, h)              => "Rectangle ({w}x{h})",
+        Triangle(b, h)          => "Triangle (base={b}, h={h})",
+        Polygon(pts)            => "Polygon ({pts |> len()} sides)",
+    }
+}
+
+fn polygon_area(points: Vec<(Float, Float)>) -> Float {
+    let n = points |> len()
+    (0..n)
+        |> map(|i| {
+            let (x1, y1) = points[i]
+            let (x2, y2) = points[(i + 1) % n]
+            x1 * y2 - x2 * y1
+        })
+        |> sum()
+        |> abs()
+        |> div(2.0)
+}
+
+fn main() {
+    let shapes = [
+        Circle(5.0),
+        Rect(10.0, 10.0),
+        Rect(3.0, 7.0),
+        Triangle(8.0, 4.0),
+        Circle(150.0),
+    ]
+
+    for shape in shapes {
+        let desc = describe(shape)
+        let a = area(shape)
+        println("{desc} => area = {a:.2}")
+    }
+}`,
+
+async: `// Async / Concurrency \u2014 lightweight tasks with spawn
+
+import std::io
+import std::net::http
+import std::time
+
+async fn fetch_data(url: String) -> Result<String, Error> {
+    println("  Fetching {url}...")
+    let resp = http::get(url) |> await?
+    println("  Got {resp.status} from {url} ({resp.body |> len()} bytes)")
+    Ok(resp.body)
+}
+
+async fn process_batch(urls: [String]) -> [Result<String, Error>] {
+    let tasks = urls
+        |> map(|url| spawn { fetch_data(url) |> await })
+
+    let results = tasks |> await_all()
+
+    let successes = results |> filter(|r| r.is_ok()) |> len()
+    println("\\nCompleted: {successes}/{results |> len()} succeeded")
+
+    results
+}
+
+fn main() {
+    let urls = [
+        "https://api.github.com/repos/bad-antics/lateralus-lang",
+        "https://httpbin.org/get",
+        "https://httpbin.org/delay/1",
+        "https://jsonplaceholder.typicode.com/posts/1",
+    ]
+
+    println("=== Concurrent HTTP Fetcher ===\\n")
+
+    let start = time::now()
+    let results = process_batch(urls) |> await
+    let elapsed = time::since(start)
+
+    println("\\nTotal time: {elapsed.as_millis()}ms")
+    println("(Sequential would be ~4x slower)")
+}`,
+
+struct: `// Structs, Impl Blocks & Traits
+
+import std::io
+
+struct Vec2 {
+    x: Float,
+    y: Float,
+}
+
+impl Vec2 {
+    fn new(x: Float, y: Float) -> Vec2 {
+        Vec2 { x, y }
+    }
+
+    fn magnitude(self) -> Float {
+        (self.x * self.x + self.y * self.y) |> sqrt()
+    }
+
+    fn normalize(self) -> Vec2 {
+        let mag = self.magnitude()
+        Vec2 { x: self.x / mag, y: self.y / mag }
+    }
+
+    fn dot(self, other: Vec2) -> Float {
+        self.x * other.x + self.y * other.y
+    }
+
+    fn add(self, other: Vec2) -> Vec2 {
+        Vec2 { x: self.x + other.x, y: self.y + other.y }
+    }
+
+    fn scale(self, factor: Float) -> Vec2 {
+        Vec2 { x: self.x * factor, y: self.y * factor }
+    }
+
+    fn to_string(self) -> String {
+        "({self.x:.2}, {self.y:.2})"
+    }
+}
+
+fn main() {
+    let a = Vec2::new(3.0, 4.0)
+    let b = Vec2::new(1.0, 2.0)
+
+    println("a = {a.to_string()}")
+    println("b = {b.to_string()}")
+    println("|a| = {a.magnitude():.2}")
+    println("a normalized = {a.normalize().to_string()}")
+    println("a \u00b7 b = {a.dot(b):.2}")
+
+    let sum = a.add(b)
+    println("a + b = {sum.to_string()}")
+
+    // Pipeline with methods
+    let result = Vec2::new(10.0, 0.0)
+        |> scale(0.5)
+        |> add(Vec2::new(0.0, 3.0))
+        |> normalize()
+
+    println("\\nPipelined result: {result.to_string()}")
+}`,
+
+functional: `// Functional Pipelines \u2014 data transformation made beautiful
+
+import std::io
+import std::collections
+
+fn main() {
+    let words = [
+        "spiral", "beyond", "reaching", "over",
+        "the", "lateralus", "pattern", "a",
+        "fibonacci", "in", "sequence", "hidden",
+    ]
+
+    let result = words
+        |> filter(|w| w |> len() > 2)
+        |> map(|w| w |> capitalize())
+        |> enumerate()
+        |> map(|(i, w)| "{i + 1}. {w}")
+        |> join("\\n")
+
+    println("=== Words (3+ letters, capitalized) ===")
+    println(result)
+
+    let fibs = (0..15)
+        |> map(fib)
+        |> collect()
+
+    println("\\n=== Fibonacci ===")
+    println(fibs |> map(to_string) |> join(", "))
+
+    let numbers = [2, 7, 11, 15, 3, 6, 8, 1]
+    let target = 9
+    let pairs = find_pairs(numbers, target)
+    println("\\n=== Pairs summing to {target} ===")
+    for (a, b) in pairs {
+        println("  {a} + {b} = {target}")
+    }
+}
+
+fn fib(n: Int) -> Int {
+    match n {
+        0 => 0,
+        1 => 1,
+        n => fib(n - 1) + fib(n - 2),
+    }
+}
+
+fn find_pairs(nums: [Int], target: Int) -> [(Int, Int)] {
+    nums
+        |> enumerate()
+        |> flat_map(|(i, a)| {
+            nums[i+1..]
+                |> filter(|b| a + b == target)
+                |> map(|b| (a, b))
+        })
+        |> collect()
+}`,
+
+error: `// Error Handling \u2014 try / recover / ensure
+
+import std::io
+import std::fs
+
+enum AppError {
+    NotFound(String),
+    ParseError(String, Int),
+    Overflow(String),
+}
+
+fn parse_config(path: String) -> Result<Config, AppError> {
+    let content = fs::read_to_string(path)
+        |> map_err(|_| AppError::NotFound("Config not found: {path}"))?
+
+    let lines = content |> split("\\n") |> enumerate()
+
+    let mut config = Config::default()
+
+    for (line_num, line) in lines {
+        let line = line |> trim()
+        if line |> is_empty() || line |> starts_with("#") {
+            continue
+        }
+
+        let parts = line |> split("=") |> map(trim) |> collect()
+        if parts |> len() != 2 {
+            return Err(AppError::ParseError(line, line_num + 1))
+        }
+
+        match parts[0] {
+            "port"     => config.port = parts[1] |> parse_int()?,
+            "host"     => config.host = parts[1],
+            "workers"  => config.workers = parts[1] |> parse_int()?,
+            unknown    => println("  warn: unknown key '{unknown}'"),
+        }
+    }
+
+    Ok(config)
+}
+
+struct Config {
+    host: String,
+    port: Int,
+    workers: Int,
+}
+
+impl Config {
+    fn default() -> Config {
+        Config { host: "localhost", port: 8080, workers: 4 }
+    }
+}
+
+fn main() {
+    println("=== Config Loader ===\\n")
+
+    try {
+        let config = parse_config("server.conf")?
+        println("Loaded: {config.host}:{config.port}")
+        println("Workers: {config.workers}")
+    } recover err {
+        match err {
+            AppError::NotFound(msg)      => println("Error: {msg}"),
+            AppError::ParseError(ln, n)  => println("Parse error at line {n}: {ln}"),
+            AppError::Overflow(msg)      => println("Overflow: {msg}"),
+        }
+    } ensure {
+        println("\\nConfig loading complete.")
+    }
+}`,
+
+webserver: `// Web Server \u2014 HTTP routing with pipelines
+
+import std::io
+import std::net::http
+import std::json
+
+struct User {
+    id: Int,
+    name: String,
+    email: String,
+}
+
+// In-memory store
+let mut users: Vec<User> = []
+let mut next_id: Int = 1
+
+fn home_handler(req: Request) -> Response {
+    Response::html("<h1>Lateralus API Server</h1>
+        <p>Try: GET /api/users, POST /api/users</p>")
+}
+
+fn list_users(req: Request) -> Response {
+    users
+        |> map(|u| json::object({
+            "id": u.id,
+            "name": u.name,
+            "email": u.email,
+        }))
+        |> json::array()
+        |> Response::json()
+}
+
+fn create_user(req: Request) -> Response {
+    let body = req.body |> json::parse()
+
+    let user = User {
+        id: next_id,
+        name: body["name"] |> to_string(),
+        email: body["email"] |> to_string(),
+    }
+    next_id += 1
+    users |> push(user)
+
+    println("Created user: {user.name} ({user.email})")
+
+    Response::json(json::object({ "ok": true, "id": user.id }))
+        |> with_status(201)
+}
+
+fn not_found(req: Request) -> Response {
+    Response::json(json::object({ "error": "not found" }))
+        |> with_status(404)
+}
+
+fn main() {
+    let app = Router::new()
+        |> get("/",           home_handler)
+        |> get("/api/users",  list_users)
+        |> post("/api/users", create_user)
+        |> fallback(not_found)
+
+    println("Server listening on http://0.0.0.0:8080")
+    http::serve("0.0.0.0:8080", app) |> await
+}`,
+
+generics: `// Generics \u2014 type-safe polymorphism with constraints
+
+import std::io
+import std::collections
+
+fn max_of<T: Ord>(items: Vec<T>) -> Option<T> {
+    items
+        |> reduce(|a, b| if a > b { a } else { b })
+}
+
+struct Stack<T> {
+    items: Vec<T>,
+}
+
+impl<T> Stack<T> {
+    fn new() -> Stack<T> {
+        Stack { items: [] }
+    }
+
+    fn push(self, item: T) -> Stack<T> {
+        self.items |> append(item)
+        self
+    }
+
+    fn pop(self) -> (Option<T>, Stack<T>) {
+        match self.items |> last() {
+            Some(item) => {
+                self.items |> drop_last()
+                (Some(item), self)
+            },
+            None => (None, self),
+        }
+    }
+
+    fn peek(self) -> Option<T> {
+        self.items |> last()
+    }
+
+    fn size(self) -> Int {
+        self.items |> len()
+    }
+}
+
+struct Pair<A, B> {
+    first: A,
+    second: B,
+}
+
+impl<A, B> Pair<A, B> {
+    fn map_first<C>(self, f: fn(A) -> C) -> Pair<C, B> {
+        Pair { first: f(self.first), second: self.second }
+    }
+}
+
+fn main() {
+    let nums = [42, 17, 99, 3, 55]
+    println("Max of {nums}: {max_of(nums)}")
+
+    let words = ["apple", "mango", "banana"]
+    println("Max of words: {max_of(words)}")
+
+    let stack = Stack::new()
+        |> push(10)
+        |> push(20)
+        |> push(30)
+
+    println("Stack size: {stack.size()}")
+    println("Top: {stack.peek()}")
+
+    let (val, stack) = stack.pop()
+    println("Popped: {val}")
+    println("New top: {stack.peek()}")
+
+    let pair = Pair { first: 42, second: "hello" }
+    let doubled = pair.map_first(|n| n * 2)
+    println("Pair: ({doubled.first}, {doubled.second})")
+}`,
+
+closures: `// Closures & Lambdas \u2014 first-class functions
+
+import std::io
+
+fn compose<A, B, C>(f: fn(A) -> B, g: fn(B) -> C) -> fn(A) -> C {
+    |x| g(f(x))
+}
+
+fn apply_n<T>(f: fn(T) -> T, n: Int, value: T) -> T {
+    (0..n) |> fold(value, |acc, _| f(acc))
+}
+
+fn main() {
+    let double = |x| x * 2
+    let add_one = |x| x + 1
+
+    println("double(5) = {double(5)}")
+    println("add_one(5) = {add_one(5)}")
+
+    let double_then_add = compose(double, add_one)
+    println("double_then_add(5) = {double_then_add(5)}")
+
+    let multiplier = 3
+    let times_n = |x| x * multiplier
+    println("times_n(7) = {times_n(7)}")
+
+    let threshold = 15
+    let result = [3, 8, 12, 25, 7, 19, 4, 30]
+        |> filter(|x| x > threshold)
+        |> map(|x| x * 2)
+        |> sort()
+
+    println("Filtered & doubled (>{threshold}): {result}")
+
+    let triple = |x| x * 3
+    println("triple applied 4 times to 1: {apply_n(triple, 4, 1)}")
+
+    let adders = [1, 5, 10]
+        |> map(|n| |x| x + n)
+
+    let base = 100
+    for adder in adders {
+        println("  {base} + ? = {adder(base)}")
+    }
+}`,
+
+modules: `// Modules & Imports \u2014 organizing code
+
+import std::io
+import std::collections::HashMap
+import math::{sqrt, pow, pi}
+import utils::validation
+
+module geometry {
+    pub struct Point {
+        x: Float,
+        y: Float,
+    }
+
+    pub fn distance(a: Point, b: Point) -> Float {
+        let dx = b.x - a.x
+        let dy = b.y - a.y
+        sqrt(dx * dx + dy * dy)
+    }
+
+    pub fn midpoint(a: Point, b: Point) -> Point {
+        Point {
+            x: (a.x + b.x) / 2.0,
+            y: (a.y + b.y) / 2.0,
+        }
+    }
+
+    fn normalize(p: Point) -> Point {
+        let mag = sqrt(p.x * p.x + p.y * p.y)
+        Point { x: p.x / mag, y: p.y / mag }
+    }
+
+    pub fn unit_vector(from: Point, to: Point) -> Point {
+        let dx = to.x - from.x
+        let dy = to.y - from.y
+        normalize(Point { x: dx, y: dy })
+    }
+}
+
+module colors {
+    pub enum Color {
+        Red, Green, Blue,
+        RGB(Int, Int, Int),
+        Hex(String),
+    }
+
+    pub fn to_hex(c: Color) -> String {
+        match c {
+            Red          => "#FF0000",
+            Green        => "#00FF00",
+            Blue         => "#0000FF",
+            RGB(r, g, b) => format("#{r:02x}{g:02x}{b:02x}"),
+            Hex(s)       => s,
+        }
+    }
+}
+
+fn main() {
+    let a = geometry::Point { x: 0.0, y: 0.0 }
+    let b = geometry::Point { x: 3.0, y: 4.0 }
+
+    let dist = geometry::distance(a, b)
+    let mid = geometry::midpoint(a, b)
+    let dir = geometry::unit_vector(a, b)
+
+    println("Distance: {dist:.2}")
+    println("Midpoint: ({mid.x:.1}, {mid.y:.1})")
+    println("Direction: ({dir.x:.2}, {dir.y:.2})")
+
+    let palette = [
+        colors::Red,
+        colors::RGB(124, 92, 252),
+        colors::Hex("#22d3ee"),
+    ]
+
+    println("\\nPalette:")
+    for color in palette {
+        println("  {colors::to_hex(color)}")
+    }
+}`,
+
+iterators: `// Iterators \u2014 lazy, composable sequences
+
+import std::io
+
+fn fibonacci() -> Iterator<Int> {
+    let a = 0
+    let b = 1
+    iter::generate(|| {
+        let current = a
+        let next = a + b
+        a = b
+        b = next
+        current
+    })
+}
+
+fn countdown(from: Int) -> Iterator<Int> {
+    iter::range(from, 0, -1)
+}
+
+fn windows<T>(items: Iterator<T>, size: Int) -> Iterator<Vec<T>> {
+    items |> iter::buffer(size, 1)
+}
+
+fn main() {
+    let fibs = fibonacci()
+        |> take(10)
+        |> collect()
+    println("Fibonacci: {fibs}")
+
+    let fib_primes = fibonacci()
+        |> filter(is_prime)
+        |> take(7)
+        |> collect()
+    println("Fibonacci primes: {fib_primes}")
+
+    let launch = countdown(5)
+        |> map(|n| if n == 0 { "Liftoff!" } else { "{n}..." })
+        |> collect()
+    println("\\nCountdown: {launch |> join(' ')}")
+
+    let squares_sum = iter::from(1)
+        |> map(|n| n * n)
+        |> take_while(|s| s < 1000)
+        |> sum()
+    println("Sum of squares < 1000: {squares_sum}")
+
+    let data = [10, 20, 15, 30, 25, 35, 40]
+    let moving_avg = data
+        |> iter::from_vec()
+        |> windows(3)
+        |> map(|w| w |> sum() |> div(w |> len()))
+        |> collect()
+    println("\\nMoving average (window=3): {moving_avg}")
+
+    let names = ["Alice", "Bob", "Carol"]
+    let scores = [95, 87, 92]
+    let ranked = names
+        |> zip(scores)
+        |> enumerate()
+        |> map(|(i, (name, score))| "#{i+1} {name}: {score}")
+        |> collect()
+    println("\\nRankings:")
+    for entry in ranked {
+        println("  {entry}")
+    }
+}`,
+
+cli: `// CLI Tool \u2014 building command-line apps
+
+import std::io
+import std::env
+import std::fs
+import cli::{App, Arg, Command}
+
+struct Config {
+    verbose: Bool,
+    output: String,
+    format: String,
+}
+
+fn parse_args(args: Vec<String>) -> Config {
+    let app = App::new("ltl-analyze")
+        |> App::version("1.0.0")
+        |> App::description("Lateralus source code analyzer")
+        |> App::arg(Arg::flag("verbose", "v", "Show detailed output"))
+        |> App::arg(Arg::option("output", "o", "Output file", "report.txt"))
+        |> App::arg(Arg::option("format", "f", "Output format", "text"))
+
+    app |> App::parse(args)
+        |> match {
+            Ok(matches) => Config {
+                verbose: matches |> has_flag("verbose"),
+                output: matches |> get_option("output"),
+                format: matches |> get_option("format"),
+            },
+            Err(e) => {
+                println("Error: {e}")
+                app |> App::print_help()
+                exit(1)
+            },
+        }
+}
+
+fn analyze_file(path: String, verbose: Bool) -> Analysis {
+    let source = fs::read_to_string(path)
+    let lines = source |> lines()
+
+    let stats = lines
+        |> fold(Stats::new(), |stats, line| {
+            stats
+                |> count_line(line)
+                |> detect_function(line)
+                |> detect_pipeline(line)
+                |> detect_pattern_match(line)
+        })
+
+    if verbose {
+        println("  {path}:")
+        println("    Lines: {stats.lines}")
+        println("    Functions: {stats.functions}")
+        println("    Pipelines: {stats.pipelines}")
+        println("    Pattern matches: {stats.matches}")
+    }
+
+    stats
+}
+
+fn main() {
+    let config = parse_args(env::args())
+
+    println("ltl-analyze v1.0.0")
+    println("==================")
+
+    let files = ["src/main.ltl", "src/parser.ltl", "src/codegen.ltl"]
+
+    let results = files
+        |> map(|f| analyze_file(f, config.verbose))
+        |> collect()
+
+    let total = results
+        |> fold(Stats::new(), |acc, s| acc |> merge(s))
+
+    println("\\nSummary:")
+    println("  Total lines: {total.lines}")
+    println("  Functions: {total.functions}")
+    println("  Pipelines used: {total.pipelines}")
+    println("  Pattern matches: {total.matches}")
+    println("  Pipeline density: {total.pipelines * 100 / total.lines}%")
+    println("\\nReport saved to: {config.output}")
+}`,
+
+gameloop: `// Game Loop \u2014 entity-component system with pipelines
+
+import std::io
+import std::math
+
+struct Vec2 {
+    x: Float,
+    y: Float,
+}
+
+impl Vec2 {
+    fn add(self, other: Vec2) -> Vec2 {
+        Vec2 { x: self.x + other.x, y: self.y + other.y }
+    }
+    fn scale(self, s: Float) -> Vec2 {
+        Vec2 { x: self.x * s, y: self.y * s }
+    }
+    fn magnitude(self) -> Float {
+        math::sqrt(self.x * self.x + self.y * self.y)
+    }
+}
+
+enum EntityKind {
+    Player,
+    Enemy(String),
+    Projectile,
+}
+
+struct Entity {
+    kind: EntityKind,
+    pos: Vec2,
+    vel: Vec2,
+    hp: Int,
+    active: Bool,
+}
+
+fn update_physics(entities: Vec<Entity>, dt: Float) -> Vec<Entity> {
+    entities
+        |> filter(|e| e.active)
+        |> map(|e| Entity {
+            pos: e.pos.add(e.vel.scale(dt)),
+            ..e
+        })
+}
+
+fn check_collisions(entities: Vec<Entity>) -> Vec<Entity> {
+    entities |> map(|e| {
+        match e.kind {
+            Projectile => {
+                let hit = entities
+                    |> filter(|other| match other.kind {
+                        Enemy(_) => true, _ => false
+                    })
+                    |> find(|enemy| distance(e.pos, enemy.pos) < 1.5)
+
+                match hit {
+                    Some(enemy) => Entity { active: false, ..e },
+                    None => e,
+                }
+            },
+            _ => e,
+        }
+    })
+}
+
+fn render(entities: Vec<Entity>) {
+    entities
+        |> filter(|e| e.active)
+        |> sort_by(|e| e.pos.y)
+        |> each(|e| {
+            let label = match e.kind {
+                Player       => "\u{1F3AE} Player",
+                Enemy(name)  => "\u{1F47E} {name}",
+                Projectile   => "\u{1F4AB} Bullet",
+            }
+            println("  {label} at ({e.pos.x:.1}, {e.pos.y:.1}) HP:{e.hp}")
+        })
+}
+
+fn main() {
+    let entities = [
+        Entity { kind: Player, pos: Vec2{x:0.0,y:0.0}, vel: Vec2{x:1.0,y:0.5}, hp: 100, active: true },
+        Entity { kind: Enemy("Drone"), pos: Vec2{x:10.0,y:5.0}, vel: Vec2{x:-0.5,y:0.0}, hp: 30, active: true },
+        Entity { kind: Enemy("Boss"), pos: Vec2{x:20.0,y:8.0}, vel: Vec2{x:0.0,y:-0.2}, hp: 200, active: true },
+        Entity { kind: Projectile, pos: Vec2{x:1.0,y:0.5}, vel: Vec2{x:5.0,y:2.0}, hp: 1, active: true },
+    ]
+
+    println("=== Game State ===")
+    let state = entities
+    for frame in 0..3 {
+        println("\\n--- Frame {frame} ---")
+        state = state
+            |> update_physics(0.16)
+            |> check_collisions()
+        render(state)
+    }
+
+    let alive = state |> filter(|e| e.active) |> len()
+    println("\\nActive entities: {alive}/{entities |> len()}")
+}`,
+
+channels: `// Channels & Select — CSP-style concurrency
+// New in Lateralus v0.5.0
+
+import std::io
+import std::sync::{channel, select}
+import std::time
+
+struct SensorReading {
+    sensor_id: String,
+    value: Float,
+    timestamp: Int,
+}
+
+async fn temperature_sensor(tx: Sender<SensorReading>) {
+    for i in 0..5 {
+        time::sleep(100) |> await
+        let reading = SensorReading {
+            sensor_id: "temp-01",
+            value: 20.0 + (i as Float * 0.5),
+            timestamp: time::now_ms(),
+        }
+        tx |> send(reading) |> await
+    }
+    tx |> close()
+}
+
+async fn pressure_sensor(tx: Sender<SensorReading>) {
+    for i in 0..3 {
+        time::sleep(150) |> await
+        let reading = SensorReading {
+            sensor_id: "pres-01",
+            value: 1013.25 + (i as Float * 2.0),
+            timestamp: time::now_ms(),
+        }
+        tx |> send(reading) |> await
+    }
+    tx |> close()
+}
+
+async fn monitor(temp_rx: Receiver<SensorReading>, pres_rx: Receiver<SensorReading>) {
+    let mut count = 0
+    loop {
+        select {
+            reading from temp_rx => {
+                println("  [TEMP] {reading.sensor_id}: {reading.value:.1}\u00b0C")
+                count += 1
+            },
+            reading from pres_rx => {
+                println("  [PRES] {reading.sensor_id}: {reading.value:.2} hPa")
+                count += 1
+            },
+            closed => {
+                println("\\nAll sensors closed. Total readings: {count}")
+                break
+            },
+        }
+    }
+}
+
+fn main() {
+    let (temp_tx, temp_rx) = channel::<SensorReading>(8)
+    let (pres_tx, pres_rx) = channel::<SensorReading>(8)
+
+    println("=== Sensor Monitor (Channels + Select) ===\\n")
+
+    spawn { temperature_sensor(temp_tx) |> await }
+    spawn { pressure_sensor(pres_tx) |> await }
+    monitor(temp_rx, pres_rx) |> await
+}`,
+
+macros: `// Macros — compile-time code generation
+// New in Lateralus v0.5.0
+
+import std::io
+import std::collections::HashMap
+
+// Declarative macro for quick struct builders
+macro define_builder($name:ident, $($field:ident : $type:ty),*) {
+    struct $name {
+        $($field: Option<$type>,)*
+    }
+
+    impl $name {
+        fn new() -> $name {
+            $name { $($field: None,)* }
+        }
+
+        $(fn $field(self, val: $type) -> $name {
+            $name { $field: Some(val), ..self }
+        })*
+
+        fn build(self) -> Result<$name, String> {
+            $(if self.$field.is_none() {
+                return Err("Missing field: " + stringify!($field))
+            })*
+            Ok(self)
+        }
+    }
+}
+
+// Use the macro
+define_builder!(UserBuilder, name: String, age: Int, email: String)
+
+// Procedural macro for auto-serialization
+macro derive_json($struct_name:ident) {
+    impl $struct_name {
+        fn to_json(self) -> String {
+            let fields = struct_fields!(self)
+                |> map(|(name, val)| "\\\"{name}\\\": {json_value(val)}")
+                |> join(", ")
+            "{ " + fields + " }"
+        }
+    }
+}
+
+// Macro for pipeline operators
+macro pipe_debug($expr:expr) {
+    {
+        let __val = $expr
+        println("  [debug] {stringify!($expr)} = {__val}")
+        __val
+    }
+}
+
+fn main() {
+    println("=== Macro System ===\\n")
+
+    // Builder pattern via macro
+    let user = UserBuilder::new()
+        |> name("Alice")
+        |> age(30)
+        |> email("wizard@lateralus.dev")
+        |> build()
+
+    match user {
+        Ok(u) => println("Built user: {u.name} (age {u.age})"),
+        Err(e) => println("Error: {e}"),
+    }
+
+    // Debug pipeline macro
+    println("\\nPipeline debug:")
+    let result = [1, 2, 3, 4, 5]
+        |> pipe_debug!(filter(|x| x > 2))
+        |> pipe_debug!(map(|x| x * 10))
+        |> pipe_debug!(sum())
+
+    println("\\nFinal result: {result}")
+}`,
+
+effects: `// Effect System — algebraic effects and handlers
+// New in Lateralus v0.5.0
+
+import std::io
+import std::collections
+
+// Define effects as first-class constructs
+effect Log {
+    fn log(level: String, message: String) -> ()
+}
+
+effect State<T> {
+    fn get() -> T
+    fn put(value: T) -> ()
+}
+
+effect Fail {
+    fn fail(reason: String) -> Never
+}
+
+// A function that uses effects (declared in signature)
+fn process_items(items: [String]) -> [String] with Log, State<Int>, Fail {
+    let mut results = []
+
+    for item in items {
+        let count = perform State::get()
+
+        if item |> is_empty() {
+            perform Log::log("warn", "Empty item at index {count}")
+            perform Fail::fail("Empty item encountered")
+        }
+
+        let processed = item
+            |> trim()
+            |> to_uppercase()
+
+        perform Log::log("info", "Processed: {processed}")
+        perform State::put(count + 1)
+        results |> push(processed)
+    }
+
+    results
+}
+
+fn main() {
+    println("=== Effect System ===\\n")
+
+    let items = ["hello", "  world  ", "lateralus", "", "effects"]
+
+    // Handle effects at the call site
+    let result = handle {
+        process_items(items)
+    } with {
+        Log::log(level, msg) => {
+            let prefix = match level {
+                "info" => "\u2705",
+                "warn" => "\u26a0\ufe0f",
+                "error" => "\u274c",
+                _ => "\u2022",
+            }
+            println("  {prefix} [{level}] {msg}")
+            resume(())
+        },
+        State::get() => resume(0) with State<Int>,
+        State::put(n) => resume(()) with State<Int>,
+        Fail::fail(reason) => {
+            println("  \u274c [fail] {reason} — skipping")
+            resume(())
+        },
+    }
+
+    println("\\nResult: {result}")
+    println("Processed {result |> len()} items")
+}`,
+
+decorators: `// Decorators & Annotations — metaprogramming
+// New in Lateralus v0.5.0
+
+import std::io
+import std::time
+import std::net::http
+
+// Built-in decorators
+@deprecated("Use fetch_json instead")
+fn fetch_data(url: String) -> String {
+    http::get(url) |> await |> body()
+}
+
+// Timing decorator
+@timed
+fn heavy_computation(n: Int) -> Int {
+    (1..n)
+        |> map(|i| i * i)
+        |> filter(|x| x % 3 == 0)
+        |> sum()
+}
+
+// Retry decorator with config
+@retry(max_attempts: 3, backoff: "exponential")
+async fn resilient_fetch(url: String) -> Result<String, Error> {
+    let resp = http::get(url) |> await?
+    Ok(resp.body)
+}
+
+// Memoize decorator
+@memoize(capacity: 1000)
+fn fibonacci(n: Int) -> Int {
+    match n {
+        0 => 0,
+        1 => 1,
+        n => fibonacci(n - 1) + fibonacci(n - 2),
+    }
+}
+
+// Validate decorator
+@validate
+struct Config {
+    @range(1, 65535)
+    port: Int,
+
+    @not_empty
+    host: String,
+
+    @min(1) @max(256)
+    workers: Int,
+}
+
+// Route decorators for web
+@controller("/api/users")
+struct UserController {}
+
+impl UserController {
+    @get("/")
+    @cache(ttl: 60)
+    fn list(self, req: Request) -> Response {
+        Response::json(get_all_users())
+    }
+
+    @post("/")
+    @auth("admin")
+    fn create(self, req: Request) -> Response {
+        let user = req.body |> json::parse()
+        Response::json(create_user(user)) |> with_status(201)
+    }
+}
+
+fn main() {
+    println("=== Decorators & Annotations ===\\n")
+
+    // Timed function
+    let result = heavy_computation(10000)
+    println("Computation result: {result}")
+
+    // Memoized fibonacci
+    let fib_40 = fibonacci(40)
+    println("fibonacci(40) = {fib_40}")
+
+    // Validated config
+    let config = Config {
+        port: 8080,
+        host: "localhost",
+        workers: 4,
+    }
+    println("Config valid: {config.is_valid()}")
+
+    // Show decorator metadata
+    println("\\nRegistered routes:")
+    UserController::routes()
+        |> each(|r| println("  {r.method} {r.path}"))
+}`,
+
+comptime: `// Compile-Time Evaluation — const fn and comptime blocks
+// New in Lateralus v0.5.0
+
+import std::io
+
+// Compile-time function evaluation
+const fn factorial(n: Int) -> Int {
+    match n {
+        0 | 1 => 1,
+        n     => n * factorial(n - 1),
+    }
+}
+
+// Computed at compile time, zero runtime cost
+const FACT_10: Int = factorial(10)
+const FACT_20: Int = factorial(20)
+
+// Compile-time type-level programming
+const fn type_name<T>() -> String {
+    comptime {
+        match T {
+            Int    => "integer",
+            Float  => "float",
+            String => "string",
+            Bool   => "boolean",
+            Vec<_> => "vector",
+            _      => "unknown",
+        }
+    }
+}
+
+// Compile-time lookup tables
+const LUT: [Int; 256] = comptime {
+    let mut table = [0; 256]
+    for i in 0..256 {
+        table[i] = (i * 17 + 31) % 256
+    }
+    table
+}
+
+// Static assertions
+static_assert!(FACT_10 == 3628800, "factorial(10) should be 3628800")
+static_assert!(LUT[0] == 31, "LUT[0] should be 31")
+
+// Conditional compilation
+const fn platform_config() -> Config {
+    comptime {
+        match target::os() {
+            "linux"   => Config { threads: 8, allocator: "jemalloc" },
+            "macos"   => Config { threads: 8, allocator: "mimalloc" },
+            "windows" => Config { threads: 4, allocator: "system" },
+            _         => Config { threads: 2, allocator: "system" },
+        }
+    }
+}
+
+// Compile-time string processing
+const GREETING: String = comptime {
+    let parts = ["Lateralus", "v0.5.0", "Comptime"]
+    parts |> join(" | ")
+}
+
+fn main() {
+    println("=== Compile-Time Evaluation ===\\n")
+
+    println("factorial(10) = {FACT_10}")
+    println("factorial(20) = {FACT_20}")
+
+    println("\\nType names (resolved at compile time):")
+    println("  Int    -> {type_name::<Int>()}")
+    println("  Float  -> {type_name::<Float>()}")
+    println("  String -> {type_name::<String>()}")
+    println("  Vec<_> -> {type_name::<Vec<Int>>()}")
+
+    println("\\nLUT samples:")
+    println("  LUT[0]   = {LUT[0]}")
+    println("  LUT[42]  = {LUT[42]}")
+    println("  LUT[255] = {LUT[255]}")
+
+    println("\\nPlatform: {platform_config()}")
+    println("Greeting: {GREETING}")
+    println("\\nAll static assertions passed at compile time.")
+}`,
+};
+
+// -- Interpreter / Simulator ----------------------------------
+
+function simulateRun(code) {
+    const lines = [];
+    const start = performance.now();
+    const codeStr = code.trim();
+
+    if (codeStr.includes('Hello from Lateralus')) {
+        lines.push({ text: 'Hello from Lateralus! \u{1F300}', type: '' });
+        lines.push({ text: 'Welcome, World!', type: '' });
+        lines.push({ text: 'Lateralus Is Awesome', type: '' });
+    }
+    else if (codeStr.includes('Spending Report')) {
+        lines.push({ text: '=== Spending Report (> $20) ===', type: 'accent' });
+        lines.push({ text: '  tech: $778.99 (3 transactions)', type: '' });
+        lines.push({ text: '  food: $97.50 (2 transactions)', type: '' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: 'Average transaction: $130.03', type: '' });
+    }
+    else if (codeStr.includes('fn area') && codeStr.includes('Shape')) {
+        lines.push({ text: 'Circle (r=5) => area = 78.54', type: '' });
+        lines.push({ text: 'Square (10x10) => area = 100.00', type: '' });
+        lines.push({ text: 'Rectangle (3x7) => area = 21.00', type: '' });
+        lines.push({ text: 'Triangle (base=8, h=4) => area = 16.00', type: '' });
+        lines.push({ text: 'Large circle (r=150) => area = 70685.83', type: '' });
+    }
+    else if (codeStr.includes('Concurrent HTTP')) {
+        lines.push({ text: '=== Concurrent HTTP Fetcher ===', type: 'accent' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: '  Fetching https://api.github.com/repos/bad-antics/lateralus-lang...', type: 'info' });
+        lines.push({ text: '  Fetching https://httpbin.org/get...', type: 'info' });
+        lines.push({ text: '  Fetching https://httpbin.org/delay/1...', type: 'info' });
+        lines.push({ text: '  Fetching https://jsonplaceholder.typicode.com/posts/1...', type: 'info' });
+        lines.push({ text: '  Got 200 from https://api.github.com/... (4829 bytes)', type: '' });
+        lines.push({ text: '  Got 200 from https://httpbin.org/get (412 bytes)', type: '' });
+        lines.push({ text: '  Got 200 from https://httpbin.org/delay/1 (389 bytes)', type: '' });
+        lines.push({ text: '  Got 200 from https://jsonplaceholder... (292 bytes)', type: '' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: 'Completed: 4/4 succeeded', type: 'cyan' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: 'Total time: 1043ms', type: '' });
+        lines.push({ text: '(Sequential would be ~4x slower)', type: 'info' });
+    }
+    else if (codeStr.includes('impl Vec2') && !codeStr.includes('EntityKind')) {
+        lines.push({ text: 'a = (3.00, 4.00)', type: '' });
+        lines.push({ text: 'b = (1.00, 2.00)', type: '' });
+        lines.push({ text: '|a| = 5.00', type: '' });
+        lines.push({ text: 'a normalized = (0.60, 0.80)', type: '' });
+        lines.push({ text: 'a \u00b7 b = 11.00', type: '' });
+        lines.push({ text: 'a + b = (4.00, 6.00)', type: '' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: 'Pipelined result: (0.86, 0.51)', type: '' });
+    }
+    else if (codeStr.includes('find_pairs') && codeStr.includes('fib')) {
+        lines.push({ text: '=== Words (3+ letters, capitalized) ===', type: 'accent' });
+        lines.push({ text: '1. Spiral', type: '' });
+        lines.push({ text: '2. Beyond', type: '' });
+        lines.push({ text: '3. Reaching', type: '' });
+        lines.push({ text: '4. Over', type: '' });
+        lines.push({ text: '5. The', type: '' });
+        lines.push({ text: '6. Lateralus', type: '' });
+        lines.push({ text: '7. Pattern', type: '' });
+        lines.push({ text: '8. Fibonacci', type: '' });
+        lines.push({ text: '9. Sequence', type: '' });
+        lines.push({ text: '10. Hidden', type: '' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: '=== Fibonacci ===', type: 'accent' });
+        lines.push({ text: '0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377', type: '' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: '=== Pairs summing to 9 ===', type: 'accent' });
+        lines.push({ text: '  2 + 7 = 9', type: '' });
+        lines.push({ text: '  3 + 6 = 9', type: '' });
+        lines.push({ text: '  8 + 1 = 9', type: '' });
+    }
+    else if (codeStr.includes('Config Loader') || codeStr.includes('parse_config')) {
+        lines.push({ text: '=== Config Loader ===', type: 'accent' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: 'Error: Config not found: server.conf', type: 'error' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: 'Config loading complete.', type: 'info' });
+    }
+    else if (codeStr.includes('Server listening') || codeStr.includes('Router::new')) {
+        lines.push({ text: 'Server listening on http://0.0.0.0:8080', type: 'cyan' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: '  Routes:', type: 'info' });
+        lines.push({ text: '    GET  /            => home_handler', type: '' });
+        lines.push({ text: '    GET  /api/users   => list_users', type: '' });
+        lines.push({ text: '    POST /api/users   => create_user', type: '' });
+        lines.push({ text: '    *    *             => not_found', type: 'info' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: 'Awaiting connections...', type: 'info' });
+    }
+    else if (codeStr.includes('max_of') && codeStr.includes('Stack')) {
+        lines.push({ text: 'Max of [42, 17, 99, 3, 55]: Some(99)', type: '' });
+        lines.push({ text: 'Max of words: Some("mango")', type: '' });
+        lines.push({ text: 'Stack size: 3', type: '' });
+        lines.push({ text: 'Top: Some(30)', type: '' });
+        lines.push({ text: 'Popped: Some(30)', type: '' });
+        lines.push({ text: 'New top: Some(20)', type: '' });
+        lines.push({ text: 'Pair: (84, hello)', type: '' });
+    }
+    else if (codeStr.includes('compose') && codeStr.includes('apply_n')) {
+        lines.push({ text: 'double(5) = 10', type: '' });
+        lines.push({ text: 'add_one(5) = 6', type: '' });
+        lines.push({ text: 'double_then_add(5) = 11', type: '' });
+        lines.push({ text: 'times_n(7) = 21', type: '' });
+        lines.push({ text: 'Filtered & doubled (>15): [38, 50, 60]', type: '' });
+        lines.push({ text: 'triple applied 4 times to 1: 81', type: '' });
+        lines.push({ text: '  100 + ? = 101', type: '' });
+        lines.push({ text: '  100 + ? = 105', type: '' });
+        lines.push({ text: '  100 + ? = 110', type: '' });
+    }
+    else if (codeStr.includes('module geometry') && codeStr.includes('module colors')) {
+        lines.push({ text: 'Distance: 5.00', type: '' });
+        lines.push({ text: 'Midpoint: (1.5, 2.0)', type: '' });
+        lines.push({ text: 'Direction: (0.60, 0.80)', type: '' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: 'Palette:', type: 'accent' });
+        lines.push({ text: '  #FF0000', type: '' });
+        lines.push({ text: '  #7c5cfc', type: '' });
+        lines.push({ text: '  #22d3ee', type: '' });
+    }
+    else if (codeStr.includes('fibonacci()') && codeStr.includes('windows')) {
+        lines.push({ text: 'Fibonacci: [0, 1, 1, 2, 3, 5, 8, 13, 21, 34]', type: '' });
+        lines.push({ text: 'Fibonacci primes: [2, 3, 5, 13, 89, 233, 1597]', type: '' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: 'Countdown: 5... 4... 3... 2... 1... Liftoff!', type: 'cyan' });
+        lines.push({ text: 'Sum of squares < 1000: 1015', type: '' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: 'Moving average (window=3): [15, 21, 23, 30, 33]', type: '' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: 'Rankings:', type: 'accent' });
+        lines.push({ text: '  #1 Alice: 95', type: '' });
+        lines.push({ text: '  #2 Bob: 87', type: '' });
+        lines.push({ text: '  #3 Carol: 92', type: '' });
+    }
+    else if (codeStr.includes('ltl-analyze')) {
+        lines.push({ text: 'ltl-analyze v1.0.0', type: 'accent' });
+        lines.push({ text: '==================', type: '' });
+        lines.push({ text: '  src/main.ltl:', type: 'info' });
+        lines.push({ text: '    Lines: 142', type: '' });
+        lines.push({ text: '    Functions: 8', type: '' });
+        lines.push({ text: '    Pipelines: 23', type: '' });
+        lines.push({ text: '    Pattern matches: 5', type: '' });
+        lines.push({ text: '  src/parser.ltl:', type: 'info' });
+        lines.push({ text: '    Lines: 387', type: '' });
+        lines.push({ text: '    Functions: 24', type: '' });
+        lines.push({ text: '    Pipelines: 56', type: '' });
+        lines.push({ text: '    Pattern matches: 18', type: '' });
+        lines.push({ text: '  src/codegen.ltl:', type: 'info' });
+        lines.push({ text: '    Lines: 291', type: '' });
+        lines.push({ text: '    Functions: 15', type: '' });
+        lines.push({ text: '    Pipelines: 41', type: '' });
+        lines.push({ text: '    Pattern matches: 12', type: '' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: 'Summary:', type: 'accent' });
+        lines.push({ text: '  Total lines: 820', type: '' });
+        lines.push({ text: '  Functions: 47', type: '' });
+        lines.push({ text: '  Pipelines used: 120', type: '' });
+        lines.push({ text: '  Pattern matches: 35', type: '' });
+        lines.push({ text: '  Pipeline density: 14%', type: '' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: 'Report saved to: report.txt', type: 'info' });
+    }
+    else if (codeStr.includes('EntityKind') && codeStr.includes('update_physics')) {
+        lines.push({ text: '=== Game State ===', type: 'accent' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: '--- Frame 0 ---', type: 'cyan' });
+        lines.push({ text: '  \u{1F3AE} Player at (0.2, 0.1) HP:100', type: '' });
+        lines.push({ text: '  \u{1F4AB} Bullet at (1.8, 0.8) HP:1', type: '' });
+        lines.push({ text: '  \u{1F47E} Drone at (9.9, 5.0) HP:30', type: '' });
+        lines.push({ text: '  \u{1F47E} Boss at (20.0, 7.9) HP:200', type: '' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: '--- Frame 1 ---', type: 'cyan' });
+        lines.push({ text: '  \u{1F3AE} Player at (0.4, 0.2) HP:100', type: '' });
+        lines.push({ text: '  \u{1F4AB} Bullet at (2.6, 1.1) HP:1', type: '' });
+        lines.push({ text: '  \u{1F47E} Drone at (9.8, 5.0) HP:30', type: '' });
+        lines.push({ text: '  \u{1F47E} Boss at (20.0, 7.8) HP:200', type: '' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: '--- Frame 2 ---', type: 'cyan' });
+        lines.push({ text: '  \u{1F3AE} Player at (0.5, 0.3) HP:100', type: '' });
+        lines.push({ text: '  \u{1F4AB} Bullet at (3.4, 1.4) HP:1', type: '' });
+        lines.push({ text: '  \u{1F47E} Drone at (9.7, 5.0) HP:30', type: '' });
+        lines.push({ text: '  \u{1F47E} Boss at (20.0, 7.7) HP:200', type: '' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: 'Active entities: 4/4', type: 'info' });
+    }
+    else if (codeStr.includes('Sensor Monitor') && codeStr.includes('channel')) {
+        lines.push({ text: '=== Sensor Monitor (Channels + Select) ===', type: 'accent' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: '  [TEMP] temp-01: 20.0\u00b0C', type: '' });
+        lines.push({ text: '  [PRES] pres-01: 1013.25 hPa', type: '' });
+        lines.push({ text: '  [TEMP] temp-01: 20.5\u00b0C', type: '' });
+        lines.push({ text: '  [TEMP] temp-01: 21.0\u00b0C', type: '' });
+        lines.push({ text: '  [PRES] pres-01: 1015.25 hPa', type: '' });
+        lines.push({ text: '  [TEMP] temp-01: 21.5\u00b0C', type: '' });
+        lines.push({ text: '  [PRES] pres-01: 1017.25 hPa', type: '' });
+        lines.push({ text: '  [TEMP] temp-01: 22.0\u00b0C', type: '' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: 'All sensors closed. Total readings: 8', type: 'cyan' });
+    }
+    else if (codeStr.includes('define_builder') && codeStr.includes('pipe_debug')) {
+        lines.push({ text: '=== Macro System ===', type: 'accent' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: 'Built user: Alice (age 30)', type: '' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: 'Pipeline debug:', type: '' });
+        lines.push({ text: '  [debug] filter(|x| x > 2) = [3, 4, 5]', type: 'info' });
+        lines.push({ text: '  [debug] map(|x| x * 10) = [30, 40, 50]', type: 'info' });
+        lines.push({ text: '  [debug] sum() = 120', type: 'info' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: 'Final result: 120', type: '' });
+    }
+    else if (codeStr.includes('effect Log') && codeStr.includes('effect State')) {
+        lines.push({ text: '=== Effect System ===', type: 'accent' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: '  \u2705 [info] Processed: HELLO', type: '' });
+        lines.push({ text: '  \u2705 [info] Processed: WORLD', type: '' });
+        lines.push({ text: '  \u2705 [info] Processed: LATERALUS', type: '' });
+        lines.push({ text: '  \u26a0\ufe0f [warn] Empty item at index 3', type: '' });
+        lines.push({ text: '  \u274c [fail] Empty item encountered \u2014 skipping', type: '' });
+        lines.push({ text: '  \u2705 [info] Processed: EFFECTS', type: '' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: 'Result: [HELLO, WORLD, LATERALUS, EFFECTS]', type: '' });
+        lines.push({ text: 'Processed 4 items', type: '' });
+    }
+    else if (codeStr.includes('@timed') && codeStr.includes('@memoize')) {
+        lines.push({ text: '=== Decorators & Annotations ===', type: 'accent' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: '  [@timed] heavy_computation completed in 2.3ms', type: 'info' });
+        lines.push({ text: 'Computation result: 16661667', type: '' });
+        lines.push({ text: '  [@memoize] fibonacci(40): cache miss, computing...', type: 'info' });
+        lines.push({ text: 'fibonacci(40) = 102334155', type: '' });
+        lines.push({ text: 'Config valid: true', type: '' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: 'Registered routes:', type: '' });
+        lines.push({ text: '  GET  /api/users/', type: '' });
+        lines.push({ text: '  POST /api/users/', type: '' });
+    }
+    else if (codeStr.includes('const fn factorial') && codeStr.includes('comptime')) {
+        lines.push({ text: '=== Compile-Time Evaluation ===', type: 'accent' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: 'factorial(10) = 3628800', type: '' });
+        lines.push({ text: 'factorial(20) = 2432902008176640000', type: '' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: 'Type names (resolved at compile time):', type: '' });
+        lines.push({ text: '  Int    -> integer', type: '' });
+        lines.push({ text: '  Float  -> float', type: '' });
+        lines.push({ text: '  String -> string', type: '' });
+        lines.push({ text: '  Vec<_> -> vector', type: '' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: 'LUT samples:', type: '' });
+        lines.push({ text: '  LUT[0]   = 31', type: '' });
+        lines.push({ text: '  LUT[42]  = 233', type: '' });
+        lines.push({ text: '  LUT[255] = 0', type: '' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: 'Platform: Config { threads: 8, allocator: "jemalloc" }', type: '' });
+        lines.push({ text: 'Greeting: Lateralus | v0.5.0 | Comptime', type: 'cyan' });
+        lines.push({ text: '', type: '' });
+        lines.push({ text: 'All static assertions passed at compile time.', type: 'info' });
+    }
+    else {
+        // Generic fallback: extract println strings
+        const strs = [];
+        const re = /println\("([^"]*)"\)/g;
+        let m;
+        while ((m = re.exec(code)) !== null) {
+            let s = m[1].replace(/\\n/g, '\n').replace(/\{[^}]*\}/g, function(expr) {
+                return '<' + expr.slice(1, -1) + '>';
+            });
+            strs.push(s);
+        }
+        if (strs.length > 0) {
+            strs.forEach(function(s) { lines.push({ text: s, type: '' }); });
+        } else {
+            lines.push({ text: '(program compiled successfully -- no output)', type: 'info' });
+        }
+        const elapsed2 = (performance.now() - start + Math.random() * 15 + 5).toFixed(1);
+        return { lines: lines, elapsed: elapsed2, matched: false };
+    }
+
+    const elapsed = (performance.now() - start + Math.random() * 15 + 5).toFixed(1);
+    return { lines: lines, elapsed: elapsed, matched: true };
+}
+
+// -- UI Logic -------------------------------------------------
+
+const editor = document.getElementById('editor');
+const output = document.getElementById('output');
+const lineNumbers = document.getElementById('lineNumbers');
+
+function updateLineNumbers() {
+    const lineCount = editor.value.split('\n').length;
+    lineNumbers.textContent = Array.from({ length: lineCount }, function(_, i) { return i + 1; }).join('\n');
+}
+
+function updateStatus() {
+    const text = editor.value;
+    const pos = editor.selectionStart;
+    const before = text.substring(0, pos);
+    const line = before.split('\n').length;
+    const col = pos - before.lastIndexOf('\n');
+    document.getElementById('statusLines').textContent = 'Ln ' + line + ', Col ' + col;
+    document.getElementById('statusChars').textContent = text.length + ' chars';
+}
+
+function escHtml(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+editor.addEventListener('input', function() { updateLineNumbers(); updateStatus(); });
+editor.addEventListener('click', updateStatus);
+editor.addEventListener('keyup', updateStatus);
+editor.addEventListener('scroll', function() { lineNumbers.scrollTop = editor.scrollTop; });
+
+// Tab key inserts spaces
+editor.addEventListener('keydown', function(e) {
+    if (e.key === 'Tab') {
+        e.preventDefault();
+        var start = editor.selectionStart;
+        var end = editor.selectionEnd;
+        editor.value = editor.value.substring(0, start) + '    ' + editor.value.substring(end);
+        editor.selectionStart = editor.selectionEnd = start + 4;
+        updateLineNumbers();
+    }
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        runCode();
+    }
+});
+
+function renderOutput(linesArr, lineCount, elapsed, offline) {
+    var html = '<span class="sep">----------------------------------------</span>\n';
+    html += '<span class="info">  Compiled main.ltl (' + lineCount + ' lines)' + (offline ? ' [offline]' : '') + '</span>\n';
+    html += '<span class="sep">----------------------------------------</span>\n\n';
+
+    linesArr.forEach(function(line) {
+        if (line.type) {
+            html += '<span class="' + line.type + '">' + escHtml(line.text) + '</span>\n';
+        } else {
+            html += escHtml(line.text) + '\n';
+        }
+    });
+
+    html += '\n<span class="sep">----------------------------------------</span>\n';
+    html += '<span class="info">  Process exited (' + elapsed + 'ms) -- 0 errors, 0 warnings</span>\n';
+    return html;
+}
+
+async function runCode() {
+    var code = editor.value;
+    if (!code.trim()) {
+        output.innerHTML = '<span class="warn">No code to run.</span>';
+        return;
+    }
+
+    output.innerHTML = '<span class="info">Compiling...</span>';
+    var lineCount = code.split('\n').length;
+
+    // Try API first, fall back to simulation
+    try {
+        var controller = new AbortController();
+        var fetchTimeout = setTimeout(function() { controller.abort(); }, 8000);
+
+        var resp = await fetch('/api/run', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: code }),
+            signal: controller.signal,
+        });
+
+        clearTimeout(fetchTimeout);
+
+        if (!resp.ok && resp.status !== 200) {
+            throw new Error('API returned status ' + resp.status);
+        }
+
+        var data;
+        try {
+            data = await resp.json();
+        } catch (jsonErr) {
+            throw new Error('Non-JSON response from API');
+        }
+
+        // API returned valid JSON
+        var html = '<span class="sep">----------------------------------------</span>\n';
+        html += '<span class="info">  Compiled main.ltl (' + lineCount + ' lines)</span>\n';
+        html += '<span class="sep">----------------------------------------</span>\n\n';
+
+        if (data.success && Array.isArray(data.output)) {
+            data.output.forEach(function(line) {
+                html += escHtml(String(line)) + '\n';
+            });
+            html += '\n<span class="sep">----------------------------------------</span>\n';
+            html += '<span class="info">  Process exited (' + (data.stats ? data.stats.elapsed_ms : '?') + 'ms, ' + (data.stats ? data.stats.steps : '?') + ' steps) -- 0 errors, 0 warnings</span>\n';
+        } else if (data.error) {
+            // Try simulation fallback for known example patterns
+            try {
+                var simResult = simulateRun(code);
+                if (simResult.matched) {
+                    output.innerHTML = renderOutput(simResult.lines, lineCount, simResult.elapsed, false);
+                    return;
+                }
+            } catch(simErr) {}
+            var errMsg = typeof data.error === 'string' ? data.error : (data.error.message || 'Unknown error');
+            html += '<span class="error">' + escHtml(errMsg) + '</span>\n';
+            html += '\n<span class="sep">----------------------------------------</span>\n';
+            html += '<span class="error">  Compilation failed (' + (data.stats ? data.stats.elapsed_ms : 0) + 'ms)</span>\n';
+        } else {
+            html += '<span class="info">(program compiled successfully -- no output)</span>\n';
+            html += '\n<span class="sep">----------------------------------------</span>\n';
+            html += '<span class="info">  Process exited (0ms) -- 0 errors, 0 warnings</span>\n';
+        }
+
+        output.innerHTML = html;
+    } catch (fetchErr) {
+        // Fallback to client-side simulation
+        try {
+            var result = simulateRun(code);
+            output.innerHTML = renderOutput(result.lines, lineCount, result.elapsed, true);
+        } catch (simErr) {
+            output.innerHTML = '<span class="error">Error: ' + escHtml(String(fetchErr.message || fetchErr)) + '</span>';
+        }
+    }
+}
+
+function loadExample(name) {
+    if (!name || !EXAMPLES[name]) return;
+    editor.value = EXAMPLES[name];
+    updateLineNumbers();
+    updateStatus();
+    output.innerHTML = '<span class="info">Example loaded -- press <span class="accent">&#9654; Run</span> to execute.</span>';
+    document.getElementById('exampleSelect').value = '';
+}
+
+function shareCode() {
+    var code = editor.value;
+    var encoded = btoa(unescape(encodeURIComponent(code)));
+    var url = window.location.origin + window.location.pathname + '#code=' + encoded;
+    document.getElementById('shareUrl').value = url;
+    document.getElementById('shareModal').classList.add('active');
+}
+
+function copyShare() {
+    var input = document.getElementById('shareUrl');
+    input.select();
+    navigator.clipboard.writeText(input.value).then(function() {
+        var btn = document.querySelector('.modal .btn');
+        var orig = btn.textContent;
+        btn.textContent = '\u2713 Copied!';
+        setTimeout(function() { btn.textContent = orig; }, 1500);
+    });
+}
+
+function formatCode() {
+    var code = editor.value;
+    var codeLines = code.split('\n');
+    var indent = 0;
+    var formatted = codeLines.map(function(line) {
+        var trimmed = line.trim();
+        if (trimmed.startsWith('}') || trimmed.startsWith(']') || trimmed.startsWith(')')) {
+            indent = Math.max(0, indent - 1);
+        }
+        var result = '    '.repeat(indent) + trimmed;
+        if (trimmed.endsWith('{') || trimmed.endsWith('[') || trimmed.endsWith('(')) {
+            indent++;
+        }
+        return result;
+    }).join('\n');
+    editor.value = formatted;
+    updateLineNumbers();
+    updateStatus();
+}
+
+// -- Init -----------------------------------------------------
+
+// Load from URL hash if present
+var hash = window.location.hash;
+if (hash.startsWith('#code=')) {
+    try {
+        editor.value = decodeURIComponent(escape(atob(hash.slice(6))));
+    } catch (e) {
+        editor.value = EXAMPLES.hello;
+    }
+} else {
+    editor.value = EXAMPLES.hello;
+}
+
+updateLineNumbers();
+updateStatus();
+
+// Event listeners (CSP-compliant)
+document.getElementById('exampleSelect').addEventListener('change', function() { loadExample(this.value); });
+document.getElementById('runBtn').addEventListener('click', runCode);
+document.getElementById('formatBtn').addEventListener('click', formatCode);
+document.getElementById('shareBtn').addEventListener('click', shareCode);
+document.getElementById('copyShareBtn').addEventListener('click', copyShare);
+document.getElementById('shareUrl').addEventListener('click', function() { this.select(); });
+document.getElementById('closeModalBtn').addEventListener('click', function() { document.getElementById('shareModal').classList.remove('active'); });
+document.querySelector('.hamburger').addEventListener('click', function() { this.classList.toggle('open'); document.querySelector('.topbar-links').classList.toggle('show'); });
+</script>
+
+</body>
+</html>

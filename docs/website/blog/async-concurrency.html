@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Async Concurrency in Lateralus: spawn, await, and Beyond — Lateralus Blog</title>
+  <meta name="description" content="Async Concurrency in Lateralus: spawn, await, and Beyond - Notes on language design, tooling, OS development, and the pipeline-first way of thinking.">
+  <meta property="og:title" content="Async Concurrency in Lateralus: spawn, await, and Beyond — Lateralus Blog">
+  <meta property="og:description" content="Async Concurrency in Lateralus: spawn, await, and Beyond">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://lateralus.dev/blog/async-concurrency.html">
+  <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+  <link rel="canonical" href="https://lateralus.dev/blog/async-concurrency.html">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css?v=20260408">
+  <style>
+    .blog-post { max-width: 800px; margin: 0 auto; padding: 80px 20px 60px; }
+    .blog-post h1 { font-family: 'Press Start 2P', monospace; font-size: clamp(14px, 3vw, 20px); color: var(--electric-yellow); line-height: 1.8; margin-bottom: 16px; }
+    .blog-meta { font-family: 'VT323', monospace; font-size: 18px; color: var(--hot-pink); margin-bottom: 24px; }
+    .blog-meta .tags { display: inline-flex; gap: 8px; margin-left: 16px; }
+    .blog-meta .tag { font-family: 'Press Start 2P', monospace; font-size: 8px; padding: 4px 10px; border: 1px solid var(--lime); color: var(--lime); }
+    .blog-content { font-family: 'VT323', monospace; font-size: 20px; color: var(--text); line-height: 1.7; }
+    .blog-content h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--cyber-blue); margin: 32px 0 16px; line-height: 1.6; }
+    .blog-content h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--lime); margin: 24px 0 12px; line-height: 1.6; }
+    .blog-content p { margin-bottom: 16px; }
+    .blog-content code { background: var(--bg3); padding: 2px 6px; color: var(--hot-pink); font-size: 18px; }
+    .blog-content pre { background: var(--bg3); border: 2px solid var(--border-light); padding: 16px; overflow-x: auto; margin: 16px 0; }
+    .blog-content pre code { background: none; padding: 0; display: block; font-size: 16px; line-height: 1.5; color: var(--text); }
+    .blog-content ul, .blog-content ol { margin: 16px 0; padding-left: 24px; }
+    .blog-content li { margin-bottom: 8px; }
+    .blog-content a { color: var(--cyber-blue); text-decoration: underline; }
+    .blog-content a:hover { color: var(--lime); }
+    .blog-content blockquote { border-left: 3px solid var(--lime); padding-left: 16px; margin: 16px 0; color: var(--text2); font-style: italic; }
+    .blog-back { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; color: var(--lime); text-decoration: none; margin-bottom: 24px; }
+    .blog-back:hover { color: var(--electric-yellow); }
+    .feature-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin: 20px 0; }
+    .feature-card { background: var(--bg3); border: 2px solid var(--border-light); padding: 12px; }
+    .feature-card h4 { font-family: 'Press Start 2P', monospace; font-size: 8px; color: var(--electric-yellow); margin-bottom: 6px; }
+    .feature-card p { font-size: 16px; margin: 0; }
+    .cta-box { background: var(--bg3); border: 2px solid var(--lime); padding: 20px; text-align: center; margin: 24px 0; }
+    .cta-box h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--electric-yellow); margin-bottom: 8px; }
+    .cta-box p { margin-bottom: 12px; }
+    .cta-box a { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; padding: 10px 20px; margin: 4px; }
+    .cta-box .btn-primary { background: var(--lime); color: var(--bg); }
+    .cta-box .btn-secondary { border: 2px solid var(--cyber-blue); color: var(--cyber-blue); }
+    @media (max-width: 768px) {
+      .blog-post h1 { font-size: 14px; line-height: 1.5; }
+      .blog-content { font-size: 16px; }
+      .blog-content code { font-size: 14px; }
+      .blog-content pre { padding: 12px; }
+      .blog-content pre code { font-size: 13px; }
+      .blog-back { font-size: 8px; }
+      .feature-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/">PLAYGROUND</a>
+      <a href="/blog/" class="active">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<article class="blog-post">
+  <a href="/blog/" class="blog-back">← Back to Blog</a>
+  <h1>Async Concurrency in Lateralus: spawn, await, and Beyond</h1>
+  <div class="blog-meta">
+    2025
+    <span class="tags"><span class="tag">async</span><span class="tag">concurrency</span></span>
+  </div>
+  <div class="blog-content">
+<a href="/blog/" class="blog-back">← Back to Blog</a>
+  
+  <div class="blog-meta">
+    2025
+    <span class="tags"><span class="tag">async</span><span class="tag">concurrency</span></span>
+  </div>
+  <div class="blog-content">
+<div class="meta">September 2025 · 8 min read · <a href="/blog/">← All Posts</a></div>
+
+<p>Modern software lives on the network. APIs call other APIs, services fan out requests in parallel, data pipelines stream from multiple sources. If your language doesn't have a good concurrency story, you're fighting the runtime instead of writing logic.</p>
+
+<p>When I designed Lateralus's async model, I had three goals: it should be <strong>lightweight</strong> (no thread-per-task overhead), <strong>structured</strong> (no orphan tasks leaking resources), and <strong>pipeline-friendly</strong> (async should compose with <code>|&gt;</code> naturally). Here's how we achieved all three.</p>
+
+<h2>◉ The Basics: spawn and await</h2>
+
+<p>Lateralus uses two core primitives for concurrency: <code>spawn</code> to launch a concurrent task, and <code>await</code> to wait for its result.</p>
+
+<pre><code><span style="color: var(--text2)">// Spawn a task — runs concurrently, returns a Task&lt;T&gt; handle</span>
+<span style="color: var(--hot-pink)">let</span> task = <span style="color: var(--hot-pink)">spawn</span> <span style="color: var(--cyber-blue)">fetch</span>(<span style="color: var(--lime)">"https://api.example.com/users"</span>)
+
+<span style="color: var(--text2)">// Do other work while the fetch runs...</span>
+<span style="color: var(--hot-pink)">let</span> local_data = <span style="color: var(--cyber-blue)">read_file</span>(<span style="color: var(--lime)">"cache.json"</span>)
+
+<span style="color: var(--text2)">// Await the result when you need it</span>
+<span style="color: var(--hot-pink)">let</span> users = <span style="color: var(--hot-pink)">await</span> task
+<span style="color: var(--text2)">// users : Result&lt;Response, Error&gt;</span></code></pre>
+
+<p>Tasks are <strong>lightweight</strong> — they're multiplexed onto a small pool of OS threads, similar to goroutines in Go or green threads in Erlang. You can spawn thousands of tasks without running out of memory or threads. The runtime handles scheduling, suspension, and resumption transparently.</p>
+
+<h3>await_all: Parallel Fan-Out</h3>
+
+<p>The real power comes when you need to run many tasks in parallel and collect all results. That's what <code>await_all</code> is for:</p>
+
+<pre><code><span style="color: var(--hot-pink)">let</span> urls = [
+    <span style="color: var(--lime)">"https://api.example.com/users"</span>,
+    <span style="color: var(--lime)">"https://api.example.com/posts"</span>,
+    <span style="color: var(--lime)">"https://api.example.com/comments"</span>,
+]
+
+<span style="color: var(--text2)">// Spawn all fetches concurrently, await all results</span>
+<span style="color: var(--hot-pink)">let</span> responses = urls
+    <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--cyber-blue)">map</span>(url <span style="color: var(--electric-yellow)">=&gt;</span> <span style="color: var(--hot-pink)">spawn</span> <span style="color: var(--cyber-blue)">fetch</span>(url))
+    <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--cyber-blue)">await_all</span>
+
+<span style="color: var(--text2)">// responses : List&lt;Result&lt;Response, Error&gt;&gt;</span>
+<span style="color: var(--text2)">// All 3 requests ran in parallel!</span></code></pre>
+
+<p>Notice how naturally this composes with pipelines. The list of URLs flows into <code>map</code> which spawns concurrent tasks, then <code>await_all</code> waits for every task to complete. No callback nesting, no promise chains, no <code>async def</code> coloring — just data flowing through functions.</p>
+
+<h2>◉ Structured Concurrency</h2>
+
+<p>One of the most insidious bugs in concurrent programs is the <strong>orphan task</strong> — a background task that outlives its parent scope, holding resources, failing silently, or corrupting state after the code that spawned it has moved on.</p>
+
+<p>Lateralus enforces <strong>structured concurrency</strong>: every task is bound to the scope that spawned it. When a scope exits, all tasks spawned within it are automatically awaited (or cancelled if the scope exits due to an error).</p>
+
+<pre><code><span style="color: var(--hot-pink)">let</span> <span style="color: var(--cyber-blue)">process_batch</span> = batch <span style="color: var(--electric-yellow)">=&gt;</span> {
+    <span style="color: var(--text2)">// These tasks are scoped to this block</span>
+    <span style="color: var(--hot-pink)">let</span> validated = <span style="color: var(--hot-pink)">spawn</span> <span style="color: var(--cyber-blue)">validate</span>(batch)
+    <span style="color: var(--hot-pink)">let</span> enriched  = <span style="color: var(--hot-pink)">spawn</span> <span style="color: var(--cyber-blue)">enrich</span>(batch)
+
+    <span style="color: var(--text2)">// Both tasks are guaranteed to complete (or cancel)</span>
+    <span style="color: var(--text2)">// before process_batch returns</span>
+    (<span style="color: var(--hot-pink)">await</span> validated, <span style="color: var(--hot-pink)">await</span> enriched)
+}
+
+<span style="color: var(--text2)">// After process_batch returns, no orphan tasks exist.</span>
+<span style="color: var(--text2)">// Resources are clean. Always.</span></code></pre>
+
+<blockquote><p><strong>No fire and forget.</strong> If you spawn it, someone awaits it. The compiler and runtime work together to guarantee this invariant. You literally cannot create an orphan task in safe Lateralus code.</p></blockquote>
+
+<h2>◉ Error Propagation in Async Contexts</h2>
+
+<p>What happens when a concurrent task fails? In many languages, async errors are swallowed, logged to stderr, or surface as mysterious "unhandled promise rejection" warnings. Lateralus treats async errors as first-class values using the <code>Result</code> type:</p>
+
+<pre><code><span style="color: var(--hot-pink)">let</span> <span style="color: var(--cyber-blue)">fetch_user_profile</span> = user_id <span style="color: var(--electric-yellow)">=&gt;</span> {
+    <span style="color: var(--hot-pink)">let</span> profile_task = <span style="color: var(--hot-pink)">spawn</span> <span style="color: var(--cyber-blue)">fetch</span>(<span style="color: var(--lime)">"/api/users/"</span> ++ user_id)
+    <span style="color: var(--hot-pink)">let</span> avatar_task  = <span style="color: var(--hot-pink)">spawn</span> <span style="color: var(--cyber-blue)">fetch</span>(<span style="color: var(--lime)">"/api/avatars/"</span> ++ user_id)
+
+    <span style="color: var(--hot-pink)">match</span> (<span style="color: var(--hot-pink)">await</span> profile_task, <span style="color: var(--hot-pink)">await</span> avatar_task)
+        | (<span style="color: var(--hot-pink)">Ok</span>(profile), <span style="color: var(--hot-pink)">Ok</span>(avatar)) <span style="color: var(--electric-yellow)">=&gt;</span>
+            <span style="color: var(--hot-pink)">Ok</span>(<span style="color: var(--cyber-blue)">merge_profile</span>(profile, avatar))
+        | (<span style="color: var(--hot-pink)">Err</span>(e), _) <span style="color: var(--electric-yellow)">=&gt;</span> <span style="color: var(--hot-pink)">Err</span>(<span style="color: var(--lime)">"Profile fetch failed: "</span> ++ e)
+        | (_, <span style="color: var(--hot-pink)">Err</span>(e)) <span style="color: var(--electric-yellow)">=&gt;</span> <span style="color: var(--hot-pink)">Err</span>(<span style="color: var(--lime)">"Avatar fetch failed: "</span> ++ e)
+}
+</code></pre>
+
+<p>Pattern matching on async results gives you <strong>exhaustive error handling</strong>. The compiler ensures you handle every failure case — no error slips through unnoticed.</p>
+
+<h2>◉ Async + Pipelines: The Killer Combo</h2>
+
+<p>This is where Lateralus's concurrency model really distinguishes itself. Because <code>spawn</code> returns a <code>Task&lt;T&gt;</code> and <code>await</code> unwraps it, you can weave async operations into pipeline chains seamlessly:</p>
+
+<pre><code><span style="color: var(--text2)">// A concurrent data processing pipeline</span>
+<span style="color: var(--hot-pink)">let</span> <span style="color: var(--cyber-blue)">process_orders</span> = date <span style="color: var(--electric-yellow)">=&gt;</span>
+    date
+    <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--cyber-blue)">fetch_orders</span>                           <span style="color: var(--text2)">// Task&lt;List&lt;Order&gt;&gt;</span>
+    <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--hot-pink)">await</span>                                    <span style="color: var(--text2)">// List&lt;Order&gt;</span>
+    <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--cyber-blue)">filter</span>(o <span style="color: var(--electric-yellow)">=&gt;</span> o.status == <span style="color: var(--lime)">"pending"</span>)      <span style="color: var(--text2)">// List&lt;Order&gt;</span>
+    <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--cyber-blue)">map</span>(o <span style="color: var(--electric-yellow)">=&gt;</span> <span style="color: var(--hot-pink)">spawn</span> <span style="color: var(--cyber-blue)">validate_payment</span>(o))    <span style="color: var(--text2)">// List&lt;Task&lt;Result&gt;&gt;</span>
+    <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--cyber-blue)">await_all</span>                                <span style="color: var(--text2)">// List&lt;Result&gt;</span>
+    <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--cyber-blue)">filter_ok</span>                                <span style="color: var(--text2)">// List&lt;Order&gt;</span>
+    <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--cyber-blue)">map</span>(<span style="color: var(--cyber-blue)">fulfill</span>)                             <span style="color: var(--text2)">// List&lt;Fulfillment&gt;</span></code></pre>
+
+<p>Read this top to bottom: fetch orders (async), filter pending ones (sync), validate payments in parallel (async), collect successes (sync), fulfill them (sync). The pipeline makes the concurrent parts <strong>visually obvious</strong> — you can see exactly where the parallelism happens.</p>
+
+<h2>◉ Real-World Example: Concurrent HTTP Fetcher</h2>
+
+<p>Let's build a complete concurrent URL fetcher with rate limiting, retries, and error collection:</p>
+
+<pre><code><span style="color: var(--hot-pink)">let</span> <span style="color: var(--cyber-blue)">fetch_with_retry</span> = (url, retries) <span style="color: var(--electric-yellow)">=&gt;</span>
+    <span style="color: var(--hot-pink)">match</span> <span style="color: var(--hot-pink)">await</span> <span style="color: var(--hot-pink)">spawn</span> <span style="color: var(--cyber-blue)">fetch</span>(url)
+        | <span style="color: var(--hot-pink)">Ok</span>(response) <span style="color: var(--electric-yellow)">=&gt;</span> <span style="color: var(--hot-pink)">Ok</span>(response)
+        | <span style="color: var(--hot-pink)">Err</span>(_) <span style="color: var(--hot-pink)">when</span> retries &gt; <span style="color: var(--electric-yellow)">0</span> <span style="color: var(--electric-yellow)">=&gt;</span>
+            <span style="color: var(--hot-pink)">await</span> <span style="color: var(--cyber-blue)">sleep</span>(<span style="color: var(--electric-yellow)">1000</span>)
+            <span style="color: var(--cyber-blue)">fetch_with_retry</span>(url, retries - <span style="color: var(--electric-yellow)">1</span>)
+        | <span style="color: var(--hot-pink)">Err</span>(e) <span style="color: var(--electric-yellow)">=&gt;</span> <span style="color: var(--hot-pink)">Err</span>(e)
+
+<span style="color: var(--hot-pink)">let</span> <span style="color: var(--cyber-blue)">crawl</span> = urls <span style="color: var(--electric-yellow)">=&gt;</span>
+    urls
+    <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--cyber-blue)">chunks</span>(<span style="color: var(--electric-yellow)">10</span>)                                <span style="color: var(--text2)">// Rate limit: 10 at a time</span>
+    <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--cyber-blue)">flat_map</span>(chunk <span style="color: var(--electric-yellow)">=&gt;</span>
+        chunk
+        <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--cyber-blue)">map</span>(url <span style="color: var(--electric-yellow)">=&gt;</span> <span style="color: var(--hot-pink)">spawn</span> <span style="color: var(--cyber-blue)">fetch_with_retry</span>(url, <span style="color: var(--electric-yellow)">3</span>))
+        <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--cyber-blue)">await_all</span>
+    )
+    <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--cyber-blue)">partition_results</span>                          <span style="color: var(--text2)">// (successes, failures)</span>
+
+<span style="color: var(--text2)">// Usage:</span>
+<span style="color: var(--hot-pink)">let</span> (pages, errors) = <span style="color: var(--cyber-blue)">read_file</span>(<span style="color: var(--lime)">"urls.txt"</span>)
+    <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--cyber-blue)">lines</span>
+    <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--cyber-blue)">crawl</span>
+
+<span style="color: var(--cyber-blue)">print</span>(<span style="color: var(--lime)">"Fetched {len(pages)} pages, {len(errors)} failures"</span>)</code></pre>
+
+<h2>◉ How It Compares</h2>
+
+<div class="info-box">
+    <h4>Lateralus vs. Other Async Models</h4>
+    <ul>
+        <li><strong>Go goroutines:</strong> Similar lightweight tasks, but Go lacks structured concurrency — goroutines can outlive their parent. Lateralus prevents this by design.</li>
+        <li><strong>Rust async:</strong> Rust requires <code>.await</code> postfix syntax and <code>async fn</code> coloring. Lateralus avoids function coloring — any function can spawn tasks without changing its signature.</li>
+        <li><strong>Python asyncio:</strong> Python's <code>async/await</code> splits the world into sync and async functions. Lateralus treats concurrency as a value (<code>Task&lt;T&gt;</code>), not a function modifier.</li>
+        <li><strong>JavaScript Promises:</strong> Promises eagerly execute and can't be cancelled. Lateralus tasks are lazy (run on spawn) and support structured cancellation.</li>
+    </ul>
+</div>
+
+<h2>◉ What's Next</h2>
+
+<p>We're working on <strong>async iterators</strong> — the ability to <code>|&gt;</code> through a stream of values that arrive over time. Think processing a WebSocket feed or tailing a log file, all with the same pipeline syntax. We're also exploring <strong>supervision trees</strong> inspired by Erlang's OTP for building fault-tolerant services.</p>
+
+<div class="cta">
+    <a href="/playground/" class="btn-p">🧪 Try async pipelines in the Playground</a>
+    <a href="https://github.com/bad-antics/lateralus-lang" class="btn-s">⭐ Star on GitHub</a>
+</div>
+  </div>
+  </div>
+</article>
+
+<footer class="footer">
+  <div class="footer-inner">
+    <div class="footer-logo"><span class="pipe">|></span> LATERALUS</div>
+    <div class="footer-tagline">A Language That Spirals Outward</div>
+  </div>
+</footer>
+
+<script src="/site.js"></script>
+</body>
+</html>

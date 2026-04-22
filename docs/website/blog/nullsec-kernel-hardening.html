@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kernel Hardening in NullSec Linux — Lateralus Blog</title>
+  <meta name="description" content="Kernel Hardening in NullSec Linux - Notes on language design, tooling, OS development, and the pipeline-first way of thinking.">
+  <meta property="og:title" content="Kernel Hardening in NullSec Linux — Lateralus Blog">
+  <meta property="og:description" content="Kernel Hardening in NullSec Linux">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://lateralus.dev/blog/nullsec-kernel-hardening.html">
+  <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+  <link rel="canonical" href="https://lateralus.dev/blog/nullsec-kernel-hardening.html">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css?v=20260408">
+  <style>
+    .blog-post { max-width: 800px; margin: 0 auto; padding: 80px 20px 60px; }
+    .blog-post h1 { font-family: 'Press Start 2P', monospace; font-size: clamp(14px, 3vw, 20px); color: var(--electric-yellow); line-height: 1.8; margin-bottom: 16px; }
+    .blog-meta { font-family: 'VT323', monospace; font-size: 18px; color: var(--hot-pink); margin-bottom: 24px; }
+    .blog-meta .tags { display: inline-flex; gap: 8px; margin-left: 16px; }
+    .blog-meta .tag { font-family: 'Press Start 2P', monospace; font-size: 8px; padding: 4px 10px; border: 1px solid var(--lime); color: var(--lime); }
+    .blog-content { font-family: 'VT323', monospace; font-size: 20px; color: var(--text); line-height: 1.7; }
+    .blog-content h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--cyber-blue); margin: 32px 0 16px; line-height: 1.6; }
+    .blog-content h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--lime); margin: 24px 0 12px; line-height: 1.6; }
+    .blog-content p { margin-bottom: 16px; }
+    .blog-content code { background: var(--bg3); padding: 2px 6px; color: var(--hot-pink); font-size: 18px; }
+    .blog-content pre { background: var(--bg3); border: 2px solid var(--border-light); padding: 16px; overflow-x: auto; margin: 16px 0; }
+    .blog-content pre code { background: none; padding: 0; display: block; font-size: 16px; line-height: 1.5; color: var(--text); }
+    .blog-content ul, .blog-content ol { margin: 16px 0; padding-left: 24px; }
+    .blog-content li { margin-bottom: 8px; }
+    .blog-content a { color: var(--cyber-blue); text-decoration: underline; }
+    .blog-content a:hover { color: var(--lime); }
+    .blog-content blockquote { border-left: 3px solid var(--lime); padding-left: 16px; margin: 16px 0; color: var(--text2); font-style: italic; }
+    .blog-back { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; color: var(--lime); text-decoration: none; margin-bottom: 24px; }
+    .blog-back:hover { color: var(--electric-yellow); }
+    /* Mobile responsive */
+    @media (max-width: 768px) {
+      .blog-header h1 { font-size: 14px; line-height: 1.5; }
+      .blog-header .meta { font-size: 11px; }
+      .blog-content { font-size: 16px; }
+      .blog-content code { font-size: 14px; }
+      .blog-content pre { padding: 12px; }
+      .blog-content pre code { font-size: 13px; }
+      .blog-back { font-size: 8px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/">PLAYGROUND</a>
+      <a href="/blog/" class="active">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<article class="blog-post">
+  <a href="/blog/" class="blog-back">← Back to Blog</a>
+  <h1>Kernel Hardening in NullSec Linux</h1>
+  <div class="blog-meta">
+    October 5, 2025
+    <span class="tags"><span class="tag">nullsec</span><span class="tag">kernel</span><span class="tag">security</span></span>
+  </div>
+  <div class="blog-content">
+
+    <p>A security-focused distribution needs a security-focused kernel. NullSec Linux ships with extensive hardening: grsecurity patches, enhanced ASLR, strict sysctl defaults, and mandatory access control for every service. Here's what we changed and why.</p>
+
+    <h2>◉ The Threat Model</h2>
+    <p>NullSec is used for security testing. That means:</p>
+
+    <ul>
+      <li>Users run untrusted code (exploit development, malware analysis)</li>
+      <li>Network exposure is high (listening services, port scanning)</li>
+      <li>Privilege escalation attempts are likely (pen testing practice)</li>
+      <li>Persistence mechanisms may be tested (rootkits, backdoors)</li>
+    </ul>
+
+    <p>The kernel must assume hostile user-space. Defense in depth at every layer.</p>
+
+    <h2>◉ Grsecurity Patches</h2>
+    <p>We apply the grsecurity patchset (self-compiled, not the commercial version). Key features:</p>
+
+    <h3>ASLR+</h3>
+    <p>Standard ASLR randomizes stack, heap, and libraries. Grsecurity's ASLR+ adds:</p>
+    <ul>
+      <li>Stronger entropy (32-bit on x86_64 vs 28-bit default)</li>
+      <li>VDSO randomization</li>
+      <li>Per-thread stack randomization</li>
+      <li>Brute force detection and throttling</li>
+    </ul>
+
+    <pre><code># Verify ASLR entropy
+cat /proc/sys/kernel/randomize_va_space
+# Should be 2 (full randomization)
+
+# Check brute force protection
+cat /proc/sys/kernel/grsecurity/deter_bruteforce
+# Should be 1</code></pre>
+
+    <h3>RBAC (Role-Based Access Control)</h3>
+    <p>Fine-grained access control beyond traditional Unix permissions:</p>
+
+    <pre><code># Example gradm policy for nginx
+role nginx u
+subject /usr/sbin/nginx
+  /                           h
+  /var/www                    r
+  /var/log/nginx              a
+  /run/nginx.pid              rw
+  /etc/nginx                  r
+  -CAP_ALL
+  +CAP_NET_BIND_SERVICE</code></pre>
+
+    <p>Each process sees only what it needs. No ambient capabilities.</p>
+
+    <h3>PaX Memory Protections</h3>
+    <ul>
+      <li><strong>MPROTECT:</strong> Prevents writable+executable memory</li>
+      <li><strong>RANDKSTACK:</strong> Randomizes kernel stack between syscalls</li>
+      <li><strong>UDEREF:</strong> Separates kernel/user address spaces</li>
+      <li><strong>REFCOUNT:</strong> Hardens reference counting against overflow</li>
+    </ul>
+
+    <h2>◉ Kernel Config</h2>
+    <p>Our kernel config enables every hardening option:</p>
+
+    <pre><code># Memory hardening
+CONFIG_INIT_ON_ALLOC_DEFAULT_ON=y    # Zero memory on alloc
+CONFIG_INIT_ON_FREE_DEFAULT_ON=y     # Zero memory on free
+CONFIG_HARDENED_USERCOPY=y           # Bounds-checked copies
+CONFIG_FORTIFY_SOURCE=y              # Buffer overflow detection
+
+# Stack protection
+CONFIG_STACKPROTECTOR_STRONG=y       # Stack canaries
+CONFIG_SHADOW_CALL_STACK=y           # ARM64: separate return stack
+CONFIG_VMAP_STACK=y                  # Guard pages around stack
+
+# Address space randomization
+CONFIG_RANDOMIZE_BASE=y              # KASLR
+CONFIG_RANDOMIZE_MEMORY=y            # Randomize physical memory
+
+# Control flow integrity
+CONFIG_CFI_CLANG=y                   # Forward-edge CFI
+CONFIG_CFI_PERMISSIVE=n              # Strict mode
+
+# Misc hardening
+CONFIG_UBSAN_BOUNDS=y                # Bounds checking
+CONFIG_SLAB_FREELIST_RANDOM=y        # Randomize freelist
+CONFIG_SLAB_FREELIST_HARDENED=y      # Harden freelist pointers
+CONFIG_SHUFFLE_PAGE_ALLOCATOR=y      # Randomize page allocation</code></pre>
+
+    <h2>◉ Sysctl Defaults</h2>
+    <p>Runtime kernel parameters, set in <code>/etc/sysctl.d/99-nullsec.conf</code>:</p>
+
+    <pre><code># Network hardening
+net.ipv4.conf.all.rp_filter = 1              # Strict reverse path
+net.ipv4.conf.all.accept_redirects = 0       # Ignore ICMP redirects
+net.ipv4.conf.all.send_redirects = 0         # Don't send redirects
+net.ipv4.tcp_syncookies = 1                  # SYN flood protection
+net.ipv4.tcp_timestamps = 0                  # Disable TCP timestamps
+
+# Kernel hardening
+kernel.kptr_restrict = 2                     # Hide kernel pointers
+kernel.dmesg_restrict = 1                    # Restrict dmesg access
+kernel.perf_event_paranoid = 3               # Restrict perf
+kernel.unprivileged_bpf_disabled = 1         # No unprivileged eBPF
+kernel.yama.ptrace_scope = 2                 # Restrict ptrace
+
+# Filesystem hardening
+fs.protected_symlinks = 1                    # Symlink protection
+fs.protected_hardlinks = 1                   # Hardlink protection
+fs.protected_fifos = 2                       # FIFO protection
+fs.protected_regular = 2                     # Regular file protection
+fs.suid_dumpable = 0                         # No SUID core dumps</code></pre>
+
+    <h2>◉ AppArmor Profiles</h2>
+    <p>Every service runs under mandatory access control. Our profile collection:</p>
+
+    <table style="width:100%; border-collapse:collapse; margin:16px 0;">
+      <tr style="border-bottom:1px solid var(--border-light);">
+        <th style="text-align:left; padding:8px;">Service</th>
+        <th style="text-align:left; padding:8px;">Profile Status</th>
+        <th style="text-align:left; padding:8px;">Notes</th>
+      </tr>
+      <tr><td style="padding:8px;">NetworkManager</td><td style="padding:8px;">Enforcing</td><td style="padding:8px;">Read /etc, write /run only</td></tr>
+      <tr><td style="padding:8px;">sshd</td><td style="padding:8px;">Enforcing</td><td style="padding:8px;">Minimal filesystem access</td></tr>
+      <tr><td style="padding:8px;">dhclient</td><td style="padding:8px;">Enforcing</td><td style="padding:8px;">Network only</td></tr>
+      <tr><td style="padding:8px;">cups</td><td style="padding:8px;">Enforcing</td><td style="padding:8px;">USB and /var/spool</td></tr>
+      <tr><td style="padding:8px;">snapd</td><td style="padding:8px;">Disabled</td><td style="padding:8px;">Not installed</td></tr>
+      <tr><td style="padding:8px;">All others</td><td style="padding:8px;">Complain</td><td style="padding:8px;">Logging violations</td></tr>
+    </table>
+
+    <p>Security tools (nmap, Metasploit, etc.) run without AppArmor confinement — they need raw access to function.</p>
+
+    <h2>◉ Module Restrictions</h2>
+    <p>Kernel modules are locked down after boot:</p>
+
+    <pre><code># /etc/modprobe.d/nullsec.conf
+# Disable rarely-used filesystems
+install cramfs /bin/false
+install freevxfs /bin/false
+install jffs2 /bin/false
+install hfs /bin/false
+install hfsplus /bin/false
+install squashfs /bin/false
+install udf /bin/false
+
+# Disable rarely-used network protocols
+install dccp /bin/false
+install sctp /bin/false
+install rds /bin/false
+install tipc /bin/false
+
+# After boot:
+# echo 1 > /proc/sys/kernel/modules_disabled</code></pre>
+
+    <h2>◉ Secure Boot</h2>
+    <p>NullSec supports Secure Boot with our own signing keys:</p>
+
+    <ol>
+      <li>Kernel signed with our MOK (Machine Owner Key)</li>
+      <li>All modules signed at build time</li>
+      <li>DKMS modules re-signed automatically</li>
+      <li>Users can enroll our key via mokutil</li>
+    </ol>
+
+    <h2>◉ Performance Impact</h2>
+    <p>Hardening has costs. Our measurements on typical workloads:</p>
+
+    <table style="width:100%; border-collapse:collapse; margin:16px 0;">
+      <tr style="border-bottom:1px solid var(--border-light);">
+        <th style="text-align:left; padding:8px;">Feature</th>
+        <th style="text-align:right; padding:8px;">Overhead</th>
+      </tr>
+      <tr><td style="padding:8px;">ASLR+</td><td style="text-align:right; padding:8px;">~1%</td></tr>
+      <tr><td style="padding:8px;">Init on alloc/free</td><td style="text-align:right; padding:8px;">~3-5%</td></tr>
+      <tr><td style="padding:8px;">CFI</td><td style="text-align:right; padding:8px;">~1-2%</td></tr>
+      <tr><td style="padding:8px;">AppArmor</td><td style="text-align:right; padding:8px;">~1%</td></tr>
+      <tr><td style="padding:8px;"><strong>Total</strong></td><td style="text-align:right; padding:8px;"><strong>~6-9%</strong></td></tr>
+    </table>
+
+    <p>Worth it for a security-focused distro. If you need raw speed, use a different kernel.</p>
+
+    <h2>◉ Verifying Hardening</h2>
+    <p>Check your installation:</p>
+
+    <pre><code># Check kernel config
+zcat /proc/config.gz | grep -E 'HARDENED|FORTIFY|STACK|CFI'
+
+# Check sysctl values
+sysctl -a | grep -E 'kptr|dmesg|ptrace|bpf'
+
+# Check AppArmor status
+aa-status
+
+# Run hardening audit
+lynis audit system --pentest</code></pre>
+
+    <p>Full kernel config at <a href="https://github.com/bad-antics/nullsec-linux/blob/main/kernel/config" target="_blank">nullsec-linux/kernel/config</a>.</p>
+
+  </div>
+</article>
+
+<footer>
+  <div class="container" style="text-align:center; padding: 2rem 0;">
+    <p style="font-family:'Press Start 2P',monospace; font-size:9px; color:var(--lime); margin-bottom:8px;">|&gt; LATERALUS</p>
+    <p style="font-family:'VT323',monospace; font-size:14px; color:var(--text);">A Language That Spirals Outward</p>
+  </div>
+</footer>
+
+<script src="/site.js"></script>
+</body>
+</html>

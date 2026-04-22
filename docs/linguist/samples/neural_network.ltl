@@ -1,0 +1,249 @@
+// =======================================================================
+// LATERALUS — Machine Learning Example
+// A simple neural network implementation from scratch
+// Demonstrates LATERALUS's mathematical computing capabilities
+// =======================================================================
+
+import math
+import matrix
+
+// --- Activation Functions ---------------------------------------------
+
+fn sigmoid(x: float) -> float {
+    return 1.0 / (1.0 + exp(-x))
+}
+
+fn sigmoid_derivative(x: float) -> float {
+    let s = sigmoid(x)
+    return s * (1.0 - s)
+}
+
+fn relu(x: float) -> float {
+    if x > 0.0 { return x }
+    return 0.0
+}
+
+fn relu_derivative(x: float) -> float {
+    if x > 0.0 { return 1.0 }
+    return 0.0
+}
+
+fn tanh_activation(x: float) -> float {
+    let ep = exp(x)
+    let en = exp(-x)
+    return (ep - en) / (ep + en)
+}
+
+// --- Apply activation to matrix ---------------------------------------
+
+fn apply_activation(m: list, activation) -> list {
+    let result = []
+    for row in m {
+        let new_row = row |> map(fn(x) { activation(x) })
+        result = result + [new_row]
+    }
+    return result
+}
+
+// --- Loss Functions ---------------------------------------------------
+
+fn mse_loss(predicted: list, actual: list) -> float {
+    let total = 0.0
+    let count = 0
+    for i in range(len(predicted)) {
+        for j in range(len(predicted[i])) {
+            let diff = predicted[i][j] - actual[i][j]
+            total = total + diff ** 2
+            count = count + 1
+        }
+    }
+    return total / count
+}
+
+fn binary_cross_entropy(predicted: list, actual: list) -> float {
+    let total = 0.0
+    let count = 0
+    for i in range(len(predicted)) {
+        for j in range(len(predicted[i])) {
+            let p = max(min(predicted[i][j], 0.9999), 0.0001)
+            let y = actual[i][j]
+            total = total - (y * log(p) + (1.0 - y) * log(1.0 - p))
+            count = count + 1
+        }
+    }
+    return total / count
+}
+
+// --- Dense Layer ------------------------------------------------------
+
+fn layer_new(input_size: int, output_size: int) -> map {
+    // Xavier initialization
+    let scale = sqrt(2.0 / (input_size + output_size))
+
+    let weights = []
+    for i in range(input_size) {
+        let row = []
+        for j in range(output_size) {
+            row = row + [(random() - 0.5) * 2.0 * scale]
+        }
+        weights = weights + [row]
+    }
+
+    let biases = []
+    for j in range(output_size) {
+        biases = biases + [0.0]
+    }
+
+    let layer = {}
+    layer["weights"] = weights
+    layer["biases"] = biases
+    layer["input_size"] = input_size
+    layer["output_size"] = output_size
+    layer["last_input"] = none
+    layer["last_output"] = none
+    layer["last_pre_activation"] = none
+    return layer
+}
+
+fn layer_forward(layer: map, input: list, activation) -> map {
+    // input: [batch_size x input_size]
+    // output: [batch_size x output_size]
+    let output = matrix_multiply(input, layer["weights"])
+
+    // Add biases
+    for i in range(len(output)) {
+        for j in range(len(output[i])) {
+            output[i][j] = output[i][j] + layer["biases"][j]
+        }
+    }
+
+    layer["last_input"] = input
+    layer["last_pre_activation"] = output
+    layer["last_output"] = apply_activation(output, activation)
+
+    return layer
+}
+
+// --- Simple Neural Network -------------------------------------------
+
+fn network_new(layer_sizes: list) -> map {
+    let layers = []
+    for i in range(len(layer_sizes) - 1) {
+        layers = layers + [layer_new(layer_sizes[i], layer_sizes[i + 1])]
+    }
+    let net = {}
+    net["layers"] = layers
+    net["layer_count"] = len(layers)
+    return net
+}
+
+fn network_forward(net: map, input: list) -> list {
+    let current = input
+    for i in range(net["layer_count"]) {
+        let activation = sigmoid
+        if i == net["layer_count"] - 1 {
+            activation = sigmoid  // Output layer
+        }
+        net["layers"][i] = layer_forward(net["layers"][i], current, activation)
+        current = net["layers"][i]["last_output"]
+    }
+    return current
+}
+
+// --- Training (simplified gradient descent) ---------------------------
+
+fn train_step(net: map, input: list, target: list, lr: float) -> map {
+    // Forward pass
+    let output = network_forward(net, input)
+
+    // Compute output error
+    let error = []
+    for i in range(len(output)) {
+        let row = []
+        for j in range(len(output[i])) {
+            let o = output[i][j]
+            let t = target[i][j]
+            // Gradient: (output - target) * sigmoid_derivative
+            row = row + [(o - t) * o * (1.0 - o)]
+        }
+        error = error + [row]
+    }
+
+    // Update output layer weights
+    let last_idx = net["layer_count"] - 1
+    let last_layer = net["layers"][last_idx]
+    let last_input = last_layer["last_input"]
+
+    let input_t = matrix_transpose(last_input)
+    let weight_gradient = matrix_multiply(input_t, error)
+
+    // Apply gradient descent
+    for i in range(len(last_layer["weights"])) {
+        for j in range(len(last_layer["weights"][i])) {
+            last_layer["weights"][i][j] = last_layer["weights"][i][j] - lr * weight_gradient[i][j]
+        }
+    }
+
+    // Update biases
+    for j in range(len(last_layer["biases"])) {
+        let grad = 0.0
+        for i in range(len(error)) {
+            grad = grad + error[i][j]
+        }
+        last_layer["biases"][j] = last_layer["biases"][j] - lr * grad / len(error)
+    }
+
+    net["layers"][last_idx] = last_layer
+    return net
+}
+
+// --- Main: XOR Problem -----------------------------------------------
+
+fn main() {
+    println("LATERALUS Neural Network — XOR Problem")
+    println("=======================================")
+    println("")
+
+    // XOR dataset
+    let X = [[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]]
+    let Y = [[0.0], [1.0], [1.0], [0.0]]
+
+    // Create network: 2 inputs -> 4 hidden -> 1 output
+    let net = network_new([2, 4, 1])
+    let learning_rate = 0.5
+    let epochs = 1000
+
+    println("Architecture: 2 -> 4 -> 1")
+    println("Learning rate: " + str(learning_rate))
+    println("Training for " + str(epochs) + " epochs...")
+    println("")
+
+    // Training loop
+    for epoch in range(epochs) {
+        net = train_step(net, X, Y, learning_rate)
+
+        if (epoch + 1) % 100 == 0 {
+            let predictions = network_forward(net, X)
+            let loss = mse_loss(predictions, Y)
+            println("Epoch " + str(epoch + 1) + ": loss = " + str(round(loss, 6)))
+        }
+    }
+
+    // Final predictions
+    println("")
+    println("Final Predictions:")
+    let final_pred = network_forward(net, X)
+    for i in range(len(X)) {
+        let input_str = str(int(X[i][0])) + " XOR " + str(int(X[i][1]))
+        let predicted = round(final_pred[i][0], 4)
+        let expected = int(Y[i][0])
+        let correct = abs(predicted - expected) < 0.5
+        let icon = "CORRECT"
+        if not correct { icon = "WRONG" }
+        println("  " + input_str + " = " + str(predicted) +
+                " (expected " + str(expected) + ") " + icon)
+    }
+
+    println("")
+    println("Network weights learned successfully!")
+}

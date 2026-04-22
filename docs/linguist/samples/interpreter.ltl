@@ -1,0 +1,394 @@
+// =======================================================================
+// Mini Interpreter — Lateralus Implementation
+// A small arithmetic expression evaluator demonstrating recursive
+// descent parsing, AST construction, and tree-walk interpretation
+// =======================================================================
+
+import math
+import strings
+
+// -- Token Types ---------------------------------------------------------
+
+const TK_NUM  = 1
+const TK_PLUS = 2
+const TK_MINUS = 3
+const TK_STAR = 4
+const TK_SLASH = 5
+const TK_LPAREN = 6
+const TK_RPAREN = 7
+const TK_EOF = 8
+const TK_IDENT = 9
+const TK_ASSIGN = 10
+
+// -- Tokenizer -----------------------------------------------------------
+
+fn tokenize(input: str) -> list {
+    let tokens = []
+    let i = 0
+
+    while i < len(input) {
+        let ch = input[i]
+
+        // Skip whitespace
+        if ch == " " || ch == "\t" {
+            i = i + 1
+            continue
+        }
+
+        // Numbers
+        if ch >= "0" && ch <= "9" {
+            let start = i
+            while i < len(input) && input[i] >= "0" && input[i] <= "9" {
+                i = i + 1
+            }
+            // Check for decimal point
+            if i < len(input) && input[i] == "." {
+                i = i + 1
+                while i < len(input) && input[i] >= "0" && input[i] <= "9" {
+                    i = i + 1
+                }
+            }
+            let num_str = substr(input, start, i)
+            tokens = tokens + [[TK_NUM, num_str]]
+            continue
+        }
+
+        // Identifiers (variable names)
+        if (ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z") || ch == "_" {
+            let start = i
+            while i < len(input) && ((input[i] >= "a" && input[i] <= "z") || (input[i] >= "A" && input[i] <= "Z") || (input[i] >= "0" && input[i] <= "9") || input[i] == "_") {
+                i = i + 1
+            }
+            let name = substr(input, start, i)
+            tokens = tokens + [[TK_IDENT, name]]
+            continue
+        }
+
+        // Single-character tokens
+        if ch == "+" {
+            tokens = tokens + [[TK_PLUS, "+"]]
+        } else if ch == "-" {
+            tokens = tokens + [[TK_MINUS, "-"]]
+        } else if ch == "*" {
+            tokens = tokens + [[TK_STAR, "*"]]
+        } else if ch == "/" {
+            tokens = tokens + [[TK_SLASH, "/"]]
+        } else if ch == "(" {
+            tokens = tokens + [[TK_LPAREN, "("]]
+        } else if ch == ")" {
+            tokens = tokens + [[TK_RPAREN, ")"]]
+        } else if ch == "=" {
+            tokens = tokens + [[TK_ASSIGN, "="]]
+        } else {
+            println("Error: unexpected character '" + ch + "'")
+        }
+
+        i = i + 1
+    }
+
+    tokens = tokens + [[TK_EOF, ""]]
+    return tokens
+}
+
+// -- AST Node Types ------------------------------------------------------
+
+const AST_NUM = 1
+const AST_ADD = 2
+const AST_SUB = 3
+const AST_MUL = 4
+const AST_DIV = 5
+const AST_NEG = 6
+const AST_VAR = 7
+const AST_ASSIGN = 8
+
+// Node format: [type, ...children/value]
+// Number:  [AST_NUM, value]
+// Binary:  [AST_ADD/SUB/MUL/DIV, left, right]
+// Unary:   [AST_NEG, operand]
+// Var:     [AST_VAR, name]
+// Assign:  [AST_ASSIGN, name, expr]
+
+// -- Recursive Descent Parser --------------------------------------------
+
+// Parser state: [tokens, position]
+fn parser_new(tokens: list) -> list {
+    return [tokens, 0]
+}
+
+fn parser_peek(p: list) -> list {
+    let pos = p[1]
+    return p[0][pos]
+}
+
+fn parser_advance(p: list) -> list {
+    p[1] = p[1] + 1
+    return p
+}
+
+fn parser_expect(p: list, kind: int) -> list {
+    let tok = parser_peek(p)
+    if tok[0] != kind {
+        println("Parse error: expected token type " + str(kind) + " got " + str(tok[0]))
+    }
+    p = parser_advance(p)
+    return p
+}
+
+// Grammar:
+//   statement  -> IDENT '=' expr | expr
+//   expr       -> term (('+' | '-') term)*
+//   term       -> factor (('*' | '/') factor)*
+//   factor     -> '-' factor | atom
+//   atom       -> NUMBER | IDENT | '(' expr ')'
+
+fn parse_atom(p: list) -> list {
+    let tok = parser_peek(p)
+
+    if tok[0] == TK_NUM {
+        p = parser_advance(p)
+        return [p, [AST_NUM, float(tok[1])]]
+    }
+
+    if tok[0] == TK_IDENT {
+        p = parser_advance(p)
+        return [p, [AST_VAR, tok[1]]]
+    }
+
+    if tok[0] == TK_LPAREN {
+        p = parser_advance(p)
+        let result = parse_expr(p)
+        p = result[0]
+        let node = result[1]
+        p = parser_expect(p, TK_RPAREN)
+        return [p, node]
+    }
+
+    println("Parse error: unexpected token '" + tok[1] + "'")
+    return [p, [AST_NUM, 0.0]]
+}
+
+fn parse_factor(p: list) -> list {
+    let tok = parser_peek(p)
+
+    // Unary minus
+    if tok[0] == TK_MINUS {
+        p = parser_advance(p)
+        let result = parse_factor(p)
+        p = result[0]
+        let operand = result[1]
+        return [p, [AST_NEG, operand]]
+    }
+
+    return parse_atom(p)
+}
+
+fn parse_term(p: list) -> list {
+    let result = parse_factor(p)
+    p = result[0]
+    let left = result[1]
+
+    while parser_peek(p)[0] == TK_STAR || parser_peek(p)[0] == TK_SLASH {
+        let op = parser_peek(p)
+        p = parser_advance(p)
+        let right_result = parse_factor(p)
+        p = right_result[0]
+        let right = right_result[1]
+
+        if op[0] == TK_STAR {
+            left = [AST_MUL, left, right]
+        } else {
+            left = [AST_DIV, left, right]
+        }
+    }
+
+    return [p, left]
+}
+
+fn parse_expr(p: list) -> list {
+    let result = parse_term(p)
+    p = result[0]
+    let left = result[1]
+
+    while parser_peek(p)[0] == TK_PLUS || parser_peek(p)[0] == TK_MINUS {
+        let op = parser_peek(p)
+        p = parser_advance(p)
+        let right_result = parse_term(p)
+        p = right_result[0]
+        let right = right_result[1]
+
+        if op[0] == TK_PLUS {
+            left = [AST_ADD, left, right]
+        } else {
+            left = [AST_SUB, left, right]
+        }
+    }
+
+    return [p, left]
+}
+
+fn parse_statement(p: list) -> list {
+    let tok = parser_peek(p)
+
+    // Check for assignment: IDENT = expr
+    if tok[0] == TK_IDENT {
+        let saved_pos = p[1]
+        p = parser_advance(p)
+        let next = parser_peek(p)
+        if next[0] == TK_ASSIGN {
+            p = parser_advance(p)
+            let result = parse_expr(p)
+            p = result[0]
+            let expr = result[1]
+            return [p, [AST_ASSIGN, tok[1], expr]]
+        }
+        // Not assignment — backtrack
+        p[1] = saved_pos
+    }
+
+    return parse_expr(p)
+}
+
+// -- Tree-Walk Interpreter -----------------------------------------------
+
+fn eval_node(node: list, env: map) -> float {
+    let kind = node[0]
+
+    if kind == AST_NUM {
+        return node[1]
+    }
+
+    if kind == AST_VAR {
+        let name = node[1]
+        if contains(keys(env), name) {
+            return env[name]
+        }
+        println("Error: undefined variable '" + name + "'")
+        return 0.0
+    }
+
+    if kind == AST_NEG {
+        return 0.0 - eval_node(node[1], env)
+    }
+
+    if kind == AST_ADD {
+        return eval_node(node[1], env) + eval_node(node[2], env)
+    }
+
+    if kind == AST_SUB {
+        return eval_node(node[1], env) - eval_node(node[2], env)
+    }
+
+    if kind == AST_MUL {
+        return eval_node(node[1], env) * eval_node(node[2], env)
+    }
+
+    if kind == AST_DIV {
+        let divisor = eval_node(node[2], env)
+        if divisor == 0.0 {
+            println("Error: division by zero")
+            return 0.0
+        }
+        return eval_node(node[1], env) / divisor
+    }
+
+    println("Error: unknown node type " + str(kind))
+    return 0.0
+}
+
+// -- AST Pretty Printer -------------------------------------------------
+
+fn ast_to_str(node: list) -> str {
+    let kind = node[0]
+
+    if kind == AST_NUM {
+        return str(node[1])
+    }
+    if kind == AST_VAR {
+        return node[1]
+    }
+    if kind == AST_NEG {
+        return "(-" + ast_to_str(node[1]) + ")"
+    }
+    if kind == AST_ADD {
+        return "(" + ast_to_str(node[1]) + " + " + ast_to_str(node[2]) + ")"
+    }
+    if kind == AST_SUB {
+        return "(" + ast_to_str(node[1]) + " - " + ast_to_str(node[2]) + ")"
+    }
+    if kind == AST_MUL {
+        return "(" + ast_to_str(node[1]) + " * " + ast_to_str(node[2]) + ")"
+    }
+    if kind == AST_DIV {
+        return "(" + ast_to_str(node[1]) + " / " + ast_to_str(node[2]) + ")"
+    }
+    if kind == AST_ASSIGN {
+        return node[1] + " = " + ast_to_str(node[2])
+    }
+    return "?"
+}
+
+// -- REPL Driver ---------------------------------------------------------
+
+fn evaluate(input: str, env: map) -> list {
+    let tokens = tokenize(input)
+    let p = parser_new(tokens)
+    let result = parse_statement(p)
+    let _p = result[0]
+    let ast = result[1]
+
+    println("  AST:    " + ast_to_str(ast))
+
+    if ast[0] == AST_ASSIGN {
+        let name = ast[1]
+        let val = eval_node(ast[2], env)
+        env[name] = val
+        println("  Result: " + name + " = " + str(val))
+        return [val, env]
+    }
+
+    let val = eval_node(ast, env)
+    println("  Result: " + str(val))
+    return [val, env]
+}
+
+// -- Main ----------------------------------------------------------------
+
+fn main() {
+    println("Mini Interpreter — Lateralus Edition")
+    println("=======================================\n")
+
+    let env = {}
+
+    // Test cases: tokenize, parse, evaluate
+    let expressions = [
+        "2 + 3",
+        "10 * (4 + 2)",
+        "100 / (5 - 5 + 1)",
+        "-3 * -4",
+        "(1 + 2) * (3 + 4)",
+        "2 * 3 + 4 * 5",
+        "x = 42",
+        "y = x * 2 + 1",
+        "x + y",
+        "pi = 3.14159",
+        "r = 10",
+        "area = pi * r * r",
+    ]
+
+    for expr in expressions {
+        println(">>> " + expr)
+        let result = evaluate(expr, env)
+        env = result[1]
+        println("")
+    }
+
+    // Show final environment
+    println("=== Environment ===")
+    for name in sorted(keys(env)) {
+        println("  " + name + " = " + str(env[name]))
+    }
+
+    println("\nInterpreter demo complete!")
+}
+
+main()

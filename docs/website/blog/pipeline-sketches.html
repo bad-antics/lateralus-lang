@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pipeline Sketches: Design Patterns — Lateralus Blog</title>
+  <meta name="description" content="Pipeline Sketches: Design Patterns - Notes on language design, tooling, OS development, and the pipeline-first way of thinking.">
+  <meta property="og:title" content="Pipeline Sketches: Design Patterns — Lateralus Blog">
+  <meta property="og:description" content="Pipeline Sketches: Design Patterns">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://lateralus.dev/blog/pipeline-sketches.html">
+  <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+  <link rel="canonical" href="https://lateralus.dev/blog/pipeline-sketches.html">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css?v=20260408">
+  <style>
+    .blog-post { max-width: 800px; margin: 0 auto; padding: 80px 20px 60px; }
+    .blog-post h1 { font-family: 'Press Start 2P', monospace; font-size: clamp(14px, 3vw, 20px); color: var(--electric-yellow); line-height: 1.8; margin-bottom: 16px; }
+    .blog-meta { font-family: 'VT323', monospace; font-size: 18px; color: var(--hot-pink); margin-bottom: 24px; }
+    .blog-meta .tags { display: inline-flex; gap: 8px; margin-left: 16px; }
+    .blog-meta .tag { font-family: 'Press Start 2P', monospace; font-size: 8px; padding: 4px 10px; border: 1px solid var(--lime); color: var(--lime); }
+    .blog-content { font-family: 'VT323', monospace; font-size: 20px; color: var(--text); line-height: 1.7; }
+    .blog-content h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--cyber-blue); margin: 32px 0 16px; line-height: 1.6; }
+    .blog-content h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--lime); margin: 24px 0 12px; line-height: 1.6; }
+    .blog-content p { margin-bottom: 16px; }
+    .blog-content code { background: var(--bg3); padding: 2px 6px; color: var(--hot-pink); font-size: 18px; }
+    .blog-content pre { background: var(--bg3); border: 2px solid var(--border-light); padding: 16px; overflow-x: auto; margin: 16px 0; }
+    .blog-content pre code { background: none; padding: 0; display: block; font-size: 16px; line-height: 1.5; color: var(--text); }
+    .blog-content ul, .blog-content ol { margin: 16px 0; padding-left: 24px; }
+    .blog-content li { margin-bottom: 8px; }
+    .blog-content a { color: var(--cyber-blue); text-decoration: underline; }
+    .blog-content a:hover { color: var(--lime); }
+    .blog-content blockquote { border-left: 3px solid var(--lime); padding-left: 16px; margin: 16px 0; color: var(--text2); font-style: italic; }
+    .blog-back { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; color: var(--lime); text-decoration: none; margin-bottom: 24px; }
+    .blog-back:hover { color: var(--electric-yellow); }
+    /* Mobile responsive */
+    @media (max-width: 768px) {
+      .blog-header h1 { font-size: 14px; line-height: 1.5; }
+      .blog-header .meta { font-size: 11px; }
+      .blog-content { font-size: 16px; }
+      .blog-content code { font-size: 14px; }
+      .blog-content pre { padding: 12px; }
+      .blog-content pre code { font-size: 13px; }
+      .blog-back { font-size: 8px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/">PLAYGROUND</a>
+      <a href="/blog/" class="active">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<article class="blog-post">
+  <a href="/blog/" class="blog-back">← Back to Blog</a>
+  <h1>Pipeline Sketches: Design Patterns</h1>
+  <div class="blog-meta">
+    September 10, 2025
+    <span class="tags"><span class="tag">language</span><span class="tag">patterns</span><span class="tag">pipelines</span></span>
+  </div>
+  <div class="blog-content">
+
+    <p>After writing thousands of lines of pipeline-heavy Lateralus code, certain patterns emerge repeatedly. This is a collection of idioms and design patterns that have proven useful across domains.</p>
+
+    <h2>◉ Transform-Filter-Reduce</h2>
+    <p>The most common pattern. Transform data, filter out what you don't need, reduce to a result.</p>
+
+    <pre><code>// Count words over 5 characters
+let long_word_count = text
+    |> split(" ")
+    |> map(fn(w) { w |> trim() |> lowercase() })
+    |> filter(fn(w) { len(w) > 5 })
+    |> len()
+
+// Sum of squared even numbers
+let sum_sq_evens = numbers
+    |> filter(fn(n) { n % 2 == 0 })
+    |> map(fn(n) { n * n })
+    |> sum()</code></pre>
+
+    <h2>◉ Fanout-Fanin</h2>
+    <p>Process data through multiple paths, then merge results. Useful for parallel processing or when you need multiple derived values.</p>
+
+    <pre><code>// Compute multiple statistics in parallel
+fn analyze(data: [float]) -> Stats {
+    let results = data |> tee(
+        fn(d) { ("min", min(d)) },
+        fn(d) { ("max", max(d)) },
+        fn(d) { ("mean", mean(d)) },
+        fn(d) { ("stddev", stddev(d)) }
+    )
+
+    Stats {
+        min: results["min"],
+        max: results["max"],
+        mean: results["mean"],
+        stddev: results["stddev"]
+    }
+}
+
+// Multiple enrichment paths
+fn enrich_user(user: User) -> EnrichedUser {
+    user |> tee(
+        fetch_profile,
+        fetch_permissions,
+        fetch_preferences
+    ) |> merge_into(EnrichedUser)</code></pre>
+
+    <h2>◉ Accumulating Pipeline</h2>
+    <p>Build up context as you move through stages. Each stage adds to the result rather than replacing it.</p>
+
+    <pre><code>// Build a report with progressive enrichment
+fn build_report(order_id: int) -> Report {
+    { id: order_id }
+        |> add_order_details()
+        |> add_customer_info()
+        |> add_shipping_status()
+        |> add_payment_history()
+        |> format_report()
+}
+
+fn add_order_details(ctx: map) -> map {
+    let order = db.get_order(ctx.id)
+    { ...ctx, order: order, items: order.items }
+}
+
+fn add_customer_info(ctx: map) -> map {
+    let customer = db.get_customer(ctx.order.customer_id)
+    { ...ctx, customer: customer }
+}</code></pre>
+
+    <h2>◉ Conditional Pipeline</h2>
+    <p>Branch pipeline flow based on conditions. Use <code>then_if</code> or pattern matching.</p>
+
+    <pre><code>// Apply discount only if eligible
+fn process_order(order: Order) -> Order {
+    order
+        |> validate()
+        |> then_if(_.total > 100, apply_bulk_discount)
+        |> then_if(_.customer.is_member, apply_member_discount)
+        |> calculate_shipping()
+        |> finalize()
+}
+
+// Pattern-based branching
+fn route_message(msg: Message) -> Result {
+    msg |> match {
+        Message::Email(_) => send_email,
+        Message::SMS(_) => send_sms,
+        Message::Push(_) => send_push,
+    } |> log_result()
+}</code></pre>
+
+    <h2>◉ Error-Collecting Pipeline</h2>
+    <p>Process all items, collecting errors rather than failing fast. Useful for batch operations.</p>
+
+    <pre><code>fn process_batch(items: [Item]) -> BatchResult {
+    let results = items
+        |> map(fn(item) {
+            match process_item(item) {
+                Ok(r) => { item: item, result: Some(r), error: None },
+                Err(e) => { item: item, result: None, error: Some(e) }
+            }
+        })
+
+    BatchResult {
+        succeeded: results |> filter(_.result.is_some()) |> map(_.result.unwrap()),
+        failed: results |> filter(_.error.is_some()) |> map(fn(r) { (r.item, r.error.unwrap()) })
+    }
+}</code></pre>
+
+    <h2>◉ Window Pipeline</h2>
+    <p>Process data in sliding or tumbling windows. Essential for time-series and streaming.</p>
+
+    <pre><code>// Moving average
+fn moving_average(data: [float], window_size: int) -> [float] {
+    data
+        |> windows(window_size)
+        |> map(mean)
+}
+
+// Detect anomalies using rolling statistics
+fn detect_anomalies(readings: [float]) -> [Anomaly] {
+    readings
+        |> windows(60)  // 1-minute windows
+        |> enumerate()
+        |> filter(fn((i, window)) {
+            let avg = mean(window)
+            let std = stddev(window)
+            let latest = window[len(window) - 1]
+            abs(latest - avg) > 3.0 * std
+        })
+        |> map(fn((i, _)) { Anomaly { index: i } })
+}</code></pre>
+
+    <h2>◉ State Machine Pipeline</h2>
+    <p>Transform input through a state machine. Each input can trigger state transitions.</p>
+
+    <pre><code>enum TokenizerState { Normal, InString, InComment }
+
+fn tokenize(chars: [char]) -> [Token] {
+    let initial = { state: Normal, tokens: [], buffer: "" }
+
+    chars
+        |> fold(initial, fn(ctx, ch) {
+            match (ctx.state, ch) {
+                (Normal, '"') => { ...ctx, state: InString },
+                (InString, '"') => {
+                    ...ctx,
+                    state: Normal,
+                    tokens: ctx.tokens + [Token::String(ctx.buffer)],
+                    buffer: ""
+                },
+                (InString, c) => { ...ctx, buffer: ctx.buffer + c },
+                (Normal, '/') => { ...ctx, state: InComment },
+                // ... more transitions
+            }
+        })
+        |> _.tokens
+}</code></pre>
+
+    <h2>◉ Retry Pipeline</h2>
+    <p>Wrap fallible operations with retry logic. Combines well with exponential backoff.</p>
+
+    <pre><code>fn with_retry[T](op: fn() -> Result[T], max_attempts: int) -> Result[T] {
+    range(0, max_attempts)
+        |> find_map(fn(attempt) {
+            match op() {
+                Ok(v) => Some(Ok(v)),
+                Err(e) if attempt < max_attempts - 1 => {
+                    sleep_ms(100 * pow(2, attempt))  // Exponential backoff
+                    None
+                },
+                Err(e) => Some(Err(e))
+            }
+        })
+        |> unwrap_or(Err("Max retries exceeded"))
+}
+
+// Usage
+let result = with_retry(fn() { http.get(url) }, 3)</code></pre>
+
+    <h2>◉ Validation Pipeline</h2>
+    <p>Run multiple validations, collecting all errors rather than stopping at first.</p>
+
+    <pre><code>fn validate_user(user: User) -> Result[User, [ValidationError]] {
+    let checks = [
+        (fn(u) { len(u.name) > 0 }, "Name required"),
+        (fn(u) { len(u.email) > 0 }, "Email required"),
+        (fn(u) { u.email.contains("@") }, "Invalid email format"),
+        (fn(u) { u.age >= 13 }, "Must be 13 or older"),
+    ]
+
+    let errors = checks
+        |> filter(fn((check, _)) { !check(user) })
+        |> map(fn((_, msg)) { ValidationError { message: msg } })
+
+    match len(errors) {
+        0 => Ok(user),
+        _ => Err(errors)
+    }
+}</code></pre>
+
+    <h2>◉ Pipeline Composition</h2>
+    <p>Build complex pipelines from smaller, reusable pieces.</p>
+
+    <pre><code>// Define pipeline stages as named functions
+let normalize = fn(data) {
+    data |> map(lowercase) |> map(trim)
+}
+
+let remove_stopwords = fn(words) {
+    words |> filter(fn(w) { !STOPWORDS.contains(w) })
+}
+
+let stem = fn(words) {
+    words |> map(porter_stem)
+}
+
+// Compose into a text processing pipeline
+let preprocess = compose(normalize, remove_stopwords, stem)
+
+// Use it
+let tokens = raw_text |> split(" ") |> preprocess()</code></pre>
+
+    <h2>◉ When Pipelines Don't Fit</h2>
+    <p>Not everything should be a pipeline. Avoid them when:</p>
+
+    <ul>
+      <li><strong>Lots of early exits:</strong> Use traditional control flow</li>
+      <li><strong>Complex state dependencies:</strong> Consider a class or closure</li>
+      <li><strong>Performance-critical loops:</strong> Sometimes a simple loop is faster</li>
+      <li><strong>Readability suffers:</strong> If the pipeline is confusing, refactor</li>
+    </ul>
+
+    <p>Pipelines are a tool, not a religion. Use them where they clarify intent.</p>
+
+    <p>More examples in the <a href="/playground/">playground</a> and the <a href="https://github.com/bad-antics/lateralus-lang/tree/main/examples" target="_blank">examples directory</a>.</p>
+
+  </div>
+</article>
+
+<footer>
+  <div class="container" style="text-align:center; padding: 2rem 0;">
+    <p style="font-family:'Press Start 2P',monospace; font-size:9px; color:var(--lime); margin-bottom:8px;">|&gt; LATERALUS</p>
+    <p style="font-family:'VT323',monospace; font-size:14px; color:var(--text);">A Language That Spirals Outward</p>
+  </div>
+</footer>
+
+<script src="/site.js"></script>
+</body>
+</html>

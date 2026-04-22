@@ -1,0 +1,265 @@
+// =======================================================================
+// LATERALUS — Graph Theory & Network Analysis
+// Demonstrates data structures, algorithms, and pipeline composition
+// =======================================================================
+
+import algorithms
+import data
+
+// --- Graph representation using adjacency list ------------------------
+
+fn graph_new() -> map {
+    let g = {}
+    g["vertices"] = {}
+    g["edges"] = []
+    g["directed"] = false
+    g["vertex_count"] = 0
+    g["edge_count"] = 0
+    return g
+}
+
+fn graph_add_vertex(g: map, id: str, data) -> map {
+    let v = {}
+    v["id"] = id
+    v["data"] = data
+    v["neighbors"] = []
+    g["vertices"][id] = v
+    g["vertex_count"] = g["vertex_count"] + 1
+    return g
+}
+
+fn graph_add_edge(g: map, src: str, to: str, weight: float) -> map {
+    let edge = {}
+    edge["from"] = src
+    edge["to"] = to
+    edge["weight"] = weight
+    g["edges"] = g["edges"] + [edge]
+    g["edge_count"] = g["edge_count"] + 1
+
+    // Add to adjacency list
+    let nb1 = {}
+    nb1["vertex"] = to
+    nb1["weight"] = weight
+    g["vertices"][src]["neighbors"] = g["vertices"][src]["neighbors"] + [nb1]
+
+    if not g["directed"] {
+        let nb2 = {}
+        nb2["vertex"] = src
+        nb2["weight"] = weight
+        g["vertices"][to]["neighbors"] = g["vertices"][to]["neighbors"] + [nb2]
+    }
+
+    return g
+}
+
+// --- Breadth-First Search ---------------------------------------------
+
+fn bfs(g: map, start: str) -> list {
+    let visited = {}
+    let queue = [start]
+    let order = []
+
+    visited[start] = true
+
+    while len(queue) > 0 {
+        let current = queue[0]
+        queue = slice(queue, 1, len(queue))
+        order = order + [current]
+
+        let vertex = g["vertices"][current]
+        for neighbor in vertex["neighbors"] {
+            let vid = neighbor["vertex"]
+            if not contains(keys(visited), vid) {
+                visited[vid] = true
+                queue = queue + [vid]
+            }
+        }
+    }
+
+    return order
+}
+
+// --- Depth-First Search -----------------------------------------------
+
+fn dfs_helper(g: map, vertex: str, visited: map, order: list) -> list {
+    visited[vertex] = true
+    order = order + [vertex]
+
+    let v = g["vertices"][vertex]
+    for neighbor in v["neighbors"] {
+        let vid = neighbor["vertex"]
+        if not contains(keys(visited), vid) {
+            order = dfs_helper(g, vid, visited, order)
+        }
+    }
+
+    return order
+}
+
+fn dfs(g: map, start: str) -> list {
+    let visited = {}
+    return dfs_helper(g, start, visited, [])
+}
+
+// --- Shortest Path (Dijkstra's Algorithm) -----------------------------
+
+fn dijkstra(g: map, start: str) -> map {
+    let distances = {}
+    let previous = {}
+    let unvisited = {}
+
+    // Initialize distances
+    for vertex_id in keys(g["vertices"]) {
+        distances[vertex_id] = 999999999
+        previous[vertex_id] = none
+        unvisited[vertex_id] = true
+    }
+    distances[start] = 0.0
+
+    while len(keys(unvisited)) > 0 {
+        // Find minimum distance unvisited vertex
+        let min_dist = 999999999
+        let current = none
+        for vid in keys(unvisited) {
+            if distances[vid] < min_dist {
+                min_dist = distances[vid]
+                current = vid
+            }
+        }
+
+        if current == none { break }
+
+        // Remove from unvisited
+        let new_unvisited = {}
+        for k in keys(unvisited) {
+            if k != current {
+                new_unvisited[k] = true
+            }
+        }
+        unvisited = new_unvisited
+
+        // Update neighbors
+        let vertex = g["vertices"][current]
+        for neighbor in vertex["neighbors"] {
+            let alt = distances[current] + neighbor["weight"]
+            if alt < distances[neighbor["vertex"]] {
+                distances[neighbor["vertex"]] = alt
+                previous[neighbor["vertex"]] = current
+            }
+        }
+    }
+
+    let result = {}
+    result["distances"] = distances
+    result["previous"] = previous
+    return result
+}
+
+fn shortest_path(g: map, start: str, end: str) -> map {
+    let result = dijkstra(g, start)
+    let path = []
+    let current = end
+
+    while current != none {
+        path = [current] + path
+        current = result["previous"][current]
+    }
+
+    let sp = {}
+    sp["path"] = path
+    sp["distance"] = result["distances"][end]
+    return sp
+}
+
+// --- Network Analysis -------------------------------------------------
+
+fn degree(g: map, vertex_id: str) -> int {
+    return len(g["vertices"][vertex_id]["neighbors"])
+}
+
+fn average_degree(g: map) -> float {
+    let total = 0
+    let count = 0
+    for vid in keys(g["vertices"]) {
+        total = total + degree(g, vid)
+        count = count + 1
+    }
+    if count == 0 { return 0.0 }
+    return total / count
+}
+
+fn density(g: map) -> float {
+    let n = g["vertex_count"]
+    if n <= 1 { return 0.0 }
+    let max_edges = n * (n - 1) / 2
+    return g["edge_count"] / max_edges
+}
+
+// --- Main: Build and analyze a network --------------------------------
+
+fn main() {
+    println("LATERALUS Graph Theory Demo")
+    println("===========================")
+    println("")
+
+    // Build a city network
+    let cities = graph_new()
+
+    // Add cities
+    cities = cities
+        |> graph_add_vertex("NYC", "New York City")
+        |> graph_add_vertex("BOS", "Boston")
+        |> graph_add_vertex("PHI", "Philadelphia")
+        |> graph_add_vertex("DC", "Washington DC")
+        |> graph_add_vertex("CHI", "Chicago")
+        |> graph_add_vertex("DET", "Detroit")
+
+    // Add routes (distances in miles)
+    cities = cities
+        |> graph_add_edge("NYC", "BOS", 215.0)
+        |> graph_add_edge("NYC", "PHI", 95.0)
+        |> graph_add_edge("PHI", "DC", 140.0)
+        |> graph_add_edge("NYC", "CHI", 790.0)
+        |> graph_add_edge("BOS", "CHI", 980.0)
+        |> graph_add_edge("CHI", "DET", 280.0)
+        |> graph_add_edge("DET", "NYC", 615.0)
+
+    println("Network: " + str(cities["vertex_count"]) + " cities, " +
+            str(cities["edge_count"]) + " routes")
+
+    // BFS traversal
+    let bfs_order = bfs(cities, "NYC")
+    println("BFS from NYC: " + str(bfs_order))
+
+    // DFS traversal
+    let dfs_order = dfs(cities, "NYC")
+    println("DFS from NYC: " + str(dfs_order))
+
+    // Shortest paths
+    println("")
+    println("Shortest Paths from NYC:")
+    let sp = dijkstra(cities, "NYC")
+    for city in ["BOS", "PHI", "DC", "CHI", "DET"] {
+        println("  NYC -> " + city + ": " + str(sp["distances"][city]) + " miles")
+    }
+
+    // Find specific shortest path
+    let route = shortest_path(cities, "BOS", "DC")
+    println("")
+    println("Best route BOS -> DC:")
+    println("  Path: " + str(route["path"]))
+    println("  Distance: " + str(route["distance"]) + " miles")
+
+    // Network analysis
+    println("")
+    println("Network Analysis:")
+    println("  Average degree: " + str(average_degree(cities)))
+    println("  Density: " + str(density(cities)))
+
+    for city in keys(cities["vertices"]) {
+        println("  Degree(" + city + "): " + str(degree(cities, city)))
+    }
+
+    println("")
+    println("Done!")
+}

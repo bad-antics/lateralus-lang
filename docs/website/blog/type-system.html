@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hindley-Milner Type Inference in Lateralus — Lateralus Blog</title>
+  <meta name="description" content="Hindley-Milner Type Inference in Lateralus - Notes on language design, tooling, OS development, and the pipeline-first way of thinking.">
+  <meta property="og:title" content="Hindley-Milner Type Inference in Lateralus — Lateralus Blog">
+  <meta property="og:description" content="Hindley-Milner Type Inference in Lateralus">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://lateralus.dev/blog/type-system.html">
+  <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+  <link rel="canonical" href="https://lateralus.dev/blog/type-system.html">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css?v=20260408">
+  <style>
+    .blog-post { max-width: 800px; margin: 0 auto; padding: 80px 20px 60px; }
+    .blog-post h1 { font-family: 'Press Start 2P', monospace; font-size: clamp(14px, 3vw, 20px); color: var(--electric-yellow); line-height: 1.8; margin-bottom: 16px; }
+    .blog-meta { font-family: 'VT323', monospace; font-size: 18px; color: var(--hot-pink); margin-bottom: 24px; }
+    .blog-meta .tags { display: inline-flex; gap: 8px; margin-left: 16px; }
+    .blog-meta .tag { font-family: 'Press Start 2P', monospace; font-size: 8px; padding: 4px 10px; border: 1px solid var(--lime); color: var(--lime); }
+    .blog-content { font-family: 'VT323', monospace; font-size: 20px; color: var(--text); line-height: 1.7; }
+    .blog-content h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--cyber-blue); margin: 32px 0 16px; line-height: 1.6; }
+    .blog-content h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--lime); margin: 24px 0 12px; line-height: 1.6; }
+    .blog-content p { margin-bottom: 16px; }
+    .blog-content code { background: var(--bg3); padding: 2px 6px; color: var(--hot-pink); font-size: 18px; }
+    .blog-content pre { background: var(--bg3); border: 2px solid var(--border-light); padding: 16px; overflow-x: auto; margin: 16px 0; }
+    .blog-content pre code { background: none; padding: 0; display: block; font-size: 16px; line-height: 1.5; color: var(--text); }
+    .blog-content ul, .blog-content ol { margin: 16px 0; padding-left: 24px; }
+    .blog-content li { margin-bottom: 8px; }
+    .blog-content a { color: var(--cyber-blue); text-decoration: underline; }
+    .blog-content a:hover { color: var(--lime); }
+    .blog-content blockquote { border-left: 3px solid var(--lime); padding-left: 16px; margin: 16px 0; color: var(--text2); font-style: italic; }
+    .blog-back { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; color: var(--lime); text-decoration: none; margin-bottom: 24px; }
+    .blog-back:hover { color: var(--electric-yellow); }
+    .feature-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin: 20px 0; }
+    .feature-card { background: var(--bg3); border: 2px solid var(--border-light); padding: 12px; }
+    .feature-card h4 { font-family: 'Press Start 2P', monospace; font-size: 8px; color: var(--electric-yellow); margin-bottom: 6px; }
+    .feature-card p { font-size: 16px; margin: 0; }
+    .cta-box { background: var(--bg3); border: 2px solid var(--lime); padding: 20px; text-align: center; margin: 24px 0; }
+    .cta-box h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--electric-yellow); margin-bottom: 8px; }
+    .cta-box p { margin-bottom: 12px; }
+    .cta-box a { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; padding: 10px 20px; margin: 4px; }
+    .cta-box .btn-primary { background: var(--lime); color: var(--bg); }
+    .cta-box .btn-secondary { border: 2px solid var(--cyber-blue); color: var(--cyber-blue); }
+    @media (max-width: 768px) {
+      .blog-post h1 { font-size: 14px; line-height: 1.5; }
+      .blog-content { font-size: 16px; }
+      .blog-content code { font-size: 14px; }
+      .blog-content pre { padding: 12px; }
+      .blog-content pre code { font-size: 13px; }
+      .blog-back { font-size: 8px; }
+      .feature-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/">PLAYGROUND</a>
+      <a href="/blog/" class="active">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<article class="blog-post">
+  <a href="/blog/" class="blog-back">← Back to Blog</a>
+  <h1>Hindley-Milner Type Inference in Lateralus</h1>
+  <div class="blog-meta">
+    2025
+    <span class="tags"><span class="tag">types</span><span class="tag">theory</span></span>
+  </div>
+  <div class="blog-content">
+<a href="/blog/" class="blog-back">← Back to Blog</a>
+  
+  <div class="blog-meta">
+    2025
+    <span class="tags"><span class="tag">types</span><span class="tag">theory</span></span>
+  </div>
+  <div class="blog-content">
+<div class="meta">July 2025 · 9 min read · <a href="/blog/">← All Posts</a></div>
+
+<p>One of the most common complaints I hear about statically typed languages is the <strong>annotation tax</strong> — the feeling that you're writing types for the compiler, not for yourself. In dynamically typed languages you just write <code>x = 42</code> and move on. In many static languages you write <code>int x = 42</code>, which feels redundant when the compiler can clearly see there's a <code>42</code> right there.</p>
+
+<p>When I designed Lateralus, I wanted the best of both worlds: <strong>the safety of static types with the ergonomics of dynamic typing</strong>. The answer was Hindley-Milner type inference — a well-studied algorithm from the 1970s and 80s that can infer the types of nearly every expression without a single annotation.</p>
+
+<h2>◉ The Problem with Explicit Types</h2>
+
+<p>Consider a simple function that doubles a number. In many languages, you'd write something like this:</p>
+
+<pre><code><span style="color: var(--text2)">// Java-style: types everywhere</span>
+<span style="color: var(--hot-pink)">int</span> <span style="color: var(--cyber-blue)">double</span>(<span style="color: var(--hot-pink)">int</span> x) {
+    <span style="color: var(--hot-pink)">return</span> x * <span style="color: var(--electric-yellow)">2</span>;
+}
+
+<span style="color: var(--text2)">// TypeScript: better, but still annotated</span>
+<span style="color: var(--hot-pink)">function</span> <span style="color: var(--cyber-blue)">double</span>(x: <span style="color: var(--hot-pink)">number</span>): <span style="color: var(--hot-pink)">number</span> {
+    <span style="color: var(--hot-pink)">return</span> x * <span style="color: var(--electric-yellow)">2</span>;
+}</code></pre>
+
+<p>In Lateralus, you just write the logic:</p>
+
+<pre><code><span style="color: var(--hot-pink)">let</span> <span style="color: var(--cyber-blue)">double</span> = x <span style="color: var(--electric-yellow)">=&gt;</span> x * <span style="color: var(--electric-yellow)">2</span>
+
+<span style="color: var(--text2)">// The compiler infers: (Int) -&gt; Int</span>
+<span style="color: var(--text2)">// No annotation needed — the * operator constrains x to Int</span></code></pre>
+
+<p>This isn't just syntactic sugar. The compiler genuinely <strong>derives</strong> the type from the structure of the expression. And it works for far more complex cases than simple arithmetic.</p>
+
+<h2>◉ What Is Hindley-Milner?</h2>
+
+<p>Hindley-Milner (often called HM) is a type system and inference algorithm developed by Roger Hindley in 1969 and later independently by Robin Milner in 1978. Luis Damas formalized the completeness proof in 1982. The key insight is that for a language without subtyping or ad-hoc overloading, <strong>every well-typed expression has a unique most-general type that can be computed mechanically</strong>.</p>
+
+<p>The algorithm works in two phases:</p>
+<ol>
+    <li><strong>Constraint generation</strong> — Walk the AST and emit equations like "the type of <code>x</code> must equal the type of <code>y</code>"</li>
+    <li><strong>Unification</strong> — Solve those equations simultaneously to find concrete types</li>
+</ol>
+
+<h2>◉ Constraint Generation in Lateralus</h2>
+
+<p>Let's trace through a real example. Consider this function:</p>
+
+<pre><code><span style="color: var(--hot-pink)">let</span> <span style="color: var(--cyber-blue)">apply_twice</span> = (f, x) <span style="color: var(--electric-yellow)">=&gt;</span> x <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--cyber-blue)">f</span> <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--cyber-blue)">f</span></code></pre>
+
+<p>The compiler assigns fresh <strong>type variables</strong> to each unknown:</p>
+
+<pre><code><span style="color: var(--text2)">// Internal constraint generation:</span>
+<span style="color: var(--text2)">// f : α</span>
+<span style="color: var(--text2)">// x : β</span>
+<span style="color: var(--text2)">// apply_twice : (α, β) -&gt; γ</span>
+<span style="color: var(--text2)">//</span>
+<span style="color: var(--text2)">// From `x |&gt; f`:</span>
+<span style="color: var(--text2)">//   α must be a function: α = β -&gt; δ</span>
+<span style="color: var(--text2)">//</span>
+<span style="color: var(--text2)">// From `(x |&gt; f) |&gt; f`:</span>
+<span style="color: var(--text2)">//   α must accept δ as input: α = δ -&gt; γ</span>
+<span style="color: var(--text2)">//</span>
+<span style="color: var(--text2)">// Combining: β -&gt; δ = δ -&gt; γ</span>
+<span style="color: var(--text2)">//   therefore β = δ = γ</span>
+<span style="color: var(--text2)">//</span>
+<span style="color: var(--text2)">// Final type: apply_twice : ((β -&gt; β), β) -&gt; β</span></code></pre>
+
+<p>The compiler deduced that <code>f</code> must be a function from some type to <strong>the same type</strong>, and that the input and output of <code>apply_twice</code> share that type. All without a single annotation.</p>
+
+<h2>◉ The Unification Algorithm</h2>
+
+<p>Unification is the heart of HM inference. Given a set of type equations, it finds a <strong>substitution</strong> — a mapping from type variables to types — that satisfies all constraints simultaneously. Here's a simplified view of how Lateralus implements it:</p>
+
+<pre><code><span style="color: var(--text2)">// Pseudocode for the unification engine</span>
+<span style="color: var(--hot-pink)">let</span> <span style="color: var(--cyber-blue)">unify</span> = (t1, t2, subst) <span style="color: var(--electric-yellow)">=&gt;</span> <span style="color: var(--hot-pink)">match</span> (<span style="color: var(--cyber-blue)">apply_subst</span>(t1, subst), <span style="color: var(--cyber-blue)">apply_subst</span>(t2, subst))
+    | (<span style="color: var(--hot-pink)">TypeVar</span>(a), t) <span style="color: var(--electric-yellow)">=&gt;</span> <span style="color: var(--hot-pink)">if</span> <span style="color: var(--cyber-blue)">occurs</span>(a, t)
+        <span style="color: var(--hot-pink)">then</span> <span style="color: var(--hot-pink)">Error</span>(<span style="color: var(--lime)">"infinite type"</span>)
+        <span style="color: var(--hot-pink)">else</span> <span style="color: var(--cyber-blue)">extend</span>(subst, a, t)
+    | (t, <span style="color: var(--hot-pink)">TypeVar</span>(a)) <span style="color: var(--electric-yellow)">=&gt;</span> <span style="color: var(--cyber-blue)">unify</span>(<span style="color: var(--hot-pink)">TypeVar</span>(a), t, subst)
+    | (<span style="color: var(--hot-pink)">Arrow</span>(a1, r1), <span style="color: var(--hot-pink)">Arrow</span>(a2, r2)) <span style="color: var(--electric-yellow)">=&gt;</span>
+        subst <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--cyber-blue)">unify</span>(a1, a2) <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--cyber-blue)">unify</span>(r1, r2)
+    | (<span style="color: var(--hot-pink)">Con</span>(n1), <span style="color: var(--hot-pink)">Con</span>(n2)) <span style="color: var(--hot-pink)">when</span> n1 == n2 <span style="color: var(--electric-yellow)">=&gt;</span> subst
+    | _ <span style="color: var(--electric-yellow)">=&gt;</span> <span style="color: var(--hot-pink)">Error</span>(<span style="color: var(--lime)">"type mismatch"</span>)</code></pre>
+
+<p>The <strong>occurs check</strong> on line 3 prevents infinite types. Without it, you could unify <code>α</code> with <code>List&lt;α&gt;</code>, producing the nonsensical <code>List&lt;List&lt;List&lt;...&gt;&gt;&gt;</code>. The Lateralus compiler catches this and reports a clear error.</p>
+
+<h3>Type Variables and Generalization</h3>
+
+<p>After inference completes for a <code>let</code> binding, the compiler <strong>generalizes</strong> any remaining type variables into polymorphic parameters. This is what lets you write generic functions naturally:</p>
+
+<pre><code><span style="color: var(--hot-pink)">let</span> <span style="color: var(--cyber-blue)">identity</span> = x <span style="color: var(--electric-yellow)">=&gt;</span> x
+<span style="color: var(--text2)">// Inferred: ∀α. α -&gt; α</span>
+
+<span style="color: var(--hot-pink)">let</span> <span style="color: var(--cyber-blue)">first</span> = (a, b) <span style="color: var(--electric-yellow)">=&gt;</span> a
+<span style="color: var(--text2)">// Inferred: ∀α β. (α, β) -&gt; α</span>
+
+<span style="color: var(--text2)">// Both work with any type:</span>
+<span style="color: var(--cyber-blue)">identity</span>(<span style="color: var(--electric-yellow)">42</span>)          <span style="color: var(--text2)">// Int</span>
+<span style="color: var(--cyber-blue)">identity</span>(<span style="color: var(--lime)">"hello"</span>)     <span style="color: var(--text2)">// String</span>
+<span style="color: var(--cyber-blue)">first</span>(<span style="color: var(--electric-yellow)">1</span>, <span style="color: var(--lime)">"two"</span>)       <span style="color: var(--text2)">// Int</span></code></pre>
+
+<p>This is called <strong>let-polymorphism</strong>, and it's the feature that separates HM from simpler inference systems. Each use of <code>identity</code> gets a fresh instantiation of the type scheme, so it can be used at different types without conflict.</p>
+
+<h2>◉ When You DO Need Annotations</h2>
+
+<p>HM inference is powerful, but it has limits. There are a few cases where Lateralus asks for explicit annotations:</p>
+
+<div class="info-box">
+    <h4>Annotation Required</h4>
+    <ul>
+        <li><strong>Recursive types</strong> — e.g., a tree node that contains children of its own type</li>
+        <li><strong>Higher-rank polymorphism</strong> — passing polymorphic functions as arguments</li>
+        <li><strong>FFI boundaries</strong> — interfacing with Python or C functions</li>
+        <li><strong>Ambiguous numeric literals</strong> — when <code>42</code> could be Int or Float in context</li>
+    </ul>
+</div>
+
+<pre><code><span style="color: var(--text2)">// Recursive type needs annotation</span>
+<span style="color: var(--hot-pink)">type</span> <span style="color: var(--hot-pink)">Tree</span>&lt;<span style="color: var(--hot-pink)">T</span>&gt; = <span style="color: var(--hot-pink)">Leaf</span>(<span style="color: var(--hot-pink)">T</span>) | <span style="color: var(--hot-pink)">Branch</span>(<span style="color: var(--hot-pink)">Tree</span>&lt;<span style="color: var(--hot-pink)">T</span>&gt;, <span style="color: var(--hot-pink)">Tree</span>&lt;<span style="color: var(--hot-pink)">T</span>&gt;)
+
+<span style="color: var(--text2)">// FFI boundary needs annotation</span>
+<span style="color: var(--hot-pink)">extern</span> <span style="color: var(--hot-pink)">fn</span> <span style="color: var(--cyber-blue)">py_json_parse</span>(s: <span style="color: var(--hot-pink)">String</span>) <span style="color: var(--electric-yellow)">-&gt;</span> <span style="color: var(--hot-pink)">Dict</span>&lt;<span style="color: var(--hot-pink)">String</span>, <span style="color: var(--hot-pink)">Any</span>&gt;
+
+<span style="color: var(--text2)">// Everything else? The compiler handles it.</span>
+<span style="color: var(--hot-pink)">let</span> <span style="color: var(--cyber-blue)">process</span> = data <span style="color: var(--electric-yellow)">=&gt;</span>
+    data
+    <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--cyber-blue)">filter</span>(x <span style="color: var(--electric-yellow)">=&gt;</span> x.age &gt; <span style="color: var(--electric-yellow)">18</span>)
+    <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--cyber-blue)">map</span>(x <span style="color: var(--electric-yellow)">=&gt;</span> x.name)
+    <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--cyber-blue)">sort</span>()
+<span style="color: var(--text2)">// Inferred: (List&lt;{age: Int, name: String, ...}&gt;) -&gt; List&lt;String&gt;</span></code></pre>
+
+<h2>◉ Comparison: Lateralus vs. TypeScript vs. Rust</h2>
+
+<p><strong>TypeScript</strong> uses bidirectional type checking — it flows types both "forward" from expressions and "backward" from expected contexts. It's pragmatic but unsound by design (any <code>any</code> breaks the guarantees). Lateralus never has an escape hatch; inference is total or it's a compile error.</p>
+
+<p><strong>Rust</strong> uses a more complex system with trait bounds, lifetimes, and borrow checking layered on top. Rust's inference is local — it can infer types within a function body but requires signatures on all function declarations. Lateralus infers across function boundaries, which means top-level functions can be written without signatures.</p>
+
+<p>In practice, well-written Lateralus code has <strong>80-90% fewer type annotations</strong> than equivalent Rust, and <strong>100% more type safety</strong> than equivalent TypeScript.</p>
+
+<h2>◉ Pipeline Inference: The Killer Feature</h2>
+
+<p>Where HM inference really shines in Lateralus is with pipelines. Because the <code>|&gt;</code> operator threads a value through a chain of functions, the compiler can infer the entire chain's types from a single starting point:</p>
+
+<pre><code><span style="color: var(--hot-pink)">let</span> result =
+    <span style="color: var(--lime)">"hello world 123 foo 456"</span>
+    <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--cyber-blue)">split</span>(<span style="color: var(--lime)">" "</span>)           <span style="color: var(--text2)">// String -&gt; List&lt;String&gt;</span>
+    <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--cyber-blue)">filter</span>(<span style="color: var(--cyber-blue)">is_numeric</span>)   <span style="color: var(--text2)">// List&lt;String&gt; -&gt; List&lt;String&gt;</span>
+    <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--cyber-blue)">map</span>(<span style="color: var(--cyber-blue)">parse_int</span>)      <span style="color: var(--text2)">// List&lt;String&gt; -&gt; List&lt;Int&gt;</span>
+    <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--cyber-blue)">fold</span>(<span style="color: var(--electric-yellow)">0</span>, <span style="color: var(--cyber-blue)">add</span>)        <span style="color: var(--text2)">// List&lt;Int&gt; -&gt; Int</span>
+
+<span style="color: var(--text2)">// result : Int — inferred through 4 pipeline stages</span></code></pre>
+
+<p>Each stage constrains the next. The type flows left-to-right, just like the data. I find this deeply satisfying — the type system and the syntax are aligned in a way that makes both more intuitive.</p>
+
+<blockquote><p><strong>Types should follow the data.</strong> In Lateralus, they literally do — flowing through the pipeline just like the values themselves.</p></blockquote>
+
+<h2>◉ What's Next</h2>
+
+<p>We're actively working on extending the type system with <strong>row polymorphism</strong> for structural record types and <strong>effect inference</strong> to track side effects through pipelines. The goal is to maintain the zero-annotation ergonomics while giving the compiler even more information to optimize with.</p>
+
+<div class="cta">
+    <a href="/playground/" class="btn-p">🧪 Try type inference in the Playground</a>
+    <a href="https://github.com/bad-antics/lateralus-lang" class="btn-s">⭐ Star on GitHub</a>
+</div>
+  </div>
+  </div>
+</article>
+
+<footer class="footer">
+  <div class="footer-inner">
+    <div class="footer-logo"><span class="pipe">|></span> LATERALUS</div>
+    <div class="footer-tagline">A Language That Spirals Outward</div>
+  </div>
+</footer>
+
+<script src="/site.js"></script>
+</body>
+</html>

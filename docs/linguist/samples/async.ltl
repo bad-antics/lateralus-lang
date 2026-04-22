@@ -1,0 +1,163 @@
+// -----------------------------------------------------------------------------
+// examples/async_demo.ltl  –  Async/await, yield & spawn  (v1.1.0)
+// -----------------------------------------------------------------------------
+//
+// Demonstrates:
+//   • async fn  + await keyword
+//   • Generators using yield
+//   • spawn expression to launch concurrent tasks
+//   • Structured concurrency with task handles
+// -----------------------------------------------------------------------------
+
+// -- Simple async function --------------------------------------------------
+
+// A simulated async HTTP fetch (no actual I/O in the demo).
+async fn fetch_data(url: str) -> str {
+    // In a real implementation this would await a network operation.
+    await sleep_ms(10)
+    return "{ \"url\": \"" + url + "\", \"status\": 200 }"
+}
+
+// Parses a status code out of our fake JSON string.
+async fn get_status(url: str) -> int {
+    let body = await fetch_data(url)
+    // Simple check: if it contains 200 we report success.
+    if contains(body, "200") {
+        return 200
+    }
+    return 500
+}
+
+// -- Generator using yield --------------------------------------------------
+
+// Infinite counter generator starting from `start`, stepping by `step`.
+fn counter(start: int, step: int) {
+    let n = start
+    while true {
+        yield n
+        n = n + step
+    }
+}
+
+// Fibonacci sequence generator.
+fn fibonacci() {
+    let a = 0
+    let b = 1
+    while true {
+        yield a
+        let next = a + b
+        a = b
+        b = next
+    }
+}
+
+// Takes the first `n` values from a generator.
+fn take_gen(gen: fn, n: int) -> list {
+    let results = []
+    let i = 0
+    while i < n {
+        results = push(results, next(gen))
+        i = i + 1
+    }
+    return results
+}
+
+// -- Pipeline of async tasks -----------------------------------------------
+
+// Fetches multiple URLs concurrently using spawn.
+async fn fetch_all(urls: list) -> list {
+    // Launch all tasks concurrently
+    let handles = []
+    let i = 0
+    while i < len(urls) {
+        let h = spawn fetch_data(urls[i])
+        handles = push(handles, h)
+        i = i + 1
+    }
+
+    // Await all results
+    let results = []
+    let j = 0
+    while j < len(handles) {
+        let r = await handles[j]
+        results = push(results, r)
+        j = j + 1
+    }
+    return results
+}
+
+// Processes results after fetching.
+async fn process_pipeline(urls: list) {
+    println("[pipeline] Fetching " + str(len(urls)) + " URLs concurrently…")
+    let responses = await fetch_all(urls)
+    let i = 0
+    while i < len(responses) {
+        println("[pipeline] " + responses[i])
+        i = i + 1
+    }
+    println("[pipeline] Done.")
+}
+
+// -- Async producer / consumer ---------------------------------------------
+
+async fn producer(n: int) -> list {
+    let results = []
+    let i = 1
+    while i <= n {
+        await sleep_ms(1)          // simulate work
+        results = push(results, i * i)
+        i = i + 1
+    }
+    return results
+}
+
+async fn consumer(values: list) {
+    println("\n[consumer] Processing " + str(len(values)) + " items:")
+    let i = 0
+    while i < len(values) {
+        println("  item[" + str(i) + "] = " + str(values[i]))
+        i = i + 1
+    }
+}
+
+async fn producer_consumer() {
+    // Run producer and consumer as a pipeline
+    let data = await producer(5)
+    await consumer(data)
+}
+
+// -- Entry point -----------------------------------------------------------
+
+async fn main() {
+    // -- Generators
+    println("=== Generators ===")
+    let gen   = counter(0, 2)           // 0, 2, 4, 6, ...
+    let evens = take_gen(gen, 6)
+    println("Even numbers:  " + str(evens))
+
+    let fib_gen = fibonacci()
+    let fibs    = take_gen(fib_gen, 10)
+    println("Fibonacci(10): " + str(fibs))
+
+    // -- Single async call
+    println("\n=== Single async call ===")
+    let code = await get_status("https://lateralus.dev/api/health")
+    println("Status: " + str(code))
+
+    // -- Concurrent fetches
+    println("\n=== Concurrent fetches ===")
+    let urls = [
+        "https://lateralus.dev/api/v1/nodes",
+        "https://lateralus.dev/api/v1/edges",
+        "https://lateralus.dev/api/v1/metrics"
+    ]
+    await process_pipeline(urls)
+
+    // -- Producer / consumer
+    await producer_consumer()
+
+    println("\nAll done!")
+}
+
+// Launch the async main
+spawn main()

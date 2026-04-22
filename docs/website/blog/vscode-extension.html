@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Building a VS Code Extension for a New Language — Lateralus Blog</title>
+  <meta name="description" content="Building a VS Code Extension for a New Language - Notes on language design, tooling, OS development, and the pipeline-first way of thinking.">
+  <meta property="og:title" content="Building a VS Code Extension for a New Language — Lateralus Blog">
+  <meta property="og:description" content="Building a VS Code Extension for a New Language">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://lateralus.dev/blog/vscode-extension.html">
+  <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+  <link rel="canonical" href="https://lateralus.dev/blog/vscode-extension.html">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css?v=20260408">
+  <style>
+    .blog-post { max-width: 800px; margin: 0 auto; padding: 80px 20px 60px; }
+    .blog-post h1 { font-family: 'Press Start 2P', monospace; font-size: clamp(14px, 3vw, 20px); color: var(--electric-yellow); line-height: 1.8; margin-bottom: 16px; }
+    .blog-meta { font-family: 'VT323', monospace; font-size: 18px; color: var(--hot-pink); margin-bottom: 24px; }
+    .blog-meta .tags { display: inline-flex; gap: 8px; margin-left: 16px; }
+    .blog-meta .tag { font-family: 'Press Start 2P', monospace; font-size: 8px; padding: 4px 10px; border: 1px solid var(--lime); color: var(--lime); }
+    .blog-content { font-family: 'VT323', monospace; font-size: 20px; color: var(--text); line-height: 1.7; }
+    .blog-content h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--cyber-blue); margin: 32px 0 16px; line-height: 1.6; }
+    .blog-content h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--lime); margin: 24px 0 12px; line-height: 1.6; }
+    .blog-content p { margin-bottom: 16px; }
+    .blog-content code { background: var(--bg3); padding: 2px 6px; color: var(--hot-pink); font-size: 18px; }
+    .blog-content pre { background: var(--bg3); border: 2px solid var(--border-light); padding: 16px; overflow-x: auto; margin: 16px 0; }
+    .blog-content pre code { background: none; padding: 0; display: block; font-size: 16px; line-height: 1.5; color: var(--text); }
+    .blog-content ul, .blog-content ol { margin: 16px 0; padding-left: 24px; }
+    .blog-content li { margin-bottom: 8px; }
+    .blog-content a { color: var(--cyber-blue); text-decoration: underline; }
+    .blog-content a:hover { color: var(--lime); }
+    .blog-content blockquote { border-left: 3px solid var(--lime); padding-left: 16px; margin: 16px 0; color: var(--text2); font-style: italic; }
+    .blog-back { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; color: var(--lime); text-decoration: none; margin-bottom: 24px; }
+    .blog-back:hover { color: var(--electric-yellow); }
+    .feature-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin: 20px 0; }
+    .feature-card { background: var(--bg3); border: 2px solid var(--border-light); padding: 12px; }
+    .feature-card h4 { font-family: 'Press Start 2P', monospace; font-size: 8px; color: var(--electric-yellow); margin-bottom: 6px; }
+    .feature-card p { font-size: 16px; margin: 0; }
+    .cta-box { background: var(--bg3); border: 2px solid var(--lime); padding: 20px; text-align: center; margin: 24px 0; }
+    .cta-box h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--electric-yellow); margin-bottom: 8px; }
+    .cta-box p { margin-bottom: 12px; }
+    .cta-box a { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; padding: 10px 20px; margin: 4px; }
+    .cta-box .btn-primary { background: var(--lime); color: var(--bg); }
+    .cta-box .btn-secondary { border: 2px solid var(--cyber-blue); color: var(--cyber-blue); }
+    @media (max-width: 768px) {
+      .blog-post h1 { font-size: 14px; line-height: 1.5; }
+      .blog-content { font-size: 16px; }
+      .blog-content code { font-size: 14px; }
+      .blog-content pre { padding: 12px; }
+      .blog-content pre code { font-size: 13px; }
+      .blog-back { font-size: 8px; }
+      .feature-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/">PLAYGROUND</a>
+      <a href="/blog/" class="active">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<article class="blog-post">
+  <a href="/blog/" class="blog-back">← Back to Blog</a>
+  <h1>Building a VS Code Extension for a New Language</h1>
+  <div class="blog-meta">
+    2025
+    <span class="tags"><span class="tag">tooling</span><span class="tag">vscode</span></span>
+  </div>
+  <div class="blog-content">
+<a href="/blog/" class="blog-back">← Back to Blog</a>
+  
+  <div class="blog-meta">
+    2025
+    <span class="tags"><span class="tag">tooling</span><span class="tag">vscode</span></span>
+  </div>
+  <div class="blog-content">
+<div class="meta">October 2025 · 7 min read · <a href="/blog/">← All Posts</a></div>
+
+<p>A programming language without IDE support is like a car without a dashboard — technically functional, but nobody wants to drive it. When I started building Lateralus, I knew that <strong>syntax highlighting, snippets, and editor intelligence</strong> would be just as important as the compiler itself. Here's how we built the VS Code extension from scratch.</p>
+
+<h2>◉ Why VS Code First</h2>
+
+<p>The numbers made this an easy decision. VS Code has over 70% market share among developers, it's free, and its extension API is well-documented. For a new language trying to gain adoption, you want to be where the developers already are.</p>
+
+<p>The extension ecosystem also has a clear progression path: start with <strong>syntax highlighting</strong> (TextMate grammar), add <strong>snippets and bracket matching</strong> (declarative configuration), then graduate to a <strong>Language Server Protocol (LSP)</strong> implementation for full intelligence. We followed this path exactly.</p>
+
+<h2>◉ TextMate Grammars: The Foundation</h2>
+
+<p>VS Code uses <a href="https://macromates.com/manual/en/language_grammars">TextMate grammars</a> for syntax highlighting — a system of regex patterns organized into scope rules. Each pattern assigns a <strong>scope name</strong> to matched text, and the color theme maps scopes to colors.</p>
+
+<p>Here's a snippet from our <code>lateralus.tmLanguage.json</code>:</p>
+
+<pre><code>{
+  <span style="color: var(--lime)">"scopeName"</span>: <span style="color: var(--lime)">"source.lateralus"</span>,
+  <span style="color: var(--lime)">"patterns"</span>: [
+    { <span style="color: var(--lime)">"include"</span>: <span style="color: var(--lime)">"#comments"</span> },
+    { <span style="color: var(--lime)">"include"</span>: <span style="color: var(--lime)">"#keywords"</span> },
+    { <span style="color: var(--lime)">"include"</span>: <span style="color: var(--lime)">"#operators"</span> },
+    { <span style="color: var(--lime)">"include"</span>: <span style="color: var(--lime)">"#strings"</span> },
+    { <span style="color: var(--lime)">"include"</span>: <span style="color: var(--lime)">"#types"</span> }
+  ],
+  <span style="color: var(--lime)">"repository"</span>: {
+    <span style="color: var(--lime)">"keywords"</span>: {
+      <span style="color: var(--lime)">"match"</span>: <span style="color: var(--lime)">"\\b(let|match|if|then|else|type|spawn|await|fn|extern|when)\\b"</span>,
+      <span style="color: var(--lime)">"name"</span>: <span style="color: var(--lime)">"keyword.control.lateralus"</span>
+    },
+    <span style="color: var(--lime)">"operators"</span>: {
+      <span style="color: var(--lime)">"match"</span>: <span style="color: var(--lime)">"\\|&gt;|=&gt;|\\-&gt;|\\|"</span>,
+      <span style="color: var(--lime)">"name"</span>: <span style="color: var(--lime)">"keyword.operator.lateralus"</span>
+    }
+  }
+}</code></pre>
+
+<h3>The Pipeline Operator Challenge</h3>
+
+<p>The hardest part was getting the <code>|&gt;</code> operator right. TextMate grammars are regex-based, and <code>|</code> is a regex metacharacter. We needed to match <code>|&gt;</code> as a single pipeline operator while also matching <code>|</code> alone as a pattern match separator. The solution was ordering: <strong>match the longer token first</strong>.</p>
+
+<pre><code><span style="color: var(--lime)">"operators"</span>: {
+  <span style="color: var(--lime)">"patterns"</span>: [
+    {
+      <span style="color: var(--lime)">"match"</span>: <span style="color: var(--lime)">"\\|&gt;"</span>,
+      <span style="color: var(--lime)">"name"</span>: <span style="color: var(--lime)">"keyword.operator.pipeline.lateralus"</span>
+    },
+    {
+      <span style="color: var(--lime)">"match"</span>: <span style="color: var(--lime)">"=&gt;"</span>,
+      <span style="color: var(--lime)">"name"</span>: <span style="color: var(--lime)">"keyword.operator.arrow.lateralus"</span>
+    },
+    {
+      <span style="color: var(--lime)">"match"</span>: <span style="color: var(--lime)">"\\|"</span>,
+      <span style="color: var(--lime)">"name"</span>: <span style="color: var(--lime)">"keyword.operator.match-arm.lateralus"</span>
+    }
+  ]
+}</code></pre>
+
+<p>We also gave <code>|&gt;</code> its own scope (<code>keyword.operator.pipeline</code>) so that color themes can style it distinctly. In the official Lateralus theme, the pipeline operator renders in bright orange — making data flow visually pop.</p>
+
+<h2>◉ 180+ Snippets</h2>
+
+<p>Snippets are the unsung heroes of developer productivity. We shipped the extension with <strong>over 180 snippets</strong> covering every common pattern. The design philosophy: every snippet should save at least 10 keystrokes and produce idiomatic code.</p>
+
+<pre><code><span style="color: var(--text2)">// Snippet: "pipe" → expands to pipeline template</span>
+<span style="color: var(--text2)">// Trigger: pipe + Tab</span>
+
+${1:value}
+    <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--cyber-blue)">${2:transform}</span>
+    <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--cyber-blue)">${3:transform}</span>
+    <span style="color: var(--electric-yellow)">|&gt;</span> <span style="color: var(--cyber-blue)">${0:result}</span></code></pre>
+
+<pre><code><span style="color: var(--text2)">// Snippet: "matchr" → match with Result pattern</span>
+<span style="color: var(--text2)">// Trigger: matchr + Tab</span>
+
+<span style="color: var(--hot-pink)">match</span> ${1:expr}
+    | <span style="color: var(--hot-pink)">Ok</span>(${2:value}) <span style="color: var(--electric-yellow)">=&gt;</span> ${3:body}
+    | <span style="color: var(--hot-pink)">Err</span>(${4:error}) <span style="color: var(--electric-yellow)">=&gt;</span> ${0:handler}</code></pre>
+
+<div class="info-box">
+    <h4>Snippet Categories (180+ total)</h4>
+    <ul>
+        <li><strong>Core constructs</strong> (28) — let, match, if/else, type declarations</li>
+        <li><strong>Pipeline patterns</strong> (34) — common pipeline chains, async pipelines</li>
+        <li><strong>Data structures</strong> (22) — List, Dict, Set, Tree operations</li>
+        <li><strong>Async patterns</strong> (18) — spawn, await, await_all, error handling</li>
+        <li><strong>Testing</strong> (15) — test cases, assertions, property-based tests</li>
+        <li><strong>FFI</strong> (12) — extern declarations, Python/C interop boilerplate</li>
+        <li><strong>Common algorithms</strong> (51) — sort, search, transform patterns</li>
+    </ul>
+</div>
+
+<h2>◉ Bracket Matching and Auto-Indentation</h2>
+
+<p>VS Code's <code>language-configuration.json</code> handles bracket matching, auto-closing pairs, and indentation rules. Getting this right is crucial for the editing experience:</p>
+
+<pre><code>{
+  <span style="color: var(--lime)">"brackets"</span>: [
+    [<span style="color: var(--lime)">"{"</span>, <span style="color: var(--lime)">"}"</span>],
+    [<span style="color: var(--lime)">"["</span>, <span style="color: var(--lime)">"]"</span>],
+    [<span style="color: var(--lime)">"("</span>, <span style="color: var(--lime)">")"</span>]
+  ],
+  <span style="color: var(--lime)">"autoClosingPairs"</span>: [
+    { <span style="color: var(--lime)">"open"</span>: <span style="color: var(--lime)">"{"</span>, <span style="color: var(--lime)">"close"</span>: <span style="color: var(--lime)">"}"</span> },
+    { <span style="color: var(--lime)">"open"</span>: <span style="color: var(--lime)">"["</span>, <span style="color: var(--lime)">"close"</span>: <span style="color: var(--lime)">"]"</span> },
+    { <span style="color: var(--lime)">"open"</span>: <span style="color: var(--lime)">"("</span>, <span style="color: var(--lime)">"close"</span>: <span style="color: var(--lime)">")"</span> },
+    { <span style="color: var(--lime)">"open"</span>: <span style="color: var(--lime)">"\""</span>, <span style="color: var(--lime)">"close"</span>: <span style="color: var(--lime)">"\""</span> },
+    { <span style="color: var(--lime)">"open"</span>: <span style="color: var(--lime)">"/*"</span>, <span style="color: var(--lime)">"close"</span>: <span style="color: var(--lime)">"*/"</span> }
+  ],
+  <span style="color: var(--lime)">"indentationRules"</span>: {
+    <span style="color: var(--lime)">"increaseIndentPattern"</span>: <span style="color: var(--lime)">"(=>|\\{|\\|>)\\s*$"</span>,
+    <span style="color: var(--lime)">"decreaseIndentPattern"</span>: <span style="color: var(--lime)">"^\\s*(\\}|\\]|\\))"</span>
+  }
+}</code></pre>
+
+<p>The key insight: <strong>pipeline operators should trigger auto-indent</strong>. When you type <code>|&gt;</code> at the end of a line and press Enter, VS Code should indent the next line to align with the pipeline chain. That one indentation rule took us three iterations to get right, but it makes writing multi-line pipelines feel effortless.</p>
+
+<h2>◉ Testing the Extension</h2>
+
+<p>We test the extension at two levels. First, <strong>snapshot tests</strong> for the TextMate grammar — we feed sample Lateralus code through the tokenizer and compare the output tokens against saved snapshots. If a grammar change accidentally breaks highlighting for existing code, the snapshot fails.</p>
+
+<p>Second, <strong>integration tests</strong> using VS Code's test runner. These launch a real VS Code instance with the extension installed and verify that snippets expand correctly, brackets match, and syntax highlighting covers edge cases.</p>
+
+<pre><code><span style="color: var(--text2)">// Integration test example</span>
+<span style="color: var(--cyber-blue)">test</span>(<span style="color: var(--lime)">"pipeline operator is highlighted as operator"</span>, () <span style="color: var(--electric-yellow)">=&gt;</span> {
+    <span style="color: var(--hot-pink)">let</span> tokens = <span style="color: var(--cyber-blue)">tokenize</span>(<span style="color: var(--lime)">"x |&gt; f"</span>)
+    <span style="color: var(--cyber-blue)">assert_eq</span>(tokens[<span style="color: var(--electric-yellow)">1</span>].scope, <span style="color: var(--lime)">"keyword.operator.pipeline.lateralus"</span>)
+})
+
+<span style="color: var(--cyber-blue)">test</span>(<span style="color: var(--lime)">"match arm | is not confused with pipeline"</span>, () <span style="color: var(--electric-yellow)">=&gt;</span> {
+    <span style="color: var(--hot-pink)">let</span> tokens = <span style="color: var(--cyber-blue)">tokenize</span>(<span style="color: var(--lime)">"| Ok(x) =&gt; x"</span>)
+    <span style="color: var(--cyber-blue)">assert_eq</span>(tokens[<span style="color: var(--electric-yellow)">0</span>].scope, <span style="color: var(--lime)">"keyword.operator.match-arm.lateralus"</span>)
+})</code></pre>
+
+<h2>◉ Publishing and Adoption</h2>
+
+<p>We published the extension to the VS Code Marketplace under the ID <code>bad-antics.lateralus-lang</code>. The publishing process itself is straightforward — <code>vsce package</code> to build, <code>vsce publish</code> to ship. What surprised me was how much the <strong>marketplace listing</strong> matters for discoverability. A good icon, detailed README with screenshots, and clear feature list make a real difference in install rates.</p>
+
+<blockquote><p><strong>Lesson learned:</strong> Your extension's marketplace page is your language's first impression for many developers. Invest in it like you'd invest in a landing page.</p></blockquote>
+
+<h2>◉ What's Next: LSP Server</h2>
+
+<p>TextMate grammars and snippets get you 80% of the way, but the remaining 20% — <strong>go-to-definition, find references, inline errors, hover documentation, auto-completion</strong> — requires a Language Server Protocol implementation. We're building the Lateralus LSP server now, written in Lateralus itself (naturally). It reuses the compiler's parser and type checker to provide real-time diagnostics as you type.</p>
+
+<div class="info-box">
+    <h4>LSP Roadmap</h4>
+    <ul>
+        <li>✅ Syntax highlighting (TextMate grammar)</li>
+        <li>✅ 180+ snippets</li>
+        <li>✅ Bracket matching and auto-indent</li>
+        <li>🚧 Go-to-definition / find references</li>
+        <li>🚧 Inline type errors and diagnostics</li>
+        <li>📋 Hover type information</li>
+        <li>📋 Auto-completion with type-aware suggestions</li>
+        <li>📋 Refactoring support (rename, extract function)</li>
+    </ul>
+</div>
+
+<div class="cta">
+    <a href="https://marketplace.visualstudio.com/items?itemName=bad-antics.lateralus-lang" class="btn-p">📦 Install the VS Code Extension</a>
+    <a href="https://github.com/bad-antics/lateralus-lang" class="btn-s">⭐ Star on GitHub</a>
+</div>
+  </div>
+  </div>
+</article>
+
+<footer class="footer">
+  <div class="footer-inner">
+    <div class="footer-logo"><span class="pipe">|></span> LATERALUS</div>
+    <div class="footer-tagline">A Language That Spirals Outward</div>
+  </div>
+</footer>
+
+<script src="/site.js"></script>
+</body>
+</html>

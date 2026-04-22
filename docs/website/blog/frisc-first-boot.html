@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FRISC OS: First Boot — Lateralus Blog</title>
+  <meta name="description" content="FRISC OS: First Boot - Notes on language design, tooling, OS development, and the pipeline-first way of thinking.">
+  <meta property="og:title" content="FRISC OS: First Boot — Lateralus Blog">
+  <meta property="og:description" content="FRISC OS: First Boot">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://lateralus.dev/blog/frisc-first-boot.html">
+  <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+  <link rel="canonical" href="https://lateralus.dev/blog/frisc-first-boot.html">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css?v=20260408">
+  <style>
+    .blog-post { max-width: 800px; margin: 0 auto; padding: 80px 20px 60px; }
+    .blog-post h1 { font-family: 'Press Start 2P', monospace; font-size: clamp(14px, 3vw, 20px); color: var(--electric-yellow); line-height: 1.8; margin-bottom: 16px; }
+    .blog-meta { font-family: 'VT323', monospace; font-size: 18px; color: var(--hot-pink); margin-bottom: 24px; }
+    .blog-meta .tags { display: inline-flex; gap: 8px; margin-left: 16px; }
+    .blog-meta .tag { font-family: 'Press Start 2P', monospace; font-size: 8px; padding: 4px 10px; border: 1px solid var(--lime); color: var(--lime); }
+    .blog-content { font-family: 'VT323', monospace; font-size: 20px; color: var(--text); line-height: 1.7; }
+    .blog-content h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--cyber-blue); margin: 32px 0 16px; line-height: 1.6; }
+    .blog-content h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--lime); margin: 24px 0 12px; line-height: 1.6; }
+    .blog-content p { margin-bottom: 16px; }
+    .blog-content code { background: var(--bg3); padding: 2px 6px; color: var(--hot-pink); font-size: 18px; }
+    .blog-content pre { background: var(--bg3); border: 2px solid var(--border-light); padding: 16px; overflow-x: auto; margin: 16px 0; }
+    .blog-content pre code { background: none; padding: 0; display: block; font-size: 16px; line-height: 1.5; color: var(--text); }
+    .blog-content ul, .blog-content ol { margin: 16px 0; padding-left: 24px; }
+    .blog-content li { margin-bottom: 8px; }
+    .blog-content a { color: var(--cyber-blue); text-decoration: underline; }
+    .blog-content a:hover { color: var(--lime); }
+    .blog-content blockquote { border-left: 3px solid var(--lime); padding-left: 16px; margin: 16px 0; color: var(--text2); font-style: italic; }
+    .blog-back { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; color: var(--lime); text-decoration: none; margin-bottom: 24px; }
+    .blog-back:hover { color: var(--electric-yellow); }
+    /* Mobile responsive */
+    @media (max-width: 768px) {
+      .blog-header h1 { font-size: 14px; line-height: 1.5; }
+      .blog-header .meta { font-size: 11px; }
+      .blog-content { font-size: 16px; }
+      .blog-content code { font-size: 14px; }
+      .blog-content pre { padding: 12px; }
+      .blog-content pre code { font-size: 13px; }
+      .blog-back { font-size: 8px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/">PLAYGROUND</a>
+      <a href="/blog/" class="active">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<article class="blog-post">
+  <a href="/blog/" class="blog-back">← Back to Blog</a>
+  <h1>FRISC OS: First Boot</h1>
+  <div class="blog-meta">
+    January 20, 2026
+    <span class="tags"><span class="tag">frisc</span><span class="tag">osdev</span><span class="tag">devlog</span></span>
+  </div>
+  <div class="blog-content">
+
+    <p>The moment FRISC OS first booted on real RISC-V hardware — a journey from QEMU to physical silicon. After months of emulator testing, we finally lit up real LEDs.</p>
+
+    <h2>◉ Target Board</h2>
+    <p>HiFive Unmatched with SiFive U74 cores. Four 64-bit RISC-V cores at 1.2 GHz, 16GB DDR4, PCIe slot, NVMe support. Finally, Lateralus running on native RISC-V silicon.</p>
+
+    <p>The U74 is a "Linux-capable" core, meaning it has:</p>
+    <ul>
+      <li>Full supervisor mode with S-mode page tables</li>
+      <li>Physical Memory Protection (PMP)</li>
+      <li>IMAFDCSU extension set</li>
+      <li>Sv48 virtual memory (48-bit virtual addresses)</li>
+    </ul>
+
+    <h2>◉ Boot Sequence</h2>
+    <p>Getting from power-on to shell takes several stages:</p>
+
+    <pre><code>ZSBL → FSBL → OpenSBI → FRISC Bootloader → Kernel → Init → Shell
+ ↓       ↓        ↓              ↓              ↓        ↓
+ROM   SPI Flash  FW_JUMP     stage1.ltl    kernel.ltl  /init</code></pre>
+
+    <p><strong>ZSBL (Zero Stage Boot Loader):</strong> Hardwired in ROM. Loads FSBL from SPI flash.</p>
+
+    <p><strong>FSBL (First Stage Boot Loader):</strong> Initializes DDR, loads OpenSBI from SD/NVMe.</p>
+
+    <p><strong>OpenSBI:</strong> RISC-V Supervisor Binary Interface. Provides M-mode services to S-mode OS. We use FW_JUMP mode — it jumps directly to our bootloader.</p>
+
+    <p><strong>FRISC Bootloader:</strong> Written in Lateralus, compiled to C. Loads kernel, sets up initial page tables, jumps to kernel_main.</p>
+
+    <h2>◉ The Magic Moment</h2>
+    <p>January 20, 2026, 2:47 AM. Serial console output:</p>
+
+    <pre><code>OpenSBI v1.2
+  ____                    _____ ____ ___
+ / __ \                  / ____|  _ \_ _|
+| |  | |_ __   ___ _ __ | (___ | |_) || |
+| |  | | '_ \ / _ \ '_ \ \___ \|  _ < | |
+| |__| | |_) |  __/ | | |____) | |_) || |
+ \____/| .__/ \___|_| |_|_____/|____/___|
+       | |
+       |_|
+
+Platform Name : SiFive HiFive Unmatched A00
+...
+[FRISC] Bootloader v0.1.0 starting
+[FRISC] Found 16 GB RAM @ 0x80000000
+[FRISC] Loading kernel from /boot/kernel.bin
+[FRISC] Kernel loaded at 0x80200000 (487 KB)
+[FRISC] Jumping to kernel_main...
+
+ _____ ____  ___ ____   ____   ___  ____
+|  ___|  _ \|_ _/ ___| / ___| / _ \/ ___|
+| |_  | |_) || |\___ \| |    | | | \___ \
+|  _| |  _ < | | ___) | |___ | |_| |___) |
+|_|   |_| \_\___|____/ \____| \___/|____/
+
+FRISC OS v0.1.0 on HiFive Unmatched
+4 cores detected (U74 @ 1200 MHz)
+Memory: 16384 MB
+Initializing kernel heap... OK
+Initializing interrupts... OK
+Starting scheduler... OK
+Mounting root filesystem... OK
+
+Welcome to FRISC OS
+frisc:/ $ </code></pre>
+
+    <p>We stared at that blinking cursor for a solid minute before anyone typed anything.</p>
+
+    <h2>◉ What Broke First</h2>
+    <p>Of course, it wasn't smooth. The journey to that boot included:</p>
+
+    <p><strong>Timer interrupt frequency:</strong> QEMU's timer runs at 10 MHz. The U74's runs at 1 MHz. Our scheduler ran 10x too slow until we fixed the frequency detection.</p>
+
+    <p><strong>Cache coherency:</strong> The U74 has non-coherent DMA. Forgot <code>fence.i</code> after self-modifying code? Enjoy stale instruction cache.</p>
+
+    <p><strong>UART initialization:</strong> The SiFive UART needs explicit clock configuration that QEMU doesn't care about. Spent two days getting serial output working.</p>
+
+    <h2>◉ Pipeline-Driven Boot</h2>
+    <p>The kernel boot sequence is a Lateralus pipeline:</p>
+
+    <pre><code>fn kernel_main() {
+    serial_puts("[FRISC] Starting kernel subsystems")
+
+    let boot_sequence = [
+        ("memory", memory_init),
+        ("interrupts", interrupts_init),
+        ("scheduler", scheduler_init),
+        ("filesystem", fs_init),
+        ("network", network_init),
+        ("devices", device_init),
+    ]
+
+    boot_sequence
+        |> each(fn((name, init_fn)) {
+            serial_puts("  Starting " + name + "...")
+            let result = init_fn()
+            match result {
+                Ok(_) => serial_puts(" OK"),
+                Err(e) => panic("Boot failed: " + name + ": " + e),
+            }
+        })
+
+    serial_puts("Boot complete. Starting init.")
+    spawn_process("/init")
+}</code></pre>
+
+    <p>Error handling flows naturally through the pipeline. If any subsystem fails, boot halts with a clear message.</p>
+
+    <h2>◉ Performance Numbers</h2>
+    <p>First measurements on real hardware:</p>
+
+    <table style="width:100%; border-collapse:collapse; margin:16px 0;">
+      <tr style="border-bottom:1px solid var(--border-light);">
+        <th style="text-align:left; padding:8px;">Metric</th>
+        <th style="text-align:right; padding:8px;">QEMU</th>
+        <th style="text-align:right; padding:8px;">HiFive Unmatched</th>
+      </tr>
+      <tr><td style="padding:8px;">Cold boot to shell</td><td style="text-align:right; padding:8px;">4.2s</td><td style="text-align:right; padding:8px;">1.8s</td></tr>
+      <tr><td style="padding:8px;">Kernel image size</td><td style="text-align:right; padding:8px;">487 KB</td><td style="text-align:right; padding:8px;">487 KB</td></tr>
+      <tr><td style="padding:8px;">Process spawn</td><td style="text-align:right; padding:8px;">12ms</td><td style="text-align:right; padding:8px;">3ms</td></tr>
+      <tr><td style="padding:8px;">Context switch</td><td style="text-align:right; padding:8px;">~1ms</td><td style="text-align:right; padding:8px;">~50μs</td></tr>
+    </table>
+
+    <p>Real hardware is <em>fast</em>. QEMU's full-system emulation adds substantial overhead.</p>
+
+    <h2>◉ What's Next</h2>
+    <p>With first boot working, we're focused on:</p>
+    <ul>
+      <li>SMP support (currently single-core only)</li>
+      <li>PCIe driver framework</li>
+      <li>NVMe storage driver</li>
+      <li>Network stack (TCP/IP)</li>
+      <li>GUI framebuffer support</li>
+    </ul>
+
+    <p>See <a href="/os/">the OS page</a> for build instructions and latest progress.</p>
+
+  </div>
+</article>
+
+<footer>
+  <div class="container" style="text-align:center; padding: 2rem 0;">
+    <p style="font-family:'Press Start 2P',monospace; font-size:9px; color:var(--lime); margin-bottom:8px;">|&gt; LATERALUS</p>
+    <p style="font-family:'VT323',monospace; font-size:14px; color:var(--text);">A Language That Spirals Outward</p>
+  </div>
+</footer>
+
+<script src="/site.js"></script>
+</body>
+</html>

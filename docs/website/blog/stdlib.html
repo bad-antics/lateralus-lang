@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The Standard Library — Lateralus Blog</title>
+  <meta name="description" content="The Standard Library - Notes on language design, tooling, OS development, and the pipeline-first way of thinking.">
+  <meta property="og:title" content="The Standard Library — Lateralus Blog">
+  <meta property="og:description" content="The Standard Library">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://lateralus.dev/blog/stdlib.html">
+  <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+  <link rel="canonical" href="https://lateralus.dev/blog/stdlib.html">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css?v=20260408">
+  <style>
+    .blog-post { max-width: 800px; margin: 0 auto; padding: 80px 20px 60px; }
+    .blog-post h1 { font-family: 'Press Start 2P', monospace; font-size: clamp(14px, 3vw, 20px); color: var(--electric-yellow); line-height: 1.8; margin-bottom: 16px; }
+    .blog-meta { font-family: 'VT323', monospace; font-size: 18px; color: var(--hot-pink); margin-bottom: 24px; }
+    .blog-meta .tags { display: inline-flex; gap: 8px; margin-left: 16px; }
+    .blog-meta .tag { font-family: 'Press Start 2P', monospace; font-size: 8px; padding: 4px 10px; border: 1px solid var(--lime); color: var(--lime); }
+    .blog-content { font-family: 'VT323', monospace; font-size: 20px; color: var(--text); line-height: 1.7; }
+    .blog-content h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--cyber-blue); margin: 32px 0 16px; line-height: 1.6; }
+    .blog-content h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--lime); margin: 24px 0 12px; line-height: 1.6; }
+    .blog-content p { margin-bottom: 16px; }
+    .blog-content code { background: var(--bg3); padding: 2px 6px; color: var(--hot-pink); font-size: 18px; }
+    .blog-content pre { background: var(--bg3); border: 2px solid var(--border-light); padding: 16px; overflow-x: auto; margin: 16px 0; }
+    .blog-content pre code { background: none; padding: 0; display: block; font-size: 16px; line-height: 1.5; color: var(--text); }
+    .blog-content ul, .blog-content ol { margin: 16px 0; padding-left: 24px; }
+    .blog-content li { margin-bottom: 8px; }
+    .blog-content a { color: var(--cyber-blue); text-decoration: underline; }
+    .blog-content a:hover { color: var(--lime); }
+    .blog-content blockquote { border-left: 3px solid var(--lime); padding-left: 16px; margin: 16px 0; color: var(--text2); font-style: italic; }
+    .blog-back { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; color: var(--lime); text-decoration: none; margin-bottom: 24px; }
+    .blog-back:hover { color: var(--electric-yellow); }
+    /* Mobile responsive */
+    @media (max-width: 768px) {
+      .blog-header h1 { font-size: 14px; line-height: 1.5; }
+      .blog-header .meta { font-size: 11px; }
+      .blog-content { font-size: 16px; }
+      .blog-content code { font-size: 14px; }
+      .blog-content pre { padding: 12px; }
+      .blog-content pre code { font-size: 13px; }
+      .blog-back { font-size: 8px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/">PLAYGROUND</a>
+      <a href="/blog/" class="active">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<article class="blog-post">
+  <a href="/blog/" class="blog-back">← Back to Blog</a>
+  <h1>The Standard Library</h1>
+  <div class="blog-meta">
+    July 15, 2025
+    <span class="tags"><span class="tag">language</span><span class="tag">stdlib</span></span>
+  </div>
+  <div class="blog-content">
+
+    <p>Lateralus ships with 120+ standard library functions covering collections, I/O, text processing, networking, and more. Everything is designed for pipeline composition.</p>
+
+    <h2>◉ Module Overview</h2>
+
+    <ul>
+      <li><code>core</code> — Built-in types and operators</li>
+      <li><code>collections</code> — Vec, Map, Set, Queue, Stack</li>
+      <li><code>io</code> — File and network I/O</li>
+      <li><code>strings</code> — String manipulation</li>
+      <li><code>math</code> — Numeric functions</li>
+      <li><code>crypto</code> — Hashing, encryption</li>
+      <li><code>json</code> — JSON parsing and serialization</li>
+      <li><code>regex</code> — Regular expressions</li>
+      <li><code>time</code> — Date, time, durations</li>
+      <li><code>http</code> — HTTP client and server</li>
+      <li><code>async</code> — Async primitives</li>
+    </ul>
+
+    <h2>◉ Collections</h2>
+    <p>All collections have pipeline-friendly APIs:</p>
+
+    <pre><code>import collections
+
+// Vec (dynamic array)
+let numbers = vec_new()
+numbers |&gt; push(1) |&gt; push(2) |&gt; push(3)
+let doubled = numbers |&gt; map(fn(x) { x * 2 })
+
+// Map (hash map)
+let scores = map_new()
+scores["alice"] = 100
+scores["bob"] = 85
+scores |&gt; entries() |&gt; filter(fn(e) { e.value &gt; 90 })
+
+// Set (unique values)
+let tags = set_from(["rust", "go", "lateralus"])
+tags |&gt; contains("lateralus")  // true
+
+// Queue (FIFO)
+let q = queue_new()
+q |&gt; enqueue(1) |&gt; enqueue(2)
+let first = q |&gt; dequeue()  // Some(1)</code></pre>
+
+    <h2>◉ Pipeline Functions</h2>
+    <p>Core functions that work with any iterable:</p>
+
+    <pre><code>// Transform
+map(items, fn)           // Transform each element
+filter(items, pred)      // Keep matching elements
+flat_map(items, fn)      // Map and flatten
+
+// Reduce
+fold(items, init, fn)    // Reduce to single value
+reduce(items, fn)        // Reduce without init
+sum(items)               // Sum numbers
+product(items)           // Multiply numbers
+
+// Access
+first(items)             // First element (Option)
+last(items)              // Last element (Option)
+nth(items, n)            // Nth element (Option)
+take(items, n)           // First n elements
+drop(items, n)           // Skip n elements
+
+// Predicates
+any(items, pred)         // True if any match
+all(items, pred)         // True if all match
+none(items, pred)        // True if none match
+find(items, pred)        // First matching (Option)
+
+// Ordering
+sort(items)              // Sort naturally
+sort_by(items, key_fn)   // Sort by key
+reverse(items)           // Reverse order
+unique(items)            // Remove duplicates
+
+// Grouping
+group_by(items, key_fn)  // Group into map
+partition(items, pred)   // Split into two
+chunk(items, n)          // Split into chunks
+zip(a, b)                // Pair elements</code></pre>
+
+    <h2>◉ I/O</h2>
+    <p>Streaming file and network I/O:</p>
+
+    <pre><code>import io
+
+// Read file
+let content = read_file("data.txt")?
+let lines = read_lines("data.txt")
+    |&gt; filter(fn(line) { !line.is_empty() })
+    |&gt; collect()
+
+// Write file
+write_file("out.txt", "Hello")?
+append_file("log.txt", "Entry\n")?
+
+// Stream processing (lazy)
+read_lines("huge.txt")
+    |&gt; filter(fn(l) { l.starts_with("ERROR") })
+    |&gt; take(100)
+    |&gt; collect()  // Only reads until 100 found
+
+// Binary I/O
+let bytes = read_bytes("image.png")?
+write_bytes("copy.png", bytes)?</code></pre>
+
+    <h2>◉ Strings</h2>
+    <pre><code>import strings
+
+// Basic operations
+upper("hello")           // "HELLO"
+lower("HELLO")           // "hello"
+trim("  hi  ")           // "hi"
+split("a,b,c", ",")      // ["a", "b", "c"]
+join(["a", "b"], "-")    // "a-b"
+
+// Testing
+starts_with("hello", "he")   // true
+ends_with("hello", "lo")     // true
+contains("hello", "ell")     // true
+
+// Transform
+replace("hello", "l", "L")   // "heLLo"
+replace_first("hello", "l", "L")  // "heLlo"
+
+// Pipeline-style
+"  Hello, World!  "
+    |&gt; trim()
+    |&gt; lower()
+    |&gt; replace(",", "")
+    |&gt; split(" ")
+// ["hello", "world!"]</code></pre>
+
+    <h2>◉ Math</h2>
+    <pre><code>import math
+
+// Basic
+abs(-5)          // 5
+min(3, 7)        // 3
+max(3, 7)        // 7
+clamp(15, 0, 10) // 10
+
+// Rounding
+floor(3.7)       // 3.0
+ceil(3.2)        // 4.0
+round(3.5)       // 4.0
+trunc(3.9)       // 3.0
+
+// Powers and roots
+sqrt(16.0)       // 4.0
+pow(2.0, 10.0)   // 1024.0
+log(100.0, 10.0) // 2.0
+ln(E)            // 1.0
+
+// Trigonometry
+sin(PI / 2.0)    // 1.0
+cos(0.0)         // 1.0
+tan(PI / 4.0)    // 1.0
+atan2(1.0, 1.0)  // PI / 4</code></pre>
+
+    <h2>◉ JSON</h2>
+    <pre><code>import json
+
+// Parse
+let data = json_parse('{"name": "Alice", "age": 30}')?
+
+// Access
+data["name"]     // "Alice"
+data["age"]      // 30
+
+// Serialize
+let obj = { "items": [1, 2, 3], "active": true }
+let str = json_stringify(obj)
+// '{"items":[1,2,3],"active":true}'
+
+// Pretty print
+json_stringify_pretty(obj, indent=2)</code></pre>
+
+    <h2>◉ Time</h2>
+    <pre><code>import time
+
+// Current time
+let now = now()
+let today = today()
+
+// Create
+let dt = datetime(2025, 7, 15, 14, 30, 0)
+let d = date(2025, 7, 15)
+
+// Format
+format(now, "%Y-%m-%d %H:%M:%S")  // "2025-07-15 14:30:00"
+format(today, "%B %d, %Y")        // "July 15, 2025"
+
+// Parse
+parse_datetime("2025-07-15", "%Y-%m-%d")?
+
+// Arithmetic
+now + duration_hours(2)
+now - duration_days(1)
+now.add_months(3)</code></pre>
+
+    <h2>◉ HTTP</h2>
+    <pre><code>import http
+
+// GET request
+let response = http_get("https://api.example.com/data")?
+let data = response.json()?
+
+// POST request
+let response = http_post(
+    "https://api.example.com/users",
+    headers: { "Content-Type": "application/json" },
+    body: json_stringify({ "name": "Alice" })
+)?
+
+// Pipeline-style API fetching
+http_get("https://api.example.com/users")?
+    |&gt; json()?
+    |&gt; get("data")
+    |&gt; filter(fn(u) { u["active"] })
+    |&gt; map(fn(u) { u["email"] })</code></pre>
+
+    <h2>◉ Async</h2>
+    <pre><code>import async
+
+// Concurrent tasks
+let results = await_all([
+    fetch_user(1),
+    fetch_user(2),
+    fetch_user(3),
+])
+
+// With timeout
+let result = with_timeout(
+    fetch_data(),
+    duration_seconds(5)
+)?
+
+// Channels
+let (tx, rx) = channel()
+spawn(fn() { tx.send("hello") })
+let msg = rx.recv()?</code></pre>
+
+    <h2>◉ Importing Modules</h2>
+    <pre><code>// Import entire module
+import math
+math.sqrt(4.0)
+
+// Import specific functions
+from math import sqrt, pow
+sqrt(4.0)
+
+// Import all
+from strings import *
+upper("hello")
+
+// Alias
+import json as j
+j.parse("{}")</code></pre>
+
+    <p>Full stdlib documentation at <a href="https://github.com/bad-antics/lateralus-lang/tree/main/stdlib" target="_blank">github.com/bad-antics/lateralus-lang/stdlib</a>.</p>
+
+  </div>
+</article>
+
+<footer>
+  <div class="container" style="text-align:center; padding: 2rem 0;">
+    <p style="font-family:'Press Start 2P',monospace; font-size:9px; color:var(--lime); margin-bottom:8px;">|&gt; LATERALUS</p>
+    <p style="font-family:'VT323',monospace; font-size:14px; color:var(--text);">A Language That Spirals Outward</p>
+  </div>
+</footer>
+
+<script src="/site.js"></script>
+</body>
+</html>

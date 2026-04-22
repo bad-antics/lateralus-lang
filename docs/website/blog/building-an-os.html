@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Building an OS in a New Language — Lateralus Blog</title>
+  <meta name="description" content="Building an OS in a New Language - Notes on language design, tooling, OS development, and the pipeline-first way of thinking.">
+  <meta property="og:title" content="Building an OS in a New Language — Lateralus Blog">
+  <meta property="og:description" content="Building an OS in a New Language">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://lateralus.dev/blog/building-an-os.html">
+  <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+  <link rel="canonical" href="https://lateralus.dev/blog/building-an-os.html">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css?v=20260408">
+  <style>
+    .blog-post { max-width: 800px; margin: 0 auto; padding: 80px 20px 60px; }
+    .blog-post h1 { font-family: 'Press Start 2P', monospace; font-size: clamp(14px, 3vw, 20px); color: var(--electric-yellow); line-height: 1.8; margin-bottom: 16px; }
+    .blog-meta { font-family: 'VT323', monospace; font-size: 18px; color: var(--hot-pink); margin-bottom: 24px; }
+    .blog-meta .tags { display: inline-flex; gap: 8px; margin-left: 16px; }
+    .blog-meta .tag { font-family: 'Press Start 2P', monospace; font-size: 8px; padding: 4px 10px; border: 1px solid var(--lime); color: var(--lime); }
+    .blog-content { font-family: 'VT323', monospace; font-size: 20px; color: var(--text); line-height: 1.7; }
+    .blog-content h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--cyber-blue); margin: 32px 0 16px; line-height: 1.6; }
+    .blog-content h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--lime); margin: 24px 0 12px; line-height: 1.6; }
+    .blog-content p { margin-bottom: 16px; }
+    .blog-content code { background: var(--bg3); padding: 2px 6px; color: var(--hot-pink); font-size: 18px; }
+    .blog-content pre { background: var(--bg3); border: 2px solid var(--border-light); padding: 16px; overflow-x: auto; margin: 16px 0; }
+    .blog-content pre code { background: none; padding: 0; display: block; font-size: 16px; line-height: 1.5; color: var(--text); }
+    .blog-content ul, .blog-content ol { margin: 16px 0; padding-left: 24px; }
+    .blog-content li { margin-bottom: 8px; }
+    .blog-content a { color: var(--cyber-blue); text-decoration: underline; }
+    .blog-content a:hover { color: var(--lime); }
+    .blog-content blockquote { border-left: 3px solid var(--lime); padding-left: 16px; margin: 16px 0; color: var(--text2); font-style: italic; }
+    .blog-back { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; color: var(--lime); text-decoration: none; margin-bottom: 24px; }
+    .blog-back:hover { color: var(--electric-yellow); }
+    .feature-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin: 20px 0; }
+    .feature-card { background: var(--bg3); border: 2px solid var(--border-light); padding: 12px; }
+    .feature-card h4 { font-family: 'Press Start 2P', monospace; font-size: 8px; color: var(--electric-yellow); margin-bottom: 6px; }
+    .feature-card p { font-size: 16px; margin: 0; }
+    .cta-box { background: var(--bg3); border: 2px solid var(--lime); padding: 20px; text-align: center; margin: 24px 0; }
+    .cta-box h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--electric-yellow); margin-bottom: 8px; }
+    .cta-box p { margin-bottom: 12px; }
+    .cta-box a { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; padding: 10px 20px; margin: 4px; }
+    .cta-box .btn-primary { background: var(--lime); color: var(--bg); }
+    .cta-box .btn-secondary { border: 2px solid var(--cyber-blue); color: var(--cyber-blue); }
+    @media (max-width: 768px) {
+      .blog-post h1 { font-size: 14px; line-height: 1.5; }
+      .blog-content { font-size: 16px; }
+      .blog-content code { font-size: 14px; }
+      .blog-content pre { padding: 12px; }
+      .blog-content pre code { font-size: 13px; }
+      .blog-back { font-size: 8px; }
+      .feature-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/">PLAYGROUND</a>
+      <a href="/blog/" class="active">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<article class="blog-post">
+  <a href="/blog/" class="blog-back">← Back to Blog</a>
+  <h1>Building an OS in a New Language</h1>
+  <div class="blog-meta">
+    2025
+    <span class="tags"><span class="tag">os</span><span class="tag">kernel</span></span>
+  </div>
+  <div class="blog-content">
+<a href="/blog/" class="blog-back">← Back to Blog</a>
+  
+  <div class="blog-meta">
+    2025
+    <span class="tags"><span class="tag">os</span><span class="tag">kernel</span></span>
+  </div>
+  <div class="blog-content">
+<div class="meta">May 2025 · 10 min read · <a href="/blog/">← All Posts</a></div>
+
+<p>When we built Lateralus, the question wasn't <em>if</em> we'd write an OS — it was <em>when</em>. A programming language proves itself at the edges: can it handle hardware interrupts? Can it manage memory without a runtime? Can it boot a machine? <strong>LateralusOS v1.0</strong> answers yes to all three.</p>
+
+<h2>◉ Why Write an OS?</h2>
+
+<p>Every systems language claims it can do low-level work. But claims aren't proof. Writing an actual bootable kernel forced us to solve real problems:</p>
+
+<ul>
+    <li><strong>No heap at boot.</strong> Memory allocation doesn't exist until you build it.</li>
+    <li><strong>No standard library.</strong> You write <code>print</code> before you can use it.</li>
+    <li><strong>Hardware is unforgiving.</strong> One wrong memory write and the CPU triple-faults.</li>
+    <li><strong>Interrupt handling.</strong> The CPU fires hardware interrupts at any time — your code must handle them.</li>
+</ul>
+
+<p>LateralusOS forced the language to grow. Features that seemed nice-to-have became essential.</p>
+
+<h2>◉ Architecture Overview</h2>
+
+<div class="info-box">
+    <h4>LateralusOS v1.0 Components</h4>
+    <ul>
+        <li><strong>Bootloader</strong> — UEFI boot, framebuffer init, memory map</li>
+        <li><strong>Kernel</strong> — GDT, IDT, interrupt handlers, PIC, PIT timer</li>
+        <li><strong>Memory</strong> — Physical frame allocator, virtual memory (paging), heap allocator</li>
+        <li><strong>Drivers</strong> — VGA text mode, keyboard (PS/2), serial port, PCI enumeration</li>
+        <li><strong>Filesystem</strong> — Basic VFS layer, RAM disk, read/write operations</li>
+        <li><strong>Shell</strong> — Interactive command-line with 12 built-in commands</li>
+        <li><strong>Networking</strong> — Ethernet frames, ARP, basic IP stack</li>
+    </ul>
+</div>
+
+<h2>◉ The Kernel Entry Point</h2>
+
+<p>Here's how LateralusOS boots — the kernel entry point, written entirely in Lateralus:</p>
+
+<pre><code><span style="color: var(--text2)">// kernel/main.ltl — LateralusOS entry point</span>
+<span style="color: var(--hot-pink)">use</span> kernel::{gdt, idt, pic, memory, drivers, shell}
+
+<span style="color: var(--hot-pink)">fn</span> <span style="color: var(--cyber-blue)">kernel_main</span>(boot_info: <span style="color: var(--hot-pink)">BootInfo</span>) {
+    boot_info
+        <span style="color: var(--electric-yellow)">|></span> gdt::<span style="color: var(--cyber-blue)">init</span>()
+        <span style="color: var(--electric-yellow)">|></span> idt::<span style="color: var(--cyber-blue)">init</span>()
+        <span style="color: var(--electric-yellow)">|></span> pic::<span style="color: var(--cyber-blue)">init</span>()
+
+    <span style="color: var(--hot-pink)">let</span> allocator = boot_info.memory_map
+        <span style="color: var(--electric-yellow)">|></span> memory::<span style="color: var(--cyber-blue)">init_frame_allocator</span>()
+
+    <span style="color: var(--hot-pink)">let</span> heap = allocator
+        <span style="color: var(--electric-yellow)">|></span> memory::<span style="color: var(--cyber-blue)">init_heap</span>(<span style="color: var(--electric-yellow)">0x4444_0000</span>, <span style="color: var(--electric-yellow)">1024</span> * <span style="color: var(--electric-yellow)">1024</span>)
+
+    drivers::<span style="color: var(--cyber-blue)">init_all</span>()
+    shell::<span style="color: var(--cyber-blue)">run</span>()
+}</code></pre>
+
+<p>The pipeline operator shines here. Kernel initialization is a <strong>sequence of dependent steps</strong> — exactly what pipelines model.</p>
+
+<h2>◉ Memory Management</h2>
+
+<p>The physical frame allocator uses Lateralus's pattern matching to handle memory regions:</p>
+
+<pre><code><span style="color: var(--hot-pink)">fn</span> <span style="color: var(--cyber-blue)">allocate_frame</span>(allocator: &<span style="color: var(--hot-pink)">mut</span> <span style="color: var(--hot-pink)">FrameAllocator</span>) -> <span style="color: var(--hot-pink)">Option</span>&lt;<span style="color: var(--hot-pink)">Frame</span>&gt; {
+    allocator.memory_map
+        <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">filter</span>(|region| <span style="color: var(--hot-pink)">match</span> region.kind {
+            <span style="color: var(--hot-pink)">Usable</span>     => <span style="color: var(--hot-pink)">true</span>,
+            <span style="color: var(--hot-pink)">Bootloader</span> => <span style="color: var(--hot-pink)">false</span>,
+            <span style="color: var(--hot-pink)">Reserved</span>   => <span style="color: var(--hot-pink)">false</span>,
+            _          => <span style="color: var(--hot-pink)">false</span>,
+        })
+        <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">flat_map</span>(|r| r.start..r.end <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">step_by</span>(<span style="color: var(--electric-yellow)">4096</span>))
+        <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">find</span>(|addr| !allocator.used.<span style="color: var(--cyber-blue)">contains</span>(addr))
+        <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">map</span>(|addr| {
+            allocator.used.<span style="color: var(--cyber-blue)">insert</span>(addr)
+            <span style="color: var(--hot-pink)">Frame</span> { address: addr }
+        })
+}</code></pre>
+
+<h2>◉ Interrupt Handling</h2>
+
+<p>Hardware interrupts need pattern matching — the CPU gives you an interrupt number, and you need to dispatch it fast:</p>
+
+<pre><code><span style="color: var(--hot-pink)">fn</span> <span style="color: var(--cyber-blue)">interrupt_handler</span>(frame: <span style="color: var(--hot-pink)">InterruptFrame</span>, irq: <span style="color: var(--hot-pink)">u8</span>) {
+    <span style="color: var(--hot-pink)">match</span> irq {
+        <span style="color: var(--electric-yellow)">0</span>  => timer::<span style="color: var(--cyber-blue)">tick</span>(),
+        <span style="color: var(--electric-yellow)">1</span>  => keyboard::<span style="color: var(--cyber-blue)">handle_scancode</span>(
+            port::<span style="color: var(--cyber-blue)">read_u8</span>(<span style="color: var(--electric-yellow)">0x60</span>)
+        ),
+        <span style="color: var(--electric-yellow)">14</span> => disk::<span style="color: var(--cyber-blue)">handle_irq</span>(),
+        n  => <span style="color: var(--cyber-blue)">println</span>(<span style="color: var(--lime)">"Unhandled IRQ: {n}"</span>),
+    }
+    pic::<span style="color: var(--cyber-blue)">end_of_interrupt</span>(irq)
+}</code></pre>
+
+<h2>◉ The Shell</h2>
+
+<p>LateralusOS includes an interactive shell with pipeline support at the OS level:</p>
+
+<pre><code><span style="color: var(--text2)">// Built-in commands</span>
+<span style="color: var(--hot-pink)">fn</span> <span style="color: var(--cyber-blue)">execute</span>(cmd: <span style="color: var(--hot-pink)">Command</span>) {
+    <span style="color: var(--hot-pink)">match</span> cmd {
+        <span style="color: var(--hot-pink)">Command</span>::<span style="color: var(--cyber-blue)">Help</span>         => <span style="color: var(--cyber-blue)">show_help</span>(),
+        <span style="color: var(--hot-pink)">Command</span>::<span style="color: var(--cyber-blue)">Clear</span>        => vga::<span style="color: var(--cyber-blue)">clear_screen</span>(),
+        <span style="color: var(--hot-pink)">Command</span>::<span style="color: var(--cyber-blue)">Ls</span>(path)     => fs::<span style="color: var(--cyber-blue)">list_dir</span>(path),
+        <span style="color: var(--hot-pink)">Command</span>::<span style="color: var(--cyber-blue)">Cat</span>(path)    => fs::<span style="color: var(--cyber-blue)">read_file</span>(path) <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">println</span>(),
+        <span style="color: var(--hot-pink)">Command</span>::<span style="color: var(--cyber-blue)">Echo</span>(text)   => <span style="color: var(--cyber-blue)">println</span>(text),
+        <span style="color: var(--hot-pink)">Command</span>::<span style="color: var(--cyber-blue)">Uptime</span>       => timer::<span style="color: var(--cyber-blue)">uptime</span>() <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">format_duration</span>() <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">println</span>(),
+        <span style="color: var(--hot-pink)">Command</span>::<span style="color: var(--cyber-blue)">MemInfo</span>      => memory::<span style="color: var(--cyber-blue)">stats</span>() <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">display</span>(),
+        <span style="color: var(--hot-pink)">Command</span>::<span style="color: var(--cyber-blue)">Shutdown</span>     => acpi::<span style="color: var(--cyber-blue)">shutdown</span>(),
+        <span style="color: var(--hot-pink)">Command</span>::<span style="color: var(--cyber-blue)">Unknown</span>(s)   => <span style="color: var(--cyber-blue)">println</span>(<span style="color: var(--lime)">"Unknown: {s}"</span>),
+    }
+}</code></pre>
+
+<h2>◉ Lessons Learned</h2>
+
+<p>Building LateralusOS taught us three things about language design:</p>
+
+<ol>
+    <li><strong>Pattern matching is essential for systems code.</strong> Hardware gives you numbers and flags — you need exhaustive matching to handle them safely.</li>
+    <li><strong>Pipelines work at every level.</strong> From kernel init to user shell commands, left-to-right data flow makes code clearer.</li>
+    <li><strong>Zero-cost abstractions matter.</strong> The pipeline operator compiles down to direct function calls — no runtime overhead in a kernel.</li>
+</ol>
+
+<blockquote><p>If your language can boot a computer, it can handle anything.</p></blockquote>
+
+<div class="cta">
+    <a href="https://github.com/bad-antics/lateralus-os" class="btn-p">View LateralusOS on GitHub</a>
+    <a href="/blog/" class="btn-s">← Back to Blog</a>
+</div>
+  </div>
+  </div>
+</article>
+
+<footer class="footer">
+  <div class="footer-inner">
+    <div class="footer-logo"><span class="pipe">|></span> LATERALUS</div>
+    <div class="footer-tagline">A Language That Spirals Outward</div>
+  </div>
+</footer>
+
+<script src="/site.js"></script>
+</body>
+</html>

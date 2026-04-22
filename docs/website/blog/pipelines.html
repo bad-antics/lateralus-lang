@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The Pipeline Operator Deep Dive — Lateralus Blog</title>
+  <meta name="description" content="The Pipeline Operator Deep Dive - Notes on language design, tooling, OS development, and the pipeline-first way of thinking.">
+  <meta property="og:title" content="The Pipeline Operator Deep Dive — Lateralus Blog">
+  <meta property="og:description" content="The Pipeline Operator Deep Dive">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://lateralus.dev/blog/pipelines.html">
+  <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+  <link rel="canonical" href="https://lateralus.dev/blog/pipelines.html">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css?v=20260408">
+  <style>
+    .blog-post { max-width: 800px; margin: 0 auto; padding: 80px 20px 60px; }
+    .blog-post h1 { font-family: 'Press Start 2P', monospace; font-size: clamp(14px, 3vw, 20px); color: var(--electric-yellow); line-height: 1.8; margin-bottom: 16px; }
+    .blog-meta { font-family: 'VT323', monospace; font-size: 18px; color: var(--hot-pink); margin-bottom: 24px; }
+    .blog-meta .tags { display: inline-flex; gap: 8px; margin-left: 16px; }
+    .blog-meta .tag { font-family: 'Press Start 2P', monospace; font-size: 8px; padding: 4px 10px; border: 1px solid var(--lime); color: var(--lime); }
+    .blog-content { font-family: 'VT323', monospace; font-size: 20px; color: var(--text); line-height: 1.7; }
+    .blog-content h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--cyber-blue); margin: 32px 0 16px; line-height: 1.6; }
+    .blog-content h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--lime); margin: 24px 0 12px; line-height: 1.6; }
+    .blog-content p { margin-bottom: 16px; }
+    .blog-content code { background: var(--bg3); padding: 2px 6px; color: var(--hot-pink); font-size: 18px; }
+    .blog-content pre { background: var(--bg3); border: 2px solid var(--border-light); padding: 16px; overflow-x: auto; margin: 16px 0; }
+    .blog-content pre code { background: none; padding: 0; display: block; font-size: 16px; line-height: 1.5; color: var(--text); }
+    .blog-content ul, .blog-content ol { margin: 16px 0; padding-left: 24px; }
+    .blog-content li { margin-bottom: 8px; }
+    .blog-content a { color: var(--cyber-blue); text-decoration: underline; }
+    .blog-content a:hover { color: var(--lime); }
+    .blog-content blockquote { border-left: 3px solid var(--lime); padding-left: 16px; margin: 16px 0; color: var(--text2); font-style: italic; }
+    .blog-back { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; color: var(--lime); text-decoration: none; margin-bottom: 24px; }
+    .blog-back:hover { color: var(--electric-yellow); }
+    .feature-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin: 20px 0; }
+    .feature-card { background: var(--bg3); border: 2px solid var(--border-light); padding: 12px; }
+    .feature-card h4 { font-family: 'Press Start 2P', monospace; font-size: 8px; color: var(--electric-yellow); margin-bottom: 6px; }
+    .feature-card p { font-size: 16px; margin: 0; }
+    .cta-box { background: var(--bg3); border: 2px solid var(--lime); padding: 20px; text-align: center; margin: 24px 0; }
+    .cta-box h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--electric-yellow); margin-bottom: 8px; }
+    .cta-box p { margin-bottom: 12px; }
+    .cta-box a { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; padding: 10px 20px; margin: 4px; }
+    .cta-box .btn-primary { background: var(--lime); color: var(--bg); }
+    .cta-box .btn-secondary { border: 2px solid var(--cyber-blue); color: var(--cyber-blue); }
+    @media (max-width: 768px) {
+      .blog-post h1 { font-size: 14px; line-height: 1.5; }
+      .blog-content { font-size: 16px; }
+      .blog-content code { font-size: 14px; }
+      .blog-content pre { padding: 12px; }
+      .blog-content pre code { font-size: 13px; }
+      .blog-back { font-size: 8px; }
+      .feature-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/">PLAYGROUND</a>
+      <a href="/blog/" class="active">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<article class="blog-post">
+  <a href="/blog/" class="blog-back">← Back to Blog</a>
+  <h1>The Pipeline Operator Deep Dive</h1>
+  <div class="blog-meta">
+    2025
+    <span class="tags"><span class="tag">language</span><span class="tag">design</span></span>
+  </div>
+  <div class="blog-content">
+<a href="/blog/" class="blog-back">← Back to Blog</a>
+  
+  <div class="blog-meta">
+    2025
+    <span class="tags"><span class="tag">language</span><span class="tag">design</span></span>
+  </div>
+  <div class="blog-content">
+<div class="meta">June 2025 · 8 min read · <a href="/blog/">← All Posts</a></div>
+
+<p>Every programming language has a way of composing function calls. Most use nesting: <code>f(g(h(x)))</code>. Some use method chaining: <code>x.h().g().f()</code>. Lateralus uses <strong>pipelines</strong>: <code>x |> h |> g |> f</code>. This post explains why, and what it changes about the way you think.</p>
+
+<h2>◉ The Problem with Nesting</h2>
+
+<p>Consider a common data processing task: take a list of transactions, filter out small ones, group by category, sum each group, and sort by total. In a traditional language, you'd write something like:</p>
+
+<pre><code><span style="color: var(--text2)">// Traditional — read inside-out</span>
+<span style="color: var(--cyber-blue)">sort</span>(<span style="color: var(--cyber-blue)">sum_groups</span>(<span style="color: var(--cyber-blue)">group_by</span>(<span style="color: var(--cyber-blue)">filter</span>(transactions, |t| t.amount > <span style="color: var(--electric-yellow)">20</span>), |t| t.category)))</code></pre>
+
+<p>To understand this code, you start from the innermost call and read outward. The data flow is <strong>right-to-left, inside-out</strong>. The first operation applied (filter) is buried in the middle. This isn't how humans think about steps.</p>
+
+<h2>◉ The Pipeline Solution</h2>
+
+<p>In Lateralus, the same operation reads like a recipe:</p>
+
+<pre><code><span style="color: var(--text2)">// Lateralus — read left-to-right</span>
+<span style="color: var(--hot-pink)">let</span> report = transactions
+    <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">filter</span>(|t| t.amount > <span style="color: var(--electric-yellow)">20</span>)
+    <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">group_by</span>(|t| t.category)
+    <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">sum_groups</span>()
+    <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">sort</span>(descending)</code></pre>
+
+<p>Each line is one step. The data flows <strong>top-to-bottom, left-to-right</strong>. Adding, removing, or reordering steps is trivial — just add or move a line.</p>
+
+<h2>◉ How It Works</h2>
+
+<p>The pipeline operator <code>|></code> takes the expression on its left and passes it as the <strong>first argument</strong> to the function on its right. So:</p>
+
+<pre><code><span style="color: var(--text2)">// These are equivalent:</span>
+x <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">f</span>(a, b)      <span style="color: var(--text2)">// pipeline form</span>
+<span style="color: var(--cyber-blue)">f</span>(x, a, b)          <span style="color: var(--text2)">// traditional form</span>
+
+<span style="color: var(--text2)">// Chaining multiple:</span>
+x <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">f</span>() <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">g</span>() <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">h</span>()   <span style="color: var(--text2)">// pipeline</span>
+<span style="color: var(--cyber-blue)">h</span>(<span style="color: var(--cyber-blue)">g</span>(<span style="color: var(--cyber-blue)">f</span>(x)))              <span style="color: var(--text2)">// nested equivalent</span></code></pre>
+
+<h2>◉ Pipeline + Pattern Matching</h2>
+
+<p>Pipelines combine naturally with Lateralus's other features. Pattern matching in a pipeline lets you branch on the shape of data at any stage:</p>
+
+<pre><code><span style="color: var(--hot-pink)">let</span> result = input
+    <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">parse</span>()
+    <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--hot-pink)">match</span> {
+        <span style="color: var(--hot-pink)">Ok</span>(data) => data <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">validate</span>() <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">transform</span>(),
+        <span style="color: var(--hot-pink)">Err</span>(e)   => <span style="color: var(--cyber-blue)">fallback</span>(e),
+    }
+    <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">serialize</span>()</code></pre>
+
+<h2>◉ Pipeline + Async</h2>
+
+<p>Async operations flow just as naturally. No callback pyramids, no promise chains — just pipes:</p>
+
+<pre><code><span style="color: var(--hot-pink)">let</span> page = url
+    <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--hot-pink)">await</span> <span style="color: var(--cyber-blue)">fetch</span>()
+    <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--hot-pink)">await</span> <span style="color: var(--cyber-blue)">read_body</span>()
+    <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">parse_html</span>()
+    <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">extract_links</span>()
+    <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">filter</span>(|link| link.domain == <span style="color: var(--lime)">"target.com"</span>)</code></pre>
+
+<h2>◉ Real-World Example: Log Analysis</h2>
+
+<p>Here's a complete example — parsing and analyzing server logs:</p>
+
+<pre><code><span style="color: var(--hot-pink)">fn</span> <span style="color: var(--cyber-blue)">analyze_logs</span>(path: <span style="color: var(--hot-pink)">String</span>) -> <span style="color: var(--hot-pink)">Report</span> {
+    path
+        <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">read_file</span>()
+        <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">lines</span>()
+        <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">map</span>(<span style="color: var(--cyber-blue)">parse_log_entry</span>)
+        <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">filter</span>(|e| e.status >= <span style="color: var(--electric-yellow)">400</span>)
+        <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">group_by</span>(|e| e.endpoint)
+        <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">map_entries</span>(|endpoint, errors| {
+            <span style="color: var(--hot-pink)">let</span> count = errors <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">len</span>()
+            <span style="color: var(--hot-pink)">let</span> rate = count <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">as_float</span>() / total <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">as_float</span>()
+            <span style="color: var(--hot-pink)">EndpointReport</span> { endpoint, count, rate }
+        })
+        <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--cyber-blue)">sort_by</span>(|r| r.count, descending)
+        <span style="color: var(--electric-yellow)">|></span> <span style="color: var(--hot-pink)">Report</span>::<span style="color: var(--cyber-blue)">new</span>()
+}</code></pre>
+
+<p>Every step is one clear operation. No temporary variables. No nesting. The pipeline <em>is</em> the algorithm.</p>
+
+<h2>◉ Design Principles</h2>
+
+<p>Three rules guided the pipeline design:</p>
+
+<ol>
+    <li><strong>Left-to-right always.</strong> Data flows the way you read.</li>
+    <li><strong>Each step is independent.</strong> You can add, remove, or reorder lines without restructuring.</li>
+    <li><strong>Composable.</strong> Pipelines work with every feature — pattern matching, async, error handling, lambdas.</li>
+</ol>
+
+<blockquote><p>Code is read far more often than it's written. The pipeline operator optimizes for the reader.</p></blockquote>
+
+<div class="cta">
+    <a href="/playground/" class="btn-p">▶ Try Pipelines in the Playground</a>
+    <a href="/blog/" class="btn-s">← Back to Blog</a>
+</div>
+  </div>
+  </div>
+</article>
+
+<footer class="footer">
+  <div class="footer-inner">
+    <div class="footer-logo"><span class="pipe">|></span> LATERALUS</div>
+    <div class="footer-tagline">A Language That Spirals Outward</div>
+  </div>
+</footer>
+
+<script src="/site.js"></script>
+</body>
+</html>

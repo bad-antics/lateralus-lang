@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Why RISC-V for FRISC OS — Lateralus Blog</title>
+  <meta name="description" content="Why RISC-V for FRISC OS - Notes on language design, tooling, OS development, and the pipeline-first way of thinking.">
+  <meta property="og:title" content="Why RISC-V for FRISC OS — Lateralus Blog">
+  <meta property="og:description" content="Why RISC-V for FRISC OS">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://lateralus.dev/blog/why-riscv.html">
+  <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+  <link rel="canonical" href="https://lateralus.dev/blog/why-riscv.html">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css?v=20260408">
+  <style>
+    .blog-post { max-width: 800px; margin: 0 auto; padding: 80px 20px 60px; }
+    .blog-post h1 { font-family: 'Press Start 2P', monospace; font-size: clamp(14px, 3vw, 20px); color: var(--electric-yellow); line-height: 1.8; margin-bottom: 16px; }
+    .blog-meta { font-family: 'VT323', monospace; font-size: 18px; color: var(--hot-pink); margin-bottom: 24px; }
+    .blog-meta .tags { display: inline-flex; gap: 8px; margin-left: 16px; }
+    .blog-meta .tag { font-family: 'Press Start 2P', monospace; font-size: 8px; padding: 4px 10px; border: 1px solid var(--lime); color: var(--lime); }
+    .blog-content { font-family: 'VT323', monospace; font-size: 20px; color: var(--text); line-height: 1.7; }
+    .blog-content h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--cyber-blue); margin: 32px 0 16px; line-height: 1.6; }
+    .blog-content h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--lime); margin: 24px 0 12px; line-height: 1.6; }
+    .blog-content p { margin-bottom: 16px; }
+    .blog-content code { background: var(--bg3); padding: 2px 6px; color: var(--hot-pink); font-size: 18px; }
+    .blog-content pre { background: var(--bg3); border: 2px solid var(--border-light); padding: 16px; overflow-x: auto; margin: 16px 0; }
+    .blog-content pre code { background: none; padding: 0; display: block; font-size: 16px; line-height: 1.5; color: var(--text); }
+    .blog-content ul, .blog-content ol { margin: 16px 0; padding-left: 24px; }
+    .blog-content li { margin-bottom: 8px; }
+    .blog-content a { color: var(--cyber-blue); text-decoration: underline; }
+    .blog-content a:hover { color: var(--lime); }
+    .blog-content blockquote { border-left: 3px solid var(--lime); padding-left: 16px; margin: 16px 0; color: var(--text2); font-style: italic; }
+    .blog-back { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; color: var(--lime); text-decoration: none; margin-bottom: 24px; }
+    .blog-back:hover { color: var(--electric-yellow); }
+    /* Mobile responsive */
+    @media (max-width: 768px) {
+      .blog-header h1 { font-size: 14px; line-height: 1.5; }
+      .blog-header .meta { font-size: 11px; }
+      .blog-content { font-size: 16px; }
+      .blog-content code { font-size: 14px; }
+      .blog-content pre { padding: 12px; }
+      .blog-content pre code { font-size: 13px; }
+      .blog-back { font-size: 8px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/">PLAYGROUND</a>
+      <a href="/blog/" class="active">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<article class="blog-post">
+  <a href="/blog/" class="blog-back">← Back to Blog</a>
+  <h1>Why RISC-V for FRISC OS</h1>
+  <div class="blog-meta">
+    December 15, 2024
+    <span class="tags"><span class="tag">frisc</span><span class="tag">riscv</span></span>
+  </div>
+  <div class="blog-content">
+
+    <p>FRISC OS targets RISC-V because it is open, simple, and extensible. But let me explain exactly what that means and why it matters for a Lateralus-native operating system.</p>
+
+    <h2>◉ The Problem with x86 and ARM</h2>
+    <p>x86 is a 45-year-old architecture buried under layers of backward compatibility. Variable-length instructions. Dozens of addressing modes. A segment register system that made sense in 1978 but is now vestigial baggage.</p>
+
+    <p>ARM is better designed, but it's proprietary. Want to build ARM chips? Pay ARM Holdings. Want to extend the ISA? Ask permission. Want to see the full specification? Sign an NDA.</p>
+
+    <p>For an open-source OS written in an open-source language, closed ISAs feel wrong.</p>
+
+    <h2>◉ Open ISA</h2>
+    <p>RISC-V is BSD-licensed. You can:</p>
+    <ul>
+      <li>Read the complete specification (freely available PDFs)</li>
+      <li>Implement your own CPU without paying royalties</li>
+      <li>Add custom instructions for your domain</li>
+      <li>Simulate everything in open-source tools like Spike</li>
+    </ul>
+
+    <p>No black boxes. No licensing negotiations. No NDAs. Just open documentation and open implementations.</p>
+
+    <h2>◉ Clean Design</h2>
+    <p>RISC-V was designed in 2010, learning from decades of ISA mistakes:</p>
+
+    <p><strong>Fixed instruction width:</strong> All base instructions are 32 bits. Fetching, decoding, and pipelining are trivial compared to x86's variable-width nightmare.</p>
+
+    <p><strong>Regular encoding:</strong> Source registers are always in the same bit positions. The decoder can extract operands before it even knows the instruction type.</p>
+
+    <p><strong>Simple privilege levels:</strong> Machine, Supervisor, User. No rings 0-3, no SMM mode, no TrustZone complexity.</p>
+
+    <p><strong>No condition codes:</strong> Branch instructions compare registers directly. No implicit flags register to track.</p>
+
+    <pre><code>// x86: set flags, then branch on flags
+cmp eax, 0
+jz  label
+
+// RISC-V: branch compares directly
+beqz a0, label</code></pre>
+
+    <h2>◉ Extensibility</h2>
+    <p>RISC-V has a modular extension system:</p>
+
+    <table style="width:100%; border-collapse:collapse; margin:16px 0;">
+      <tr style="border-bottom:1px solid var(--border-light);">
+        <th style="text-align:left; padding:8px;">Extension</th>
+        <th style="text-align:left; padding:8px;">Purpose</th>
+      </tr>
+      <tr><td style="padding:8px;"><strong>I</strong></td><td style="padding:8px;">Base integer (required)</td></tr>
+      <tr><td style="padding:8px;"><strong>M</strong></td><td style="padding:8px;">Multiply/Divide</td></tr>
+      <tr><td style="padding:8px;"><strong>A</strong></td><td style="padding:8px;">Atomics</td></tr>
+      <tr><td style="padding:8px;"><strong>F</strong></td><td style="padding:8px;">Single-precision float</td></tr>
+      <tr><td style="padding:8px;"><strong>D</strong></td><td style="padding:8px;">Double-precision float</td></tr>
+      <tr><td style="padding:8px;"><strong>C</strong></td><td style="padding:8px;">Compressed (16-bit) instructions</td></tr>
+      <tr><td style="padding:8px;"><strong>V</strong></td><td style="padding:8px;">Vector operations</td></tr>
+    </table>
+
+    <p>FRISC OS targets RV64GC — that's RV64 (64-bit) with IMAFD (integer, multiply, atomics, float, double) and C (compressed). A practical general-purpose configuration.</p>
+
+    <h2>◉ Hardware Availability</h2>
+    <p>In 2024, real RISC-V hardware is finally practical:</p>
+
+    <ul>
+      <li><strong>HiFive Unmatched:</strong> Quad-core SiFive U74 at 1.2 GHz, 16GB RAM, PCIe. Real desktop-class Linux performance.</li>
+      <li><strong>StarFive VisionFive 2:</strong> Quad-core JH7110, $65. The "Raspberry Pi of RISC-V."</li>
+      <li><strong>QEMU:</strong> Full-system emulation for development without hardware.</li>
+      <li><strong>Milk-V Mars:</strong> Another quad-core JH7110 board, even cheaper.</li>
+    </ul>
+
+    <p>We develop FRISC primarily in QEMU, then test on VisionFive 2 boards. The HiFive Unmatched is the "production" target.</p>
+
+    <h2>◉ Lateralus ↔ RISC-V Synergy</h2>
+    <p>Lateralus's C99 backend generates clean, predictable code that RISC-V handles beautifully:</p>
+
+    <pre><code>// Lateralus pipeline
+data |> transform |> filter |> reduce
+
+// Maps naturally to RISC-V calling convention:
+// Arguments in a0-a7, return in a0
+// No complex ABI to wrestle with</code></pre>
+
+    <p>RISC-V's simplicity means the generated code is fast without complex backend optimizations. What you write is close to what runs.</p>
+
+    <h2>◉ The Future is Open</h2>
+    <p>We believe RISC-V will win the long game:</p>
+
+    <ul>
+      <li>China is investing heavily (domestic chip independence)</li>
+      <li>European Union has RISC-V in its chip strategy</li>
+      <li>Google is using RISC-V in its TPUs</li>
+      <li>Qualcomm, NVIDIA, and Western Digital all have RISC-V projects</li>
+    </ul>
+
+    <p>By building on RISC-V now, FRISC OS will be ready when open hardware becomes ubiquitous.</p>
+
+    <h2>◉ Getting Started</h2>
+    <p>Want to try FRISC on RISC-V? Start with QEMU:</p>
+
+    <pre><code># Build FRISC kernel
+lateralus build --target riscv64 kernel/
+
+# Run in QEMU
+qemu-system-riscv64 -machine virt -bios none \
+    -kernel build/frisc.elf -serial stdio</code></pre>
+
+    <p>See <a href="/os/">the OS page</a> for full documentation on building and running FRISC.</p>
+
+  </div>
+</article>
+
+<footer>
+  <div class="container" style="text-align:center; padding: 2rem 0;">
+    <p style="font-family:'Press Start 2P',monospace; font-size:9px; color:var(--lime); margin-bottom:8px;">|&gt; LATERALUS</p>
+    <p style="font-family:'VT323',monospace; font-size:14px; color:var(--text);">A Language That Spirals Outward</p>
+  </div>
+</footer>
+
+<script src="/site.js"></script>
+</body>
+</html>

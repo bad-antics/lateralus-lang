@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Building a Security Distribution — Lateralus Blog</title>
+  <meta name="description" content="Building a Security Distribution - Notes on language design, tooling, OS development, and the pipeline-first way of thinking.">
+  <meta property="og:title" content="Building a Security Distribution — Lateralus Blog">
+  <meta property="og:description" content="Building a Security Distribution">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://lateralus.dev/blog/nullsec-building-distro.html">
+  <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+  <link rel="canonical" href="https://lateralus.dev/blog/nullsec-building-distro.html">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css?v=20260408">
+  <style>
+    .blog-post { max-width: 800px; margin: 0 auto; padding: 80px 20px 60px; }
+    .blog-post h1 { font-family: 'Press Start 2P', monospace; font-size: clamp(14px, 3vw, 20px); color: var(--electric-yellow); line-height: 1.8; margin-bottom: 16px; }
+    .blog-meta { font-family: 'VT323', monospace; font-size: 18px; color: var(--hot-pink); margin-bottom: 24px; }
+    .blog-meta .tags { display: inline-flex; gap: 8px; margin-left: 16px; }
+    .blog-meta .tag { font-family: 'Press Start 2P', monospace; font-size: 8px; padding: 4px 10px; border: 1px solid var(--lime); color: var(--lime); }
+    .blog-content { font-family: 'VT323', monospace; font-size: 20px; color: var(--text); line-height: 1.7; }
+    .blog-content h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--cyber-blue); margin: 32px 0 16px; line-height: 1.6; }
+    .blog-content h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--lime); margin: 24px 0 12px; line-height: 1.6; }
+    .blog-content p { margin-bottom: 16px; }
+    .blog-content code { background: var(--bg3); padding: 2px 6px; color: var(--hot-pink); font-size: 18px; }
+    .blog-content pre { background: var(--bg3); border: 2px solid var(--border-light); padding: 16px; overflow-x: auto; margin: 16px 0; }
+    .blog-content pre code { background: none; padding: 0; display: block; font-size: 16px; line-height: 1.5; color: var(--text); }
+    .blog-content ul, .blog-content ol { margin: 16px 0; padding-left: 24px; }
+    .blog-content li { margin-bottom: 8px; }
+    .blog-content a { color: var(--cyber-blue); text-decoration: underline; }
+    .blog-content a:hover { color: var(--lime); }
+    .blog-content blockquote { border-left: 3px solid var(--lime); padding-left: 16px; margin: 16px 0; color: var(--text2); font-style: italic; }
+    .blog-back { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; color: var(--lime); text-decoration: none; margin-bottom: 24px; }
+    .blog-back:hover { color: var(--electric-yellow); }
+    /* Mobile responsive */
+    @media (max-width: 768px) {
+      .blog-header h1 { font-size: 14px; line-height: 1.5; }
+      .blog-header .meta { font-size: 11px; }
+      .blog-content { font-size: 16px; }
+      .blog-content code { font-size: 14px; }
+      .blog-content pre { padding: 12px; }
+      .blog-content pre code { font-size: 13px; }
+      .blog-back { font-size: 8px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/">PLAYGROUND</a>
+      <a href="/blog/" class="active">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<article class="blog-post">
+  <a href="/blog/" class="blog-back">← Back to Blog</a>
+  <h1>Building a Security Distribution</h1>
+  <div class="blog-meta">
+    November 5, 2025
+    <span class="tags"><span class="tag">nullsec</span><span class="tag">distro</span><span class="tag">devlog</span></span>
+  </div>
+  <div class="blog-content">
+
+    <p>Behind the scenes of building NullSec Linux: package selection, hardening, and the live-build system. How do you create a security-focused distribution from scratch?</p>
+
+    <h2>◉ Why Build a Distro?</h2>
+    <p>There are already great security distros: Kali, ParrotOS, BlackArch. Why build another?</p>
+
+    <ol>
+      <li><strong>Lateralus integration.</strong> We wanted the Lateralus SDK pre-installed with full security tooling bindings.</li>
+      <li><strong>Minimal bloat.</strong> Kali ships 600+ tools. Most pentests use maybe 30. NullSec ships lean.</li>
+      <li><strong>Different workflow.</strong> Pipeline-based security automation instead of manual tool juggling.</li>
+      <li><strong>Learning.</strong> Building a distro teaches you more about Linux than any course.</li>
+    </ol>
+
+    <h2>◉ Debian Live-Build</h2>
+    <p>NullSec is built on Debian Bookworm using the <code>live-build</code> system. This gives us:</p>
+
+    <ul>
+      <li>Reproducible builds from configuration files</li>
+      <li>Debian's package ecosystem and security updates</li>
+      <li>Live ISO support (boot without installing)</li>
+      <li>Familiar environment for Debian/Ubuntu users</li>
+    </ul>
+
+    <p>The build configuration lives in a Git repo:</p>
+
+    <pre><code>nullsec-live/
+├── auto/
+│   ├── build        # Build script
+│   ├── clean        # Clean script
+│   └── config       # Configuration script
+├── config/
+│   ├── package-lists/
+│   │   ├── base.list.chroot      # Base system packages
+│   │   ├── security.list.chroot  # Security tools
+│   │   └── lateralus.list.chroot # Lateralus SDK
+│   ├── includes.chroot/          # Files to include
+│   │   ├── etc/                  # System configs
+│   │   └── usr/                  # Custom binaries
+│   └── hooks/
+│       └── live/                 # Build-time scripts
+└── README.md</code></pre>
+
+    <h2>◉ Package Selection</h2>
+    <p>The core philosophy: include what's actually used daily. Here's our package list rationale:</p>
+
+    <h3>Recon Tools</h3>
+    <pre><code># Network discovery
+nmap
+masscan
+netdiscover
+
+# DNS enumeration
+dnsrecon
+dnsenum
+fierce
+
+# Web enumeration
+gobuster
+nikto
+whatweb</code></pre>
+
+    <h3>Exploitation</h3>
+    <pre><code># Frameworks
+metasploit-framework
+exploitdb
+
+# Web exploitation
+sqlmap
+burpsuite  # Community edition
+zaproxy
+
+# Password attacks
+john
+hashcat
+hydra</code></pre>
+
+    <h3>Post-Exploitation</h3>
+    <pre><code># Shells and listeners
+nc
+socat
+rlwrap
+
+# Privilege escalation
+linpeas
+linux-exploit-suggester</code></pre>
+
+    <h3>Lateralus SDK</h3>
+    <pre><code># Custom packages (built from source)
+lateralus          # Core compiler + runtime
+lateralus-security # Security tool bindings
+nullkia-de         # Custom desktop environment
+marshall           # Network marshal tool</code></pre>
+
+    <h2>◉ Building Custom Packages</h2>
+    <p>The Lateralus ecosystem doesn't exist in Debian repos, so we package it ourselves:</p>
+
+    <pre><code># Build script for lateralus package
+#!/bin/bash
+set -e
+
+# Clone and build
+git clone https://github.com/bad-antics/lateralus-lang.git
+cd lateralus-lang
+python -m build
+
+# Create Debian package structure
+mkdir -p pkg/DEBIAN pkg/usr/local/lib/python3.11/dist-packages
+cp dist/*.whl pkg/usr/local/lib/python3.11/dist-packages/
+
+# Control file
+cat > pkg/DEBIAN/control << EOF
+Package: lateralus
+Version: 1.5.0
+Architecture: amd64
+Maintainer: NullSec Team
+Description: Lateralus programming language
+EOF
+
+dpkg-deb --build pkg lateralus_1.5.0_amd64.deb</code></pre>
+
+    <p>Custom packages go into a local APT repository served during build.</p>
+
+    <h2>◉ System Hardening</h2>
+    <p>Live security distros need to balance usability with security. Our hardening choices:</p>
+
+    <h3>Enabled by Default</h3>
+    <ul>
+      <li><strong>MAC spoofing:</strong> Random MAC address on boot</li>
+      <li><strong>Hostname randomization:</strong> Changes each session</li>
+      <li><strong>DNS over HTTPS:</strong> Via systemd-resolved</li>
+      <li><strong>AppArmor:</strong> Mandatory Access Control for key services</li>
+      <li><strong>UFW:</strong> Firewall enabled, default deny inbound</li>
+    </ul>
+
+    <h3>Available but Optional</h3>
+    <ul>
+      <li><strong>Tor routing:</strong> Toggle all traffic through Tor</li>
+      <li><strong>Full disk encryption:</strong> For persistent installs</li>
+      <li><strong>Strict kernel lockdown:</strong> Breaks some tools but maximum security</li>
+    </ul>
+
+    <pre><code># /etc/nullsec/hardening.conf
+mac_randomize=true
+hostname_randomize=true
+dns_over_https=true
+tor_mode=false
+kernel_lockdown=false</code></pre>
+
+    <h2>◉ The Nullkia Desktop</h2>
+    <p>NullSec ships with Nullkia, a custom desktop environment built on Qt:</p>
+
+    <ul>
+      <li>Tiling window manager with floating mode</li>
+      <li>Dark retro-futuristic theme (matching lateralus.dev)</li>
+      <li>Integrated terminal with Lateralus REPL</li>
+      <li>Quick-launch menu for security tools</li>
+    </ul>
+
+    <p>Nullkia is intentionally lightweight (~200MB RAM idle) to leave resources for tool execution.</p>
+
+    <h2>◉ Build Process</h2>
+    <p>Building a NullSec ISO:</p>
+
+    <pre><code># Clone the configuration
+git clone https://github.com/bad-antics/nullsec-live.git
+cd nullsec-live
+
+# Configure
+lb config
+
+# Build (takes 30-60 minutes)
+sudo lb build
+
+# Output
+ls -lh live-image-amd64.hybrid.iso
+# 4.2G  NullSec-v2.0-amd64.iso</code></pre>
+
+    <p>The build is deterministic — same commit produces identical ISO.</p>
+
+    <h2>◉ Testing Pipeline</h2>
+    <p>Every ISO goes through automated testing before release:</p>
+
+    <pre><code>fn test_iso(iso_path: str) {
+    let tests = [
+        ("boot", test_qemu_boot),
+        ("network", test_network_tools),
+        ("lateralus", test_lateralus_sdk),
+        ("persistence", test_persistent_mode),
+    ]
+
+    tests
+        |> map(fn((name, test_fn)) {
+            println("Testing " + name + "...")
+            let result = test_fn(iso_path)
+            (name, result)
+        })
+        |> filter(fn((_, r)) { !r.passed })
+        |> each(fn((name, _)) {
+            panic("Test failed: " + name)
+        })
+
+    println("All tests passed!")
+}</code></pre>
+
+    <p>Tests run in QEMU with automated input via VNC scripting.</p>
+
+    <h2>◉ Release Workflow</h2>
+    <ol>
+      <li>Upstream Debian updates merged weekly</li>
+      <li>Security tool updates merged as released</li>
+      <li>CI rebuilds ISO on every merge to main</li>
+      <li>Manual QA on physical hardware</li>
+      <li>Signed release published to download server</li>
+    </ol>
+
+    <h2>◉ Lessons Learned</h2>
+    <ul>
+      <li><strong>Live-build is finicky.</strong> Configuration ordering matters. Document everything.</li>
+      <li><strong>Custom packages are time-consuming.</strong> Upstream to Debian where possible.</li>
+      <li><strong>Test on real hardware.</strong> VMs don't catch all issues.</li>
+      <li><strong>Users find the bugs.</strong> Beta releases are essential.</li>
+    </ul>
+
+    <p>NullSec is available on <a href="/download/">the downloads page</a>. Source code at <a href="https://github.com/bad-antics/nullsec-live" target="_blank">GitHub</a>.</p>
+
+  </div>
+</article>
+
+<footer>
+  <div class="container" style="text-align:center; padding: 2rem 0;">
+    <p style="font-family:'Press Start 2P',monospace; font-size:9px; color:var(--lime); margin-bottom:8px;">|&gt; LATERALUS</p>
+    <p style="font-family:'VT323',monospace; font-size:14px; color:var(--text);">A Language That Spirals Outward</p>
+  </div>
+</footer>
+
+<script src="/site.js"></script>
+</body>
+</html>

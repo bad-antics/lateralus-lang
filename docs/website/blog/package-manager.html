@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>lpm: The Lateralus Package Manager — Lateralus Blog</title>
+  <meta name="description" content="lpm: The Lateralus Package Manager - Notes on language design, tooling, OS development, and the pipeline-first way of thinking.">
+  <meta property="og:title" content="lpm: The Lateralus Package Manager — Lateralus Blog">
+  <meta property="og:description" content="lpm: The Lateralus Package Manager">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://lateralus.dev/blog/package-manager.html">
+  <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+  <link rel="canonical" href="https://lateralus.dev/blog/package-manager.html">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css?v=20260408">
+  <style>
+    .blog-post { max-width: 800px; margin: 0 auto; padding: 80px 20px 60px; }
+    .blog-post h1 { font-family: 'Press Start 2P', monospace; font-size: clamp(14px, 3vw, 20px); color: var(--electric-yellow); line-height: 1.8; margin-bottom: 16px; }
+    .blog-meta { font-family: 'VT323', monospace; font-size: 18px; color: var(--hot-pink); margin-bottom: 24px; }
+    .blog-meta .tags { display: inline-flex; gap: 8px; margin-left: 16px; }
+    .blog-meta .tag { font-family: 'Press Start 2P', monospace; font-size: 8px; padding: 4px 10px; border: 1px solid var(--lime); color: var(--lime); }
+    .blog-content { font-family: 'VT323', monospace; font-size: 20px; color: var(--text); line-height: 1.7; }
+    .blog-content h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--cyber-blue); margin: 32px 0 16px; line-height: 1.6; }
+    .blog-content h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--lime); margin: 24px 0 12px; line-height: 1.6; }
+    .blog-content p { margin-bottom: 16px; }
+    .blog-content code { background: var(--bg3); padding: 2px 6px; color: var(--hot-pink); font-size: 18px; }
+    .blog-content pre { background: var(--bg3); border: 2px solid var(--border-light); padding: 16px; overflow-x: auto; margin: 16px 0; }
+    .blog-content pre code { background: none; padding: 0; display: block; font-size: 16px; line-height: 1.5; color: var(--text); }
+    .blog-content ul, .blog-content ol { margin: 16px 0; padding-left: 24px; }
+    .blog-content li { margin-bottom: 8px; }
+    .blog-content a { color: var(--cyber-blue); text-decoration: underline; }
+    .blog-content a:hover { color: var(--lime); }
+    .blog-content blockquote { border-left: 3px solid var(--lime); padding-left: 16px; margin: 16px 0; color: var(--text2); font-style: italic; }
+    .blog-back { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; color: var(--lime); text-decoration: none; margin-bottom: 24px; }
+    .blog-back:hover { color: var(--electric-yellow); }
+    /* Mobile responsive */
+    @media (max-width: 768px) {
+      .blog-header h1 { font-size: 14px; line-height: 1.5; }
+      .blog-header .meta { font-size: 11px; }
+      .blog-content { font-size: 16px; }
+      .blog-content code { font-size: 14px; }
+      .blog-content pre { padding: 12px; }
+      .blog-content pre code { font-size: 13px; }
+      .blog-back { font-size: 8px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/">PLAYGROUND</a>
+      <a href="/blog/" class="active">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<article class="blog-post">
+  <a href="/blog/" class="blog-back">← Back to Blog</a>
+  <h1>lpm: The Lateralus Package Manager</h1>
+  <div class="blog-meta">
+    March 10, 2025
+    <span class="tags"><span class="tag">tooling</span><span class="tag">lpm</span></span>
+  </div>
+  <div class="blog-content">
+
+    <p>Every modern language needs a package manager. <code>lpm</code> is ours — designed for content-addressed storage, reproducible builds, and minimal ceremony. Here's how it works and why we made certain choices.</p>
+
+    <h2>◉ Design Goals</h2>
+    <p>We wanted:</p>
+
+    <ul>
+      <li><strong>Reproducibility:</strong> Same inputs → same outputs, always</li>
+      <li><strong>Speed:</strong> Fast installs, minimal network traffic</li>
+      <li><strong>Security:</strong> Verify integrity without trusting servers</li>
+      <li><strong>Simplicity:</strong> Few commands, obvious behavior</li>
+      <li><strong>Offline support:</strong> Work without network when possible</li>
+    </ul>
+
+    <h2>◉ Basic Usage</h2>
+
+    <pre><code># Create a new project
+lpm init my-project
+cd my-project
+
+# Add dependencies
+lpm add json
+lpm add http --dev        # Dev-only dependency
+lpm add crypto@2.1.0      # Specific version
+
+# Build and run
+lpm build
+lpm run
+
+# Run tests
+lpm test
+
+# Publish to registry
+lpm publish</code></pre>
+
+    <h2>◉ Project Structure</h2>
+    <p>After <code>lpm init</code>:</p>
+
+    <pre><code>my-project/
+├── lpm.toml           # Project manifest
+├── lpm.lock           # Locked dependencies
+├── src/
+│   └── main.ltl       # Entry point
+├── tests/
+│   └── test_main.ltl  # Tests
+└── .lpm/
+    └── cache/         # Downloaded packages</code></pre>
+
+    <h3>lpm.toml</h3>
+    <pre><code>[package]
+name = "my-project"
+version = "0.1.0"
+authors = ["bad-antics <wizard@lateralus.dev>"]
+license = "MIT"
+description = "A cool project"
+
+[dependencies]
+json = "^1.0"
+http = "^2.3"
+
+[dev-dependencies]
+testing = "^1.0"
+
+[build]
+target = "python"      # or "c", "bytecode"
+optimize = true
+
+[scripts]
+start = "lpm run --release"
+check = "lpm lint && lpm test"</code></pre>
+
+    <h2>◉ Content-Addressed Storage</h2>
+    <p>This is the key innovation. Every package version is identified by its content hash, not just name+version:</p>
+
+    <pre><code># lpm.lock
+[dependencies]
+json = { version = "1.2.3", hash = "sha256:a1b2c3d4..." }
+http = { version = "2.3.4", hash = "sha256:e5f6g7h8..." }</code></pre>
+
+    <p>Benefits:</p>
+
+    <ul>
+      <li><strong>Tamper detection:</strong> If content changes, hash changes</li>
+      <li><strong>Deduplication:</strong> Same content = same hash = stored once</li>
+      <li><strong>Reproducibility:</strong> Lock file pins exact content, not just version</li>
+      <li><strong>Offline verification:</strong> Verify integrity without hitting the registry</li>
+    </ul>
+
+    <p>The registry can't silently update a "1.2.3" release. The hash would change, lpm would reject it.</p>
+
+    <h2>◉ Resolution Algorithm</h2>
+    <p>Dependency resolution uses a SAT solver (similar to Cargo and Poetry):</p>
+
+    <ol>
+      <li>Collect all constraints from direct and transitive dependencies</li>
+      <li>Feed constraints to solver</li>
+      <li>Find solution that satisfies all constraints, or error with explanation</li>
+      <li>Write solution to lpm.lock</li>
+    </ol>
+
+    <p>When conflicts occur, lpm explains why:</p>
+
+    <pre><code>$ lpm add old-lib
+error: Cannot resolve dependencies
+
+  Package A requires json >= 2.0
+  Package B requires json < 2.0
+
+  These constraints cannot be satisfied simultaneously.
+
+  Consider:
+    - Update A to a version compatible with newer json
+    - Use B@1.3.0 which supports json 2.x</code></pre>
+
+    <h2>◉ Workspaces</h2>
+    <p>For multi-package projects:</p>
+
+    <pre><code># Root lpm.toml
+[workspace]
+members = [
+    "packages/core",
+    "packages/cli",
+    "packages/web",
+]
+
+# Shared dependencies resolved once
+[workspace.dependencies]
+json = "^1.0"</code></pre>
+
+    <p>All workspace members share a single lpm.lock. No version drift between packages.</p>
+
+    <h2>◉ Build Targets</h2>
+    <p>lpm handles compilation for all Lateralus targets:</p>
+
+    <pre><code># Build for Python (default)
+lpm build
+
+# Build for C
+lpm build --target c
+
+# Build for bytecode
+lpm build --target bytecode
+
+# Cross-compile for freestanding
+lpm build --target c --freestanding</code></pre>
+
+    <p>Each target can have specific configuration:</p>
+
+    <pre><code>[build.targets.c]
+cc = "gcc"
+cflags = ["-O2", "-Wall"]
+ldflags = ["-lm"]
+
+[build.targets.python]
+min_version = "3.10"</code></pre>
+
+    <h2>◉ Scripts</h2>
+    <p>Custom scripts in lpm.toml:</p>
+
+    <pre><code>[scripts]
+start = "lpm run --release"
+dev = "lpm run --watch"
+lint = "lateralus lint src/"
+fmt = "lateralus fmt src/"
+check = "lpm lint && lpm test && lpm build"
+deploy = "./scripts/deploy.sh"</code></pre>
+
+    <p>Run with <code>lpm run-script start</code> or shorthand <code>lpm start</code>.</p>
+
+    <h2>◉ Publishing</h2>
+    <p>Publishing to the registry:</p>
+
+    <pre><code># Login (once)
+lpm login
+
+# Publish
+lpm publish
+
+# Publish with specific tag
+lpm publish --tag beta</code></pre>
+
+    <p>Before publishing, lpm:</p>
+    <ol>
+      <li>Runs tests</li>
+      <li>Checks for uncommitted changes</li>
+      <li>Validates manifest</li>
+      <li>Computes content hash</li>
+      <li>Uploads to registry</li>
+    </ol>
+
+    <p>Published packages are immutable. You cannot overwrite a version — only yank it.</p>
+
+    <h2>◉ Private Registries</h2>
+    <p>For corporate use:</p>
+
+    <pre><code># ~/.config/lpm/config.toml
+[registries.internal]
+url = "https://lpm.internal.company.com"
+token = "${LPM_INTERNAL_TOKEN}"
+
+# In project lpm.toml
+[dependencies]
+internal-lib = { version = "1.0", registry = "internal" }</code></pre>
+
+    <h2>◉ Offline Mode</h2>
+    <p>Once dependencies are cached, no network needed:</p>
+
+    <pre><code># Force offline
+lpm build --offline
+
+# Vendor dependencies into project
+lpm vendor
+# Creates vendor/ directory with all sources
+
+# Build from vendored sources
+lpm build --vendored</code></pre>
+
+    <h2>◉ Security</h2>
+    <p>Security features:</p>
+
+    <ul>
+      <li><strong>Hash verification:</strong> All downloads verified against lock file</li>
+      <li><strong>Audit command:</strong> <code>lpm audit</code> checks for known vulnerabilities</li>
+      <li><strong>Supply chain:</strong> Optional GPG signatures for packages</li>
+      <li><strong>SBOM generation:</strong> <code>lpm sbom</code> generates software bill of materials</li>
+    </ul>
+
+    <p>Source at <a href="https://github.com/bad-antics/lpm" target="_blank">bad-antics/lpm</a>. Registry API docs at <a href="https://lpm.lateralus.dev/docs" target="_blank">lpm.lateralus.dev/docs</a>.</p>
+
+  </div>
+</article>
+
+<footer>
+  <div class="container" style="text-align:center; padding: 2rem 0;">
+    <p style="font-family:'Press Start 2P',monospace; font-size:9px; color:var(--lime); margin-bottom:8px;">|&gt; LATERALUS</p>
+    <p style="font-family:'VT323',monospace; font-size:14px; color:var(--text);">A Language That Spirals Outward</p>
+  </div>
+</footer>
+
+<script src="/site.js"></script>
+</body>
+</html>

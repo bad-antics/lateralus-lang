@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pattern Matching Deep Dive — Lateralus Blog</title>
+  <meta name="description" content="Pattern Matching Deep Dive - Notes on language design, tooling, OS development, and the pipeline-first way of thinking.">
+  <meta property="og:title" content="Pattern Matching Deep Dive — Lateralus Blog">
+  <meta property="og:description" content="Pattern Matching Deep Dive">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://lateralus.dev/blog/pattern-matching.html">
+  <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+  <link rel="canonical" href="https://lateralus.dev/blog/pattern-matching.html">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css?v=20260408">
+  <style>
+    .blog-post { max-width: 800px; margin: 0 auto; padding: 80px 20px 60px; }
+    .blog-post h1 { font-family: 'Press Start 2P', monospace; font-size: clamp(14px, 3vw, 20px); color: var(--electric-yellow); line-height: 1.8; margin-bottom: 16px; }
+    .blog-meta { font-family: 'VT323', monospace; font-size: 18px; color: var(--hot-pink); margin-bottom: 24px; }
+    .blog-meta .tags { display: inline-flex; gap: 8px; margin-left: 16px; }
+    .blog-meta .tag { font-family: 'Press Start 2P', monospace; font-size: 8px; padding: 4px 10px; border: 1px solid var(--lime); color: var(--lime); }
+    .blog-content { font-family: 'VT323', monospace; font-size: 20px; color: var(--text); line-height: 1.7; }
+    .blog-content h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--cyber-blue); margin: 32px 0 16px; line-height: 1.6; }
+    .blog-content h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--lime); margin: 24px 0 12px; line-height: 1.6; }
+    .blog-content p { margin-bottom: 16px; }
+    .blog-content code { background: var(--bg3); padding: 2px 6px; color: var(--hot-pink); font-size: 18px; }
+    .blog-content pre { background: var(--bg3); border: 2px solid var(--border-light); padding: 16px; overflow-x: auto; margin: 16px 0; }
+    .blog-content pre code { background: none; padding: 0; display: block; font-size: 16px; line-height: 1.5; color: var(--text); }
+    .blog-content ul, .blog-content ol { margin: 16px 0; padding-left: 24px; }
+    .blog-content li { margin-bottom: 8px; }
+    .blog-content a { color: var(--cyber-blue); text-decoration: underline; }
+    .blog-content a:hover { color: var(--lime); }
+    .blog-content blockquote { border-left: 3px solid var(--lime); padding-left: 16px; margin: 16px 0; color: var(--text2); font-style: italic; }
+    .blog-back { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; color: var(--lime); text-decoration: none; margin-bottom: 24px; }
+    .blog-back:hover { color: var(--electric-yellow); }
+    /* Mobile responsive */
+    @media (max-width: 768px) {
+      .blog-header h1 { font-size: 14px; line-height: 1.5; }
+      .blog-header .meta { font-size: 11px; }
+      .blog-content { font-size: 16px; }
+      .blog-content code { font-size: 14px; }
+      .blog-content pre { padding: 12px; }
+      .blog-content pre code { font-size: 13px; }
+      .blog-back { font-size: 8px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/">PLAYGROUND</a>
+      <a href="/blog/" class="active">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<article class="blog-post">
+  <a href="/blog/" class="blog-back">← Back to Blog</a>
+  <h1>Pattern Matching Deep Dive</h1>
+  <div class="blog-meta">
+    June 10, 2025
+    <span class="tags"><span class="tag">language</span><span class="tag">patterns</span></span>
+  </div>
+  <div class="blog-content">
+
+    <p>Lateralus pattern matching is exhaustive and expressive. Match on structure, guards, bindings, and more. The compiler verifies you've handled all cases.</p>
+
+    <h2>◉ Basic Match</h2>
+    <pre><code>let result = match value {
+    0 => "zero",
+    1 => "one",
+    _ => "many",
+}
+
+// Match is an expression - returns a value
+let description = match status_code {
+    200 => "OK",
+    404 => "Not Found",
+    500 => "Server Error",
+    _ => "Unknown",
+}</code></pre>
+
+    <h2>◉ Literal Patterns</h2>
+    <pre><code>// Numbers
+match n {
+    0 => "zero",
+    1 | 2 | 3 => "small",
+    4..=10 => "medium",
+    _ => "large",
+}
+
+// Strings
+match command {
+    "quit" | "exit" | "q" => exit(0),
+    "help" | "?" => show_help(),
+    "" => continue,
+    cmd => execute(cmd),
+}
+
+// Booleans
+match active {
+    true => "Running",
+    false => "Stopped",
+}</code></pre>
+
+    <h2>◉ Destructuring Structs</h2>
+    <pre><code>struct Point { x: float, y: float }
+
+match point {
+    // Match specific field values
+    Point { x: 0.0, y } => println("on y-axis at " + str(y)),
+    Point { x, y: 0.0 } => println("on x-axis at " + str(x)),
+
+    // Bind all fields
+    Point { x, y } => println("at (" + str(x) + ", " + str(y) + ")"),
+}
+
+// Shorthand when variable name matches field
+fn process(p: Point) {
+    let Point { x, y } = p  // Destructure in let
+    println(x + y)
+}</code></pre>
+
+    <h2>◉ Destructuring Enums</h2>
+    <pre><code>enum Result[T, E] {
+    Ok(T),
+    Err(E),
+}
+
+match result {
+    Ok(value) => println("Success: " + str(value)),
+    Err(e) => println("Error: " + e.message()),
+}
+
+// Nested destructuring
+enum Message {
+    Quit,
+    Move { x: int, y: int },
+    Write(str),
+    Color(int, int, int),
+}
+
+match msg {
+    Quit => exit(0),
+    Move { x, y } => move_cursor(x, y),
+    Write(text) => println(text),
+    Color(r, g, b) => set_color(r, g, b),
+}</code></pre>
+
+    <h2>◉ Guards</h2>
+    <p>Add conditions with <code>if</code>:</p>
+
+    <pre><code>match n {
+    x if x < 0 => "negative",
+    0 => "zero",
+    x if x > 100 => "large positive",
+    x if x % 2 == 0 => "even",
+    _ => "odd",
+}
+
+// Multiple conditions
+match point {
+    Point { x, y } if x == y => "on diagonal",
+    Point { x, y } if x > 0 && y > 0 => "quadrant I",
+    Point { x, y } if x < 0 && y > 0 => "quadrant II",
+    Point { x, y } if x < 0 && y < 0 => "quadrant III",
+    Point { x, y } if x > 0 && y < 0 => "quadrant IV",
+    _ => "on axis",
+}</code></pre>
+
+    <h2>◉ Destructuring Lists</h2>
+    <pre><code>match items {
+    [] => "empty",
+    [only] => "single: " + str(only),
+    [first, second] => "pair",
+    [first, ..rest] => "first: " + str(first) + ", rest: " + str(len(rest)),
+}
+
+// Head/tail pattern
+fn sum(list: [int]) -> int {
+    match list {
+        [] => 0,
+        [head, ..tail] => head + sum(tail),
+    }
+}
+
+// Specific positions
+match coords {
+    [x, y, z] => point_3d(x, y, z),
+    [x, y] => point_2d(x, y),
+    _ => panic("invalid coords"),
+}</code></pre>
+
+    <h2>◉ Binding with @</h2>
+    <p>Bind a value while also matching structure:</p>
+
+    <pre><code>match msg {
+    // Bind whole variant while extracting fields
+    m @ Move { x, y } if x > 100 => {
+        println("Large move: " + str(x) + "," + str(y))
+        log(m)
+    },
+    _ => {}
+}
+
+// Bind range match
+match age {
+    n @ 0..=17 => println("Minor, age " + str(n)),
+    n @ 18..=64 => println("Adult, age " + str(n)),
+    n @ 65.. => println("Senior, age " + str(n)),
+}</code></pre>
+
+    <h2>◉ Option Matching</h2>
+    <pre><code>match find_user(id) {
+    Some(user) => greet(user),
+    None => println("User not found"),
+}
+
+// Nested option
+match get_config("timeout") {
+    Some(Some(value)) => set_timeout(value),
+    Some(None) => set_timeout(default),
+    None => println("Config key missing"),
+}</code></pre>
+
+    <h2>◉ Result Matching</h2>
+    <pre><code>match read_file(path) {
+    Ok(content) => process(content),
+    Err(IOError::NotFound) => create_file(path),
+    Err(IOError::Permission) => request_access(path),
+    Err(e) => panic("Unexpected: " + e.message()),
+}</code></pre>
+
+    <h2>◉ Exhaustiveness</h2>
+    <p>The compiler ensures all cases are handled:</p>
+
+    <pre><code>enum Direction { North, South, East, West }
+
+// ERROR: non-exhaustive pattern
+match dir {
+    North => go_up(),
+    South => go_down(),
+    // Missing East and West!
+}
+
+// OK: all cases covered
+match dir {
+    North => go_up(),
+    South => go_down(),
+    East => go_right(),
+    West => go_left(),
+}
+
+// OK: wildcard covers remaining
+match dir {
+    North | South => vertical(),
+    _ => horizontal(),
+}</code></pre>
+
+    <h2>◉ If Let</h2>
+    <p>For single-pattern matching:</p>
+
+    <pre><code>// Instead of:
+match maybe_value {
+    Some(v) => process(v),
+    None => {},
+}
+
+// Use if let:
+if let Some(v) = maybe_value {
+    process(v)
+}
+
+// With else:
+if let Ok(data) = parse(input) {
+    use(data)
+} else {
+    println("Parse failed")
+}</code></pre>
+
+    <h2>◉ While Let</h2>
+    <pre><code>// Process until None
+while let Some(item) = queue.pop() {
+    process(item)
+}
+
+// Process until error
+while let Ok(line) = reader.read_line() {
+    println(line)
+}</code></pre>
+
+    <h2>◉ Match in Pipelines</h2>
+    <pre><code>// Filter by pattern
+items
+    |&gt; filter(fn(x) {
+        match x { Some(_) => true, None => false }
+    })
+
+// Transform by pattern
+results
+    |&gt; map(fn(r) {
+        match r {
+            Ok(v) => v * 2,
+            Err(_) => 0,
+        }
+    })</code></pre>
+
+    <h2>◉ Advanced: Nested Patterns</h2>
+    <pre><code>struct User { name: str, address: Option[Address] }
+struct Address { city: str, country: str }
+
+match user {
+    User { name, address: Some(Address { city: "NYC", .. }) } =>
+        println(name + " is in New York"),
+    User { name, address: Some(addr) } =>
+        println(name + " is in " + addr.city),
+    User { name, address: None } =>
+        println(name + " has no address"),
+}</code></pre>
+
+    <p>Pattern matching is central to Lateralus. Combined with exhaustiveness checking, it makes impossible states unrepresentable.</p>
+
+  </div>
+</article>
+
+<footer>
+  <div class="container" style="text-align:center; padding: 2rem 0;">
+    <p style="font-family:'Press Start 2P',monospace; font-size:9px; color:var(--lime); margin-bottom:8px;">|&gt; LATERALUS</p>
+    <p style="font-family:'VT323',monospace; font-size:14px; color:var(--text);">A Language That Spirals Outward</p>
+  </div>
+</footer>
+
+<script src="/site.js"></script>
+</body>
+</html>

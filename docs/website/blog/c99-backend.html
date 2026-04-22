@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The C99 Backend — Lateralus Blog</title>
+  <meta name="description" content="The C99 Backend - Notes on language design, tooling, OS development, and the pipeline-first way of thinking.">
+  <meta property="og:title" content="The C99 Backend — Lateralus Blog">
+  <meta property="og:description" content="The C99 Backend">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://lateralus.dev/blog/c99-backend.html">
+  <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+  <link rel="canonical" href="https://lateralus.dev/blog/c99-backend.html">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css?v=20260408">
+  <style>
+    .blog-post { max-width: 800px; margin: 0 auto; padding: 80px 20px 60px; }
+    .blog-post h1 { font-family: 'Press Start 2P', monospace; font-size: clamp(14px, 3vw, 20px); color: var(--electric-yellow); line-height: 1.8; margin-bottom: 16px; }
+    .blog-meta { font-family: 'VT323', monospace; font-size: 18px; color: var(--hot-pink); margin-bottom: 24px; }
+    .blog-meta .tags { display: inline-flex; gap: 8px; margin-left: 16px; }
+    .blog-meta .tag { font-family: 'Press Start 2P', monospace; font-size: 8px; padding: 4px 10px; border: 1px solid var(--lime); color: var(--lime); }
+    .blog-content { font-family: 'VT323', monospace; font-size: 20px; color: var(--text); line-height: 1.7; }
+    .blog-content h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--cyber-blue); margin: 32px 0 16px; line-height: 1.6; }
+    .blog-content h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--lime); margin: 24px 0 12px; line-height: 1.6; }
+    .blog-content p { margin-bottom: 16px; }
+    .blog-content code { background: var(--bg3); padding: 2px 6px; color: var(--hot-pink); font-size: 18px; }
+    .blog-content pre { background: var(--bg3); border: 2px solid var(--border-light); padding: 16px; overflow-x: auto; margin: 16px 0; }
+    .blog-content pre code { background: none; padding: 0; display: block; font-size: 16px; line-height: 1.5; color: var(--text); }
+    .blog-content ul, .blog-content ol { margin: 16px 0; padding-left: 24px; }
+    .blog-content li { margin-bottom: 8px; }
+    .blog-content a { color: var(--cyber-blue); text-decoration: underline; }
+    .blog-content a:hover { color: var(--lime); }
+    .blog-content blockquote { border-left: 3px solid var(--lime); padding-left: 16px; margin: 16px 0; color: var(--text2); font-style: italic; }
+    .blog-back { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; color: var(--lime); text-decoration: none; margin-bottom: 24px; }
+    .blog-back:hover { color: var(--electric-yellow); }
+    /* Mobile responsive */
+    @media (max-width: 768px) {
+      .blog-header h1 { font-size: 14px; line-height: 1.5; }
+      .blog-header .meta { font-size: 11px; }
+      .blog-content { font-size: 16px; }
+      .blog-content code { font-size: 14px; }
+      .blog-content pre { padding: 12px; }
+      .blog-content pre code { font-size: 13px; }
+      .blog-back { font-size: 8px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/">PLAYGROUND</a>
+      <a href="/blog/" class="active">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<article class="blog-post">
+  <a href="/blog/" class="blog-back">← Back to Blog</a>
+  <h1>The C99 Backend</h1>
+  <div class="blog-meta">
+    November 1, 2024
+    <span class="tags"><span class="tag">compiler</span><span class="tag">c99</span></span>
+  </div>
+  <div class="blog-content">
+
+    <p>The C99 backend transpiles Lateralus to portable C, enabling embedded and OS development. It's the secret weapon that lets Lateralus run on everything from microcontrollers to mainframes.</p>
+
+    <h2>◉ Why C99?</h2>
+    <p>C compilers exist for every platform ever built. From 8-bit AVR chips to z/Architecture mainframes, if silicon runs code, a C compiler targets it. By transpiling to C99, Lateralus inherits decades of optimization work for free.</p>
+
+    <p>C99 specifically because:</p>
+    <ul>
+      <li><strong>Inline functions:</strong> No macro hacks needed</li>
+      <li><strong>Variable declarations:</strong> Can appear anywhere in a block</li>
+      <li><strong>Designated initializers:</strong> Clean struct initialization</li>
+      <li><strong>bool type:</strong> Finally, native booleans</li>
+    </ul>
+
+    <h2>◉ Freestanding Mode</h2>
+    <pre><code>lateralus build --target c99 --freestanding kernel.ltl</code></pre>
+    <p>No libc, no runtime, no OS dependencies. Just your code, compiled to raw C that can run on bare metal.</p>
+
+    <p>Freestanding mode disables:</p>
+    <ul>
+      <li>Standard library imports (no <code>import io</code>)</li>
+      <li>Dynamic memory allocation (use explicit heap)</li>
+      <li>Stack unwinding (no exceptions)</li>
+      <li>Thread-local storage</li>
+    </ul>
+
+    <p>What you get is pure, position-independent code that can run at any address. Perfect for bootloaders and kernels.</p>
+
+    <h2>◉ The Translation</h2>
+    <p>Lateralus maps surprisingly well to C. Here's what the compiler generates:</p>
+
+    <pre><code>// Lateralus
+fn factorial(n: int) -> int {
+    if n <= 1 { return 1 }
+    return n * factorial(n - 1)
+}
+
+// Generated C99
+static int64_t ltl_factorial(int64_t n) {
+    if (n <= 1) { return 1; }
+    return n * ltl_factorial(n - 1);
+}</code></pre>
+
+    <p>Functions become static C functions. Structs become C structs. Pipelines get transformed into nested calls:</p>
+
+    <pre><code>// Lateralus
+data |> transform |> filter |> output
+
+// Generated C99
+ltl_output(ltl_filter(ltl_transform(data)))</code></pre>
+
+    <h2>◉ Memory Management</h2>
+    <p>The C backend supports three memory modes:</p>
+
+    <p><strong>1. GC (default):</strong> Conservative garbage collector, like Boehm GC</p>
+    <pre><code>lateralus build --target c99 --gc=conservative</code></pre>
+
+    <p><strong>2. Arena:</strong> Region-based allocation, freed in bulk</p>
+    <pre><code>lateralus build --target c99 --gc=arena</code></pre>
+
+    <p><strong>3. Manual:</strong> Explicit alloc/free, for OS kernels</p>
+    <pre><code>lateralus build --target c99 --gc=manual --freestanding</code></pre>
+
+    <h2>◉ The Preamble</h2>
+    <p>Every generated C file includes a standard preamble with type definitions:</p>
+
+    <pre><code>#include &lt;stdint.h&gt;
+#include &lt;stdbool.h&gt;
+#include &lt;stddef.h&gt;
+
+typedef struct ltl_string { char* data; size_t len; } ltl_string;
+typedef struct ltl_list { void* data; size_t len; size_t cap; } ltl_list;
+typedef struct ltl_map { void* buckets; size_t size; } ltl_map;</code></pre>
+
+    <p>In freestanding mode, even these headers are replaced with minimal definitions that assume nothing about the environment.</p>
+
+    <h2>◉ Real-World Use: LateralusOS</h2>
+    <p>The C backend powers LateralusOS — a complete operating system written in Lateralus:</p>
+
+    <pre><code>// kernel/main.ltl
+@foreign("c")
+fn kernel_main() {
+    serial_init()
+    serial_puts("LateralusOS booting...")
+
+    memory_init()
+    interrupts_init()
+    scheduler_init()
+
+    // Pipeline for boot sequence
+    drivers
+        |> filter(fn(d) { d.available() })
+        |> each(fn(d) { d.init() })
+
+    serial_puts("Boot complete. Entering shell.")
+    shell_run()
+}</code></pre>
+
+    <p>This compiles to ~500 lines of C, which then compiles to a 12KB kernel binary.</p>
+
+    <h2>◉ Performance</h2>
+    <p>The generated C is clean enough that GCC and Clang optimize it well. Benchmarks on a recursive Fibonacci:</p>
+
+    <table style="width:100%; border-collapse:collapse; margin:16px 0;">
+      <tr style="border-bottom:1px solid var(--border-light);">
+        <th style="text-align:left; padding:8px;">Target</th>
+        <th style="text-align:right; padding:8px;">fib(40)</th>
+      </tr>
+      <tr><td style="padding:8px;">Python backend</td><td style="text-align:right; padding:8px;">45.2s</td></tr>
+      <tr><td style="padding:8px;">Bytecode VM</td><td style="text-align:right; padding:8px;">2.1s</td></tr>
+      <tr><td style="padding:8px;">C99 backend (-O2)</td><td style="text-align:right; padding:8px;">0.38s</td></tr>
+      <tr><td style="padding:8px;">Native C</td><td style="text-align:right; padding:8px;">0.35s</td></tr>
+    </table>
+
+    <p>We're within 10% of hand-written C. Not bad for a high-level language.</p>
+
+    <h2>◉ Try It</h2>
+    <p>Generate C from your Lateralus code:</p>
+    <pre><code>lateralus c myprogram.ltl -o output.c
+gcc -O2 output.c -o myprogram
+./myprogram</code></pre>
+
+    <p>Or for embedded targets:</p>
+    <pre><code>lateralus c --freestanding firmware.ltl -o firmware.c
+arm-none-eabi-gcc -mcpu=cortex-m4 -ffreestanding firmware.c -o firmware.elf</code></pre>
+
+    <p>The C99 backend turns Lateralus into a practical systems language. Write elegant pipelines, deploy anywhere C runs.</p>
+
+  </div>
+</article>
+
+<footer>
+  <div class="container" style="text-align:center; padding: 2rem 0;">
+    <p style="font-family:'Press Start 2P',monospace; font-size:9px; color:var(--lime); margin-bottom:8px;">|&gt; LATERALUS</p>
+    <p style="font-family:'VT323',monospace; font-size:14px; color:var(--text);">A Language That Spirals Outward</p>
+  </div>
+</footer>
+
+<script src="/site.js"></script>
+</body>
+</html>

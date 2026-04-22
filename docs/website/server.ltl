@@ -1,0 +1,861 @@
+// ===========================================================================
+// lateralus.dev — hardened web server written in Lateralus
+// Compile:  lateralus compile server.ltl --target c99 -o lateralus-server
+// Run:      ./lateralus-server --port 8443 --tls cert.pem key.pem
+// ===========================================================================
+
+import net
+import net.tls
+import net.http { Request, Response, Cookie, Status }
+import crypto { hmac_sha256, constant_time_eq, random_bytes, sha256 }
+import crypto.tls { TlsConfig, TlsVersion }
+import fs
+import json
+import time
+import env
+import log
+
+// -- Configuration ----------------------------------------------------------
+
+struct Config {
+    host:           str
+    port:           int
+    tls_cert:       str
+    tls_key:        str
+    link_secret:    str
+    admin_pass:     str
+    static_root:    str
+    log_level:      str
+}
+
+fn load_config() -> Config {
+    Config {
+        host:        env.get("BIND_HOST")    |> unwrap_or("0.0.0.0")
+        port:        env.get("BIND_PORT")    |> unwrap_or("8443") |> parse_int()
+        tls_cert:    env.get("TLS_CERT")     |> expect("TLS_CERT required")
+        tls_key:     env.get("TLS_KEY")      |> expect("TLS_KEY required")
+        link_secret: env.get("LINK_SECRET")  |> expect("LINK_SECRET required")
+        admin_pass:  env.get("ADMIN_PASS")   |> expect("ADMIN_PASS required")
+        static_root: env.get("STATIC_ROOT")  |> unwrap_or("./public")
+        log_level:   env.get("LOG_LEVEL")    |> unwrap_or("info")
+    }
+}
+
+// -- Security Headers -------------------------------------------------------
+
+let SECURITY_HEADERS = {
+    "X-Frame-Options":                "DENY",
+    "X-Content-Type-Options":         "nosniff",
+    "Referrer-Policy":                "strict-origin-when-cross-origin",
+    "Permissions-Policy":             "camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(), accelerometer=()",
+    "X-XSS-Protection":              "0",
+    "Strict-Transport-Security":      "max-age=63072000; includeSubDomains; preload",
+    "Cross-Origin-Opener-Policy":     "same-origin",
+    "Cross-Origin-Resource-Policy":   "same-origin",
+    "Cross-Origin-Embedder-Policy":   "credentialless",
+    "X-DNS-Prefetch-Control":         "off",
+    "X-Permitted-Cross-Domain-Policies": "none",
+    "Content-Security-Policy":        "default-src 'none'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://img.shields.io; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests",
+}
+
+let PROTECTED_HEADERS = {
+    ...SECURITY_HEADERS,
+    "X-Robots-Tag":     "noindex, nofollow",
+    "Referrer-Policy":  "no-referrer",
+    "Cache-Control":    "no-store, no-cache, must-revalidate, private",
+}
+
+let STATIC_CACHE = "public, max-age=3600, immutable"
+let HTML_CACHE   = "public, max-age=0, must-revalidate"
+
+fn apply_headers(resp: Response, headers: map) -> Response {
+    headers
+        |> entries()
+        |> fold(resp, |r, (k, v)| r.set_header(k, v))
+}
+
+// -- Rate Limiter -----------------------------------------------------------
+
+struct RateRecord {
+    count:        int
+    first_attempt: int
+    locked_until:  int
+}
+
+struct RateLimiter {
+    records:      map<str, RateRecord>
+    max_attempts: int
+    window_ms:    int
+    lockout_ms:   int
+}
+
+fn new_rate_limiter() -> RateLimiter {
+    RateLimiter {
+        records:      {}
+        max_attempts: 5
+        window_ms:    15 * 60 * 1000       // 15 minutes
+        lockout_ms:   60 * 60 * 1000       // 1 hour
+    }
+}
+
+fn check_rate(limiter: RateLimiter, ip: str) -> (bool, RateLimiter) {
+    let now = time.now_ms()
+    match limiter.records |> get(ip) {
+        None => (true, limiter)
+        Some(rec) => {
+            match rec {
+                r if r.locked_until > 0 and now < r.locked_until =>
+                    (false, limiter)
+                r if now - r.first_attempt > limiter.window_ms => {
+                    let updated = limiter.records |> remove(ip)
+                    (true, RateLimiter { ...limiter, records: updated })
+                }
+                r if r.count >= limiter.max_attempts => {
+                    let locked = RateRecord { ...r, locked_until: now + limiter.lockout_ms }
+                    let updated = limiter.records |> insert(ip, locked)
+                    (false, RateLimiter { ...limiter, records: updated })
+                }
+                _ => (true, limiter)
+            }
+        }
+    }
+}
+
+fn record_failure(limiter: RateLimiter, ip: str) -> RateLimiter {
+    let now = time.now_ms()
+    let rec = match limiter.records |> get(ip) {
+        None        => RateRecord { count: 1, first_attempt: now, locked_until: 0 }
+        Some(prev)  => RateRecord { ...prev, count: prev.count + 1 }
+    }
+    RateLimiter { ...limiter, records: limiter.records |> insert(ip, rec) }
+}
+
+fn clear_failures(limiter: RateLimiter, ip: str) -> RateLimiter {
+    RateLimiter { ...limiter, records: limiter.records |> remove(ip) }
+}
+
+// -- Token Authentication ---------------------------------------------------
+
+let PROTECTED_PAGES = ["me", "resume"]
+
+fn is_protected(path: str) -> bool {
+    PROTECTED_PAGES
+        |> any(|p| path == "/{p}" or path == "/{p}/" or path |> starts_with("/{p}/"))
+}
+
+fn get_page(path: str) -> Option<str> {
+    PROTECTED_PAGES
+        |> find(|p| path == "/{p}" or path == "/{p}/" or path |> starts_with("/{p}/"))
+}
+
+async fn verify_token(token: str, secret: str, expected_page: str) -> bool {
+    // Reject empty or malformed tokens
+    if token |> len() == 0 or token |> len() > 512 {
+        return false
+    }
+
+    let parts = token |> split(".")
+    if parts |> len() != 2 {
+        return false
+    }
+
+    let payload_b64 = parts[0]
+    let sig_b64     = parts[1]
+
+    // Decode payload  (format: "page:expiryTimestamp")
+    let payload = try {
+        base64url_decode(payload_b64)
+    } recover _ {
+        return false
+    }
+
+    let colon_idx = payload |> index_of(":")
+    if colon_idx < 0 {
+        return false
+    }
+
+    let page   = payload |> slice(0, colon_idx)
+    let expiry = payload |> slice(colon_idx + 1) |> parse_int_or(0)
+
+    // Verify page binding
+    if page != expected_page {
+        return false
+    }
+
+    // Check expiry with clock-skew tolerance of 30s
+    let now = time.now_ms()
+    if expiry == 0 or now > expiry + 30_000 {
+        return false
+    }
+
+    // Reject tokens issued too far in the future (max 31 days)
+    if expiry > now + 31 * 24 * 60 * 60 * 1000 {
+        return false
+    }
+
+    // Compute expected HMAC-SHA256 signature
+    let expected_sig = hmac_sha256(secret, payload_b64)
+        |> base64url_encode()
+
+    // Constant-time comparison to prevent timing attacks
+    constant_time_eq(sig_b64, expected_sig)
+}
+
+// -- Token Generation -------------------------------------------------------
+
+let DURATION_MAP = {
+    "1h":  1 * 60 * 60 * 1000,
+    "24h": 24 * 60 * 60 * 1000,
+    "7d":  7 * 24 * 60 * 60 * 1000,
+    "30d": 30 * 24 * 60 * 60 * 1000,
+}
+
+async fn generate_token(page: str, expiry_key: str, secret: str) -> str {
+    let duration = DURATION_MAP |> get(expiry_key) |> expect("invalid expiry")
+    let expires_at = time.now_ms() + duration
+    let payload = "{page}:{expires_at}"
+    let payload_b64 = payload |> base64url_encode()
+    let sig = hmac_sha256(secret, payload_b64) |> base64url_encode()
+    "{payload_b64}.{sig}"
+}
+
+// -- Request Fingerprinting & Logging ---------------------------------------
+
+fn client_ip(req: Request) -> str {
+    req.headers |> get("x-forwarded-for")
+        |> map(|v| v |> split(",") |> first() |> trim())
+        |> or_else(|| req.headers |> get("x-real-ip"))
+        |> unwrap_or(req.remote_addr)
+}
+
+fn request_id() -> str {
+    random_bytes(16) |> hex_encode()
+}
+
+fn log_request(req: Request, status: int, rid: str) {
+    let ip = client_ip(req)
+    let ua = req.headers |> get("user-agent") |> unwrap_or("-")
+    log.info("[{rid}] {ip} {req.method} {req.path} -> {status} UA={ua}")
+}
+
+// -- MIME Types -------------------------------------------------------------
+
+fn mime_type(path: str) -> str {
+    match path |> extension() {
+        "html" => "text/html; charset=utf-8"
+        "css"  => "text/css; charset=utf-8"
+        "js"   => "application/javascript; charset=utf-8"
+        "svg"  => "image/svg+xml"
+        "json" => "application/json; charset=utf-8"
+        "xml"  => "application/xml; charset=utf-8"
+        "txt"  => "text/plain; charset=utf-8"
+        "png"  => "image/png"
+        "jpg"  => "image/jpeg"
+        "ico"  => "image/x-icon"
+        "woff2"=> "font/woff2"
+        "woff" => "font/woff"
+        _      => "application/octet-stream"
+    }
+}
+
+// -- Static File Server (path-traversal safe) -------------------------------
+
+async fn serve_static(root: str, url_path: str) -> Option<Response> {
+    // Normalize and sanitize — block path traversal
+    let clean = url_path
+        |> replace("\\", "/")
+        |> split("/")
+        |> filter(|seg| seg != "" and seg != "." and seg != "..")
+        |> join("/")
+
+    // Resolve to absolute path and verify it stays under root
+    let abs_root = fs.realpath(root) |> unwrap_or(root)
+    let candidate = "{abs_root}/{clean}"
+
+    // If directory, look for index.html
+    let file_path = if fs.is_dir(candidate) {
+        "{candidate}/index.html"
+    } else {
+        candidate
+    }
+
+    let resolved = fs.realpath(file_path) |> unwrap_or("")
+    if resolved == "" or not resolved |> starts_with(abs_root) {
+        return None
+    }
+
+    let body = try {
+        fs.read_bytes(resolved)
+    } recover _ {
+        return None
+    }
+
+    let content_type = mime_type(file_path)
+    let cache = if file_path |> ends_with(".html") { HTML_CACHE } else { STATIC_CACHE }
+
+    Some(Response {
+        status: 200,
+        headers: { "Content-Type": content_type, "Cache-Control": cache },
+        body: body,
+    })
+}
+
+// -- Denied Page ------------------------------------------------------------
+
+let DENIED_HTML = "<!DOCTYPE html>
+<html lang=\"en\">
+<head>
+<meta charset=\"UTF-8\">
+<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
+<meta name=\"robots\" content=\"noindex, nofollow\">
+<title>Access Restricted — lateralus.dev</title>
+<link rel=\"icon\" type=\"image/svg+xml\" href=\"/favicon.svg\">
+<link rel=\"stylesheet\" href=\"/style.css\">
+</head>
+<body>
+<div class=\"container\" style=\"display:flex;align-items:center;justify-content:center;min-height:100vh\">
+  <div style=\"text-align:center;padding:3rem;background:rgba(17,17,40,.7);border:1px solid rgba(0,255,255,.12);border-radius:16px;max-width:480px\">
+    <div style=\"font-size:4rem;margin-bottom:1rem\">🔒</div>
+    <div style=\"font-size:3rem;font-weight:700;color:rgba(0,255,255,.25);margin-bottom:1rem\">403</div>
+    <h1>ACCESS RESTRICTED</h1>
+    <p>This page requires an authorized link.<br>If your link has expired, please request a new one.</p>
+    <a href=\"/\">← lateralus.dev</a>
+  </div>
+</div>
+</body>
+</html>"
+
+// -- Application State ------------------------------------------------------
+
+struct AppState {
+    config:       Config
+    rate_limiter: RateLimiter
+}
+
+// -- Route: POST /api/share -------------------------------------------------
+
+async fn handle_share(state: AppState, req: Request) -> (Response, AppState) {
+    let ip = client_ip(req)
+
+    // Rate limit
+    let (allowed, limiter) = check_rate(state.rate_limiter, ip)
+    let state = AppState { ...state, rate_limiter: limiter }
+    if not allowed {
+        let resp = json_error("Too many attempts. Try again later.", 429)
+        return (resp, state)
+    }
+
+    // Reject oversized payloads (> 1KB)
+    let content_length = req.headers
+        |> get("content-length")
+        |> map(parse_int_or(_, 0))
+        |> unwrap_or(0)
+    if content_length > 1024 {
+        return (json_error("Payload too large", 413), state)
+    }
+
+    // Parse body
+    let body_text = try {
+        req.body |> read_text()
+    } recover _ {
+        return (json_error("Invalid request body", 400), state)
+    }
+
+    if body_text |> len() > 1024 {
+        return (json_error("Payload too large", 413), state)
+    }
+
+    let body = try {
+        json.parse(body_text)
+    } recover _ {
+        return (json_error("Invalid JSON", 400), state)
+    }
+
+    let password = body |> get("password") |> unwrap_or("")
+    let page     = body |> get("page")     |> unwrap_or("")
+    let expiry   = body |> get("expiry")   |> unwrap_or("")
+
+    // Validate password type & length
+    if password |> len() == 0 or password |> len() > 256 {
+        let state = AppState { ...state, rate_limiter: record_failure(state.rate_limiter, ip) }
+        await time.sleep_ms(800 + random_int(0, 400))
+        return (json_error("Unauthorized", 401), state)
+    }
+
+    // Timing-safe password comparison via HMAC
+    let key = random_bytes(32)
+    let sig_given  = hmac_sha256(key, password)
+    let sig_expect = hmac_sha256(key, state.config.admin_pass)
+    if not constant_time_eq(sig_given, sig_expect) {
+        let state = AppState { ...state, rate_limiter: record_failure(state.rate_limiter, ip) }
+        await time.sleep_ms(800 + random_int(0, 400))
+        return (json_error("Unauthorized", 401), state)
+    }
+
+    // Auth passed
+    let state = AppState { ...state, rate_limiter: clear_failures(state.rate_limiter, ip) }
+
+    // Validate page
+    if not (PROTECTED_PAGES |> contains(page)) {
+        let msg = "Invalid page. Use: {PROTECTED_PAGES |> join(\", \")}"
+        return (json_error(msg, 400), state)
+    }
+
+    // Validate expiry
+    if not (DURATION_MAP |> has_key(expiry)) {
+        let msg = "Invalid expiry. Use: {DURATION_MAP |> keys() |> join(\", \")}"
+        return (json_error(msg, 400), state)
+    }
+
+    // Generate token
+    let token = await generate_token(page, expiry, state.config.link_secret)
+    let url = "https://lateralus.dev/{page}/?t={token}"
+    let expires_at = time.now_ms() + (DURATION_MAP |> get(expiry) |> unwrap())
+
+    let resp = Response {
+        status: 200,
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+        body: json.to_string({
+            "url":     url,
+            "page":    page,
+            "expires": time.format_iso8601(expires_at),
+            "expiry":  expiry,
+        }),
+    }
+        |> apply_headers(PROTECTED_HEADERS)
+
+    (resp, state)
+}
+
+fn json_error(msg: str, status: int) -> Response {
+    Response {
+        status: status,
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+        body: json.to_string({ "error": msg }),
+    }
+        |> apply_headers(PROTECTED_HEADERS)
+}
+
+// -- Route: GET /robots.txt -------------------------------------------------
+
+let ROBOTS_TXT = "User-agent: *
+Allow: /
+Disallow: /resume/
+Disallow: /me/
+Disallow: /share/
+Disallow: /api/
+
+User-agent: GPTBot
+Disallow: /
+
+User-agent: ChatGPT-User
+Disallow: /
+
+User-agent: CCBot
+Disallow: /
+
+User-agent: Google-Extended
+Disallow: /
+
+User-agent: anthropic-ai
+Disallow: /
+
+User-agent: Claude-Web
+Disallow: /
+
+User-agent: Bytespider
+Disallow: /
+
+User-agent: FacebookBot
+Disallow: /
+
+User-agent: Diffbot
+Disallow: /
+
+User-agent: Applebot-Extended
+Disallow: /
+
+User-agent: PerplexityBot
+Disallow: /
+
+User-agent: Amazonbot
+Disallow: /
+
+User-agent: Cohere-ai
+Disallow: /
+
+Sitemap: https://lateralus.dev/sitemap.xml"
+
+// -- HTTP → HTTPS Redirect Server ------------------------------------------
+
+async fn redirect_handler(req: Request) -> Response {
+    let host = req.headers
+        |> get("host")
+        |> unwrap_or("lateralus.dev")
+        |> split(":")
+        |> first()
+
+    Response {
+        status: 301,
+        headers: {
+            "Location": "https://{host}{req.path}",
+            "Cache-Control": "public, max-age=86400",
+            "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+        },
+        body: "",
+    }
+}
+
+// -- Route: POST /api/run — Sandboxed Code Execution ------------------------
+
+const MAX_OUTPUT_LINES = 200
+const MAX_OUTPUT_BYTES = 16384
+const MAX_EXEC_STEPS  = 50000
+
+async fn handle_run(state: AppState, req: Request) -> (Response, AppState) {
+    let ip = req.headers |> get("x-forwarded-for") |> unwrap_or("unknown")
+    let state = state |> check_rate("run", ip, 30, 60)
+
+    if state.rate_blocked {
+        let resp = json_error("Rate limit exceeded (30/min)", 429)
+        return (resp, state)
+    }
+
+    let body = req.body |> json.parse()
+    let code = body |> get("code") |> unwrap_or("")
+
+    if code |> len() == 0 {
+        let resp = json_error("Missing 'code' field", 400)
+        return (resp, state)
+    }
+
+    if code |> len() > 32768 {
+        let resp = json_error("Code too large (max 32KB)", 413)
+        return (resp, state)
+    }
+
+    let start = time.now()
+
+    // Lex → Parse → Evaluate with sandboxed limits
+    let result = try {
+        let tokens = lateralus.lex(code)
+        let ast    = lateralus.parse(tokens)
+        lateralus.eval(ast, {
+            max_steps: MAX_EXEC_STEPS,
+            max_output_lines: MAX_OUTPUT_LINES,
+            max_output_bytes: MAX_OUTPUT_BYTES,
+            sandbox: true,  // disables fs, net, process
+        })
+    } recover err {
+        {
+            success: false,
+            error: { type: "LateralusError", message: err.message },
+            output: [],
+        }
+    }
+
+    let elapsed = time.now() - start
+
+    let resp = Response {
+        status: 200,
+        headers: {
+            "Content-Type": "application/json",
+            "Cache-Control": "no-store",
+            "Access-Control-Allow-Origin": "https://lateralus.dev",
+        },
+        body: json.stringify({
+            success: result.success |> unwrap_or(true),
+            output: result.output |> unwrap_or([]),
+            error: result.error |> unwrap_or(None),
+            stats: {
+                elapsed_ms: elapsed,
+                steps: result.steps |> unwrap_or(0),
+                lines: result.output |> unwrap_or([]) |> len(),
+            },
+        }),
+    } |> apply_headers(SECURITY_HEADERS)
+
+    return (resp, state)
+}
+
+// -- Main Request Handler ---------------------------------------------------
+
+async fn handle(state: AppState, req: Request) -> (Response, AppState) {
+    let rid = request_id()
+
+    // -- www → apex redirect --
+    let host = req.headers |> get("host") |> unwrap_or("")
+    if host |> starts_with("www.") {
+        let apex = host |> slice(4)
+        let resp = Response {
+            status: 301,
+            headers: { "Location": "https://{apex}{req.path}" },
+            body: "",
+        }
+        return (resp, state)
+    }
+
+    // -- Method allowlist --
+    let allowed_methods = ["GET", "HEAD", "POST", "OPTIONS"]
+    if not (allowed_methods |> contains(req.method)) {
+        let resp = Response { status: 405, headers: { "Allow": "GET, HEAD, POST, OPTIONS" }, body: "" }
+            |> apply_headers(SECURITY_HEADERS)
+        log_request(req, 405, rid)
+        return (resp, state)
+    }
+
+    // -- CORS preflight --
+    if req.method == "OPTIONS" {
+        let resp = Response {
+            status: 204,
+            headers: {
+                "Access-Control-Allow-Methods": "POST",
+                "Access-Control-Allow-Headers": "Content-Type",
+                "Access-Control-Max-Age":       "86400",
+            },
+            body: "",
+        }
+            |> apply_headers(SECURITY_HEADERS)
+        return (resp, state)
+    }
+
+    // -- Request size limits --
+    let content_length = req.headers
+        |> get("content-length")
+        |> map(parse_int_or(_, 0))
+        |> unwrap_or(0)
+    if content_length > 65536 {
+        let resp = Response { status: 413, headers: {}, body: "Request too large" }
+            |> apply_headers(SECURITY_HEADERS)
+        log_request(req, 413, rid)
+        return (resp, state)
+    }
+
+    // -- API routes --
+    if req.path == "/api/share" and req.method == "POST" {
+        let (resp, state) = await handle_share(state, req)
+        log_request(req, resp.status, rid)
+        return (resp, state)
+    }
+
+    if req.path == "/api/version" and req.method == "GET" {
+        let data = {
+            "language": "Lateralus",
+            "version": "3.0.1",
+            "compiler": { "name": "ltlc", "targets": ["python", "c99", "freestanding-c"] },
+            "install": "pip install lateralus-lang",
+            "release_date": "2026-03-28",
+        }
+        let resp = Response {
+            status: 200,
+            headers: {
+                "Content-Type": "application/json",
+                "Cache-Control": "public, max-age=300",
+                "Access-Control-Allow-Origin": "*",
+            },
+            body: json.stringify(data),
+        } |> apply_headers(SECURITY_HEADERS)
+        log_request(req, 200, rid)
+        return (resp, state)
+    }
+
+    if req.path == "/api/health" and req.method == "GET" {
+        let uptime_ms = time.now() - state.boot_time
+        let data = {
+            "status": "healthy",
+            "timestamp": time.now() |> time.format_rfc3339(),
+            "uptime_ms": uptime_ms,
+            "version": { "language": "3.0.1", "platform": "lateralus-native" },
+        }
+        let resp = Response {
+            status: 200,
+            headers: {
+                "Content-Type": "application/json",
+                "Cache-Control": "no-store",
+                "Access-Control-Allow-Origin": "*",
+            },
+            body: json.stringify(data),
+        } |> apply_headers(SECURITY_HEADERS)
+        log_request(req, 200, rid)
+        return (resp, state)
+    }
+
+    if req.path == "/api/packages" and req.method == "GET" {
+        let packages = state.package_index
+        let resp = Response {
+            status: 200,
+            headers: {
+                "Content-Type": "application/json",
+                "Cache-Control": "public, max-age=3600, s-maxage=7200",
+                "Access-Control-Allow-Origin": "*",
+            },
+            body: json.stringify(packages),
+        } |> apply_headers(SECURITY_HEADERS)
+        log_request(req, 200, rid)
+        return (resp, state)
+    }
+
+    if req.path == "/api/run" and req.method == "POST" {
+        let (resp, state) = await handle_run(state, req)
+        log_request(req, resp.status, rid)
+        return (resp, state)
+    }
+
+    if req.path |> starts_with("/api/") {
+        let resp = json_error("Method not allowed", 405)
+        log_request(req, 405, rid)
+        return (resp, state)
+    }
+
+    // -- Only GET/HEAD for page routes --
+    if req.method != "GET" and req.method != "HEAD" {
+        let resp = Response { status: 405, headers: { "Allow": "GET, HEAD" }, body: "" }
+            |> apply_headers(SECURITY_HEADERS)
+        log_request(req, 405, rid)
+        return (resp, state)
+    }
+
+    // -- robots.txt (served from memory) --
+    if req.path == "/robots.txt" {
+        let resp = Response {
+            status: 200,
+            headers: {
+                "Content-Type": "text/plain; charset=utf-8",
+                "Cache-Control": "public, max-age=3600",
+            },
+            body: ROBOTS_TXT,
+        }
+            |> apply_headers(SECURITY_HEADERS)
+        log_request(req, 200, rid)
+        return (resp, state)
+    }
+
+    // -- Legacy redirect: /lateralus/* → /* --
+    if req.path |> starts_with("/lateralus/") {
+        let new_path = req.path |> slice(10)
+        let resp = Response {
+            status: 301,
+            headers: { "Location": new_path, "Cache-Control": "public, max-age=86400" },
+            body: "",
+        }
+        log_request(req, 301, rid)
+        return (resp, state)
+    }
+
+    // -- Protected pages: verify token --
+    if is_protected(req.path) {
+        let page = get_page(req.path) |> unwrap()
+        let token = req |> query_param("t") |> unwrap_or("")
+
+        if token |> len() == 0 {
+            let resp = Response {
+                status: 403,
+                headers: { "Content-Type": "text/html; charset=utf-8" },
+                body: DENIED_HTML,
+            }
+                |> apply_headers(PROTECTED_HEADERS)
+            log_request(req, 403, rid)
+            return (resp, state)
+        }
+
+        let valid = await verify_token(token, state.config.link_secret, page)
+        if not valid {
+            let resp = Response {
+                status: 403,
+                headers: { "Content-Type": "text/html; charset=utf-8" },
+                body: DENIED_HTML,
+            }
+                |> apply_headers(PROTECTED_HEADERS)
+            log_request(req, 403, rid)
+            return (resp, state)
+        }
+
+        // Valid token — serve the protected file with strict headers
+        match await serve_static(state.config.static_root, req.path) {
+            Some(resp) => {
+                let resp = resp |> apply_headers(PROTECTED_HEADERS)
+                log_request(req, 200, rid)
+                (resp, state)
+            }
+            None => {
+                let resp = Response { status: 404, headers: {}, body: "Not Found" }
+                    |> apply_headers(PROTECTED_HEADERS)
+                log_request(req, 404, rid)
+                (resp, state)
+            }
+        }
+    } else {
+        // -- Public static files --
+        match await serve_static(state.config.static_root, req.path) {
+            Some(resp) => {
+                let resp = resp |> apply_headers(SECURITY_HEADERS)
+                log_request(req, 200, rid)
+                (resp, state)
+            }
+            None => {
+                let body = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>404</title></head><body><h1>404 — Not Found</h1></body></html>"
+                let resp = Response {
+                    status: 404,
+                    headers: { "Content-Type": "text/html; charset=utf-8" },
+                    body: body,
+                }
+                    |> apply_headers(SECURITY_HEADERS)
+                log_request(req, 404, rid)
+                (resp, state)
+            }
+        }
+    }
+}
+
+// -- TLS Configuration ------------------------------------------------------
+
+fn build_tls_config(cfg: Config) -> TlsConfig {
+    TlsConfig {
+        cert_file:     cfg.tls_cert,
+        key_file:      cfg.tls_key,
+        min_version:   TlsVersion.TLS_1_2,
+        max_version:   TlsVersion.TLS_1_3,
+        cipher_suites: [
+            // TLS 1.3 suites (preferred)
+            "TLS_AES_256_GCM_SHA384",
+            "TLS_CHACHA20_POLY1305_SHA256",
+            "TLS_AES_128_GCM_SHA256",
+            // TLS 1.2 fallback
+            "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+            "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305",
+            "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+        ],
+        curves: ["X25519", "P-256"],
+        session_tickets: false,          // forward secrecy
+        ocsp_stapling:   true,
+    }
+}
+
+// -- Entrypoint -------------------------------------------------------------
+
+fn main() {
+    let cfg = load_config()
+    log.set_level(cfg.log_level)
+
+    let state = AppState {
+        config:       cfg,
+        rate_limiter: new_rate_limiter(),
+    }
+
+    let tls = build_tls_config(cfg)
+
+    // HTTPS server (main)
+    let https_server = net.https_server(cfg.host, cfg.port, tls)
+    log.info("HTTPS listening on {cfg.host}:{cfg.port}")
+
+    // HTTP → HTTPS redirect server (port 80)
+    let http_server = net.http_server(cfg.host, 80)
+    log.info("HTTP→HTTPS redirect on {cfg.host}:80")
+
+    // Run both concurrently
+    let https_task = spawn https_server.serve_stateful(state, handle)
+    let http_task  = spawn http_server.serve(redirect_handler)
+
+    await https_task
+    await http_task
+}

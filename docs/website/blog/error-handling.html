@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Error Handling in Lateralus — Lateralus Blog</title>
+  <meta name="description" content="Error Handling in Lateralus - Notes on language design, tooling, OS development, and the pipeline-first way of thinking.">
+  <meta property="og:title" content="Error Handling in Lateralus — Lateralus Blog">
+  <meta property="og:description" content="Error Handling in Lateralus">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://lateralus.dev/blog/error-handling.html">
+  <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+  <link rel="canonical" href="https://lateralus.dev/blog/error-handling.html">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css?v=20260408">
+  <style>
+    .blog-post { max-width: 800px; margin: 0 auto; padding: 80px 20px 60px; }
+    .blog-post h1 { font-family: 'Press Start 2P', monospace; font-size: clamp(14px, 3vw, 20px); color: var(--electric-yellow); line-height: 1.8; margin-bottom: 16px; }
+    .blog-meta { font-family: 'VT323', monospace; font-size: 18px; color: var(--hot-pink); margin-bottom: 24px; }
+    .blog-meta .tags { display: inline-flex; gap: 8px; margin-left: 16px; }
+    .blog-meta .tag { font-family: 'Press Start 2P', monospace; font-size: 8px; padding: 4px 10px; border: 1px solid var(--lime); color: var(--lime); }
+    .blog-content { font-family: 'VT323', monospace; font-size: 20px; color: var(--text); line-height: 1.7; }
+    .blog-content h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--cyber-blue); margin: 32px 0 16px; line-height: 1.6; }
+    .blog-content h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--lime); margin: 24px 0 12px; line-height: 1.6; }
+    .blog-content p { margin-bottom: 16px; }
+    .blog-content code { background: var(--bg3); padding: 2px 6px; color: var(--hot-pink); font-size: 18px; }
+    .blog-content pre { background: var(--bg3); border: 2px solid var(--border-light); padding: 16px; overflow-x: auto; margin: 16px 0; }
+    .blog-content pre code { background: none; padding: 0; display: block; font-size: 16px; line-height: 1.5; color: var(--text); }
+    .blog-content ul, .blog-content ol { margin: 16px 0; padding-left: 24px; }
+    .blog-content li { margin-bottom: 8px; }
+    .blog-content a { color: var(--cyber-blue); text-decoration: underline; }
+    .blog-content a:hover { color: var(--lime); }
+    .blog-content blockquote { border-left: 3px solid var(--lime); padding-left: 16px; margin: 16px 0; color: var(--text2); font-style: italic; }
+    .blog-back { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; color: var(--lime); text-decoration: none; margin-bottom: 24px; }
+    .blog-back:hover { color: var(--electric-yellow); }
+    /* Mobile responsive */
+    @media (max-width: 768px) {
+      .blog-header h1 { font-size: 14px; line-height: 1.5; }
+      .blog-header .meta { font-size: 11px; }
+      .blog-content { font-size: 16px; }
+      .blog-content code { font-size: 14px; }
+      .blog-content pre { padding: 12px; }
+      .blog-content pre code { font-size: 13px; }
+      .blog-back { font-size: 8px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/">PLAYGROUND</a>
+      <a href="/blog/" class="active">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<article class="blog-post">
+  <a href="/blog/" class="blog-back">← Back to Blog</a>
+  <h1>Error Handling in Lateralus</h1>
+  <div class="blog-meta">
+    August 5, 2025
+    <span class="tags"><span class="tag">language</span><span class="tag">errors</span></span>
+  </div>
+  <div class="blog-content">
+
+    <p>Lateralus uses <code>Result[T, E]</code> for recoverable errors and panics for unrecoverable ones. The <code>?</code> operator propagates errors through pipelines naturally. This post covers the error handling philosophy and practical patterns.</p>
+
+    <h2>◉ The Problem with Exceptions</h2>
+    <p>Exception-based languages (Java, Python, C++) have hidden control flow:</p>
+
+    <pre><code>// Java: any of these might throw, but nothing tells you
+String content = readFile(path);
+Data data = parse(content);
+Result result = process(data);</code></pre>
+
+    <p>You can't tell from the code what errors are possible. The compiler doesn't help. Errors are invisible until runtime.</p>
+
+    <h2>◉ Result Type</h2>
+    <p>Lateralus makes errors explicit with <code>Result[T, E]</code>:</p>
+
+    <pre><code>enum Result[T, E] {
+    Ok(T),
+    Err(E),
+}
+
+fn read_file(path: str) -> Result[str, IOError] {
+    // Returns Ok(content) or Err(IOError)
+}
+
+fn parse(content: str) -> Result[Data, ParseError] {
+    // Returns Ok(data) or Err(ParseError)
+}</code></pre>
+
+    <p>The return type tells you exactly what can go wrong. The compiler forces you to handle it.</p>
+
+    <h2>◉ The ? Operator</h2>
+    <p>Handling errors explicitly can be verbose:</p>
+
+    <pre><code>fn process_file(path: str) -> Result[Data, Error] {
+    let content = match read_file(path) {
+        Ok(c) => c,
+        Err(e) => return Err(e.into()),
+    }
+
+    let data = match parse(content) {
+        Ok(d) => d,
+        Err(e) => return Err(e.into()),
+    }
+
+    Ok(transform(data))
+}</code></pre>
+
+    <p>The <code>?</code> operator eliminates boilerplate:</p>
+
+    <pre><code>fn process_file(path: str) -> Result[Data, Error] {
+    let content = read_file(path)?
+    let data = parse(content)?
+    Ok(transform(data))
+}
+
+// Or with pipelines:
+fn process_file(path: str) -> Result[Data, Error] {
+    read_file(path)?
+        |> parse()?
+        |> transform()
+        |> Ok
+}</code></pre>
+
+    <p>The <code>?</code> operator:</p>
+    <ol>
+      <li>If <code>Ok(v)</code>, unwraps to <code>v</code></li>
+      <li>If <code>Err(e)</code>, returns <code>Err(e.into())</code> from the function</li>
+    </ol>
+
+    <h2>◉ Error Context</h2>
+    <p>When errors bubble up, context is lost. Where did it fail? The <code>.context()</code> method adds information:</p>
+
+    <pre><code>fn load_config(path: str) -> Result[Config, Error] {
+    let content = read_file(path)
+        .context("reading config file")?
+
+    let parsed = parse_toml(content)
+        .context("parsing config TOML")?
+
+    let config = validate_config(parsed)
+        .context("validating config")?
+
+    Ok(config)
+}
+
+// Error message:
+// Error: validating config
+//   Caused by: missing required field 'database.url'
+//   While: parsing config TOML
+//   While: reading config file "/etc/app/config.toml"</code></pre>
+
+    <h2>◉ Error Types</h2>
+    <p>Define domain-specific error types:</p>
+
+    <pre><code>enum NetworkError {
+    Timeout { host: str, after_ms: int },
+    ConnectionRefused { host: str, port: int },
+    DNSError { name: str },
+    TLSError { reason: str },
+}
+
+impl NetworkError {
+    fn message(self) -> str {
+        match self {
+            Timeout { host, after_ms } =>
+                "Connection to " + host + " timed out after " + str(after_ms) + "ms",
+            ConnectionRefused { host, port } =>
+                "Connection refused to " + host + ":" + str(port),
+            // ...
+        }
+    }
+}</code></pre>
+
+    <h2>◉ Error Conversion</h2>
+    <p>Convert between error types with <code>From</code> trait:</p>
+
+    <pre><code>impl From[IOError] for AppError {
+    fn from(e: IOError) -> AppError {
+        AppError::IO(e)
+    }
+}
+
+impl From[ParseError] for AppError {
+    fn from(e: ParseError) -> AppError {
+        AppError::Parse(e)
+    }
+}
+
+// Now ? automatically converts:
+fn load_data(path: str) -> Result[Data, AppError] {
+    let content = read_file(path)?  // IOError -> AppError
+    let data = parse(content)?      // ParseError -> AppError
+    Ok(data)
+}</code></pre>
+
+    <h2>◉ Option Type</h2>
+    <p>For "might not exist" without errors:</p>
+
+    <pre><code>enum Option[T] {
+    Some(T),
+    None,
+}
+
+fn find_user(id: int) -> Option[User] {
+    // Returns Some(user) or None
+}
+
+// Use with match
+match find_user(123) {
+    Some(user) => println("Found: " + user.name),
+    None => println("User not found"),
+}
+
+// Or with ? in Option-returning functions
+fn get_user_email(id: int) -> Option[str] {
+    let user = find_user(id)?
+    user.email  // Might also be Option
+}</code></pre>
+
+    <h2>◉ Combining Results and Options</h2>
+    <pre><code>// Convert Option to Result
+let user = find_user(123)
+    .ok_or(Error::UserNotFound(123))?
+
+// Convert Result to Option (discarding error)
+let user = load_user(123).ok()</code></pre>
+
+    <h2>◉ Panics</h2>
+    <p>For unrecoverable errors:</p>
+
+    <pre><code>fn divide(a: int, b: int) -> int {
+    if b == 0 {
+        panic("division by zero")
+    }
+    a / b
+}
+
+// Or with assertions
+fn process(data: [int]) {
+    assert(!data.is_empty(), "data cannot be empty")
+    // ...
+}</code></pre>
+
+    <p>Panics are for bugs, not expected conditions. They crash the program (or thread in async context).</p>
+
+    <h2>◉ Pipeline Error Handling</h2>
+    <p>Multiple patterns for pipelines:</p>
+
+    <pre><code>// Early return on first error
+let result = items
+    |> map(fn(i) { process(i)? })
+    |> collect()?
+
+// Collect all errors
+let (successes, failures) = items
+    |> map(process)
+    |> partition_results()
+
+// Filter out errors, keep successes
+let results = items
+    |> map(process)
+    |> filter_ok()
+    |> collect()</code></pre>
+
+    <h2>◉ Best Practices</h2>
+
+    <ul>
+      <li><strong>Use Result for recoverable errors</strong> — file not found, network timeout, invalid input</li>
+      <li><strong>Use Option for "might not exist"</strong> — map lookup, search results</li>
+      <li><strong>Use panic for bugs</strong> — violated invariants, impossible states</li>
+      <li><strong>Add context at boundaries</strong> — where errors cross module lines</li>
+      <li><strong>Define domain error types</strong> — don't use String for everything</li>
+    </ul>
+
+    <p>Full error handling documentation in the <a href="https://github.com/bad-antics/lateralus-lang/blob/main/docs/errors.md" target="_blank">language guide</a>.</p>
+
+  </div>
+</article>
+
+<footer>
+  <div class="container" style="text-align:center; padding: 2rem 0;">
+    <p style="font-family:'Press Start 2P',monospace; font-size:9px; color:var(--lime); margin-bottom:8px;">|&gt; LATERALUS</p>
+    <p style="font-family:'VT323',monospace; font-size:14px; color:var(--text);">A Language That Spirals Outward</p>
+  </div>
+</footer>
+
+<script src="/site.js"></script>
+</body>
+</html>

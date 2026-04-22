@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NullSec Linux on ARM64 — Lateralus Blog</title>
+  <meta name="description" content="NullSec Linux on ARM64 - Notes on language design, tooling, OS development, and the pipeline-first way of thinking.">
+  <meta property="og:title" content="NullSec Linux on ARM64 — Lateralus Blog">
+  <meta property="og:description" content="NullSec Linux on ARM64">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://lateralus.dev/blog/nullsec-arm64.html">
+  <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+  <link rel="canonical" href="https://lateralus.dev/blog/nullsec-arm64.html">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css?v=20260408">
+  <style>
+    .blog-post { max-width: 800px; margin: 0 auto; padding: 80px 20px 60px; }
+    .blog-post h1 { font-family: 'Press Start 2P', monospace; font-size: clamp(14px, 3vw, 20px); color: var(--electric-yellow); line-height: 1.8; margin-bottom: 16px; }
+    .blog-meta { font-family: 'VT323', monospace; font-size: 18px; color: var(--hot-pink); margin-bottom: 24px; }
+    .blog-meta .tags { display: inline-flex; gap: 8px; margin-left: 16px; }
+    .blog-meta .tag { font-family: 'Press Start 2P', monospace; font-size: 8px; padding: 4px 10px; border: 1px solid var(--lime); color: var(--lime); }
+    .blog-content { font-family: 'VT323', monospace; font-size: 20px; color: var(--text); line-height: 1.7; }
+    .blog-content h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--cyber-blue); margin: 32px 0 16px; line-height: 1.6; }
+    .blog-content h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--lime); margin: 24px 0 12px; line-height: 1.6; }
+    .blog-content p { margin-bottom: 16px; }
+    .blog-content code { background: var(--bg3); padding: 2px 6px; color: var(--hot-pink); font-size: 18px; }
+    .blog-content pre { background: var(--bg3); border: 2px solid var(--border-light); padding: 16px; overflow-x: auto; margin: 16px 0; }
+    .blog-content pre code { background: none; padding: 0; display: block; font-size: 16px; line-height: 1.5; color: var(--text); }
+    .blog-content ul, .blog-content ol { margin: 16px 0; padding-left: 24px; }
+    .blog-content li { margin-bottom: 8px; }
+    .blog-content a { color: var(--cyber-blue); text-decoration: underline; }
+    .blog-content a:hover { color: var(--lime); }
+    .blog-content blockquote { border-left: 3px solid var(--lime); padding-left: 16px; margin: 16px 0; color: var(--text2); font-style: italic; }
+    .blog-back { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; color: var(--lime); text-decoration: none; margin-bottom: 24px; }
+    .blog-back:hover { color: var(--electric-yellow); }
+    /* Mobile responsive */
+    @media (max-width: 768px) {
+      .blog-header h1 { font-size: 14px; line-height: 1.5; }
+      .blog-header .meta { font-size: 11px; }
+      .blog-content { font-size: 16px; }
+      .blog-content code { font-size: 14px; }
+      .blog-content pre { padding: 12px; }
+      .blog-content pre code { font-size: 13px; }
+      .blog-back { font-size: 8px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/">PLAYGROUND</a>
+      <a href="/blog/" class="active">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<article class="blog-post">
+  <a href="/blog/" class="blog-back">← Back to Blog</a>
+  <h1>NullSec Linux on ARM64</h1>
+  <div class="blog-meta">
+    March 20, 2026
+    <span class="tags"><span class="tag">nullsec</span><span class="tag">arm64</span></span>
+  </div>
+  <div class="blog-content">
+
+    <p>NullSec Linux ARM64 brings the full security toolkit to Raspberry Pi, Apple Silicon, and AWS Graviton. The same tools, the same workflow, on any modern ARM hardware.</p>
+
+    <h2>◉ Why ARM64?</h2>
+    <p>ARM is everywhere now:</p>
+
+    <ul>
+      <li><strong>Raspberry Pi:</strong> Cheap, portable pentest rigs</li>
+      <li><strong>Apple Silicon:</strong> M1/M2/M3 Macs are ARM64</li>
+      <li><strong>Cloud:</strong> AWS Graviton is 40% cheaper than x86 equivalents</li>
+      <li><strong>Mobile infra:</strong> Testing ARM-based IoT/embedded systems</li>
+    </ul>
+
+    <p>A security distro that only runs on x86 is increasingly incomplete.</p>
+
+    <h2>◉ Supported Hardware</h2>
+
+    <h3>Raspberry Pi 4 &amp; 5</h3>
+    <p>The primary target for portable field work. Boot from SD card or USB SSD.</p>
+
+    <pre><code># Flash to SD card
+sudo dd if=nullsec-arm64.img of=/dev/mmcblk0 bs=4M status=progress
+sync
+
+# Boot with 8GB RAM recommended
+# Pi 5 performance is excellent — rivals Intel i5</code></pre>
+
+    <p>Performance notes:</p>
+    <ul>
+      <li>Nmap network scans: ~80% of x86 speed</li>
+      <li>Hashcat (CPU mode): ~50% of x86 (use GPU rigs for serious cracking)</li>
+      <li>Metasploit: Near-identical launch time, module execution</li>
+      <li>Web tools: Full speed (mostly I/O bound)</li>
+    </ul>
+
+    <h3>Apple Silicon (via VM)</h3>
+    <p>Run NullSec in UTM or Parallels on M1/M2/M3 Macs.</p>
+
+    <pre><code># UTM setup
+1. Create new VM → Linux → Other ARM64
+2. Import nullsec-arm64.iso
+3. Allocate 4+ GB RAM, 20+ GB disk
+4. Enable Virtualization framework for native performance</code></pre>
+
+    <p>Apple Silicon VMs are <em>fast</em> — faster than many native x86 laptops. The ARM-to-ARM virtualization has minimal overhead.</p>
+
+    <h3>AWS Graviton</h3>
+    <p>For cloud-based security assessments:</p>
+
+    <pre><code># Launch Graviton instance with NullSec AMI
+aws ec2 run-instances \
+    --image-id ami-0nullsec-arm64 \
+    --instance-type c7g.xlarge \
+    --key-name mykey
+
+# c7g.xlarge: 4 vCPU, 8 GB RAM, ~$0.12/hr
+# 40% cheaper than equivalent c7i.xlarge</code></pre>
+
+    <p>Graviton 3 processors include crypto acceleration (AES-NI equivalent), making cryptographic operations competitive with x86.</p>
+
+    <h3>Generic UEFI ARM64</h3>
+    <p>Any ARM64 hardware with UEFI boot should work:</p>
+    <ul>
+      <li>Ampere Altra servers</li>
+      <li>NVIDIA Jetson (with modifications)</li>
+      <li>Pinebook Pro / PineTab</li>
+      <li>Khadas Edge2</li>
+    </ul>
+
+    <h2>◉ Architecture Challenges</h2>
+    <p>Porting NullSec to ARM64 wasn't just rebuilding packages. Some tools needed work:</p>
+
+    <h3>Metasploit</h3>
+    <p>Ruby runs natively. Most payloads are architecture-independent (Meterpreter stages download appropriate binaries). ARM64 native payloads added where needed.</p>
+
+    <h3>Hashcat</h3>
+    <p>CPU mode works but is slow. No native ARM64 GPU drivers yet, so GPU cracking requires remote x86 rigs. We include hashcat-server for distributed setups.</p>
+
+    <h3>Burp Suite</h3>
+    <p>Java-based, runs natively on ARM64 JVM. Community edition works fine. Professional edition needs manual ARM64 JVM configuration.</p>
+
+    <h3>Lateralus</h3>
+    <p>Pure Python runtime — no changes needed. C backend required cross-compilation setup but works perfectly.</p>
+
+    <pre><code># Cross-compile Lateralus to ARM64 binary
+lateralus build --target c99 exploit.ltl
+aarch64-linux-gnu-gcc -O2 exploit.c -o exploit_arm64</code></pre>
+
+    <h2>◉ Raspberry Pi Field Kit</h2>
+    <p>Our recommended portable pentest rig:</p>
+
+    <table style="width:100%; border-collapse:collapse; margin:16px 0;">
+      <tr style="border-bottom:1px solid var(--border-light);">
+        <th style="text-align:left; padding:8px;">Component</th>
+        <th style="text-align:right; padding:8px;">Cost</th>
+      </tr>
+      <tr><td style="padding:8px;">Raspberry Pi 5 (8GB)</td><td style="text-align:right; padding:8px;">$80</td></tr>
+      <tr><td style="padding:8px;">256GB NVMe SSD + HAT</td><td style="text-align:right; padding:8px;">$45</td></tr>
+      <tr><td style="padding:8px;">Official case + fan</td><td style="text-align:right; padding:8px;">$15</td></tr>
+      <tr><td style="padding:8px;">Alfa AWUS036ACH (WiFi)</td><td style="text-align:right; padding:8px;">$50</td></tr>
+      <tr><td style="padding:8px;">USB-C PD battery (20,000 mAh)</td><td style="text-align:right; padding:8px;">$40</td></tr>
+      <tr><td style="padding:8px;">7" touchscreen (optional)</td><td style="text-align:right; padding:8px;">$70</td></tr>
+      <tr style="border-top:1px solid var(--border-light);">
+        <td style="padding:8px;"><strong>Total</strong></td>
+        <td style="text-align:right; padding:8px;"><strong>$230-300</strong></td></tr>
+    </table>
+
+    <p>Fits in a jacket pocket. 4-6 hours battery life during active scanning.</p>
+
+    <h2>◉ Performance Benchmarks</h2>
+    <p>Compared to NullSec x86 on Intel i7-1165G7 (popular pentest laptop):</p>
+
+    <table style="width:100%; border-collapse:collapse; margin:16px 0;">
+      <tr style="border-bottom:1px solid var(--border-light);">
+        <th style="text-align:left; padding:8px;">Task</th>
+        <th style="text-align:right; padding:8px;">x86</th>
+        <th style="text-align:right; padding:8px;">Pi 5</th>
+        <th style="text-align:right; padding:8px;">M2 VM</th>
+      </tr>
+      <tr><td style="padding:8px;">Nmap -sS -T4 /24</td><td style="text-align:right; padding:8px;">12s</td><td style="text-align:right; padding:8px;">18s</td><td style="text-align:right; padding:8px;">11s</td></tr>
+      <tr><td style="padding:8px;">SQLMap basic test</td><td style="text-align:right; padding:8px;">8s</td><td style="text-align:right; padding:8px;">14s</td><td style="text-align:right; padding:8px;">7s</td></tr>
+      <tr><td style="padding:8px;">Gobuster dir (medium)</td><td style="text-align:right; padding:8px;">45s</td><td style="text-align:right; padding:8px;">62s</td><td style="text-align:right; padding:8px;">41s</td></tr>
+      <tr><td style="padding:8px;">Lateralus compile test</td><td style="text-align:right; padding:8px;">0.8s</td><td style="text-align:right; padding:8px;">1.4s</td><td style="text-align:right; padding:8px;">0.6s</td></tr>
+      <tr><td style="padding:8px;">Metasploit load</td><td style="text-align:right; padding:8px;">14s</td><td style="text-align:right; padding:8px;">22s</td><td style="text-align:right; padding:8px;">12s</td></tr>
+    </table>
+
+    <p>The M2 VM is actually <em>faster</em> than the x86 laptop for many tasks. Pi 5 is ~1.5x slower but perfectly usable.</p>
+
+    <h2>◉ WiFi Adapter Support</h2>
+    <p>WiFi hacking needs monitor mode. Tested adapters on ARM64:</p>
+
+    <ul>
+      <li><strong>Alfa AWUS036ACH:</strong> Full support (rtl8812au driver)</li>
+      <li><strong>Alfa AWUS1900:</strong> Works (rtl8814au)</li>
+      <li><strong>TP-Link TL-WN722N v1:</strong> Classic choice, works great</li>
+      <li><strong>Panda PAU09:</strong> Budget option, works</li>
+    </ul>
+
+    <p>All external WiFi adapters are tested before NullSec ARM64 releases.</p>
+
+    <h2>◉ Getting Started</h2>
+    <pre><code># Download ARM64 image
+wget https://lateralus.dev/download/nullsec-2.0-arm64.img.xz
+
+# Verify signature
+gpg --verify nullsec-2.0-arm64.img.xz.sig
+
+# Decompress
+xz -d nullsec-2.0-arm64.img.xz
+
+# Write to SD/USB (replace sdX with your device)
+sudo dd if=nullsec-2.0-arm64.img of=/dev/sdX bs=4M status=progress</code></pre>
+
+    <p>Default login: <code>nullsec</code> / <code>nullsec</code> — change immediately after boot!</p>
+
+    <p>Full documentation and downloads at <a href="/download/">the downloads page</a>.</p>
+
+  </div>
+</article>
+
+<footer>
+  <div class="container" style="text-align:center; padding: 2rem 0;">
+    <p style="font-family:'Press Start 2P',monospace; font-size:9px; color:var(--lime); margin-bottom:8px;">|&gt; LATERALUS</p>
+    <p style="font-family:'VT323',monospace; font-size:14px; color:var(--text);">A Language That Spirals Outward</p>
+  </div>
+</footer>
+
+<script src="/site.js"></script>
+</body>
+</html>

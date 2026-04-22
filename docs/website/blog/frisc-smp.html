@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SMP Support in FRISC OS — Lateralus Blog</title>
+  <meta name="description" content="SMP Support in FRISC OS - Notes on language design, tooling, OS development, and the pipeline-first way of thinking.">
+  <meta property="og:title" content="SMP Support in FRISC OS — Lateralus Blog">
+  <meta property="og:description" content="SMP Support in FRISC OS">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://lateralus.dev/blog/frisc-smp.html">
+  <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+  <link rel="canonical" href="https://lateralus.dev/blog/frisc-smp.html">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css?v=20260408">
+  <style>
+    .blog-post { max-width: 800px; margin: 0 auto; padding: 80px 20px 60px; }
+    .blog-post h1 { font-family: 'Press Start 2P', monospace; font-size: clamp(14px, 3vw, 20px); color: var(--electric-yellow); line-height: 1.8; margin-bottom: 16px; }
+    .blog-meta { font-family: 'VT323', monospace; font-size: 18px; color: var(--hot-pink); margin-bottom: 24px; }
+    .blog-meta .tags { display: inline-flex; gap: 8px; margin-left: 16px; }
+    .blog-meta .tag { font-family: 'Press Start 2P', monospace; font-size: 8px; padding: 4px 10px; border: 1px solid var(--lime); color: var(--lime); }
+    .blog-content { font-family: 'VT323', monospace; font-size: 20px; color: var(--text); line-height: 1.7; }
+    .blog-content h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--cyber-blue); margin: 32px 0 16px; line-height: 1.6; }
+    .blog-content h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--lime); margin: 24px 0 12px; line-height: 1.6; }
+    .blog-content p { margin-bottom: 16px; }
+    .blog-content code { background: var(--bg3); padding: 2px 6px; color: var(--hot-pink); font-size: 18px; }
+    .blog-content pre { background: var(--bg3); border: 2px solid var(--border-light); padding: 16px; overflow-x: auto; margin: 16px 0; }
+    .blog-content pre code { background: none; padding: 0; display: block; font-size: 16px; line-height: 1.5; color: var(--text); }
+    .blog-content ul, .blog-content ol { margin: 16px 0; padding-left: 24px; }
+    .blog-content li { margin-bottom: 8px; }
+    .blog-content a { color: var(--cyber-blue); text-decoration: underline; }
+    .blog-content a:hover { color: var(--lime); }
+    .blog-content blockquote { border-left: 3px solid var(--lime); padding-left: 16px; margin: 16px 0; color: var(--text2); font-style: italic; }
+    .blog-back { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; color: var(--lime); text-decoration: none; margin-bottom: 24px; }
+    .blog-back:hover { color: var(--electric-yellow); }
+    /* Mobile responsive */
+    @media (max-width: 768px) {
+      .blog-header h1 { font-size: 14px; line-height: 1.5; }
+      .blog-header .meta { font-size: 11px; }
+      .blog-content { font-size: 16px; }
+      .blog-content code { font-size: 14px; }
+      .blog-content pre { padding: 12px; }
+      .blog-content pre code { font-size: 13px; }
+      .blog-back { font-size: 8px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/">PLAYGROUND</a>
+      <a href="/blog/" class="active">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<article class="blog-post">
+  <a href="/blog/" class="blog-back">← Back to Blog</a>
+  <h1>SMP Support in FRISC OS</h1>
+  <div class="blog-meta">
+    February 10, 2026
+    <span class="tags"><span class="tag">frisc</span><span class="tag">smp</span><span class="tag">osdev</span></span>
+  </div>
+  <div class="blog-content">
+
+    <p>Bringing multi-core support to FRISC OS with Lateralus channels for inter-processor communication. The journey from "works on one core" to "scales to N cores."</p>
+
+    <h2>◉ The SMP Challenge</h2>
+    <p>Single-core OS development is hard. Multi-core is harder. Every assumption about "this variable won't change" becomes suspect when another core might be touching it simultaneously.</p>
+
+    <p>Key SMP challenges we solved:</p>
+    <ul>
+      <li>Bringing up secondary cores (CPU bringup)</li>
+      <li>Per-core data structures (stacks, interrupt handlers)</li>
+      <li>Shared memory synchronization (spinlocks, atomics)</li>
+      <li>Load-balanced scheduling</li>
+      <li>Cache coherency awareness</li>
+    </ul>
+
+    <h2>◉ CPU Bring-Up</h2>
+    <p>On RISC-V, secondary cores start in a parked state. OpenSBI provides the <code>sbi_hart_start</code> call to wake them:</p>
+
+    <pre><code>fn boot_secondary_cores() {
+    let hart_count = device_tree.get_cpu_count()
+    let boot_hart = current_hart_id()
+
+    println("Boot hart: " + str(boot_hart) + ", total harts: " + str(hart_count))
+
+    for hart_id in 0..hart_count {
+        if hart_id != boot_hart {
+            // Each core needs its own stack
+            let stack = alloc_pages(CORE_STACK_PAGES)
+            let stack_top = stack + (CORE_STACK_PAGES * PAGE_SIZE)
+
+            // Start the core at secondary_entry with its stack
+            let result = sbi_hart_start(
+                hart_id,
+                secondary_entry as usize,
+                stack_top
+            )
+
+            match result {
+                Ok(_) => println("  Started hart " + str(hart_id)),
+                Err(e) => println("  Failed to start hart " + str(hart_id) + ": " + e),
+            }
+        }
+    }
+}</code></pre>
+
+    <p>Secondary cores wake up at <code>secondary_entry</code>, initialize their per-core state, then join the scheduler:</p>
+
+    <pre><code>fn secondary_entry() {
+    let hart_id = current_hart_id()
+
+    // Initialize per-core state
+    per_core[hart_id].init()
+
+    // Set up timer interrupt
+    timer_init_per_core()
+
+    // Enable interrupts
+    enable_interrupts()
+
+    // Signal ready
+    atomics.store(&cores_ready, cores_ready.load() + 1)
+
+    // Enter scheduler (never returns)
+    scheduler_loop()
+}</code></pre>
+
+    <h2>◉ Per-Core Data Structures</h2>
+    <p>Each core has private data that must not be shared:</p>
+
+    <pre><code>struct PerCoreData {
+    hart_id: u32,
+    current_thread: *Thread,
+    idle_thread: *Thread,
+    run_queue: RunQueue,
+    interrupt_stack: *u8,
+    timer_ticks: u64,
+}</code></pre>
+
+    <p>We use the <code>tp</code> (thread pointer) register to access per-core data without locking:</p>
+
+    <pre><code>fn get_per_core() -> &PerCoreData {
+    // tp register holds pointer to current core's PerCoreData
+    let ptr: *PerCoreData
+    asm!("mv {}, tp", out(reg) ptr)
+    return &*ptr
+}</code></pre>
+
+    <h2>◉ Synchronization Primitives</h2>
+    <p>RISC-V provides atomic operations via the A extension. We built standard primitives on top:</p>
+
+    <pre><code>// Spinlock using atomic swap
+struct Spinlock {
+    locked: atomic[u32],
+}
+
+fn acquire(lock: &Spinlock) {
+    while lock.locked.swap(1, Ordering::Acquire) == 1 {
+        // Spin with hint to save power
+        asm!("pause")  // Or wfi on some implementations
+    }
+}
+
+fn release(lock: &Spinlock) {
+    lock.locked.store(0, Ordering::Release)
+}</code></pre>
+
+    <p>For higher-level synchronization, Lateralus channels provide message-passing:</p>
+
+    <pre><code>// Inter-core communication via channels
+let (tx, rx) = channel[WorkItem]()
+
+// Producer core
+core[0].run(fn() {
+    work_items
+        |> each(fn(item) { tx.send(item) })
+})
+
+// Consumer cores
+for i in 1..4 {
+    core[i].run(fn() {
+        loop {
+            let item = rx.recv()
+            process(item)
+        }
+    })
+}</code></pre>
+
+    <h2>◉ SMP-Aware Scheduler</h2>
+    <p>The scheduler maintains per-core run queues with work stealing:</p>
+
+    <pre><code>fn scheduler_loop() {
+    let my_queue = &get_per_core().run_queue
+
+    loop {
+        // Try to get work from my queue
+        let thread = my_queue.pop()
+
+        // If empty, try stealing from other cores
+        if thread.is_none() {
+            thread = steal_from_busiest_core()
+        }
+
+        // If still nothing, run idle thread
+        let thread = thread.unwrap_or(get_per_core().idle_thread)
+
+        // Run until preempted or yielded
+        context_switch(thread)
+    }
+}
+
+fn steal_from_busiest_core() -> Option[*Thread] {
+    // Find core with most queued threads
+    let victim = per_core_data
+        |> enumerate()
+        |> filter(fn((id, _)) { id != current_hart_id() })
+        |> max_by(fn((_, data)) { data.run_queue.len() })
+
+    match victim {
+        Some((_, data)) if data.run_queue.len() > 1 => {
+            // Steal half their queue
+            data.run_queue.steal_half()
+        },
+        _ => None,
+    }
+}</code></pre>
+
+    <h2>◉ Load Balancing</h2>
+    <p>Every 100ms, a load balancer runs to rebalance work across cores:</p>
+
+    <pre><code>fn load_balance_tick() {
+    let loads = per_core_data
+        |> map(fn(data) { (data.hart_id, data.run_queue.len()) })
+        |> collect()
+
+    let avg_load = loads |> map(fn((_, l)) { l }) |> mean()
+
+    // Move threads from overloaded to underloaded cores
+    let overloaded = loads |> filter(fn((_, l)) { l > avg_load * 1.5 })
+    let underloaded = loads |> filter(fn((_, l)) { l < avg_load * 0.5 })
+
+    for (src, _) in overloaded {
+        for (dst, _) in underloaded {
+            if per_core[src].run_queue.len() > 2 {
+                let thread = per_core[src].run_queue.pop_back()
+                per_core[dst].run_queue.push(thread)
+            }
+        }
+    }
+}</code></pre>
+
+    <h2>◉ Cache Coherency</h2>
+    <p>RISC-V doesn't guarantee cache coherency across cores for all implementations. We handle this with explicit fences:</p>
+
+    <pre><code>// Before another core reads this data
+fn publish_data(data: &Data) {
+    asm!("fence w, w")  // Ensure all writes are visible
+}
+
+// Before reading data written by another core
+fn acquire_data() {
+    asm!("fence r, r")  // Ensure we see latest writes
+}</code></pre>
+
+    <p>The U74 cores on HiFive Unmatched are coherent, but we keep these fences for portability.</p>
+
+    <h2>◉ Benchmarks</h2>
+    <p>Parallel speedup on HiFive Unmatched (4 cores):</p>
+
+    <table style="width:100%; border-collapse:collapse; margin:16px 0;">
+      <tr style="border-bottom:1px solid var(--border-light);">
+        <th style="text-align:left; padding:8px;">Workload</th>
+        <th style="text-align:right; padding:8px;">1 core</th>
+        <th style="text-align:right; padding:8px;">4 cores</th>
+        <th style="text-align:right; padding:8px;">Speedup</th>
+      </tr>
+      <tr><td style="padding:8px;">Mandelbrot render</td><td style="text-align:right; padding:8px;">4.2s</td><td style="text-align:right; padding:8px;">1.15s</td><td style="text-align:right; padding:8px;">3.65x</td></tr>
+      <tr><td style="padding:8px;">Parallel sort (1M items)</td><td style="text-align:right; padding:8px;">890ms</td><td style="text-align:right; padding:8px;">245ms</td><td style="text-align:right; padding:8px;">3.63x</td></tr>
+      <tr><td style="padding:8px;">Build kernel</td><td style="text-align:right; padding:8px;">12.4s</td><td style="text-align:right; padding:8px;">4.1s</td><td style="text-align:right; padding:8px;">3.02x</td></tr>
+      <tr><td style="padding:8px;">Process spawn stress</td><td style="text-align:right; padding:8px;">1.8s</td><td style="text-align:right; padding:8px;">0.52s</td><td style="text-align:right; padding:8px;">3.46x</td></tr>
+    </table>
+
+    <p>We're seeing 3-3.65x speedup on 4 cores — not quite linear, but respectable for a young OS.</p>
+
+    <h2>◉ Debugging SMP</h2>
+    <p>SMP bugs are notoriously hard to reproduce. Our debugging toolkit:</p>
+
+    <ul>
+      <li><strong>Per-core serial output:</strong> Each core prefixes its output with hart ID</li>
+      <li><strong>Deadlock detection:</strong> Timer watchdog detects stuck spinlocks</li>
+      <li><strong>Core dump on panic:</strong> All cores halt and dump state on any panic</li>
+      <li><strong>QEMU logging:</strong> <code>-d int,cpu_reset</code> to trace all interrupts</li>
+    </ul>
+
+    <pre><code>[hart 0] Boot complete
+[hart 1] Secondary entry
+[hart 2] Secondary entry
+[hart 3] Secondary entry
+[hart 0] All 4 cores online
+[hart 2] Running task: compile foo.ltl
+[hart 0] Running task: compile bar.ltl
+...</code></pre>
+
+    <h2>◉ What's Next</h2>
+    <p>SMP support is stable for compute workloads. Next up:</p>
+    <ul>
+      <li>NUMA awareness (when hardware supports it)</li>
+      <li>Core parking for power savings</li>
+      <li>Real-time scheduling priority for multimedia</li>
+    </ul>
+
+    <p>See <a href="/os/">the OS page</a> for build instructions and SMP configuration.</p>
+
+  </div>
+</article>
+
+<footer>
+  <div class="container" style="text-align:center; padding: 2rem 0;">
+    <p style="font-family:'Press Start 2P',monospace; font-size:9px; color:var(--lime); margin-bottom:8px;">|&gt; LATERALUS</p>
+    <p style="font-family:'VT323',monospace; font-size:14px; color:var(--text);">A Language That Spirals Outward</p>
+  </div>
+</footer>
+
+<script src="/site.js"></script>
+</body>
+</html>

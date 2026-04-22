@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Writing the First Lateralus Compiler — Lateralus Blog</title>
+  <meta name="description" content="Writing the First Lateralus Compiler - Notes on language design, tooling, OS development, and the pipeline-first way of thinking.">
+  <meta property="og:title" content="Writing the First Lateralus Compiler — Lateralus Blog">
+  <meta property="og:description" content="Writing the First Lateralus Compiler">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://lateralus.dev/blog/first-compiler.html">
+  <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+  <link rel="canonical" href="https://lateralus.dev/blog/first-compiler.html">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css?v=20260408">
+  <style>
+    .blog-post { max-width: 800px; margin: 0 auto; padding: 80px 20px 60px; }
+    .blog-post h1 { font-family: 'Press Start 2P', monospace; font-size: clamp(14px, 3vw, 20px); color: var(--electric-yellow); line-height: 1.8; margin-bottom: 16px; }
+    .blog-meta { font-family: 'VT323', monospace; font-size: 18px; color: var(--hot-pink); margin-bottom: 24px; }
+    .blog-meta .tags { display: inline-flex; gap: 8px; margin-left: 16px; }
+    .blog-meta .tag { font-family: 'Press Start 2P', monospace; font-size: 8px; padding: 4px 10px; border: 1px solid var(--lime); color: var(--lime); }
+    .blog-content { font-family: 'VT323', monospace; font-size: 20px; color: var(--text); line-height: 1.7; }
+    .blog-content h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--cyber-blue); margin: 32px 0 16px; line-height: 1.6; }
+    .blog-content h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--lime); margin: 24px 0 12px; line-height: 1.6; }
+    .blog-content p { margin-bottom: 16px; }
+    .blog-content code { background: var(--bg3); padding: 2px 6px; color: var(--hot-pink); font-size: 18px; }
+    .blog-content pre { background: var(--bg3); border: 2px solid var(--border-light); padding: 16px; overflow-x: auto; margin: 16px 0; }
+    .blog-content pre code { background: none; padding: 0; display: block; font-size: 16px; line-height: 1.5; color: var(--text); }
+    .blog-content ul, .blog-content ol { margin: 16px 0; padding-left: 24px; }
+    .blog-content li { margin-bottom: 8px; }
+    .blog-content a { color: var(--cyber-blue); text-decoration: underline; }
+    .blog-content a:hover { color: var(--lime); }
+    .blog-content blockquote { border-left: 3px solid var(--lime); padding-left: 16px; margin: 16px 0; color: var(--text2); font-style: italic; }
+    .blog-back { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; color: var(--lime); text-decoration: none; margin-bottom: 24px; }
+    .blog-back:hover { color: var(--electric-yellow); }
+    /* Mobile responsive */
+    @media (max-width: 768px) {
+      .blog-header h1 { font-size: 14px; line-height: 1.5; }
+      .blog-header .meta { font-size: 11px; }
+      .blog-content { font-size: 16px; }
+      .blog-content code { font-size: 14px; }
+      .blog-content pre { padding: 12px; }
+      .blog-content pre code { font-size: 13px; }
+      .blog-back { font-size: 8px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/">PLAYGROUND</a>
+      <a href="/blog/" class="active">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<article class="blog-post">
+  <a href="/blog/" class="blog-back">← Back to Blog</a>
+  <h1>Writing the First Lateralus Compiler</h1>
+  <div class="blog-meta">
+    February 1, 2025
+    <span class="tags"><span class="tag">history</span><span class="tag">compiler</span></span>
+  </div>
+  <div class="blog-content">
+
+    <p>The story of building the first Lateralus compiler — from idea to working prototype in three months. This is the tale of late nights, syntax debates, and the moment "Hello, World" finally compiled.</p>
+
+    <h2>◉ The Genesis</h2>
+    <p>It started with frustration. Every time I wanted to write a data transformation, I'd end up nesting function calls five levels deep. Why couldn't code just <em>flow</em> like data naturally does? That question became Lateralus.</p>
+
+    <p>The initial prototype was hacked together in Python over a weekend — just enough to prove the pipe operator could work. By Monday, I had this compiling:</p>
+
+    <pre><code>// This was the first Lateralus program that ever ran
+let nums = [1, 2, 3, 4, 5]
+nums |> filter(fn(x) { x > 2 }) |> map(fn(x) { x * x }) |> println</code></pre>
+
+    <p>Seeing <code>[9, 16, 25]</code> print to the console was electric. The pipeline vision was real.</p>
+
+    <h2>◉ Bootstrapping</h2>
+    <p>The first "real" compiler was written in Python. I know, I know — but Python's AST module made prototyping trivial, and we needed to iterate fast on syntax.</p>
+
+    <p>The architecture was simple:</p>
+    <ul>
+      <li><strong>Lexer:</strong> Hand-written scanner, 400 lines</li>
+      <li><strong>Parser:</strong> Recursive descent, 1200 lines</li>
+      <li><strong>Type checker:</strong> Hindley-Milner inference, 800 lines</li>
+      <li><strong>Codegen:</strong> Python target first, then added bytecode VM</li>
+    </ul>
+
+    <p>The Python backend was the fastest path to "working." We could compile Lateralus to Python, run it, and see if the semantics were right. Only later did we add the bytecode VM for performance.</p>
+
+    <h2>◉ The Type System Wars</h2>
+    <p>Type inference was contentious. Should we require annotations everywhere (like Rust)? Allow full inference (like Haskell)? We landed on a middle ground:</p>
+
+    <pre><code>// Function signatures need annotations
+fn add(x: int, y: int) -> int {
+    return x + y
+}
+
+// But locals are inferred
+let result = add(1, 2)  // result: int, inferred</code></pre>
+
+    <p>The Hindley-Milner algorithm handles let-polymorphism, which means this works:</p>
+
+    <pre><code>fn identity(x) { return x }
+
+let a = identity(42)      // a: int
+let b = identity("hello") // b: str - same function, different type!</code></pre>
+
+    <h2>◉ Design Decisions</h2>
+    <p><strong>Why pipelines?</strong> Because <code>x |> f |> g |> h</code> reads left-to-right, like natural language. Compare: <code>h(g(f(x)))</code> — you have to read inside-out.</p>
+
+    <p><strong>Why Hindley-Milner?</strong> Because inference reduces boilerplate while preserving type safety. No runtime type errors, but also no annotation gymnastics.</p>
+
+    <p><strong>Why Python as first backend?</strong> Pragmatism. Python is everywhere. By targeting Python, Lateralus immediately inherits access to NumPy, Pandas, requests, and 400,000 other packages.</p>
+
+    <h2>◉ The First Real Program</h2>
+    <p>The first non-trivial Lateralus program was a CSV transformer:</p>
+
+    <pre><code>import io
+import strings
+
+fn main() {
+    io.read_file("sales.csv")
+        |> strings.split("\n")
+        |> filter(fn(line) { len(line) > 0 })
+        |> map(fn(line) {
+            let parts = strings.split(line, ",")
+            return { name: parts[0], amount: float(parts[1]) }
+        })
+        |> filter(fn(row) { row.amount > 1000 })
+        |> sort_by(fn(row) { row.amount })
+        |> reverse()
+        |> take(10)
+        |> each(fn(row) { println(row.name + ": $" + str(row.amount)) })
+}</code></pre>
+
+    <p>It worked. The entire ETL pipeline, readable top-to-bottom. No temporary variables needed.</p>
+
+    <h2>◉ Lessons Learned</h2>
+    <ol>
+      <li><strong>Ship something.</strong> The Python prototype was ugly. It worked. We iterated.</li>
+      <li><strong>Syntax matters.</strong> We spent weeks debating <code>|></code> vs <code>>></code> vs <code>-></code>. The pipe won because it looks like data flowing through a pipe.</li>
+      <li><strong>Test with real programs.</strong> Unit tests caught bugs, but real programs caught design flaws.</li>
+      <li><strong>Type errors should help, not punish.</strong> We rewrote error messages three times until they actually told you what to fix.</li>
+    </ol>
+
+    <h2>◉ What's Next</h2>
+    <p>The compiler today is vastly more sophisticated — LLVM backend, LSP server, debugger support — but the core insight from day one remains: <strong>code should flow like data flows.</strong></p>
+
+    <p>Want to try it? <a href="/playground/">The playground</a> is running the latest compiler. Write some pipelines and see for yourself.</p>
+
+  </div>
+</article>
+
+<footer>
+  <div class="container" style="text-align:center; padding: 2rem 0;">
+    <p style="font-family:'Press Start 2P',monospace; font-size:9px; color:var(--lime); margin-bottom:8px;">|&gt; LATERALUS</p>
+    <p style="font-family:'VT323',monospace; font-size:14px; color:var(--text);">A Language That Spirals Outward</p>
+  </div>
+</footer>
+
+<script src="/site.js"></script>
+</body>
+</html>

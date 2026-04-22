@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nullkia: A Pipeline-Driven Desktop Environment — Lateralus Blog</title>
+  <meta name="description" content="Nullkia: A Pipeline-Driven Desktop Environment - Notes on language design, tooling, OS development, and the pipeline-first way of thinking.">
+  <meta property="og:title" content="Nullkia: A Pipeline-Driven Desktop Environment — Lateralus Blog">
+  <meta property="og:description" content="Nullkia: A Pipeline-Driven Desktop Environment">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://lateralus.dev/blog/nullkia-desktop.html">
+  <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+  <link rel="canonical" href="https://lateralus.dev/blog/nullkia-desktop.html">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css?v=20260408">
+  <style>
+    .blog-post { max-width: 800px; margin: 0 auto; padding: 80px 20px 60px; }
+    .blog-post h1 { font-family: 'Press Start 2P', monospace; font-size: clamp(14px, 3vw, 20px); color: var(--electric-yellow); line-height: 1.8; margin-bottom: 16px; }
+    .blog-meta { font-family: 'VT323', monospace; font-size: 18px; color: var(--hot-pink); margin-bottom: 24px; }
+    .blog-meta .tags { display: inline-flex; gap: 8px; margin-left: 16px; }
+    .blog-meta .tag { font-family: 'Press Start 2P', monospace; font-size: 8px; padding: 4px 10px; border: 1px solid var(--lime); color: var(--lime); }
+    .blog-content { font-family: 'VT323', monospace; font-size: 20px; color: var(--text); line-height: 1.7; }
+    .blog-content h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--cyber-blue); margin: 32px 0 16px; line-height: 1.6; }
+    .blog-content h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--lime); margin: 24px 0 12px; line-height: 1.6; }
+    .blog-content p { margin-bottom: 16px; }
+    .blog-content code { background: var(--bg3); padding: 2px 6px; color: var(--hot-pink); font-size: 18px; }
+    .blog-content pre { background: var(--bg3); border: 2px solid var(--border-light); padding: 16px; overflow-x: auto; margin: 16px 0; }
+    .blog-content pre code { background: none; padding: 0; display: block; font-size: 16px; line-height: 1.5; color: var(--text); }
+    .blog-content ul, .blog-content ol { margin: 16px 0; padding-left: 24px; }
+    .blog-content li { margin-bottom: 8px; }
+    .blog-content a { color: var(--cyber-blue); text-decoration: underline; }
+    .blog-content a:hover { color: var(--lime); }
+    .blog-content blockquote { border-left: 3px solid var(--lime); padding-left: 16px; margin: 16px 0; color: var(--text2); font-style: italic; }
+    .blog-back { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; color: var(--lime); text-decoration: none; margin-bottom: 24px; }
+    .blog-back:hover { color: var(--electric-yellow); }
+    /* Mobile responsive */
+    @media (max-width: 768px) {
+      .blog-header h1 { font-size: 14px; line-height: 1.5; }
+      .blog-header .meta { font-size: 11px; }
+      .blog-content { font-size: 16px; }
+      .blog-content code { font-size: 14px; }
+      .blog-content pre { padding: 12px; }
+      .blog-content pre code { font-size: 13px; }
+      .blog-back { font-size: 8px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/">PLAYGROUND</a>
+      <a href="/blog/" class="active">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<article class="blog-post">
+  <a href="/blog/" class="blog-back">← Back to Blog</a>
+  <h1>Nullkia: A Pipeline-Driven Desktop Environment</h1>
+  <div class="blog-meta">
+    April 6, 2026
+    <span class="tags"><span class="tag">nullkia</span><span class="tag">desktop</span><span class="tag">wayland</span></span>
+  </div>
+  <div class="blog-content">
+
+    <p>Nullkia is a lightweight, Wayland-native desktop environment written entirely in Lateralus. Tiling and floating modes, GPU-accelerated compositor, and pipeline-based widgets — all in under 50 MB RAM.</p>
+
+    <h2>◉ Why Nullkia?</h2>
+    <p>Existing desktop environments are either:</p>
+
+    <ul>
+      <li><strong>Heavy</strong> — GNOME/KDE use 500MB+ RAM just sitting idle</li>
+      <li><strong>Unconfigurable</strong> — Hard-coded behaviors you can't change</li>
+      <li><strong>X11-bound</strong> — Still using a protocol from 1987</li>
+    </ul>
+
+    <p>Nullkia is different: lightweight (~40MB idle), fully configurable via pipelines, and Wayland-native from the ground up.</p>
+
+    <h2>◉ Pipeline Widgets</h2>
+    <p>Status bar widgets are Lateralus pipelines. CPU usage, network stats, volume — all streaming data transformations:</p>
+
+    <pre><code>// ~/.config/nullkia/widgets.ltl
+
+// CPU widget - samples every 500ms, smooths, formats
+widget cpu_widget {
+    interval: 500,
+    pipeline: cpu_samples()
+        |> window(10)
+        |> map(avg)
+        |> format("CPU: {:.1}%")
+}
+
+// Memory widget
+widget mem_widget {
+    interval: 1000,
+    pipeline: mem_info()
+        |> map(fn(m) { m.used / m.total * 100.0 })
+        |> format("RAM: {:.0}%")
+}
+
+// Network throughput
+widget net_widget {
+    interval: 1000,
+    pipeline: net_stats()
+        |> map(fn(n) { n.rx_bytes / 1024.0 })
+        |> diff()  // Delta from previous
+        |> format("↓ {:.1} KB/s")
+}
+
+// Battery with color coding
+widget battery_widget {
+    interval: 5000,
+    pipeline: battery_info()
+        |> map(fn(b) {
+            let color = match b.percent {
+                p if p < 20 => "#ff5555",
+                p if p < 50 => "#ffcc00",
+                _ => "#55ff55",
+            }
+            { text: "⚡ " + str(b.percent) + "%", color: color }
+        })
+}</code></pre>
+
+    <h2>◉ Hybrid Window Management</h2>
+    <p>Switch between tiling and floating modes per-workspace:</p>
+
+    <pre><code>// ~/.config/nullkia/config.toml
+
+[workspaces]
+count = 9
+
+[workspace.1]
+name = "dev"
+layout = "tiling"
+master_ratio = 0.55
+
+[workspace.2]
+name = "web"
+layout = "floating"
+
+[workspace.3]
+name = "term"
+layout = "tiling"
+layout_type = "columns"  # or "rows", "spiral"
+
+[tiling]
+gap = 8
+border_width = 2
+border_color = "#00ff88"
+border_focus = "#ff66ff"</code></pre>
+
+    <h3>Layout Rules</h3>
+    <pre><code>// Window rules are pipeline expressions
+[rules]
+
+// Firefox always on workspace 2
+[[rule]]
+match = { app_id = "firefox" }
+action = { workspace = 2, floating = false }
+
+// Terminals tile on workspace 3
+[[rule]]
+match = { app_id = "kitty|alacritty|foot" }
+action = { workspace = 3 }
+
+// Dialogs float
+[[rule]]
+match = { type = "dialog" }
+action = { floating = true, center = true }
+
+// Picture-in-picture
+[[rule]]
+match = { title = "*Picture in Picture*" }
+action = { floating = true, sticky = true, size = [400, 225] }</code></pre>
+
+    <h2>◉ Keyboard Bindings</h2>
+    <pre><code>[keybindings]
+"Super+Return" = "spawn kitty"
+"Super+d" = "spawn wofi --show drun"
+"Super+q" = "close_window"
+"Super+f" = "toggle_fullscreen"
+"Super+Space" = "toggle_floating"
+
+# Focus
+"Super+h" = "focus left"
+"Super+j" = "focus down"
+"Super+k" = "focus up"
+"Super+l" = "focus right"
+
+# Move
+"Super+Shift+h" = "move left"
+"Super+Shift+j" = "move down"
+"Super+Shift+k" = "move up"
+"Super+Shift+l" = "move right"
+
+# Workspaces
+"Super+1" = "workspace 1"
+"Super+2" = "workspace 2"
+"Super+Shift+1" = "move_to_workspace 1"
+"Super+Shift+2" = "move_to_workspace 2"
+
+# Layout
+"Super+t" = "layout tiling"
+"Super+y" = "layout floating"
+"Super+[" = "resize shrink"
+"Super+]" = "resize grow"</code></pre>
+
+    <h2>◉ Plugin System</h2>
+    <p>v1.1 introduces plugins — load Lateralus modules to extend the desktop:</p>
+
+    <pre><code>// ~/.config/nullkia/plugins/auto_tile.ltl
+
+plugin auto_tile {
+    // Automatically tile new windows based on content
+    on window_open(win: Window) {
+        let should_tile = win.app_id
+            |> matches_any(["code", "kitty", "firefox"])
+
+        if should_tile {
+            win.set_tiled(true)
+        }
+    }
+
+    // Smart resize based on content
+    on window_resize(win: Window, new_size: Size) {
+        if win.is_terminal() && new_size.width < 400 {
+            win.set_font_size(win.font_size - 2)
+        }
+    }
+}
+
+// Enable in config.toml:
+// [plugins]
+// enabled = ["auto_tile", "workspace_history"]</code></pre>
+
+    <h2>◉ Notifications</h2>
+    <pre><code>// Notification styling and behavior
+[notifications]
+position = "top-right"
+width = 350
+timeout = 5000
+max_visible = 5
+
+// Filter notifications
+[[notification_rule]]
+match = { app = "Slack", urgency = "low" }
+action = { timeout = 2000 }
+
+[[notification_rule]]
+match = { app = "Discord" }
+action = { sound = false }
+
+[[notification_rule]]
+match = { urgency = "critical" }
+action = { timeout = 0, sticky = true }</code></pre>
+
+    <h2>◉ Theming</h2>
+    <pre><code>// ~/.config/nullkia/theme.toml
+
+[colors]
+background = "#0a0a0f"
+foreground = "#e0e0e0"
+accent = "#00ff88"
+warning = "#ffcc00"
+error = "#ff5555"
+
+[bar]
+height = 28
+background = "#0a0a0f"
+font = "JetBrains Mono"
+font_size = 12
+
+[window]
+border_width = 2
+border_radius = 0
+shadow = true
+shadow_color = "#000000aa"
+
+[cursor]
+theme = "Adwaita"
+size = 24</code></pre>
+
+    <h2>◉ Performance</h2>
+
+    <ul>
+      <li><strong>Memory</strong> — ~40MB idle, ~60MB with 20 windows</li>
+      <li><strong>CPU</strong> — <1% idle, GPU-accelerated compositing</li>
+      <li><strong>Startup</strong> — <200ms to usable desktop</li>
+      <li><strong>Latency</strong> — <8ms input-to-display</li>
+    </ul>
+
+    <h2>◉ Installation</h2>
+    <pre><code># NullSec Linux (pre-installed)
+# Already your default desktop
+
+# Arch Linux
+yay -S nullkia
+
+# Debian/Ubuntu
+sudo add-apt-repository ppa:nullsec/nullkia
+sudo apt install nullkia
+
+# From source
+git clone https://github.com/bad-antics/nullkia
+cd nullkia
+lateralus build --release
+sudo make install</code></pre>
+
+    <p>Nullkia ships with NullSec Linux and is available as a <a href="/download/#applications">standalone download</a>. Source on <a href="https://github.com/bad-antics/nullkia" target="_blank">GitHub</a>.</p>
+
+  </div>
+</article>
+
+<footer>
+  <div class="container" style="text-align:center; padding: 2rem 0;">
+    <p style="font-family:'Press Start 2P',monospace; font-size:9px; color:var(--lime); margin-bottom:8px;">|&gt; LATERALUS</p>
+    <p style="font-family:'VT323',monospace; font-size:14px; color:var(--text);">A Language That Spirals Outward</p>
+  </div>
+</footer>
+
+<script src="/site.js"></script>
+</body>
+</html>

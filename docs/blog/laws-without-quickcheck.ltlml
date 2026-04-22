@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Laws Without QuickCheck — Lateralus</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "Laws Without QuickCheck: @law as a First-Class Language Feature"
+author: bad-antics
+date: 2026-04-21
+abstract: Property-based testing has been a library feature since 2000. Lateralus v3.2 makes it a language feature — and because the compiler owns the type system, the generator comes free.
+---
+
+## The pitch
+
+```lateralus
+@law
+fn addition_commutative(a: int, b: int) -> bool {
+    return a + b == b + a
+}
+```
+
+```
+$ lateralus verify laws.ltl --seed 42
+  ✓  addition_commutative  (100 trials)
+```
+
+That's the entire contract. No `Arbitrary Int` instance. No
+`@given(st.integers(), st.integers())`. No strategy registry. The
+compiler already knew `a` and `b` were `int`; it reuses that knowledge to
+generate values.
+
+## The landscape
+
+Every mainstream language that has property testing has it as a **library**:
+
+| Tool          | What you write for `foo(xs: list[int], n: int)` |
+|---------------|-------------------------------------------------|
+| QuickCheck    | `Arbitrary [Int]` + `Arbitrary Int` instances |
+| Hypothesis    | `@given(st.lists(st.integers()), st.integers())` |
+| ScalaCheck    | Implicit `Arbitrary` generators |
+| fast-check    | `fc.property(fc.array(fc.integer()), fc.integer(), fn)` |
+| Idris / Lean  | Write a full formal proof |
+| **Lateralus** | `@law` — that's it |
+
+Libraries solve this by asking you to re-declare information the compiler
+already has. Lateralus skips that step.
+
+## Why we get to skip it
+
+The reason libraries need generators is that in Haskell, Python, Scala,
+and JS the type system is either erased (Python, JS), open (Scala
+typeclasses are lookup-based), or decoupled from value construction
+(Haskell). A generator can't be derived "for free" because *there's no
+authoritative source of truth about what types to generate*.
+
+Lateralus owns the lexer, parser, type checker, and codegen. When you
+write `xs: list[int]`, that annotation isn't just a hint — it's the same
+datum the type inferencer and C backend consume. A `_law_spec` attribute
+lives on every `@law` function, carrying `[("xs", "list[int]"),
+("n", "int")]` preserved straight from the AST, generics and all. The
+runner reads it and dispatches.
+
+## The runner, briefly
+
+When `lateralus verify` runs a file:
+
+1. The compiler transpiles to Python (reusing the existing Python backend).
+2. Every `@law fn` emits two things: the function itself, and a line
+   attaching its `_law_spec`.
+3. The verifier appends a self-contained runner tail that iterates
+   `_LATERALUS_LAWS`, generates random values per spec entry, calls the
+   function, and — on failure — shrinks.
+
+Each type gets a generator:
+
+```python
+"int"   -> rng.randint(-100, 100)
+"float" -> rng.uniform(-100, 100)
+"bool"  -> rng.choice([True, False])
+"str"   -> rng random ASCII, length 0..size
+"list"  -> list of random any, length 0..size
+"list[T]" -> list of T, length 0..size
+"map"   -> dict of str->any
+"map[K,V]" -> dict of K->V
+```
+
+User-defined types aren't supported yet — they're skipped with a reason.
+That's the next step (structural generator derivation for records).
+
+## Shrinking
+
+The real win of property testing isn't finding bugs — it's finding
+*minimal* bugs. Lateralus shrinks iteratively:
+
+- Ints: try 0, halve magnitude, then ±1
+- Floats: try 0.0, halve, round to 2 decimals
+- Strings: try empty, single char, drop last
+- Lists: drop each element; recursively shrink inner values
+- Maps: drop each key; try empty
+
+Up to 100 shrink steps per failed trial. A counter-example to
+`x > 0` shrinks to `x=0`, not `x=-47382`. A failure in `sum(xs) < 100`
+on a randomly-generated list shrinks to something like `xs=[40, 60]` —
+the *boundary*, the thing you actually want to look at.
+
+## Try it
+
+```bash
+pip install lateralus-lang   # (v3.2 when released)
+# For now, from the repo:
+python3 -m lateralus_lang verify examples/laws_demo.ltl --seed 42
+```
+
+The 16 laws in [examples/laws_demo.ltl](../../examples/laws_demo.ltl)
+cover algebraic identities, boolean logic (De Morgan, double negation),
+list structural properties (reverse involutive, length under concat),
+and string laws. Uncomment the one at the bottom to see the shrinker
+hunt down a counter-example to `x > 0`.
+
+## What this unlocks
+
+- **Stdlib invariants as docs.** Every `list_reverse`, `map_merge`,
+  `sort` can carry its correctness spec right next to its
+  implementation. Reading the stdlib becomes reading math.
+- **Regression bait.** Bugs tend to violate laws. When `sorted`
+  accidentally loses elements, `length_preserved_by_sort` fails on
+  trial 14 with `xs=[0, 0]`.
+- **A gentle on-ramp to formal methods.** `@law` doesn't prove
+  anything — it just tries really hard. But the syntax looks identical
+  to what a future `@theorem` decorator (compile-time-verified) would
+  demand. The habit transfers.
+
+## What's next
+
+- Structural generators for user-defined records (`struct Point { x: int, y: int }` → auto-generate)
+- `assume` guards for conditional laws (`@law fn foo(x: int) { assume x > 0; ... }`)
+- Per-law trial overrides: `@law(trials=10000)`
+- Native-speed law execution via the C backend — millions of trials in the time
+  Hypothesis does thousands
+
+The design holds: keep the user's surface area at one annotation, and let
+the compiler do what it already knows how to do.
+
+## Spiral outward.
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>

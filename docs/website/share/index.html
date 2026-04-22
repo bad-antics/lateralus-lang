@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Link Generator — lateralus.dev</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="stylesheet" href="/fonts.css">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0a0a1a;--surface:rgba(17,17,40,.7);
+  --border:rgba(0,255,255,.12);--cyan:#06b6d4;
+  --purple:#a855f7;--text:#e0e0e0;--text2:#8888aa;
+  --mono:'Space Mono',monospace;
+}
+body{
+  min-height:100vh;display:flex;align-items:center;justify-content:center;
+  background:var(--bg);color:var(--text);
+  font-family:'Inter',sans-serif;
+}
+.scanlines{
+  position:fixed;inset:0;
+  background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,255,255,.015) 2px,rgba(0,255,255,.015) 4px);
+  pointer-events:none;z-index:100;
+}
+.card{
+  width:100%;max-width:520px;padding:2.5rem;
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:16px;
+  backdrop-filter:blur(12px);
+}
+h1{
+  font-family:'Press Start 2P',monospace;font-size:0.8rem;font-weight:900;
+  background:linear-gradient(135deg,var(--purple),var(--cyan));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  background-clip:text;text-align:center;margin-bottom:.3rem;
+}
+.subtitle{text-align:center;color:var(--text2);font-size:.8rem;margin-bottom:2rem}
+label{
+  display:block;font-family:var(--mono);font-size:.75rem;
+  color:var(--cyan);margin-bottom:.4rem;letter-spacing:1px;
+}
+input,select{
+  width:100%;padding:.7rem 1rem;margin-bottom:1.2rem;
+  background:rgba(0,0,0,.3);color:var(--text);
+  border:1px solid rgba(255,255,255,.08);border-radius:8px;
+  font-family:var(--mono);font-size:.85rem;
+  outline:none;transition:border .2s;
+}
+input:focus,select:focus{border-color:var(--cyan)}
+select option{background:#111128;color:var(--text)}
+.btn{
+  display:block;width:100%;padding:.8rem;
+  background:linear-gradient(135deg,var(--purple),var(--cyan));
+  color:#fff;font-family:var(--mono);font-size:.9rem;font-weight:700;
+  border:none;border-radius:8px;cursor:pointer;
+  letter-spacing:1px;transition:opacity .2s;
+}
+.btn:hover{opacity:.9}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.result{
+  display:none;margin-top:1.5rem;padding:1.2rem;
+  background:rgba(0,0,0,.3);border:1px solid rgba(6,182,212,.2);
+  border-radius:8px;
+}
+.result.show{display:block}
+.result-label{font-family:var(--mono);font-size:.7rem;color:var(--cyan);margin-bottom:.5rem}
+.result-url{
+  font-family:var(--mono);font-size:.75rem;color:var(--text);
+  word-break:break-all;line-height:1.6;
+  padding:.6rem;background:rgba(0,0,0,.4);border-radius:6px;
+  margin-bottom:.8rem;cursor:pointer;
+  border:1px solid transparent;transition:border .2s;
+}
+.result-url:hover{border-color:var(--cyan)}
+.result-meta{font-size:.75rem;color:var(--text2)}
+.result-meta span{color:var(--cyan)}
+.copied{
+  text-align:center;font-family:var(--mono);font-size:.75rem;
+  color:#22c55e;margin-top:.5rem;opacity:0;transition:opacity .3s;
+}
+.copied.show{opacity:1}
+.error{
+  display:none;margin-top:1rem;padding:.8rem;
+  background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);
+  border-radius:8px;font-family:var(--mono);font-size:.8rem;color:#ef4444;
+}
+.error.show{display:block}
+.home{
+  display:block;text-align:center;margin-top:1.5rem;
+  font-family:var(--mono);font-size:.75rem;color:var(--text2);
+  text-decoration:none;
+}
+.home:hover{color:var(--cyan)}
+</style>
+</head>
+<body>
+<div class="scanlines"></div>
+<div class="card">
+  <h1>🔗 LINK GENERATOR</h1>
+  <p class="subtitle">Generate time-limited access links</p>
+
+  <form id="gen-form" autocomplete="off">
+    <label>ADMIN PASSWORD</label>
+    <input type="password" id="password" required placeholder="Enter password">
+
+    <label>PAGE</label>
+    <select id="page">
+      <option value="resume">📄 Resume</option>
+      <option value="me">👤 Portfolio</option>
+    </select>
+
+    <label>EXPIRES IN</label>
+    <select id="expiry">
+      <option value="1h">1 Hour</option>
+      <option value="24h" selected>24 Hours</option>
+      <option value="7d">7 Days</option>
+      <option value="30d">30 Days</option>
+    </select>
+
+    <button type="submit" class="btn" id="submit-btn">GENERATE LINK</button>
+  </form>
+
+  <div class="error" id="error"></div>
+
+  <div class="result" id="result">
+    <div class="result-label">PROTECTED LINK (click to copy)</div>
+    <div class="result-url" id="result-url" title="Click to copy"></div>
+    <div class="result-meta">
+      Page: <span id="result-page"></span> · Expires: <span id="result-expires"></span>
+    </div>
+    <div class="copied" id="copied">✓ Copied to clipboard</div>
+  </div>
+
+  <a href="/" class="home">← lateralus.dev</a>
+</div>
+
+<script>
+const form = document.getElementById('gen-form');
+const resultDiv = document.getElementById('result');
+const errorDiv = document.getElementById('error');
+const copiedDiv = document.getElementById('copied');
+const btn = document.getElementById('submit-btn');
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  errorDiv.classList.remove('show');
+  resultDiv.classList.remove('show');
+  copiedDiv.classList.remove('show');
+  btn.disabled = true;
+  btn.textContent = 'GENERATING...';
+
+  try {
+    const res = await fetch('/api/share', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        password: document.getElementById('password').value,
+        page: document.getElementById('page').value,
+        expiry: document.getElementById('expiry').value,
+      }),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      throw new Error(data.error || 'Request failed');
+    }
+
+    document.getElementById('result-url').textContent = data.url;
+    document.getElementById('result-page').textContent = '/' + data.page + '/';
+    document.getElementById('result-expires').textContent =
+      new Date(data.expires).toLocaleString();
+    resultDiv.classList.add('show');
+  } catch (err) {
+    errorDiv.textContent = '✗ ' + err.message;
+    errorDiv.classList.add('show');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'GENERATE LINK';
+  }
+});
+
+document.getElementById('result-url').addEventListener('click', async () => {
+  const url = document.getElementById('result-url').textContent;
+  try {
+    await navigator.clipboard.writeText(url);
+    copiedDiv.classList.add('show');
+    setTimeout(() => copiedDiv.classList.remove('show'), 2000);
+  } catch {
+    // Fallback
+    const ta = document.createElement('textarea');
+    ta.value = url;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    ta.remove();
+    copiedDiv.classList.add('show');
+    setTimeout(() => copiedDiv.classList.remove('show'), 2000);
+  }
+});
+</script>
+</body>
+</html>
