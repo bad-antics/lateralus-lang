@@ -51,9 +51,37 @@ After merge, these overrides stay put as a belt-and-braces fallback.
 - `meta/languages-yml-entry.yml` — proposed `languages.yml` patch
 - `meta/heuristics-yml-entry.yml` — disambiguation heuristics (none needed; `.ltl` is unique)
 - `samples/*.ltl` — 20 representative samples for Linguist's bayesian classifier
-- `grammar_repo/` — contents staged for `bad-antics/lateralus-grammar`
+- `grammar_repo/` — **full standalone repo** staged for `bad-antics/lateralus-grammar` (MIT, `package.json`, `syntaxes/lateralus.tmLanguage.json`, `CHANGELOG.md`, `.gitattributes`)
+- `scripts/sync-grammar-repo.sh` — mirrors `vscode-lateralus/syntaxes/*` into `grammar_repo/` with sanity checks
+- `scripts/publish-grammar-repo.sh` — one-shot publisher: initialises git in a temp dir, force-pushes to `github.com/bad-antics/lateralus-grammar`, optionally tags a version
+- `scripts/prepare-linguist-pr.sh` — clones your linguist fork, adds the submodule, patches `languages.yml`, copies samples, regenerates `grammars.yml`, and commits — ready for `gh pr create`
+- `scripts/count-ltl-repos.sh` — nightly poll of the `extension:ltl` API, writes `meta/repo-count.jsonl`
 - `pr-checklist.md` — Linguist PR body
 - `repo-search.md` — current discoverable-repo inventory
+
+## End-to-end workflow when the 200-repo bar is cleared
+
+```bash
+# 1. Keep grammar_repo in sync with the canonical VS Code grammar.
+./scripts/sync-grammar-repo.sh
+
+# 2. Publish the grammar to its own public repo (first time: use --create).
+./scripts/publish-grammar-repo.sh --create --tag v1.0.0
+
+# 3. Fork github-linguist/linguist; clone next to this repo.
+gh repo fork github-linguist/linguist --clone=true
+
+# 4. Scaffold the PR branch: submodule, languages.yml, samples, licenses.
+LINGUIST_DIR=../linguist ./scripts/prepare-linguist-pr.sh
+
+# 5. Run Linguist's tests (ruby env required).
+cd ../linguist && bundle install && bundle exec rake samples && bundle exec rspec
+
+# 6. Open the PR with the prepared body.
+gh pr create --base main --head add-lateralus \
+   --title "Add Lateralus language support" \
+   --body-file ../lateralus-lang/docs/linguist/pr-checklist.md
+```
 
 ## Files NOT in this package (lives elsewhere)
 

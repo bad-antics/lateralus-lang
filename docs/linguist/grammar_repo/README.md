@@ -16,8 +16,10 @@ Text, TextMate itself, Zed, Helix, etc.).
 
 | File | Purpose |
 |------|---------|
-| `lateralus.tmLanguage.json` | TextMate grammar (scope `source.ltl`) |
-| `language-configuration.json` | Bracket/comment metadata for editors |
+| `syntaxes/lateralus.tmLanguage.json` | TextMate grammar (scope `source.ltl`) |
+| `language-configuration.json` | Bracket / comment metadata for VS Code-style editors |
+| `package.json` | Grammar manifest consumed by VS Code, Zed, and `github-linguist/linguist`'s `script/convert-grammars` |
+| `CHANGELOG.md` | Release notes per grammar version |
 | `LICENSE` | MIT |
 
 ## Scope
