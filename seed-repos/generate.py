@@ -51,7 +51,7 @@ def project_source_files(repo: dict) -> dict[str, str]:
     exists; otherwise emits a minimal placeholder main.ltl with the
     right shape so that the repo contains a detectable `.ltl` file.
     """
-    tmpl_dir = PROJECTS / repo["source_template"]
+    tmpl_dir = PROJECTS / str(repo["source_template"])
     if tmpl_dir.is_dir():
         out: dict[str, str] = {}
         for src in tmpl_dir.rglob("*"):
