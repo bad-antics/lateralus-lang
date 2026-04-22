@@ -1,5 +1,30 @@
 # Lateralus Programming Language
 
+> **🌐 Official home: [lateralus.dev](https://lateralus.dev)** — docs, playground, downloads, papers, and package registry.
+
+<p align="center">
+  <a href="https://lateralus.dev"><strong>Website</strong></a> •
+  <a href="https://lateralus.dev/docs/"><strong>Docs</strong></a> •
+  <a href="https://lateralus.dev/playground/"><strong>Playground</strong></a> •
+  <a href="https://lateralus.dev/download/"><strong>Download</strong></a> •
+  <a href="https://lateralus.dev/papers/"><strong>Papers</strong></a> •
+  <a href="https://lateralus.dev/blog/"><strong>Blog</strong></a>
+</p>
+
+## Install
+
+```bash
+# From PyPI (recommended)
+pip install lateralus-lang
+
+# One-liner from lateralus.dev
+curl -fsSL https://lateralus.dev/install.sh | sh
+```
+
+VS Code users: install the **[Lateralus Language](https://marketplace.visualstudio.com/items?itemName=lateralus.lateralus-lang)** extension for full IDE support.
+
+---
+
 Lateralus is a systems programming language built for performance, safety, and expressive pipelines. It combines Rust-inspired ownership semantics with first-class pipeline operators, pattern matching, and a rich standard library.
 
 ## Features
@@ -79,3 +104,9 @@ make test
 ## License
 
 MIT — see LICENSE for details.
+
+---
+
+<p align="center">
+  <sub>Made with care at <a href="https://lateralus.dev">lateralus.dev</a></sub>
+</p>

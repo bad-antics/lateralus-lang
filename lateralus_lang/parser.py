@@ -1282,13 +1282,22 @@ class Parser:
             else:
                 raise ParseError("expected decorator name", cur)
             args = []
+            kwargs: list = []
             if self._match(TK.LPAREN):
                 while not self._check(TK.RPAREN, TK.EOF):
-                    args.append(self._parse_expr())
+                    # Detect `name = expr` keyword argument
+                    if (self._check(TK.IDENT)
+                        and self._peek(1) is not None
+                        and self._peek(1).kind == TK.ASSIGN):
+                        kw_name = self._advance().value
+                        self._expect(TK.ASSIGN)
+                        kwargs.append((kw_name, self._parse_expr()))
+                    else:
+                        args.append(self._parse_expr())
                     if not self._match(TK.COMMA):
                         break
                 self._expect(TK.RPAREN)
-            decorators.append(Decorator(span=self._span(t), name=name, args=args))
+            decorators.append(Decorator(span=self._span(t), name=name, args=args, kwargs=kwargs))
         # Parse the decorated statement
         stmt = self._parse_stmt()
         if hasattr(stmt, "decorators"):

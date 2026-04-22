@@ -1,6 +1,10 @@
 """
-lateralus_lang  -  LATERALUS Proprietary Language Toolkit
+lateralus_lang  -  Lateralus Language Toolkit
 ==============================================================
+A pipeline-native programming language with Hindley-Milner type
+inference, algebraic data types, and multi-target code generation
+(native bytecode VM, Python, C, WASM, JavaScript).
+
 Exports the primary public API.
 """
 from .codegen import generate_bytecode, transpile_to_python
@@ -28,7 +32,7 @@ from .parser import ParseError, parse
 from .repl import REPL, start_repl
 from .vm import VM, Bytecode, VMError, assemble
 
-__version__ = "3.0.0"
+__version__ = "3.1.0"
 __author__  = "bad-antics"
 
 __all__ = [

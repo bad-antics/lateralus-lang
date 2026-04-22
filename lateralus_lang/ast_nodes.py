@@ -472,6 +472,7 @@ class Decorator(Node):
     """@inline  or  @derive(Debug, Clone)  before a declaration."""
     name: str
     args: List["Expr"]  = field(default_factory=list)
+    kwargs: List[Tuple[str, "Expr"]] = field(default_factory=list)
 
 
 @dataclass

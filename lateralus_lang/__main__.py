@@ -96,6 +96,102 @@ def main(argv=None) -> int:
     test_p.add_argument("file")
     test_p.add_argument("--verbose", "-v", action="store_true")
 
+    # verify  (v3.2) — run @law property tests
+    ver_p = sub.add_parser(
+        "verify",
+        help="Run @law executable specifications (random property tests)",
+    )
+    ver_p.add_argument("file")
+    ver_p.add_argument("--trials", "-n", type=int, default=100,
+                       help="Random inputs generated per law (default: 100)")
+    ver_p.add_argument("--seed", type=int, default=None,
+                       help="Random seed for reproducible runs")
+    ver_p.add_argument("--mutate", action="store_true",
+                       help="Mutation-test: measure spec quality by perturbing implementation")
+    ver_p.add_argument("--max-mutants", type=int, default=None,
+                       help="Cap the number of mutants evaluated (default: all)")
+    ver_p.add_argument("--timeout", type=float, default=10.0,
+                       help="Per-mutant timeout in seconds (default: 10)")
+    ver_p.add_argument("--propose", action="store_true",
+                       help="For each surviving mutant, synthesize a witness @law that would kill it")
+    ver_p.add_argument("--propose-output", type=str, default=None,
+                       help="Write proposed witness laws to this file (.ltl)")
+    ver_p.add_argument("--apply", action="store_true",
+                       help="Insert synthesized witness laws back into the source file (idempotent)")
+
+    # harden  (v3.2) — iterative self-hardening loop
+    hard_p = sub.add_parser(
+        "harden",
+        help="Iterate mutate → propose → apply until mutation score reaches target",
+    )
+    hard_p.add_argument("file")
+    hard_p.add_argument("--trials", "-n", type=int, default=100,
+                        help="Random inputs per law per iteration (default: 100)")
+    hard_p.add_argument("--seed", type=int, default=42,
+                        help="Random seed (default: 42)")
+    hard_p.add_argument("--max-iter", type=int, default=5,
+                        help="Maximum iterations (default: 5)")
+    hard_p.add_argument("--target", type=float, default=1.0,
+                        help="Target mutation score 0.0–1.0 (default: 1.0 = 100%%)")
+    hard_p.add_argument("--timeout", type=float, default=10.0,
+                        help="Per-mutant timeout in seconds (default: 10)")
+
+    # characterize  (v3.2) — inductive law generalization
+    char_p = sub.add_parser(
+        "characterize",
+        help="Find closed-form @law characterizations of user functions",
+    )
+    char_p.add_argument("file")
+    char_p.add_argument("--trials", "-n", type=int, default=60,
+                        help="Inputs tested per candidate expression (default: 60)")
+    char_p.add_argument("--seed", type=int, default=42,
+                        help="Random seed (default: 42)")
+    char_p.add_argument("-o", "--output",
+                        help="Write characterizations to this .ltl file")
+
+    # relate  (v3.2) — cross-function relational law discovery
+    rel_p = sub.add_parser(
+        "relate",
+        help="Find cross-function relational laws (inverse, commuting, equivalent, …)",
+    )
+    rel_p.add_argument("file")
+    rel_p.add_argument("--trials", "-n", type=int, default=80,
+                       help="Trials per candidate relation (default: 80)")
+    rel_p.add_argument("--seed", type=int, default=42,
+                       help="Random seed (default: 42)")
+    rel_p.add_argument("-o", "--output",
+                       help="Write relational laws to this .ltl file")
+    rel_p.add_argument("--apply", action="store_true",
+                       help="Patch the source file in-place with discovered laws")
+
+    # triangulate  (v3.2) — ternary algebraic structure laws
+    tri_p = sub.add_parser(
+        "triangulate",
+        help="Find ternary algebraic laws (distributivity, homomorphisms)",
+    )
+    tri_p.add_argument("file")
+    tri_p.add_argument("--trials", "-n", type=int, default=80,
+                       help="Trials per candidate relation (default: 80)")
+    tri_p.add_argument("--seed", type=int, default=42,
+                       help="Random seed (default: 42)")
+    tri_p.add_argument("-o", "--output",
+                       help="Write ternary laws to this .ltl file")
+    tri_p.add_argument("--apply", action="store_true",
+                       help="Patch the source file in-place with discovered laws")
+
+    # discover  (v3.2) — automatic law discovery
+    dis_p = sub.add_parser(
+        "discover",
+        help="Automatically propose @law declarations from function behavior",
+    )
+    dis_p.add_argument("file")
+    dis_p.add_argument("--trials", "-n", type=int, default=60,
+                       help="Trials per candidate pattern (default: 60)")
+    dis_p.add_argument("--seed", type=int, default=42,
+                       help="Random seed (default: 42)")
+    dis_p.add_argument("-o", "--output",
+                       help="Write discovered laws to this .ltl file")
+
     # doc  (v1.4)
     doc_p = sub.add_parser("doc", help="Render a .ltlm document (HTML or terminal)")
     doc_p.add_argument("file")
@@ -395,6 +491,79 @@ print(f"\n  {_passed} passed  {_failed} failed")
         ret = subprocess.run([sys.executable, tmp.name]).returncode
         pathlib.Path(tmp.name).unlink(missing_ok=True)
         return ret
+
+    elif ns.cmd == "verify":
+        # v3.2 — run @law property tests (optionally with mutation testing)
+        if getattr(ns, "mutate", False):
+            from .law_mutator import mutation_test_file
+            return mutation_test_file(
+                ns.file,
+                trials=ns.trials,
+                seed=ns.seed,
+                timeout=ns.timeout,
+                max_mutants=ns.max_mutants,
+                propose=getattr(ns, "propose", False),
+                propose_output=getattr(ns, "propose_output", None),
+                apply=getattr(ns, "apply", False),
+            )
+        from .law_runner import verify_file
+        print(f"\n  Verifying laws in {ns.file}")
+        print(f"  {('─' * 60)}")
+        return verify_file(ns.file, trials=ns.trials, seed=ns.seed)
+
+    elif ns.cmd == "discover":
+        # v3.2 — automatic law discovery
+        from .law_discovery import discover_file
+        return discover_file(
+            ns.file,
+            trials=ns.trials,
+            seed=ns.seed,
+            output=ns.output,
+        )
+
+    elif ns.cmd == "harden":
+        # v3.2 — iterative self-hardening (mutate → propose → apply loop)
+        from .law_mutator import harden_file
+        return harden_file(
+            ns.file,
+            trials=ns.trials,
+            seed=ns.seed,
+            timeout=ns.timeout,
+            max_iter=ns.max_iter,
+            target_score=ns.target,
+        )
+
+    elif ns.cmd == "characterize":
+        # v3.2 — inductive law generalization
+        from .law_generalizer import characterize_file
+        return characterize_file(
+            ns.file,
+            trials=ns.trials,
+            seed=ns.seed,
+            output=ns.output,
+        )
+
+    elif ns.cmd == "relate":
+        # v3.2 — cross-function relational law discovery (9th pillar)
+        from .law_relator import relate_file
+        return relate_file(
+            ns.file,
+            trials=ns.trials,
+            seed=ns.seed,
+            output=ns.output,
+            apply=ns.apply,
+        )
+
+    elif ns.cmd == "triangulate":
+        # v3.2 — ternary algebraic structure laws (10th pillar)
+        from .law_triangulator import triangulate_file
+        return triangulate_file(
+            ns.file,
+            trials=ns.trials,
+            seed=ns.seed,
+            output=ns.output,
+            apply=ns.apply,
+        )
 
     elif ns.cmd == "doc":
         import pathlib

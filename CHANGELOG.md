@@ -7,6 +7,706 @@ Follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [3.2.0-dev] — Unreleased — `@law` Executable Specifications
+
+### � Groundbreaking: Ternary algebraic structure (10th pillar)
+
+> *Discover the algebraic shape hiding inside ordinary code.*
+
+```
+$ lateralus triangulate examples/law_triangulate_demo.ltl
+
+  Triangulating functions in law_triangulate_demo.ltl
+  ────────────────────────────────────────────────────────────
+  Trials per relation: 80, seed=42
+  Found: 8 ternary law(s)
+    • homomorphism           ×4
+    • left_distributive      ×2
+    • right_distributive     ×2
+
+    [left_distributive]  times(x, plus(y, z))
+                           ≡  plus(times(x, y), times(x, z))
+    [right_distributive] times(plus(x, y), z)
+                           ≡  plus(times(x, z), times(y, z))
+    [homomorphism]       negate(plus(x, y))
+                           ≡  plus(negate(x), negate(y))
+    [homomorphism]       double(minus(x, y))
+                           ≡  minus(double(x), double(y))
+    ...
+```
+
+Where `relate` tied **pairs** of functions together, `triangulate`
+searches over **triples** of expressions to discover the
+higher-order algebraic structure that usually has to be *proven
+by hand* in a textbook — distributivity and homomorphisms:
+
+| Relation | Law form | Mathematical meaning |
+| --- | --- | --- |
+| **left_distributive** | `f(x, g(y, z)) == g(f(x, y), f(x, z))` | `f` distributes over `g` from the left (rings, semirings) |
+| **right_distributive** | `f(g(x, y), z) == g(f(x, z), f(y, z))` | `f` distributes over `g` from the right |
+| **homomorphism** | `g(f(x, y)) == f(g(x), g(y))` | `g` is a structure-preserving map on `f` |
+| **anti_homomorphism** | `g(f(x, y)) == f(g(y), g(x))` | `g` reverses structure (e.g. matrix transpose) |
+
+Each match becomes one fully-quantified `@law`:
+
+```lateralus
+@law
+fn times_left_distributive_plus(x: int, y: int, z: int) -> bool {
+    return (times(x, plus(y, z))) == (plus(times(x, y), times(x, z)))
+}
+
+@law
+fn plus_homomorphism_negate(x: int, y: int) -> bool {
+    return (negate(plus(x, y))) == (plus(negate(x), negate(y)))
+}
+```
+
+**The system literally rediscovered, from user code alone:** the
+distributive law of multiplication over addition and subtraction,
+and the fact that `negate` and `double` are ℤ-linear maps (group
+homomorphisms on `(ℤ, +)`). No axioms were given.
+
+The `--apply` flag patches the source in place under an idempotent
+banner — safe to re-run as the codebase evolves:
+
+```
+$ lateralus triangulate my_module.ltl --apply
+  → patched 8 ternary laws into my_module.ltl
+```
+
+**End-to-end validation**: all 8 generated laws from the demo file
+pass `verify` at 100 trials each (`8 passed  0 failed`).
+
+### The ten-pillar verification pipeline
+
+| Pillar | Command | What it proves |
+| --- | --- | --- |
+| 1 | `discover` | Algebraic identities of one fn |
+| 2 | `@law` | Declare executable specs in source |
+| 3 | `verify` | Random property test with shrinking |
+| 4 | ◈ PROVED | Exhaust finite domains |
+| 5 | `verify --mutate` | Measure spec completeness |
+| 6 | `--propose` | Synthesize witness laws for survivors |
+| 7 | `harden` | Iterate 5→6→auto-patch to fixpoint |
+| 8 | `characterize` | Find closed-form defining equations |
+| 9 | `relate` | Find cross-function relational laws |
+| **10** | **`triangulate`** | **Find ternary algebraic structure (distributivity, homomorphisms)** |
+
+*13 new tests. 2055/2055 pytest green. 0 regressions.*
+
+---
+
+### �🔗 Groundbreaking: Cross-function relational laws (9th pillar)
+
+> *Laws can tie functions together, not just characterize them one at a time.*
+
+```
+$ lateralus relate examples/law_relate_demo.ltl
+
+  Relating functions in law_relate_demo.ltl
+  ────────────────────────────────────────────────────────────
+  Trials per relation: 80, seed=42
+  Found: 17 relational law(s)
+    • absorbs              ×1
+    • commuting            ×11
+    • equivalent           ×1
+    • idempotent_compose   ×1
+    • inverse              ×2
+    • involution           ×1
+
+    [inverse]    inc(dec(x))         ↔  x
+    [inverse]    dec(inc(x))         ↔  x
+    [involution] negate(negate(x))   ↔  x
+    [idempotent] abs_val(abs_val(x)) ↔  abs_val(x)
+    [absorbs]    abs_val(negate(x))  ↔  abs_val(x)
+    [equivalent] double(x)           ≡  twice(x)      ← code smell!
+    ...
+```
+
+Where `discover` finds identities *inside* one function and
+`characterize` finds closed-form equations for one function,
+`relate` searches across **pairs** of user functions for the richest
+laws of all — the ones that tie two functions together:
+
+| Relation | Law form | Example |
+| --- | --- | --- |
+| **inverse** | `f(g(x)) == x` | encoder/decoder round-trip |
+| **involution** | `f(f(x)) == x` | `negate ∘ negate = id` |
+| **idempotent ∘** | `f(f(x)) == f(x)` | `abs ∘ abs = abs` |
+| **commuting** | `f(g(x)) == g(f(x))` | order-invariant shifts |
+| **absorbs** | `f(g(x)) == f(x)` | `abs(−x) = abs(x)` |
+| **equivalent** | `f(x) == g(x)` | duplicated definitions (code smell) |
+
+Each match becomes one quantified `@law` that the rest of the
+pipeline (`verify`, `--mutate`, `harden`) can exercise:
+
+```lateralus
+@law
+fn inc_inverse_dec(x: int) -> bool {
+    return (inc(dec(x))) == (x)
+}
+
+@law
+fn abs_val_absorbs_negate(x: int) -> bool {
+    return (abs_val(negate(x))) == (abs_val(x))
+}
+
+@law
+fn double_equivalent_twice(x: int) -> bool {
+    return (double(x)) == (twice(x))
+}
+```
+
+The `--apply` flag patches the source file in place under an
+idempotent banner — safe to re-run as the codebase evolves:
+
+```
+$ lateralus relate my_module.ltl --apply
+  → patched 12 relational laws into my_module.ltl
+```
+
+**End-to-end validation**: all 17 generated laws from the demo file
+pass `verify` at 100 trials each (`17 passed  0 failed`).
+
+### The nine-pillar verification pipeline
+
+| Pillar | Command | What it proves |
+| --- | --- | --- |
+| 1 | `discover` | Algebraic identities of one fn |
+| 2 | `@law` | Declare executable specs in source |
+| 3 | `verify` | Random property test with shrinking |
+| 4 | ◈ PROVED | Exhaust finite domains |
+| 5 | `verify --mutate` | Measure spec completeness |
+| 6 | `--propose` | Synthesize witness laws for survivors |
+| 7 | `harden` | Iterate 5→6→auto-patch to fixpoint |
+| 8 | `characterize` | Find closed-form defining equations |
+| **9** | **`relate`** | **Find cross-function relational laws** |
+
+*16 new tests. 2042/2042 pytest green. 0 regressions.*
+
+---
+
+### 📐 Groundbreaking: Inductive law characterization (8th pillar)
+
+> *Point witnesses are finite. Characterizations are complete.*
+
+```
+$ lateralus characterize math.ltl
+
+  Characterizing functions in math.ltl
+  ────────────────────────────────────────────────────────────
+  User functions: 4  ['abs_val', 'add', 'double', 'is_positive']
+  Trials per candidate: 60, seed=42
+
+    abs_val      ≡  x < 0 ? 0 - x : x   (60 trials)
+    add          ≡  x + y               (60 trials)
+    double       ≡  x + x               (60 trials)
+    is_positive  ≡  x > 0               (60 trials)
+
+  Characterized: 4  |  Unmatched: 0
+```
+
+Where `discover` found *algebraic identities* ("`f` is commutative"),
+`characterize` finds *defining equations* — closed-form expressions
+that completely specify a function's behaviour. Each match becomes
+a single quantified `@law` that subsumes infinitely many point
+witnesses:
+
+```lateralus
+@law
+fn is_positive_characterized(x: int) -> bool {
+    return is_positive(x) == (x > 0)
+}
+```
+
+### Catalogue
+
+Bool (arity 1): `x > 0`, `x >= 0`, `x < 0`, `x <= 0`, `x == 0`, `x != 0`,
+`x % 2 == 0`, `x % 2 != 0`, `true`, `false`.
+
+Bool (arity 2): `x == y`, `x != y`, `x > y`, `x >= y`, `x < y`, `x <= y`.
+
+Numeric (arity 1): `x`, `0 - x`, `x + 1`, `x - 1`, `x * 2`, `x + x`,
+`x * x`, `0`, `1`, `x < 0 ? 0 - x : x`, `x > 0 ? x : 0 - x`.
+
+Numeric (arity 2): `x + y`, `x - y`, `y - x`, `x * y`, `x`, `y`.
+
+Trivial constants (`true`, `false`, `0`, `1`) are tried **last** so we
+prefer the most informative characterization. The generated `@law`
+auto-renames the expression variables (`x`, `y`) to the real parameter
+names from the function signature.
+
+Safety: emitted laws are pure primitives (no `abs()` requiring stdlib
+imports). Every characterization is *validated* — each candidate must
+pass on every sampled input before being emitted.
+
+### The eight-pillar pipeline
+
+| Pillar | Command | What it does |
+| --- | --- | --- |
+| 1 | `discover` | Propose algebraic identity laws |
+| 2 | `@law` | Declare executable specifications in source |
+| 3 | `verify` | Random-property test with shrinking |
+| 4 | ◈ PROVED | Exhaust finite domains |
+| 5 | `verify --mutate` | Measure spec completeness |
+| 6 | `--propose` | Synthesize witness laws for survivors |
+| 7 | `harden` | Iterate 5→6→auto-patch to fixpoint |
+| **8** | **`characterize`** | **Find closed-form defining equations** |
+
+*13 new tests. 2026/2026 pytest green. 0 regressions.*
+
+---
+
+### �🔁 Groundbreaking: Self-hardening laws (7th pillar)
+
+> *One command. Zero manual paste. Your spec hardens itself until it's airtight.*
+
+```
+$ lateralus harden weak.ltl
+
+  Hardening weak.ltl
+  ────────────────────────────────────────────────────────────
+  Target score: 100%,  max iterations: 5
+
+  iter 1: score  66.7%  (4/6 caught, 2 survivors, 1 proposals)
+         → applied 1 new witness law(s)
+  iter 2: score  83.3%  (5/6 caught, 1 survivors, 0 proposals)
+  ⟂ fixpoint: no new witnesses — remaining survivors likely equivalent
+
+  Final score: 83.3%
+```
+
+Two new pieces close the loop end-to-end:
+
+**`--apply`** on `verify --mutate --propose` writes the synthesized
+witness laws back into the source file, under an idempotent marker
+banner (`// ─── BEGIN/END auto-generated witness laws ───`). Re-runs
+are byte-exact unchanged when no new witnesses appear. Hand-editing
+inside the banner is preserved across regenerations.
+
+**`lateralus harden <file>`** wraps the whole pipeline in a fixpoint
+loop: mutate → propose → apply, repeated until mutation score hits
+`--target` (default 100%), no new proposals are found (a strong hint
+that remaining survivors are *equivalent mutations*), or `--max-iter`
+is reached. The tool **does not hang** on equivalent mutations — the
+absence of a witness *is* the fixpoint signal.
+
+Flags:
+- `--apply` — insert synthesized laws in place (idempotent)
+- `--max-iter N` — iteration cap for `harden` (default 5)
+- `--target 0.9` — harden to 90% rather than the default 100%
+
+Now the entire spec pipeline is:
+
+| Pillar | Command | What it does |
+| --- | --- | --- |
+| 1 | `discover` | Propose laws from implementation behaviour |
+| 2 | `@law` | Declare executable specifications in source |
+| 3 | `verify` | Random-property test with shrinking |
+| 4 | ◈ PROVED | Exhaust finite domains (no counterexample possible) |
+| 5 | `verify --mutate` | Measure spec completeness by perturbing code |
+| 6 | `--propose` | Synthesize the laws the mutations revealed you were missing |
+| **7** | **`harden`** | **Iterate 5 → 6 → auto-patch to fixpoint, in one command** |
+
+*7 new tests. 2013/2013 pytest green. 0 regressions.*
+
+---
+
+### 🪡 Groundbreaking: Witness-based law synthesis (6th pillar)
+
+> *Mutation testing found a surviving mutant? Lateralus writes the law that kills it.*
+
+`lateralus verify file.ltl --mutate --propose` closes the mutation
+feedback loop. For every surviving mutant, Lateralus:
+
+1. Exec's the **original** and **mutated** transpiled source into
+   separate Python namespaces (suppressing stdout/stderr and tolerating
+   failed law-runner tails — functions are defined before assertions
+   fire).
+2. Identifies the user function containing the mutation via a
+   line-number → AST function-name map.
+3. Samples random inputs (typed via `_get_param_types`) looking for a
+   **witness** — a call where `orig(*args) ≠ mut(*args)`.
+4. Emits a ready-to-paste `@law` asserting the original's behaviour at
+   that witness. Adding that law would kill the mutant.
+
+```
+$ lateralus verify weak.ltl --mutate --propose
+
+  Mutation score:  66.7%  [█████████████░░░░░░░]  (weak)
+  Caught:         4 / 6
+  Survivors:      2
+
+  ─── Proposed laws (1) ───
+    // kills mutant in `is_positive`: original→True, mutant→False
+    @law
+    fn is_positive_witness_20770() -> bool {
+        return is_positive(1) == true
+    }
+```
+
+If a survivor has **no** synthesizable witness, that's a strong hint it
+may be a genuinely *equivalent mutation* — the synthesizer's inability
+to discriminate is itself diagnostic.
+
+Flags:
+- `--propose` — emit witness laws for every survivor
+- `--propose-output <file.ltl>` — write them to a ready-to-import file
+
+This completes the verification story no other mainstream language has
+assembled end-to-end:
+
+| Pillar | What it does |
+| --- | --- |
+| `discover` | Propose laws from implementation behaviour |
+| `@law` | Declare executable specifications in source |
+| `verify` | Random-property test with shrinking |
+| ◈ PROVED | Exhaust finite domains (no counterexample possible) |
+| `--mutate` | Measure spec completeness by perturbing code |
+| **`--propose`** | **Synthesize the laws the mutations revealed you were missing** |
+
+*7 tests added. 2006/2006 pytest green. 0 regressions.*
+
+---
+
+### �🧬 Groundbreaking: Automatic law discovery
+
+> *You wrote the code. Lateralus writes the specs.*
+
+`lateralus discover file.ltl` reads your implementation and **proposes
+the laws it actually satisfies**, ready to paste in. It tries every
+pattern in a built-in algebraic catalog (commutativity, associativity,
+identity, absorbing elements, idempotence, involution, oddness,
+cross-function distributivity) against each user function with matched
+type signature, and emits compiling `@law` snippets for every pattern
+that holds over N random trials.
+
+```
+$ lateralus discover kernel.ltl
+  Discovering laws in kernel.ltl
+  ────────────────────────────────────────────────────────────
+  User functions: 6  ['add', 'mul', 'max2', 'negate', 'abs_val', 'square']
+  Trials per pattern: 60, seed=42
+
+  add
+    ✓ commutative            (60 trials)
+    ✓ associative            (60 trials)
+    ✓ identity_left_0        (60 trials)
+    ✓ identity_right_0       (60 trials)
+    ✓ distributive over max2 (60 trials)
+  mul
+    ✓ commutative            (60 trials)
+    ✓ associative            (60 trials)
+    ✓ identity_left_1        (60 trials)
+    ✓ absorb_0_left          (60 trials)
+    ✓ distributive over add  (60 trials)
+  negate
+    ✓ involutive             (60 trials)
+    ✓ odd                    (60 trials)
+  abs_val
+    ✓ idempotent_unary       (60 trials)
+  max2
+    ✓ commutative            (60 trials)
+    ✓ associative            (60 trials)
+    ✓ idempotent_binary      (60 trials)
+
+  Discovered 18 laws
+```
+
+Add `-o laws.ltl` to emit the snippets to a file. Concatenating that
+file with the original and running `lateralus verify` passes all 18 —
+including genuinely non-obvious ones like `add` distributes over
+`max2` (the identity `a + max(b,c) = max(a+b, a+c)`).
+
+Why this is new: **no property-based testing tool discovers its own
+properties**. QuickCheck, Hypothesis, Jqwik, mutmut all require you to
+*write* the invariants first. Lateralus proposes them from a catalog,
+lets you review, and hands back compiling source code. The verification
+loop now bootstraps itself:
+
+1. **`discover`** — propose laws from implementation behavior ✨ *new*
+2. **`@law`** — keep, edit, or reject the proposals
+3. **`verify`** — sampled property testing (with shrinking)
+4. **◈ `PROVED`** — auto-upgrade to exhaustive proof when domain is finite
+5. **`--mutate`** — check the spec set is tight enough to catch bugs
+
+That's **five verification pillars** in one CLI. No other language
+in the world ships this combination as first-class built-ins.
+
+Built-in patterns (v3.2 launch set):
+
+| Pattern | Shape | Example |
+|---|---|---|
+| commutative | `f(a,b) = f(b,a)` | `add`, `mul`, `max2` |
+| associative | `f(f(a,b),c) = f(a,f(b,c))` | `add`, `mul` |
+| identity left/right {0,1} | `f(c,a) = a` or `f(a,c) = a` | `add`+0, `mul`+1 |
+| absorbing left/right {0} | `f(c,a) = c` or `f(a,c) = c` | `mul`+0 |
+| idempotent binary | `f(a,a) = a` | `max2`, `min2` |
+| idempotent unary | `f(f(x)) = f(x)` | `abs`, `normalize` |
+| involutive | `f(f(x)) = x` | `negate`, `reverse` |
+| odd | `f(-x) = -f(x)` | `negate`, `sin` |
+| distributive | `f(a,g(b,c)) = g(f(a,b),f(a,c))` | `mul` over `add` |
+
+The trivial-identity filter rejects `fn f(x) { return x }` from
+triggering `idempotent_unary` (every function satisfies it vacuously).
+
+---
+
+### 🔬 Groundbreaking: Mutation testing driven by laws
+
+> *Your tests verify your code. What verifies your tests?*
+
+`lateralus verify --mutate` closes the loop. It systematically injects
+single-site bugs into your implementation (flipping `+`↔`-`, `==`↔`!=`,
+`and`↔`or`, `0`↔`1`, boundary shifts on `<`/`<=`, etc.) and checks
+whether your existing `@law` suite catches each one. The **mutation
+score** = (caught mutations) / (total mutations) is a direct,
+quantitative measure of **spec completeness** — not code coverage,
+but *invariant coverage*.
+
+```
+  Mutation-testing laws in mutation_demo.ltl
+  ────────────────────────────────────────────────────────────
+  User functions:  5  ['add', 'is_positive', 'max2', 'min2', 'mul']
+  Candidate mutants: 6
+  Baseline: 100 trials per law, seed=42
+
+  Mutation score:  83.3%  [████████████████░░░░]  (adequate)
+  Caught:         5 / 6
+  Survivors:      1  (undetected mutations)
+
+  ─── Survivors (laws missing coverage for these) ───
+    • line  643  0  →  1           → return (x > 1)
+```
+
+The one survivor above is a **real spec gap**: `is_positive(x) = x > 0`
+was mutated to `x > 1`, and the existing three laws (on positive, zero,
+and negative inputs) all agree on that mutation. No law pins down the
+boundary at `x == 1`. The tool tells you *exactly which invariant is
+missing*, with file:line precision.
+
+Usage:
+- `lateralus verify file.ltl --mutate` — run full mutation campaign
+- `--max-mutants N` — cap mutants (fast CI mode)
+- `--timeout SEC` — per-mutant timeout (default 10s)
+- Returns exit code `0` iff score is 100 %
+
+Why this is new: Rust has `mutagen`, JS has `stryker`, Python has
+`mutmut` — but none of them are **fused with property-based specs**.
+Traditional mutation testers check unit tests written in an imperative
+style; Lateralus checks *declared mathematical invariants*. Combined
+with the exhaustive `◈ PROVED` mode, this is the first language where
+you can prove a law holds over a finite domain *and* prove your law
+set is tight enough to catch arbitrary implementation perturbations —
+in one command.
+
+This is the **4th pillar** of the verification story:
+
+1. `@law` — write the spec
+2. `verify` — check implementation against spec
+3. ◈ `PROVED` — auto-upgrade to exhaustive proof when domain is finite
+4. `--mutate` — check the **spec** against injected bugs
+
+---
+
+### 🧪 Groundbreaking: Laws that prove themselves
+
+Property-based testing meets formal verification — no other mainstream
+language does this. The `lateralus verify` runner now automatically
+upgrades `@law` declarations to three progressively stronger modes:
+
+| Mode | Trigger | Output | Example |
+|---|---|---|---|
+| ✓ **Sampled** | Default, infinite domain | `(N trials)` | `@law fn reverse_involutive(xs: list[int])` |
+| ◈ **PROVED** (exhaustive) | All params finite-domain (`bool`, `@law(bound=N)`) | `(exhaustive: K cases)` | `@law fn de_morgan(p: bool, q: bool)` |
+| ≡ **ORACLE** (differential) | `@law(oracle=ref_fn)` | `(N agreements with oracle)` | `@law(oracle=slow_sort) fn quick_sort(xs)` |
+
+**Why this matters:** QuickCheck samples. Hypothesis samples. Lean/Coq
+make you write a whole different language. Lateralus **automatically
+enumerates** when the input space is finite — the 6 boolean-algebra
+laws in our canonical stdlib spec are now **mathematical theorems**,
+not statistical confidence. A law with params `(p: bool, q: bool, r: bool)`
+gets proved over 2³ = 8 cases; `@law(bound=4) fn mul_distributes(a: int, b: int, c: int)`
+gets proved over 9³ = 729 cases. No formal-methods PhD required.
+
+```
+◈ PROVED  and_commutative           (exhaustive: 4 cases)
+◈ PROVED  de_morgan_and             (exhaustive: 4 cases)
+◈ PROVED  mul_distributes_over_add  (exhaustive: 729 cases)
+≡         fast_sort_matches_slow    (100 agreements with oracle)
+
+  42 passed  0 failed  0 skipped  [6 proved, 1 oracle]
+```
+
+### Language
+- **`@law` — first-class executable specifications.** A boolean-returning
+  function tagged `@law` is registered by the compiler as a property test.
+  Generators are **auto-derived from the declared parameter types** (`int`,
+  `float`, `bool`, `str`, `list`, `list[T]`, `map`, `map[K,V]`) — no
+  `Arbitrary` instances, no `@given(strategies...)`, no boilerplate.
+- **`lateralus verify <file>`** CLI subcommand runs every `@law` in a file
+  (default 100 trials each), reports pass/fail, and **shrinks
+  counter-examples** to a minimal form when a law fails (halves numeric
+  magnitudes, drops list elements, shrinks list-inner values).
+- **Decorator kwargs** — `@law(trials=1000)`, `@law(bound=10)`,
+  `@law(oracle=reference_fn)`, `@law(exhaustive=true)`. Kwargs propagate
+  to `_law_<key>` attrs on the function, surfaced to the runner.
+- Flags: `--trials N` for trial count, `--seed S` for reproducibility.
+
+### Why this is novel
+Haskell's QuickCheck needs per-type `Arbitrary` typeclass instances.
+Python's Hypothesis needs `@given(strategies...)` per parameter. They
+both sample. Idris/Lean demand full formal proofs as a separate mode.
+Lateralus owns the type system, so the compiler already knows enough
+to generate `list[int]` without being told twice *and* detect when the
+input space is finite enough to enumerate. **One decorator, three modes,
+zero boilerplate.** The specification is the code.
+
+### Runtime
+- New `lateralus_lang/law_runner.py` module: generator dispatch, iterative
+  shrinker, self-contained harness (with inline fallback when the package
+  isn't on `sys.path`).
+- Python codegen registers `@law` functions into `_LATERALUS_LAWS` and
+  attaches a `._law_spec` attribute carrying the parameter-name/type list
+  with generics preserved (`list[int]`, not flattened to `list`).
+- **Structural generators for user structs.** `@struct` declarations are
+  registered into `_LATERALUS_STRUCTS` with a `_ltl_struct_spec` field
+  descriptor; the runner recursively generates instances from the spec,
+  so `fn law(p: Point) -> bool` works with no extra config.
+- **`assume(pred)` preconditions.** Laws may discard uninteresting trials
+  via `assume(b != 0)` / `assume(a >= 0)`. Discarded trials don't count
+  against the trial budget but the effective count is reported.
+- **`@law(trials=N)` per-law override.** Decorator kwargs land directly on
+  the function (`fn._law_trials = N`); high-value laws can run 1000+
+  trials without bloating cheap ones.
+
+### Testing
+- **Canonical stdlib law file** — [tests/laws/stdlib_laws.ltl](tests/laws/stdlib_laws.ltl)
+  ships 42 fundamental invariants across 9 categories (arithmetic,
+  integer div/mod, boolean algebra, list structural, string, comparison,
+  min/max, gcd/sign/clamp, high-volume smoke). Writing these surfaced
+  one real semantic truth: Lateralus `/` is float division, which
+  prompted the `idiv`/`imod`/`divmod` builtins below — the feature
+  earned its keep on its first serious deployment.
+- **pytest CI integration** — [tests/test_stdlib_laws.py](tests/test_stdlib_laws.py)
+  shells out to `lateralus verify` under 6 different seeds. Any future
+  change that violates a fundamental invariant fails `pytest`.
+
+### Stdlib (closing the loop)
+New integer-arithmetic builtins prompted by a `@law` finding:
+- **`idiv(a, b)`** — integer floor division (Python `//` semantics). Lateralus
+  `/` is float division; `idiv` is the operator you want when both operands
+  are integers and you expect `idiv(a,b) * b + imod(a,b) == a` to hold.
+- **`imod(a, b)`** — integer modulo (Python `%`).
+- **`divmod(a, b)`** — returns `[quotient, remainder]` pair.
+- **`gcd(a, b)` / `lcm(a, b)`** — via Python's `math.gcd`/`math.lcm`.
+- **`sign(v)`** — returns `-1`, `0`, or `1`.
+- **`clamp(v, lo, hi)`** — bounded projection.
+- **`is_even(n)` / `is_odd(n)`** — predicates, covered by
+  `even_odd_partition` law (exactly one is true for every integer).
+
+### Example
+```lateralus
+@law
+fn addition_commutative(a: int, b: int) -> bool {
+    return a + b == b + a
+}
+```
+```
+$ lateralus verify examples/laws_demo.ltl --seed 42
+  ✓  addition_commutative  (100 trials)
+  ...
+  16 passed  0 failed  0 skipped
+```
+
+---
+
+## [3.1.0] — 2026-04-21 — PyPI Metadata, Distribution & C Backend Perf
+
+### Distribution
+- **PyPI v3.1.0 published** — `pip install lateralus-lang` installs the full
+  toolchain (compiler, interpreter, LSP, DAP, formatter, linter, package manager)
+- **VS Code Marketplace v3.1.0 published** — extension `lateralus.lateralus-lang`
+  with syntax highlighting, LSP integration, debugger UI, and 30+ snippets
+- **Linguist submission staged** — [docs/linguist/](docs/linguist/) contains 20
+  real (compiling) code samples, TextMate grammar repo contents, and the
+  `languages.yml` patch ready to submit to github-linguist/linguist
+
+### C Backend
+- **Polymorphic `println` / `print` dispatch** — type-inferred at codegen
+  so `println(int)`, `println(float)`, `println(bool)` and `println(string)`
+  all produce correct C without requiring wrapper helpers in user code
+- **Builtin cast functions** — `int(x)`, `float(x)`, `bool(x)`, `str(x)` now
+  compile to native C casts or type-dispatched `ltl_*_to_str` calls
+- `fib` benchmark: **~60× faster than CPython** (4 ms vs 236 ms)
+- `sieve` benchmark: **~30× faster than CPython** (1 ms vs 25 ms), **~300×
+  faster than the Lateralus interpreter**
+- `mandelbrot` benchmark: **~30× faster than CPython** (3 ms vs 84 ms)
+- `nbody` benchmark: **~40× faster than CPython** (0.6 ms vs 36 ms), **~450×
+  faster than the Lateralus interpreter**
+- Native binaries: 16 KB stripped, `gcc -O2` with `-lm`, no external runtime
+- **List literal element population** — `[1, 2, 3]` now emits a GCC
+  statement-expression with typed boxing helpers (`ltl_box_int`, etc.) so
+  elements actually land in the underlying `ltl_list_t*`
+- **List repetition operator** — `[x] * n` lowers to `ltl_list_repeat` runtime
+  helper; `[a] + [b]` lowers to `ltl_list_concat`
+- **Truthy coercion in conditionals** — `if list[i]` and `while list[i]` auto-
+  unbox `ltl_value_t` via `ltl_unbox_bool` when the condition is an untyped value
+- **List-element assignment boxing** — `list[i] = expr` now boxes the RHS into
+  the correct `ltl_value_t` tag based on inferred source type
+- **Function parameter type tracking** — parameter types are now registered
+  in the local-type table so inference works throughout the function body
+- **Typed C-array lowering for homogeneous numeric list literals** —
+  `let xs = [0.0, 4.84, 8.34]` compiles to `double xs[3] = {...};` with
+  native indexing. `xs[i] - xs[j]` is now one FP subtract, not two unboxes.
+  Tracked in `_list_elem_types` for the whole function scope. This + math-
+  builtin return-type inference (`sqrt`, `pow`, `sin`, etc. return `double`)
+  unblocked `nbody` at full double precision
+- **Full-precision float printing** (`%.17g`) — byte-identical to Lateralus
+  interpreter and Node.js output
+
+### Benchmarks
+- New `benchmarks/` harness with 4 backends: Lateralus-interp, Lateralus-C99,
+  CPython, Node.js — all produce byte-identical output (verified per-run)
+- `lateralus-c99` lane pre-builds native binaries, gracefully skips on codegen
+  failures rather than faking numbers
+- **4/5 benchmarks now native** (fib, sieve, mandelbrot, nbody). The last
+  benchmark (`binary_trees`) still goes through the interpreter only —
+  blocked on `any`-typed returns mixing primitive sentinels with struct
+  variants. Needs a proper dynamic-value-representation design pass in the
+  typed codegen path (tracked for v3.2)
+
+### Packaging
+- **Fixed package description** — removed stale "proprietary" wording (contradicted MIT license)
+- Added **project URLs** for Homepage / Documentation / Papers / Repository / Issues / Changelog
+- Expanded PyPI **classifiers**: Development Status (4 - Beta), License (OSI/MIT),
+  Intended Audience (Developers + Education), additional Topics (Code Generators, Education),
+  and Python 3.13 support
+- New keywords: `pipeline`, `type-inference`, `transpiler`
+- `__init__.py` docstring rewritten to describe real feature set (HM inference, ADTs,
+  multi-target codegen) instead of placeholder "proprietary toolkit" text
+- Synced `__version__` with `pyproject.toml` (was drifted at 3.0.0 vs 3.0.1)
+
+### Documentation
+- All 58 research PDFs rebuilt to **canonical style**
+  (Helvetica + Helvetica-Bold + Courier only, no Oblique)
+- Content extraction pipeline (`docs/website/papers/src/_extract_and_render.py`)
+  preserves original paragraph structure via block-level PyMuPDF parsing
+- Eliminated 20-page padding bug on `lateralus-pipeline-native-language.pdf`
+- Page counts synchronized across all index cards (0 mismatches across 58 papers,
+  total 4,657 pages)
+- New [docs/hn-launch-faq.md](docs/hn-launch-faq.md) — 8-category pre-rehearsed
+  Q&A covering perf, type system, concurrency, compilation, tooling, and honest
+  design regrets
+
+### Developer Experience
+- New [scripts/seed_repo_template/](scripts/seed_repo_template/) — one-command
+  bootstrap for new Lateralus projects (`new-lateralus-project.sh <name>`).
+  Pre-loaded `.gitattributes` so every derived repo forces `linguist-language=Lateralus`
+- 1976/1976 tests passing (3 stale `__version__` assertions bumped 3.0.0 → 3.1.0)
+
+---
+
 ## [2.4.0] — 2025-07-19 — Deep Internals, Optimizer & Stdlib Expansion
 
 ### CLI

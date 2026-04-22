@@ -1,0 +1,172 @@
+// ===================================================================
+// LATERALUS v3.2 - Executable Specifications (@law)
+//
+// A @law is a boolean-returning function the compiler treats as a
+// property test. Unlike QuickCheck/Hypothesis, you don't need a
+// typeclass instance or @given strategy for each argument: Lateralus
+// owns the type system, so generators are derived from the declared
+// parameter types automatically.
+//
+// Run:
+//     lateralus verify examples/laws_demo.ltl
+//     lateralus verify examples/laws_demo.ltl --trials 1000 --seed 42
+//
+// Each law is called N times (default 100) with random inputs matching
+// the parameter types. If any trial returns false or raises, the
+// runner shrinks the input to the simplest counter-example.
+// ===================================================================
+
+// ---- Pure algebraic identities -----------------------------------
+
+@law
+fn addition_commutative(a: int, b: int) -> bool {
+    return a + b == b + a
+}
+
+@law
+fn addition_associative(a: int, b: int, c: int) -> bool {
+    return (a + b) + c == a + (b + c)
+}
+
+@law
+fn multiplication_distributes(a: int, b: int, c: int) -> bool {
+    return a * (b + c) == a * b + a * c
+}
+
+@law
+fn zero_is_additive_identity(a: int) -> bool {
+    return a + 0 == a
+}
+
+@law
+fn one_is_multiplicative_identity(a: int) -> bool {
+    return a * 1 == a
+}
+
+// ---- Boolean algebra ---------------------------------------------
+
+@law
+fn and_commutative(p: bool, q: bool) -> bool {
+    return (p and q) == (q and p)
+}
+
+@law
+fn de_morgan(p: bool, q: bool) -> bool {
+    return (not (p and q)) == ((not p) or (not q))
+}
+
+@law
+fn double_negation(p: bool) -> bool {
+    let q = not p
+    let r = not q
+    return r == p
+}
+
+// ---- List structural properties ----------------------------------
+
+fn list_reverse(xs: list) -> list {
+    let mut out = []
+    let n = len(xs)
+    let mut i = n - 1
+    while i >= 0 {
+        out = out + [xs[i]]
+        i = i - 1
+    }
+    return out
+}
+
+@law
+fn reverse_involutive(xs: list) -> bool {
+    return list_reverse(list_reverse(xs)) == xs
+}
+
+@law
+fn length_preserved_by_reverse(xs: list) -> bool {
+    return len(list_reverse(xs)) == len(xs)
+}
+
+@law
+fn concat_length_adds(xs: list, ys: list) -> bool {
+    return len(xs + ys) == len(xs) + len(ys)
+}
+
+@law
+fn empty_is_left_identity(xs: list) -> bool {
+    return [] + xs == xs
+}
+
+@law
+fn empty_is_right_identity(xs: list) -> bool {
+    return xs + [] == xs
+}
+
+// ---- String laws -------------------------------------------------
+
+@law
+fn string_concat_associative(a: str, b: str, c: str) -> bool {
+    return (a + b) + c == a + (b + c)
+}
+
+@law
+fn empty_string_is_identity(s: str) -> bool {
+    return ("" + s == s) and (s + "" == s)
+}
+
+@law
+fn length_under_concat(a: str, b: str) -> bool {
+    return len(a + b) == len(a) + len(b)
+}
+
+// ---- A deliberately-failing law (uncomment to see shrinking) -----
+//
+// @law
+// fn integers_are_all_positive(x: int) -> bool {
+//     return x > 0
+// }
+
+// ---- Struct generators + assume() guards (v3.2) ------------------
+// The runner auto-derives a generator for any struct declared in the
+// file by walking its field spec. `assume(pred)` discards a trial
+// silently when the precondition is false (like Hypothesis's
+// `assume()` or QuickCheck's `==>`).
+
+struct Point {
+    x: int
+    y: int
+}
+
+fn translate(p: Point, dx: int, dy: int) -> Point {
+    return Point{x: p.x + dx, y: p.y + dy}
+}
+
+@law
+fn translate_by_zero_is_identity(p: Point) -> bool {
+    let q = translate(p, 0, 0)
+    return q.x == p.x and q.y == p.y
+}
+
+@law
+fn translation_is_composable(p: Point, a: int, b: int) -> bool {
+    let q = translate(translate(p, a, 0), b, 0)
+    let r = translate(p, a + b, 0)
+    return q.x == r.x and q.y == r.y
+}
+
+@law
+fn positive_plus_one_stays_positive(x: int) -> bool {
+    assume(x > 0)            // discard non-positive trials
+    return x + 1 > 0
+}
+
+@law(trials=500)
+fn doubling_always_grows(x: int) -> bool {
+    assume(x > 0)
+    return x * 2 > x
+}
+
+fn main() {
+    println("This file declares laws. Run with:")
+    println("  lateralus verify examples/laws_demo.ltl")
+}
+
+main()

@@ -1,10 +1,201 @@
-# LATERALUS v2.4.0 — Deep Internals, Optimizer & Stdlib Expansion
+# LATERALUS v3.2.0-dev — `@law` Executable Specifications
 
 > *Spiral outward. Build something beautiful.*
 
+**Status:** In development
+**Author:** bad-antics
+**License:** MIT
+
+---
+
+## What no other mainstream language has
+
+Lateralus v3.2 introduces **`@law` — first-class executable specifications**.
+A boolean-returning function tagged `@law` is registered by the compiler as a
+property test. Generators are **auto-derived from the declared parameter types**.
+No typeclass instances. No per-parameter strategies. No boilerplate.
+
+```lateralus
+@law
+fn addition_commutative(a: int, b: int) -> bool {
+    return a + b == b + a
+}
+
+@law
+fn reverse_involutive(xs: list) -> bool {
+    return list_reverse(list_reverse(xs)) == xs
+}
+```
+
+```bash
+$ lateralus verify examples/laws_demo.ltl --seed 42
+  ✓  addition_commutative  (100 trials)
+  ✓  reverse_involutive  (100 trials)
+  ...
+  16 passed  0 failed  0 skipped
+```
+
+When a law fails, the runner **shrinks** the input to a minimal counter-example:
+
+```
+✗  all_positive  (failed on trial 1)
+   counter-example: x=0
+```
+
+### Why this is novel
+
+| Tool | Cost to test `foo(xs: list[int], n: int)` |
+|------|------|
+| Haskell QuickCheck | Write `Arbitrary [Int]` + `Arbitrary Int` instances |
+| Python Hypothesis | `@given(st.lists(st.integers()), st.integers())` |
+| Idris / Lean | Write a formal proof |
+| **Lateralus** | `@law` — that's the entire contract |
+
+Lateralus owns the type system end-to-end, so the compiler already knows how to
+materialize `list[int]` without being told twice. The specification **is** the
+code.
+
+### CLI
+
+```
+lateralus verify <file> [--trials N] [--seed S]
+```
+
+### Supported types (auto-generated)
+
+`int`, `float`, `bool`, `str`, `list`, `list[T]`, `map`, `map[K,V]`, `any`.
+User-defined types are gracefully skipped with a reason; future releases will
+derive structural generators for records.
+
+### Shrinking
+
+- Integers / floats: halve magnitudes, try 0, try ±1
+- Strings: empty, one char, drop last char
+- Lists: drop each element; recursively shrink inner values by inferred element type
+- Maps: drop each key; try empty
+
+Up to 100 shrinking steps per failed trial.
+
+---
+
+# LATERALUS v3.1.0 — PyPI, Marketplace & C Backend Perf
+
+> *Spiral outward. Build something beautiful.*
+
+**Release Date:** 2026-04-21
+**Author:** bad-antics
+**License:** MIT
+
+---
+
+## TL;DR
+
+Lateralus is now installable via a single command:
+
+```bash
+pip install lateralus-lang
+```
+
+The VS Code extension is published to the Marketplace (`lateralus.lateralus-lang`),
+and the C99 backend now produces native binaries that beat CPython by **~80×** on
+fib and **~30×** on mandelbrot — byte-identical output, 16 KB stripped binaries,
+no external runtime.
+
+## Highlights
+
+### 📦 Distribution
+
+- **PyPI**: [pypi.org/project/lateralus-lang/3.1.0](https://pypi.org/project/lateralus-lang/3.1.0/)
+- **VS Code Marketplace**: `lateralus.lateralus-lang@3.1.0` — syntax highlighting,
+  LSP, debugger UI, 30+ snippets
+- **Linguist submission staged** — 20 compiling code samples + TextMate grammar
+  repo prepared in [docs/linguist/](docs/linguist/)
+
+### ⚡ C Backend Performance Wins
+
+| Benchmark       | Lateralus C99 | Lateralus interp | CPython  | Node.js  | Speedup vs CPython |
+|-----------------|---------------|------------------|----------|----------|--------------------|
+| fib(35)         | **0.004 s**   | 0.474 s          | 0.236 s  | 0.110 s  | ~60×               |
+| sieve(50k)      | **0.001 s**   | 0.272 s          | 0.025 s  | 0.091 s  | ~30×               |
+| mandelbrot      | **0.003 s**   | 0.325 s          | 0.084 s  | 0.095 s  | ~30×               |
+| nbody(5k steps) | **0.001 s**   | 0.277 s          | 0.036 s  | 0.095 s  | ~40×               |
+
+All outputs byte-identical across the Lateralus interpreter, our C99 backend,
+and Node.js. (CPython differs from the reference implementations by a single
+ULP on `nbody` due to its own FP rounding — tracked in the harness.) Native
+binaries are **16 KB stripped** (`gcc -O2 -lm`), no Lateralus runtime dependency.
+
+#### What changed in the C codegen
+- **Polymorphic `println` / `print` dispatch** — type-inferred, so
+  `println(int)`, `println(float)`, `println(bool)`, `println(string)` all
+  produce correct C from user code that looks identical
+- **Builtin cast functions** — `int(x)`, `float(x)`, `bool(x)`, `str(x)` now
+  compile to native C casts or type-dispatched `ltl_*_to_str` calls
+- **Typed C-array lowering for homogeneous numeric list literals** — e.g.
+  `let xs = [0.0, 4.84, 8.34, 12.89, 15.37]` compiles to `double xs[5] = {...}`
+  with native indexing, turning `xs[i] - xs[j]` into one subtraction instead
+  of two tagged-union unboxes. This unblocked `nbody` at full precision (`%.17g`)
+- **Math-builtin return-type inference** — `sqrt`, `pow`, `sin`, `log`, etc.
+  now return `double` in the type table, so expressions like `sqrt(d2) * 0.01`
+  stay fully native-typed through the inner loop
+
+#### Honest caveat (tracked for v3.2)
+
+One of the five benchmarks still goes through the interpreter only;
+the C backend currently lacks:
+
+- **`any`-typed return sites with mixed primitive/struct variants** (blocks
+  `binary_trees`, which uses `fn make(d: int) -> any` returning either an
+  `int` sentinel `0` or a `Tree { left, right }` struct)
+
+This needs a proper design pass for dynamic value representation in typed
+codegen, not a one-line fix. List-repetition (`[true] * (n+1)`), truthy
+coercion from tagged values, and homogeneous-list arrays — previously blocking
+`sieve` and `nbody` — were landed in v3.1. We ship the interpreter number for
+`binary_trees` rather than fake the C-backend column. See
+[benchmarks/README.md](benchmarks/README.md).
+
+### 🔧 Packaging Fixes
+
+- Removed stale "proprietary" wording that contradicted the MIT license
+- Added project URLs: Homepage / Documentation / Papers / Repository / Issues / Changelog
+- Expanded PyPI classifiers (Beta status, OSI-approved MIT, Python 3.13)
+- `__init__.py` docstring now describes the real feature set (HM inference,
+  ADTs, multi-target codegen) instead of placeholder text
+- Synced `__version__` with `pyproject.toml` (drifted at 3.0.0 vs 3.0.1)
+
+### 📚 Documentation
+
+- All **58 research PDFs** rebuilt to canonical style (Helvetica family + Courier only)
+- Block-level PyMuPDF extraction preserves original paragraph structure
+- 0 page-count mismatches across 4,657 pages
+- New [docs/hn-launch-faq.md](docs/hn-launch-faq.md) — 8-category Q&A covering
+  perf, type system, concurrency, tooling, and honest design regrets
+
+### 🧑‍💻 Developer Experience
+
+- New [scripts/seed_repo_template/](scripts/seed_repo_template/) — one-command
+  project bootstrap (`new-lateralus-project.sh <name>`). Ships with
+  `.gitattributes` pre-configured to force `linguist-language=Lateralus`
+- **1976 / 1976 tests passing**
+
+### 🧪 Benchmark Harness
+
+- New [benchmarks/](benchmarks/) directory — 4 backends × 5 workloads
+- 2 warmup + 5 measured iterations per run, wall-clock median
+- Graceful skip with logged reason when a backend can't compile a workload
+  (no silent zero-filling)
+
+---
+
+## Historical Release Notes
+
+---
+
+# LATERALUS v2.4.0 — Deep Internals, Optimizer & Stdlib Expansion
+
 **Release Date:** 2025-07-19
 **Author:** bad-antics
-**License:** Proprietary — LATERALUS Research
 
 ---
 

@@ -301,7 +301,7 @@ static ltl_string_t* ltl_str_concat(ltl_string_t *a, ltl_string_t *b) {
 
 static void println(const char *s)         { puts(s ? s : ""); }
 static void print_int(int64_t v)           { printf("%lld", (long long)v); }
-static void print_float(double v)          { printf("%g", v); }
+static void print_float(double v)          { printf("%.17g", v); }
 
 /* io module */
 static void ltl_io_println(ltl_string_t *s)  { puts(s && s->len ? s->data : ""); }
@@ -319,7 +319,7 @@ static ltl_string_t* ltl_int_to_str(int64_t v) {
     return ltl_str_new(buf);
 }
 static ltl_string_t* ltl_float_to_str(double v) {
-    char buf[64]; snprintf(buf, sizeof(buf), "%g", v);
+    char buf[64]; snprintf(buf, sizeof(buf), "%.17g", v);
     return ltl_str_new(buf);
 }
 static ltl_string_t* ltl_bool_to_str(bool v) { return ltl_str_new(v ? "true" : "false"); }
@@ -337,7 +337,7 @@ static void ltl_println_any(ltl_value_t v) {
     switch (v.tag) {
         case LTL_STRING: puts(v.s ? v.s->data : ""); break;
         case LTL_INT:    printf("%lld\\n", (long long)v.i); break;
-        case LTL_FLOAT:  printf("%g\\n", v.f); break;
+        case LTL_FLOAT:  printf("%.17g\\n", v.f); break;
         case LTL_BOOL:   puts(v.b ? "true" : "false"); break;
         default:         puts("nil"); break;
     }
@@ -365,6 +365,43 @@ static void ltl_list_push(ltl_list_t *l, ltl_value_t v) {
         l->items = (ltl_value_t*)realloc(l->items, sizeof(ltl_value_t) * l->cap);
     }
     l->items[l->len++] = v;
+}
+
+/* Boxing helpers for typed → ltl_value_t */
+static inline ltl_value_t ltl_box_int(int64_t v) {
+    ltl_value_t r; r.tag = LTL_INT;    r.i = v; return r;
+}
+static inline ltl_value_t ltl_box_float(double v) {
+    ltl_value_t r; r.tag = LTL_FLOAT;  r.f = v; return r;
+}
+static inline ltl_value_t ltl_box_bool(bool v) {
+    ltl_value_t r; r.tag = LTL_BOOL;   r.b = v; return r;
+}
+static inline ltl_value_t ltl_box_str(ltl_string_t *v) {
+    ltl_value_t r; r.tag = LTL_STRING; r.s = v; return r;
+}
+
+/* Truthy extraction from ltl_value_t (used by list-item bool/int contexts) */
+static inline bool    ltl_unbox_bool(ltl_value_t v)  { return v.tag == LTL_BOOL  ? v.b : (v.tag == LTL_INT ? v.i != 0 : false); }
+static inline int64_t ltl_unbox_int(ltl_value_t v)   { return v.tag == LTL_INT   ? v.i : (v.tag == LTL_BOOL ? (int64_t)v.b : 0); }
+static inline double  ltl_unbox_float(ltl_value_t v) { return v.tag == LTL_FLOAT ? v.f : (v.tag == LTL_INT  ? (double)v.i : 0.0); }
+
+/* Repeat a list: [x] * n → new list with x copied n times. */
+static ltl_list_t* ltl_list_repeat(ltl_list_t *src, int64_t n) {
+    int64_t total = src->len * (n > 0 ? n : 0);
+    ltl_list_t *out = ltl_list_new(total > 0 ? total : 1);
+    for (int64_t k = 0; k < n; k++)
+        for (int64_t j = 0; j < src->len; j++)
+            ltl_list_push(out, src->items[j]);
+    return out;
+}
+
+/* Concatenate two lists. */
+static ltl_list_t* ltl_list_concat(ltl_list_t *a, ltl_list_t *b) {
+    ltl_list_t *out = ltl_list_new(a->len + b->len);
+    for (int64_t i = 0; i < a->len; i++) ltl_list_push(out, a->items[i]);
+    for (int64_t i = 0; i < b->len; i++) ltl_list_push(out, b->items[i]);
+    return out;
 }
 
 '''
@@ -531,6 +568,7 @@ class CTranspiler(ASTVisitor):
         self._in_fn = False
         self._local_types: Dict[str, str] = {}    # name → C type for current fn
         self._fn_return_types: Dict[str, str] = {}  # fn name → C return type
+        self._list_elem_types: Dict[str, str] = {}  # name → elem C type (typed C arrays)
 
     # ── helpers ───────────────────────────────────────────────────────────
 
@@ -626,6 +664,15 @@ class CTranspiler(ASTVisitor):
             return "ltl_value_t"
         if isinstance(node, (InterpolatedStr,)):
             return "ltl_string_t*"
+        if isinstance(node, ListExpr):
+            return "ltl_list_t*"
+        if isinstance(node, IndexExpr):
+            # Typed C array? Return its element type.
+            if isinstance(node.obj, Ident):
+                nm = self._mangle(node.obj.name)
+                if nm in self._list_elem_types:
+                    return self._list_elem_types[nm]
+            return "ltl_value_t"
         if isinstance(node, Ident):
             # Look up known local variable types
             nm = self._mangle(node.name)
@@ -639,6 +686,8 @@ class CTranspiler(ASTVisitor):
             if op in ("+", "-", "*", "/", "%"):
                 lt = self._infer_ctype_from_expr(node.left)
                 rt = self._infer_ctype_from_expr(node.right)
+                if op in ("*", "+") and "ltl_list_t*" in (lt, rt):
+                    return "ltl_list_t*"
                 if "ltl_string_t*" in (lt, rt): return "ltl_string_t*"
                 if "double" in (lt, rt):         return "double"
                 if lt == "int64_t" and rt == "int64_t": return "int64_t"
@@ -657,9 +706,16 @@ class CTranspiler(ASTVisitor):
                 if nm in ("ltl_int_to_str", "ltl_float_to_str",
                           "ltl_bool_to_str", "ltl_str_new", "ltl_str_concat"):
                     return "ltl_string_t*"
+                # Math builtins return double (sqrt, pow, sin, cos, log, etc.)
+                if node.callee.name in self._IO_MATH:
+                    return "double"
                 # Look up fn return type
                 if nm in self._fn_return_types:
                     return self._fn_return_types[nm]
+            if isinstance(node.callee, FieldExpr) and isinstance(node.callee.obj, Ident):
+                # math.sqrt(...) etc.
+                if node.callee.obj.name == "math" and node.callee.field in self._IO_MATH:
+                    return "double"
         return "ltl_value_t"
 
     # ── stdlib module call mapping ─────────────────────────────────────────
@@ -783,6 +839,14 @@ class CTranspiler(ASTVisitor):
         self._in_fn = True
         self._local_vars = set()
         self._local_types = {}
+        self._list_elem_types = {}
+
+        # Register parameter types so inference can see them inside the body
+        for p in node.params:
+            ptype = _c_type(getattr(p, "type_", None), "ltl_value_t")
+            pname = self._mangle(p.name)
+            self._local_types[pname] = ptype
+            self._local_vars.add(pname)
 
         w.block_open(f"static {ret} {name}({params})")
         if node.body:
@@ -812,15 +876,73 @@ class CTranspiler(ASTVisitor):
         else:
             ctype = "ltl_value_t"
         name = self._mangle(node.name)
+
+        # Typed C-array fast path: homogeneous primitive list literal with
+        # no explicit type annotation. e.g. `let xs = [0.0, 4.84, 8.34]`
+        # lowers to `double xs[3] = {0.0, 4.84, 8.34};` so `xs[i]` is native.
+        if (explicit is None
+                and isinstance(node.value, ListExpr)
+                and node.value.elements):
+            elem_ct = self._homogeneous_list_elem_type(node.value)
+            if elem_ct is not None:
+                elems = ", ".join(self._visit_expr(e) for e in node.value.elements)
+                n = len(node.value.elements)
+                self._w.line(f"{elem_ct} {name}[{n}] = {{ {elems} }};")
+                self._local_types[name] = f"{elem_ct}*"  # decays to pointer for ctype purposes
+                self._list_elem_types[name] = elem_ct
+                self._local_vars.add(name)
+                return
+
         val  = self._visit_expr(node.value) if node.value else "/* uninitialized */ {0}"
         self._w.line(f"{ctype} {name} = {val};")
         self._local_types[name] = ctype
         self._local_vars.add(name)
 
+    def _homogeneous_list_elem_type(self, node: "ListExpr") -> "Optional[str]":
+        """Return a primitive C type if every element infers to the same
+        primitive (int64_t / double / bool); else None.  Mixed int/float is
+        promoted to double to match Lateralus numeric semantics."""
+        types = set()
+        has_float = False
+        has_int = False
+        for e in node.elements:
+            t = self._infer_ctype_from_expr(e)
+            if t not in ("int64_t", "double", "bool"):
+                return None
+            if t == "double":
+                has_float = True
+            if t == "int64_t":
+                has_int = True
+            types.add(t)
+        if has_float and has_int:
+            return "double"
+        if len(types) == 1:
+            return next(iter(types))
+        return None
+
     def _visit_AssignStmt(self, node: AssignStmt):
         target = self._visit_expr(node.target)
         value  = self._visit_expr(node.value)
         op     = getattr(node, "op", "=") or "="
+        # If target is a list index (list->items[i]), box the RHS into ltl_value_t
+        if isinstance(node.target, IndexExpr) and op == "=":
+            # Typed C arrays: native assignment, no boxing.
+            is_typed_array = (
+                isinstance(node.target.obj, Ident)
+                and self._mangle(node.target.obj.name) in self._list_elem_types
+            )
+            if not is_typed_array:
+                obj_ctype = self._infer_ctype_from_expr(node.target.obj)
+                if obj_ctype == "ltl_list_t*":
+                    val_ctype = self._infer_ctype_from_expr(node.value)
+                    if val_ctype == "int64_t":
+                        value = f"ltl_box_int({value})"
+                    elif val_ctype == "double":
+                        value = f"ltl_box_float({value})"
+                    elif val_ctype == "bool":
+                        value = f"ltl_box_bool({value})"
+                    elif val_ctype == "ltl_string_t*":
+                        value = f"ltl_box_str({value})"
         # Compound assignment operators
         compound_map = {
             "+=": "+=", "-=": "-=", "*=": "*=", "/=": "/=", "%=": "%=",
@@ -841,12 +963,12 @@ class CTranspiler(ASTVisitor):
 
     def _visit_IfStmt(self, node: IfStmt):
         w = self._w
-        cond = self._visit_expr(node.condition)
+        cond = self._coerce_bool(node.condition)
         w.block_open(f"if ({cond})")
         self._visit_block(node.then_block)
         w.block_close()
         for elif_cond, elif_block in (node.elif_arms or []):
-            ec = self._visit_expr(elif_cond)
+            ec = self._coerce_bool(elif_cond)
             w.block_open(f"else if ({ec})")
             self._visit_block(elif_block)
             w.block_close()
@@ -856,10 +978,18 @@ class CTranspiler(ASTVisitor):
             w.block_close()
 
     def _visit_WhileStmt(self, node: WhileStmt):
-        cond = self._visit_expr(node.condition)
+        cond = self._coerce_bool(node.condition)
         self._w.block_open(f"while ({cond})")
         self._visit_block(node.body)
         self._w.block_close()
+
+    def _coerce_bool(self, expr_node) -> str:
+        """Visit a condition expression and coerce ltl_value_t → C bool."""
+        src = self._visit_expr(expr_node)
+        ctype = self._infer_ctype_from_expr(expr_node)
+        if ctype == "ltl_value_t":
+            return f"ltl_unbox_bool({src})"
+        return src
 
     def _visit_ForStmt(self, node: ForStmt):
         w = self._w
@@ -1068,6 +1198,26 @@ class CTranspiler(ASTVisitor):
             left  = self._visit_expr(node.left)
             right = self._visit_expr(node.right)
             return f"pow({left}, {right})"
+        # List repetition: [x] * n  or  n * [x]  → ltl_list_repeat
+        if op == "*":
+            lt = self._infer_ctype_from_expr(node.left)
+            rt = self._infer_ctype_from_expr(node.right)
+            if lt == "ltl_list_t*" and rt == "int64_t":
+                left  = self._visit_expr(node.left)
+                right = self._visit_expr(node.right)
+                return f"ltl_list_repeat({left}, {right})"
+            if lt == "int64_t" and rt == "ltl_list_t*":
+                left  = self._visit_expr(node.left)
+                right = self._visit_expr(node.right)
+                return f"ltl_list_repeat({right}, {left})"
+        # List concatenation: [a] + [b] → ltl_list_concat
+        if op == "+":
+            lt = self._infer_ctype_from_expr(node.left)
+            rt = self._infer_ctype_from_expr(node.right)
+            if lt == "ltl_list_t*" and rt == "ltl_list_t*":
+                left  = self._visit_expr(node.left)
+                right = self._visit_expr(node.right)
+                return f"ltl_list_concat({left}, {right})"
         # Detect string concatenation before visiting (needs type info)
         if op == "+":
             lt = self._infer_ctype_from_expr(node.left)
@@ -1115,13 +1265,50 @@ class CTranspiler(ASTVisitor):
             mapped = self._map_stdlib_call(mod, method, args)
             if mapped is not None:
                 return mapped
+        # Intercept bare builtin calls: println(x) / print(x) — type-dispatch
+        # so numeric and boolean arguments don't hit the string-only println.
+        if isinstance(node.callee, Ident) and node.args:
+            name = node.callee.name
+            if name in ("println", "print"):
+                arg_node = node.args[0]
+                arg = self._visit_expr(arg_node)
+                ctype = self._infer_ctype_from_expr(arg_node)
+                nl = "\\n" if name == "println" else ""
+                if ctype == "int64_t":
+                    return f'printf("%lld{nl}", (long long)({arg}))'
+                if ctype == "double":
+                    return f'printf("%.17g{nl}", (double)({arg}))'
+                if ctype == "bool":
+                    return f'printf("%s{nl}", ({arg}) ? "true" : "false")'
+                if ctype == "ltl_string_t*":
+                    helper = "ltl_io_println" if name == "println" else "ltl_io_print"
+                    return f"{helper}({arg})"
+            # Builtin type-coercion calls: int(x), float(x), bool(x), str(x).
+            if name in ("int", "float", "bool", "str") and len(node.args) == 1:
+                arg_node = node.args[0]
+                arg = self._visit_expr(arg_node)
+                src = self._infer_ctype_from_expr(arg_node)
+                if name == "int":   return f"((int64_t)({arg}))"
+                if name == "float": return f"((double)({arg}))"
+                if name == "bool":  return f"((bool)({arg}))"
+                # str(x): dispatch on source type
+                if src == "int64_t":    return f"ltl_int_to_str({arg})"
+                if src == "double":     return f"ltl_float_to_str({arg})"
+                if src == "bool":       return f"ltl_bool_to_str({arg})"
+                if src == "ltl_string_t*": return arg
+                return f"ltl_value_to_str({arg})"
         func = self._visit_expr(node.callee)
         args = ", ".join(self._visit_expr(a) for a in node.args)
         return f"{func}({args})"
 
     def _expr_IndexExpr(self, node: IndexExpr) -> str:
-        obj = self._visit_expr(node.obj)
         idx = self._visit_expr(node.index)
+        # Typed C array? Emit native indexing.
+        if isinstance(node.obj, Ident):
+            nm = self._mangle(node.obj.name)
+            if nm in self._list_elem_types:
+                return f"{nm}[{idx}]"
+        obj = self._visit_expr(node.obj)
         return f"{obj}->items[{idx}]"
 
     def _expr_FieldExpr(self, node: FieldExpr) -> str:
@@ -1139,11 +1326,29 @@ class CTranspiler(ASTVisitor):
         return f"{obj}->{self._mangle(node.field)}" if obj.endswith("*") or "ltl_" in obj else f"{obj}.{self._mangle(node.field)}"
 
     def _expr_ListExpr(self, node: ListExpr) -> str:
-        # Build a list from elements
-        parts = [self._visit_expr(e) for e in node.elements]
-        tmp = self._temp()
-        # This is an expression — we'll use a compound literal / helper
-        return f"/* list[{len(parts)}] */ ltl_list_new({len(parts)})"
+        # Build a list from elements using a GCC statement expression.
+        # Each element is boxed into ltl_value_t via the appropriate helper.
+        if not node.elements:
+            return "ltl_list_new(0)"
+        pushes = []
+        for elem in node.elements:
+            ctype = self._infer_ctype_from_expr(elem)
+            val = self._visit_expr(elem)
+            if ctype == "int64_t":
+                boxed = f"ltl_box_int({val})"
+            elif ctype == "double":
+                boxed = f"ltl_box_float({val})"
+            elif ctype == "bool":
+                boxed = f"ltl_box_bool({val})"
+            elif ctype == "ltl_string_t*":
+                boxed = f"ltl_box_str({val})"
+            else:
+                boxed = val  # already ltl_value_t
+            pushes.append(f"ltl_list_push(__l, {boxed});")
+        push_block = " ".join(pushes)
+        n = len(node.elements)
+        return (f"({{ ltl_list_t* __l = ltl_list_new({n}); "
+                f"{push_block} __l; }})")
 
     def _expr_TernaryExpr(self, node: TernaryExpr) -> str:
         cond = self._visit_expr(node.condition)

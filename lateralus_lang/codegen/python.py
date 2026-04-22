@@ -285,6 +285,15 @@ class PythonTranspiler(ASTVisitor):
         self._w += "def len(v):               return _builtins.len(v)"
         self._w += "def abs(v):               return _builtins.abs(v)"
         self._w += "def sum(lst):             return _builtins.sum(lst)"
+        self._w += "def idiv(a, b):           return a // b"
+        self._w += "def imod(a, b):           return a % b"
+        self._w += "def divmod(a, b):         return [a // b, a % b]"
+        self._w += "def sign(v):              return 0 if v == 0 else (1 if v > 0 else -1)"
+        self._w += "def gcd(a, b):            import math as _m; return _m.gcd(_builtins.int(a), _builtins.int(b))"
+        self._w += "def lcm(a, b):            import math as _m; return _m.lcm(_builtins.int(a), _builtins.int(b))"
+        self._w += "def is_even(n):           return n % 2 == 0"
+        self._w += "def is_odd(n):            return n % 2 != 0"
+        self._w += "def clamp(v, lo, hi):     return (lo if v < lo else (hi if v > hi else v))"
         self._w += "def min(*a,**kw):         return _builtins.min(*a,**kw)"
         self._w += "def max(*a,**kw):         return _builtins.max(*a,**kw)"
         self._w += "def range_ltl(s, e, step=1): return list(_builtins.range(s, e, step))"
@@ -773,6 +782,26 @@ class PythonTranspiler(ASTVisitor):
         self._w += "_LATERALUS_TESTS: list = []"
         self._w += "def test(fn):"
         self._w += "    _LATERALUS_TESTS.append(fn); return fn"
+        # v3.2 — @law decorator: first-class executable specifications.
+        # Laws are property tests; the function returns bool and is auto-run by
+        # `lateralus verify`. Each law registers its parameter type spec so the
+        # harness can generate random inputs without per-type fixtures.
+        self._w += "_LATERALUS_LAWS: list = []"
+        self._w += "def law(*args, **kwargs):"
+        self._w += "    if len(args) == 1 and callable(args[0]) and not kwargs:"
+        self._w += "        fn = args[0]; _LATERALUS_LAWS.append(fn); fn._is_law = True; return fn"
+        self._w += "    def _wrap(fn):"
+        self._w += "        _LATERALUS_LAWS.append(fn); fn._is_law = True"
+        self._w += "        for _k, _v in kwargs.items(): setattr(fn, '_law_' + _k, _v)"
+        self._w += "        return fn"
+        self._w += "    return _wrap"
+        # Struct registry — used by @law runner for auto-generating struct values
+        self._w += "_LATERALUS_STRUCTS: dict = {}"
+        # assume(pred) — if pred is False inside a @law, the trial is silently
+        # discarded instead of counted as a failure.
+        self._w += "class _AssumptionFailed(Exception): pass"
+        self._w += "def assume(pred):"
+        self._w += "    if not pred: raise _AssumptionFailed()"
         self._w += ""
         # EventBus for emit
         self._w += "# ── EventBus (for emit) ─────────────────────────────────"
@@ -904,6 +933,17 @@ class PythonTranspiler(ASTVisitor):
                 self._w += "pass"
         self._w += ""
 
+        # v3.2 — @law registration: stash the full type spec (with generics
+        # intact, unlike Python annotations which flatten `list[int]` → `list`)
+        # so the law runner can generate random inputs.
+        if any(d.name == "law" for d in (node.decorators or [])):
+            spec_parts = []
+            for p in node.params:
+                tname = self._ltl_type_str(p.type_) if p.type_ else "any"
+                spec_parts.append(f"({p.name!r}, {tname!r})")
+            self._w += f"{node.name}._law_spec = [{', '.join(spec_parts)}]"
+            self._w += ""
+
     @staticmethod
     def _get_foreign_lang(decorators) -> Optional[str]:
         """Return the language string if any decorator is @foreign(\"lang\")."""
@@ -977,6 +1017,22 @@ class PythonTranspiler(ASTVisitor):
     def _py_type(self, name: str) -> str:
         """Map Lateralus type name to valid Python annotation."""
         return self._TYPE_MAP.get(name, name)
+
+    def _ltl_type_str(self, t) -> str:
+        """Serialize a Lateralus TypeRef back to its source form, preserving
+        generic parameters so the @law runner sees `list[int]` not `list`."""
+        if t is None:
+            return "any"
+        name = getattr(t, "name", None) or "any"
+        params = getattr(t, "params", None) or []
+        if params:
+            inner = ",".join(self._ltl_type_str(p) for p in params)
+            base = f"{name}[{inner}]"
+        else:
+            base = name
+        if getattr(t, "nullable", False):
+            base += "?"
+        return base
 
     def _render_params(self, params) -> str:
         parts = []
@@ -1264,6 +1320,14 @@ class PythonTranspiler(ASTVisitor):
                 self._emit_derive_methods(node, derive_traits)
             if not node.fields and not self._impl_map.get(node.name) and not derive_traits:
                 self._w += "pass"
+        # Structural generator spec for @law verifier — preserves field names + types
+        if node.fields:
+            spec_parts = []
+            for f in node.fields:
+                tname = self._ltl_type_str(f.type_) if f.type_ else "any"
+                spec_parts.append(f"({f.name!r}, {tname!r})")
+            self._w += f"{node.name}._ltl_struct_spec = [{', '.join(spec_parts)}]"
+            self._w += f"_LATERALUS_STRUCTS[{node.name!r}] = {node.name}"
         self._w += ""
 
     def visit_EnumDecl(self, node: EnumDecl):
@@ -1373,6 +1437,7 @@ class PythonTranspiler(ASTVisitor):
             "memo":       "memo",
             "typed":      "typed",
             "test":       "test",
+            "law":        "law",
             "dataclass":  "_dataclass",
             "abstract":   "_abstractmethod",
             "staticmethod": "staticmethod",
@@ -1384,9 +1449,10 @@ class PythonTranspiler(ASTVisitor):
         py_name = _deco_map.get(d.name, d.name)
         if not py_name:
             return f"# @{d.name} (no-op)"
-        if d.args:
-            args = ", ".join(self._expr(a) for a in d.args)
-            return f"@{py_name}({args})"
+        if d.args or d.kwargs:
+            parts = [self._expr(a) for a in d.args]
+            parts += [f"{k}={self._expr(v)}" for k, v in d.kwargs]
+            return f"@{py_name}({', '.join(parts)})"
         return f"@{py_name}"
 
     # ── expression emitter ────────────────────────────────────────────────────
