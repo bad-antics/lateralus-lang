@@ -12,7 +12,8 @@ Inputs:
 Output:
     gui/grug_corpus.h   (auto-generated; do not edit by hand)
 """
-import os, sys, pathlib, datetime
+import datetime
+import pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 TRAIN = ROOT / "apps" / "grug_training"
