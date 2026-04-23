@@ -37,6 +37,11 @@ echo "[3/25] CC   boot/kernel_stub.c"
 gcc $CFLAGS -Wno-unused-variable -Wno-unused-function \
     -c boot/kernel_stub.c -o "$BUILD/boot/kernel_stub.o"
 
+# -- Regenerate grugbot420 trained corpus from apps/grug_training/*.txt ---
+if [ -d apps/grug_training ] && command -v python3 >/dev/null 2>&1; then
+    python3 tools/gen_grug_corpus.py || true
+fi
+
 # -- Compile GUI subsystem -----------------------------------------------
 echo "[4/25] CC   gui/framebuffer.c"
 gcc $GUI_CFLAGS -c gui/framebuffer.c -o "$BUILD/gui/framebuffer.o"

@@ -109,11 +109,21 @@ FFMPEG_PID=$!
         sleep "${2:-2}"
     }
 
-    # --- intro: greet + show help ---
+    # --- intro: greet + show help + show trained-corpus stats ---
     type_line "hello grug"                 2
     type_line "/help"                      3
+    type_line "/stats"                     3
 
-    # --- keyword intelligence ---
+    # --- TRAINED RULES demo (these answers come from apps/grug_training/rules.txt) ---
+    type_line "what about docker?"         2
+    type_line "opinions on postgres?"      2
+    type_line "should i use graphql?"      2
+    type_line "thoughts on kubernetes"     2
+    type_line "memory leak help"           2
+    type_line "tell me about ml models"    2
+    type_line "ask about tech debt"        2
+
+    # --- classic keyword intelligence ---
     type_line "i have a nasty bug"         2
     type_line "this code is too complex"   2
     type_line "should i refactor or ship?" 3
