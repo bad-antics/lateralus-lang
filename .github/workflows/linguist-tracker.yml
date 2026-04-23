@@ -1,0 +1,54 @@
+name: Linguist eligibility tracker
+
+# Polls GitHub's code search for unique repositories using `.ltl` files
+# (the Lateralus extension). Linguist requires >= 200 unique repos before
+# accepting a new language; this workflow gives us a rolling time series.
+
+on:
+  schedule:
+    - cron: "0 7 * * *"  # 07:00 UTC daily
+  workflow_dispatch:
+  push:
+    paths:
+      - "docs/linguist/scripts/**"
+      - ".github/workflows/linguist-tracker.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: linguist-tracker
+  cancel-in-progress: false
+
+jobs:
+  count:
+    name: Count Lateralus repos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install jq
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq
+
+      - name: Count repos
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p docs/linguist/meta
+          OUT=docs/linguist/meta/repo-count.jsonl bash docs/linguist/scripts/count-ltl-repos.sh
+          tail -n 5 docs/linguist/meta/repo-count.jsonl
+
+      - name: Update badge JSON
+        run: python3 docs/linguist/scripts/update_badge.py
+
+      - name: Commit if changed
+        run: |
+          if [ -n "$(git status --porcelain docs/linguist/meta/)" ]; then
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add docs/linguist/meta/
+            git commit -m "linguist-tracker: $(date -u +%Y-%m-%d) snapshot"
+            git push
+          else
+            echo "no change"
+          fi
