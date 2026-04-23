@@ -17,6 +17,18 @@ THRESHOLD = 200
 
 
 def latest_count() -> int | None:
+    """Return the best available signal for Linguist eligibility from the
+    most recent JSONL entry.
+
+    Preference order:
+      1. unique_repos — unique :user/:repo pairs with .ltl files (what
+         Linguist actually cares about).
+      2. repos_tagged — repos GitHub already indexes as language:Lateralus.
+      3. total — raw file-hit count from code-search.
+
+    Falling back to `total` is mostly for older snapshots that predate the
+    unique-repo tracking patch.
+    """
     if not JSONL.exists():
         return None
     last = None
@@ -30,7 +42,18 @@ def latest_count() -> int | None:
             continue
     if not last:
         return None
-    return int(last.get("total", 0))
+    for field in ("unique_repos", "repos_tagged", "total"):
+        value = last.get(field)
+        if value is None:
+            continue
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            continue
+        if n > 0:
+            return n
+    # All fields present but zero — still return 0 so the badge can show it.
+    return int(last.get("total", 0) or 0)
 
 
 def main() -> int:
