@@ -485,44 +485,12 @@ static void cmd_neofetch(GuiTerminal *t) {
  * When a terminal is in grug_mode, each Enter-terminated line is routed
  * through grug_respond() instead of the shell dispatcher.  Output is
  * written straight into the terminal scrollback via term_puts.
+ *
+ * Corpus arrays (GRUG_WISDOM, GRUG_JOKES, GRUG_SMOKE, GRUG_RULES) are
+ * generated from apps/grug_training/*.txt by tools/gen_grug_corpus.py.
  * ======================================================================= */
 
-static const char *GRUG_WISDOM[] = {
-    "grug say: complexity very very bad. simple good.",
-    "grug say: factory factory factory make grug head hurt.",
-    "grug say: name variable what it be. 'data' mean nothing.",
-    "grug say: if code hard to delete, code already own you.",
-    "grug say: type system friend, not enemy. type catch bug.",
-    "grug brain small, so grug keep function small too.",
-    "grug say: senior dev is one who know where bodies buried.",
-    "grug say: meeting is where productivity go to die.",
-    "grug say: ship small, ship often, fix in prod, grug not scared.",
-    "grug say: premature optimization root of all bug. measure first.",
-    "grug say: DRY is lie. same shape not same meaning.",
-    "grug say: if test hard to write, code shape wrong.",
-    "grug say: comment say WHY. code already say WHAT.",
-    "grug say: log loud when bad, silent when good.",
-};
-static const int GRUG_WISDOM_N = sizeof(GRUG_WISDOM)/sizeof(GRUG_WISDOM[0]);
-
-static const char *GRUG_JOKES[] = {
-    "why function cross road? because callback on other side.",
-    "grug have 99 problem but null pointer not one. grug also have null.",
-    "how many grug to change lightbulb? none. grug afraid of dark.",
-    "grug try recursion to understand recursion. grug still trying.",
-    "wife say get bread, if egg get 12. he come home with 12 bread.",
-};
-static const int GRUG_JOKES_N = sizeof(GRUG_JOKES)/sizeof(GRUG_JOKES[0]);
-
-static const char *GRUG_SMOKE[] = {
-    "grug puff... semicolons are just fences for thoughts.",
-    "grug puff... garbage collector is just letting go man.",
-    "grug puff... monad is just burrito of sadness.",
-    "grug puff... every for-loop is a tiny universe bro.",
-    "grug puff... types are vibes and vibes are types.",
-    "grug puff... the real bug was friends we made along the way.",
-};
-static const int GRUG_SMOKE_N = sizeof(GRUG_SMOKE)/sizeof(GRUG_SMOKE[0]);
+#include "grug_corpus.h"
 
 static uint32_t grug_rand(GuiTerminal *t) {
     uint32_t x = t->grug_rng;
@@ -599,7 +567,17 @@ static void grug_exit(GuiTerminal *t) {
 
 static void grug_handle_cmd(GuiTerminal *t, const char *cmd) {
     if (grug_streq_ci(cmd, "/help")) {
-        grug_sys(t, "commands: /help /wisdom /joke /roll /smoke /time /bench /quit");
+        grug_sys(t, "commands: /help /wisdom /joke /roll /smoke /time /bench /stats /quit");
+        return;
+    }
+    if (grug_streq_ci(cmd, "/stats")) {
+        char buf[96], nb[24];
+        _tcpy(buf, "[trained] wisdom=", 96);
+        _titoa(GRUG_WISDOM_N, nb, 24); _tcat(buf, nb, 96);
+        _tcat(buf, " jokes=", 96); _titoa(GRUG_JOKES_N, nb, 24); _tcat(buf, nb, 96);
+        _tcat(buf, " smoke=", 96); _titoa(GRUG_SMOKE_N, nb, 24); _tcat(buf, nb, 96);
+        _tcat(buf, " rules=", 96); _titoa(GRUG_RULES_N, nb, 24); _tcat(buf, nb, 96);
+        term_puts(t, buf); term_putc(t, '\n');
         return;
     }
     if (grug_streq_ci(cmd, "/wisdom")) {
@@ -704,6 +682,17 @@ static void grug_respond(GuiTerminal *t, const char *line) {
     if (line[0] == '/') { grug_handle_cmd(t, line); return; }
     if (line[0] == 0)   { return; }
 
+    /* Trained rules take priority (apps/grug_training/rules.txt) */
+    for (int r = 0; r < GRUG_RULES_N; r++) {
+        const char *const *kws = GRUG_RULES[r].keywords;
+        for (int k = 0; kws[k]; k++) {
+            if (grug_has(line, kws[k])) {
+                grug_say(t, GRUG_RULES[r].response);
+                return;
+            }
+        }
+    }
+
     if (grug_has(line, "hi") || grug_has(line, "hello") || grug_has(line, "hey") ||
         grug_has(line, "sup") || grug_has(line, "yo")) {
         grug_say(t, "hi friend. grug here. what on brain?"); return;
@@ -775,7 +764,16 @@ static void grug_start(GuiTerminal *t) {
     t->grug_rng  = (uint32_t)(tick_count ^ 0x420BADA5u);
     if (t->grug_rng == 0) t->grug_rng = 0x420BADA5u;
     grug_banner(t);
-    grug_say(t, "hi. grug here. type /help or just talk. grug listen.");
+    {
+        char buf[96], nb[24];
+        _tcpy(buf, "[trained] ", 96);
+        _titoa(GRUG_WISDOM_N, nb, 24); _tcat(buf, nb, 96); _tcat(buf, "w/", 96);
+        _titoa(GRUG_JOKES_N,  nb, 24); _tcat(buf, nb, 96); _tcat(buf, "j/", 96);
+        _titoa(GRUG_SMOKE_N,  nb, 24); _tcat(buf, nb, 96); _tcat(buf, "s/", 96);
+        _titoa(GRUG_RULES_N,  nb, 24); _tcat(buf, nb, 96); _tcat(buf, "r\n", 96);
+        term_puts(t, buf);
+    }
+    grug_say(t, "hi. grug here. type /help, /stats, or just talk. grug listen.");
     grug_prompt(t);
 }
 
