@@ -1,0 +1,108 @@
+// ===================================================================
+// examples/spiral_event_bus.ltl
+// -------------------------------------------------------------------
+// Wave 5 integrative demo: a single in-memory event bus that speaks
+// five protocol dialects at its edges.  The bus itself is plain
+// Lateralus; the stdlib modules provide the byte/line codecs that
+// adapt each incoming client.
+//
+//     Kafka producer  ─┐
+//     AMQP publisher  ─┤
+//     MQTT 5 client   ─┼──►  [ Spiral Event Bus ]  ──► fan-out to
+//     STOMP client    ─┤          (topic router)        subscribers
+//     NATS publisher  ─┘
+// ===================================================================
+
+// -- Tiny topic router ---------------------------------------------
+
+let BUS_SUBS = []  // list of [topic, callback_tag]
+let BUS_LOG  = []  // list of [protocol, topic, bytes_len, summary]
+
+fn bus_subscribe(topic: str, tag: str) {
+    BUS_SUBS = BUS_SUBS + [[topic, tag]]
+}
+
+fn bus_publish(protocol: str, topic: str, payload: str) {
+    BUS_LOG = BUS_LOG + [[protocol, topic, len(payload), slice(payload, 0, 32)]]
+    let i = 0
+    while i < len(BUS_SUBS) {
+        let s = BUS_SUBS[i]
+        if s[0] == topic || s[0] == "*" {
+            print("  → deliver to " + s[1] + " on '" + topic + "' (" + str(len(payload)) + "B)")
+        }
+        i = i + 1
+    }
+}
+
+// -- Kafka edge ----------------------------------------------------
+
+fn edge_kafka(topic: str, key: str, value: str) {
+    // Build a produce-request-ish frame just to exercise the codec.
+    let hdr = kafka_wire_request_header_v1(kafka_wire_api_produce(), 9, 42, "demo")
+    let frame = kafka_wire_frame_request(hdr + kafka_wire_enc_string(topic)
+                                              + kafka_wire_enc_string(key)
+                                              + kafka_wire_enc_bytes(bytes_of(value)))
+    print("kafka frame bytes=" + str(len(frame)))
+    bus_publish("kafka", topic, value)
+}
+
+// -- AMQP edge -----------------------------------------------------
+
+fn edge_amqp(exchange: str, routing_key: str, body: str) {
+    let args = amqp_basic_publish_args(exchange, routing_key)
+    let frames = amqp_publish_frames(1, args, bytes_of(body))
+    print("amqp frames=" + str(len(frames)) + " rk=" + routing_key)
+    bus_publish("amqp", routing_key, body)
+}
+
+// -- MQTT 5 edge ---------------------------------------------------
+
+fn edge_mqtt(topic: str, qos: int, body: str) {
+    let props = []
+    props = props + mqtt5_prop_utf8(mqtt5_pi_content_type(), "text/plain")
+    let pkt = mqtt5_publish(topic, qos, false, false, 7, props, bytes_of(body))
+    print("mqtt packet bytes=" + str(len(pkt)) + " qos=" + str(qos))
+    bus_publish("mqtt", topic, body)
+}
+
+// -- STOMP edge ----------------------------------------------------
+
+fn edge_stomp(destination: str, body: str) {
+    let frame = stomp_send(destination, "text/plain", body)
+    let parsed = stomp_parse_frame(frame)
+    print("stomp frame '" + parsed["command"] + "' dest=" + destination)
+    bus_publish("stomp", destination, body)
+}
+
+// -- NATS edge -----------------------------------------------------
+
+fn edge_nats(subject: str, body: str) {
+    let line = nats_pub_msg(subject, "", body)
+    print("nats wire bytes=" + str(len(line)))
+    bus_publish("nats", subject, body)
+}
+
+// -- Demo ----------------------------------------------------------
+
+fn main() {
+    print("=== Spiral Event Bus (Wave 5) ===")
+    bus_subscribe("orders.created", "order-service")
+    bus_subscribe("*",              "audit-log")
+
+    edge_kafka("orders.created", "order-42", "{\"id\":42,\"total\":19.95}")
+    edge_amqp ("app.exchange",   "orders.created", "{\"id\":43}")
+    edge_mqtt ("orders.created", 1, "{\"id\":44}")
+    edge_stomp("/topic/orders.created",      "{\"id\":45}")
+    edge_nats ("orders.created", "{\"id\":46}")
+
+    print("---")
+    print("bus log entries: " + str(len(BUS_LOG)))
+    let i = 0
+    while i < len(BUS_LOG) {
+        let e = BUS_LOG[i]
+        print("  " + e[0] + "  " + e[1] + "  " + str(e[2]) + "B")
+        i = i + 1
+    }
+}
+
+main()

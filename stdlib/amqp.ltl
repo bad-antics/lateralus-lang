@@ -1,0 +1,224 @@
+// ===================================================================
+// stdlib/amqp.ltl  —  AMQP 0-9-1 framing (RabbitMQ dialect)
+// -------------------------------------------------------------------
+// The whole of AMQP 0-9-1 is a stream of frames:
+//
+//   type : u8      (1=method, 2=header, 3=body, 8=heartbeat)
+//   chan : u16     (0 = connection-level)
+//   size : u32
+//   payload : size bytes
+//   FRAME_END : 0xCE
+//
+// Methods are further identified by (class_id: u16, method_id: u16)
+// and a class-specific field-table payload.  This module provides
+// the frame codec, the protocol header, method-frame builders for
+// the handshake (Connection.Start / StartOk / Open / OpenOk,
+// Channel.Open / OpenOk) plus Basic.Publish envelope framing.
+// No field-table type coverage beyond the subset needed for the
+// handshake table is implemented.
+// ===================================================================
+
+// -- Constants ------------------------------------------------------
+
+pub fn frame_method()    -> int { return 1 }
+pub fn frame_header()    -> int { return 2 }
+pub fn frame_body()      -> int { return 3 }
+pub fn frame_heartbeat() -> int { return 8 }
+pub fn frame_end()       -> int { return 0xCE }
+
+pub fn class_connection() -> int { return 10 }
+pub fn class_channel()    -> int { return 20 }
+pub fn class_exchange()   -> int { return 40 }
+pub fn class_queue()      -> int { return 50 }
+pub fn class_basic()      -> int { return 60 }
+
+pub fn method_connection_start()    -> int { return 10 }
+pub fn method_connection_start_ok() -> int { return 11 }
+pub fn method_connection_tune()     -> int { return 30 }
+pub fn method_connection_tune_ok()  -> int { return 31 }
+pub fn method_connection_open()     -> int { return 40 }
+pub fn method_connection_open_ok()  -> int { return 41 }
+pub fn method_channel_open()        -> int { return 10 }
+pub fn method_channel_open_ok()     -> int { return 11 }
+pub fn method_basic_publish()       -> int { return 40 }
+pub fn method_basic_deliver()       -> int { return 60 }
+
+// -- Primitive encoders ---------------------------------------------
+
+pub fn enc_u8(v: int)  -> list { return [v & 0xff] }
+pub fn enc_u16(v: int) -> list { return [(v >> 8) & 0xff, v & 0xff] }
+pub fn enc_u32(v: int) -> list {
+    return [(v >> 24) & 0xff, (v >> 16) & 0xff,
+            (v >> 8)  & 0xff,  v        & 0xff]
+}
+pub fn enc_u64(v: int) -> list {
+    let out = []
+    let k = 7
+    while k >= 0 {
+        out = out + [(v >> (k * 8)) & 0xff]
+        k = k - 1
+    }
+    return out
+}
+
+pub fn dec_u8(buf: list, i: int)  -> list { return [buf[i], i + 1] }
+pub fn dec_u16(buf: list, i: int) -> list {
+    return [(buf[i] << 8) | buf[i + 1], i + 2]
+}
+pub fn dec_u32(buf: list, i: int) -> list {
+    let v = (buf[i] << 24) | (buf[i + 1] << 16) | (buf[i + 2] << 8) | buf[i + 3]
+    return [v, i + 4]
+}
+
+// Short string: 1-byte length + bytes.
+pub fn enc_short_str(s: str) -> list {
+    let bytes = bytes_of(s)
+    return [len(bytes) & 0xff] + bytes
+}
+
+// Long string: 4-byte length + bytes.
+pub fn enc_long_str(s: str) -> list {
+    let bytes = bytes_of(s)
+    return enc_u32(len(bytes)) + bytes
+}
+
+pub fn dec_short_str(buf: list, i: int) -> list {
+    let n = buf[i]
+    i = i + 1
+    let s = ""
+    let k = 0
+    while k < n {
+        s = s + chr(buf[i + k])
+        k = k + 1
+    }
+    return [s, i + n]
+}
+
+pub fn dec_long_str(buf: list, i: int) -> list {
+    let n = dec_u32(buf, i)
+    i = n[1]
+    let s = ""
+    let k = 0
+    while k < n[0] {
+        s = s + chr(buf[i + k])
+        k = k + 1
+    }
+    return [s, i + n[0]]
+}
+
+// -- Protocol header ------------------------------------------------
+
+/// Opening bytes the client must send first:
+/// "AMQP" + 0x00 + major + minor + revision  (= 0, 0, 9, 1)
+pub fn protocol_header() -> list {
+    return bytes_of("AMQP") + [0x00, 0x00, 0x09, 0x01]
+}
+
+// -- Frame envelope -------------------------------------------------
+
+pub fn frame(ftype: int, channel: int, payload: list) -> list {
+    return enc_u8(ftype)
+         + enc_u16(channel)
+         + enc_u32(len(payload))
+         + payload
+         + enc_u8(frame_end())
+}
+
+pub fn method_frame(channel: int, class_id: int, method_id: int,
+                    args: list) -> list {
+    let payload = enc_u16(class_id) + enc_u16(method_id) + args
+    return frame(frame_method(), channel, payload)
+}
+
+/// Parse one frame starting at `i`.  Returns nil if the buffer is
+/// short; otherwise a map with {type, channel, payload, consumed}.
+pub fn parse_frame(buf: list, i: int) -> map {
+    if len(buf) < i + 8 { return nil }
+    let t = dec_u8(buf, i)
+    let ch = dec_u16(buf, t[1])
+    let sz = dec_u32(buf, ch[1])
+    let start = sz[1]
+    let end = start + sz[0]
+    if len(buf) < end + 1 { return nil }
+    if buf[end] != frame_end() { return nil }
+    let m = {}
+    m["type"]     = t[0]
+    m["channel"]  = ch[0]
+    m["payload"]  = slice(buf, start, end)
+    m["consumed"] = end + 1 - i
+    return m
+}
+
+// -- Handshake method builders --------------------------------------
+
+/// Empty field-table — just a u32 length of 0.
+pub fn empty_table() -> list {
+    return enc_u32(0)
+}
+
+/// Connection.StartOk — "AMQPLAIN" auth response omitted; we send an
+/// empty client-properties table, mechanism "PLAIN", the caller's
+/// already-framed response bytes, and locale "en_US".
+pub fn connection_start_ok(mechanism: str, response_bytes: list,
+                            locale: str) -> list {
+    let args = empty_table()
+             + enc_short_str(mechanism)
+             + enc_u32(len(response_bytes)) + response_bytes
+             + enc_short_str(locale)
+    return args
+}
+
+/// The PLAIN SASL response is "\0" + user + "\0" + pass as raw bytes.
+pub fn plain_auth(user: str, password: str) -> list {
+    return [0x00] + bytes_of(user) + [0x00] + bytes_of(password)
+}
+
+pub fn connection_tune_ok(channel_max: int, frame_max: int,
+                           heartbeat: int) -> list {
+    return enc_u16(channel_max) + enc_u32(frame_max) + enc_u16(heartbeat)
+}
+
+pub fn connection_open(vhost: str) -> list {
+    // vhost short-string, reserved short-string "", reserved bit 0.
+    return enc_short_str(vhost) + enc_short_str("") + [0x00]
+}
+
+pub fn channel_open() -> list {
+    // Reserved short-string "".
+    return enc_short_str("")
+}
+
+// -- Basic.Publish envelope ----------------------------------------
+
+/// Build the Basic.Publish method-frame args:
+///   reserved u16, exchange short-str, routing_key short-str,
+///   bits: mandatory(1) | immediate(2)
+pub fn basic_publish_args(exchange: str, routing_key: str,
+                           mandatory: bool, immediate: bool) -> list {
+    let flags = 0
+    if mandatory { flags = flags | 0x01 }
+    if immediate { flags = flags | 0x02 }
+    return enc_u16(0) + enc_short_str(exchange)
+         + enc_short_str(routing_key)
+         + [flags & 0xff]
+}
+
+/// Header frame for a body of `body_size` bytes.  No property flags
+/// set (all defaults).
+pub fn content_header(body_size: int) -> list {
+    // class_id, weight, body_size (u64), property_flags (u16 = 0)
+    return enc_u16(class_basic()) + enc_u16(0)
+         + enc_u64(body_size) + enc_u16(0)
+}
+
+/// Build a full publish triple of frames for one body payload.
+pub fn publish_frames(channel: int, exchange: str, routing_key: str,
+                       mandatory: bool, immediate: bool,
+                       body: list) -> list {
+    let method = method_frame(channel, class_basic(), method_basic_publish(),
+                              basic_publish_args(exchange, routing_key,
+                                                  mandatory, immediate))
+    let header = frame(frame_header(), channel, content_header(len(body)))
+    let body_frame = frame(frame_body(), channel, body)
+    return method + header + body_frame
+}

@@ -3,7 +3,45 @@
 > Created and maintained by **bad-antics**
 
 All notable changes to the Lateralus Language toolchain are documented here.
-Follows [Semantic Versioning](https://semver.org/).
+
+## [3.7.0-dev] — Spiral Wave 5: Streaming & Messaging
+
+Five new stdlib modules expanding the Lateralus surface into event-streaming
+and message-broker territory:
+
+- **stdlib/kafka_wire.ltl** — Kafka binary wire codec: fixed-width ints
+  (i8/i16/i32/i64), unsigned + zig-zag varints, nullable and compact
+  strings, bytes, request headers v1/v2, `frame_request`, response-frame
+  parser, and API-key constants.
+- **stdlib/amqp.ltl** — AMQP 0-9-1 framing: protocol header, method/content
+  frame builders and parsers, SASL PLAIN auth, `connection.*` and
+  `channel.open` handshake, `basic.publish` args + content header +
+  multi-frame publish assembly.
+- **stdlib/mqtt5.ltl** — MQTT 5.0 packet codec: 4-byte variable-length
+  integer, UTF-8 strings, binary data, properties block with common PIs
+  (content-type, response-topic, user-property, …), `CONNECT` / `PUBLISH`
+  (QoS 0/1/2) / `SUBSCRIBE` / `PINGREQ` / `DISCONNECT` builders, and a
+  generic packet parser.
+- **stdlib/stomp.ltl** — STOMP 1.2 text frames: header escaping /
+  unescaping, frame encoder + parser, and `CONNECT` / `SEND` /
+  `SUBSCRIBE` / `ACK` / `NACK` / `BEGIN` / `COMMIT` / `ABORT` /
+  `DISCONNECT` builders.
+- **stdlib/nats.ltl** — NATS core line protocol: `CONNECT` / `PUB` / `SUB` /
+  `UNSUB` / `PING` / `PONG` client commands, plus a server-frame parser
+  for `MSG` / `+OK` / `-ERR` / `INFO` / `PING` / `PONG`.
+
+### Examples
+
+- **examples/spiral_event_bus.ltl** — single in-memory topic router
+  accepting Kafka, AMQP, MQTT 5, STOMP, and NATS edge producers.
+
+### Tests
+
+- **tests/stdlib_spiral_wave_5.ltl** — varint round-trips (kafka zig-zag,
+  mqtt5 7-bit at every size boundary), AMQP protocol header + PLAIN-auth
+  byte layout, STOMP frame encode→parse with header escaping, NATS
+  `PUB`/`MSG` round-trip.
+
 
 ---
 

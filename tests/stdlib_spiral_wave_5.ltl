@@ -1,0 +1,136 @@
+// ===================================================================
+// tests/stdlib_spiral_wave_5.ltl
+// Streaming / messaging codecs: kafka_wire, amqp, mqtt5, stomp, nats
+// ===================================================================
+
+let PASS = 0
+let FAIL = 0
+
+fn check(name: str, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        print("  ok  " + name)
+    } else {
+        FAIL = FAIL + 1
+        print("  FAIL " + name)
+    }
+}
+
+// ---------- kafka_wire -------------------------------------------
+
+fn test_kafka() {
+    print("[kafka_wire]")
+    // i32 round-trip.
+    let b = kafka_wire_enc_i32(0x01020304)
+    check("i32 enc len=4",   len(b) == 4)
+    check("i32 first=0x01",  b[0] == 1)
+    let r = kafka_wire_dec_i32(b, 0)
+    check("i32 round-trip",  r[0] == 0x01020304)
+
+    // zig-zag varint for negatives.
+    let zz = kafka_wire_uvarint(kafka_wire_zz_encode(-1))
+    check("zz(-1) == [1]", len(zz) == 1 && zz[0] == 1)
+    let zz2 = kafka_wire_uvarint(kafka_wire_zz_encode(-123456))
+    check("zz(-123456) nonempty", len(zz2) > 0)
+
+    // nullable string null marker is [0xff, 0xff].
+    let ns = kafka_wire_enc_nullable_string("")
+    check("nullable empty str len==2",
+          len(ns) == 2 && ns[0] == 0 && ns[1] == 0)
+}
+
+// ---------- amqp --------------------------------------------------
+
+fn test_amqp() {
+    print("[amqp]")
+    let hdr = amqp_protocol_header()
+    check("proto header len=8", len(hdr) == 8)
+    check("proto header 'A'",  hdr[0] == 65)
+    check("proto header minor=9", hdr[6] == 9)
+    check("proto header rev=1",   hdr[7] == 1)
+
+    let auth = amqp_plain_auth("guest", "guest")
+    // "\0guest\0guest" → 12 bytes.
+    check("plain_auth len=12", len(auth) == 12)
+    check("plain_auth starts NUL", auth[0] == 0)
+}
+
+// ---------- mqtt5 -------------------------------------------------
+
+fn varint_roundtrip(v: int) -> bool {
+    let bytes = mqtt5_enc_varint(v)
+    let r = mqtt5_dec_varint(bytes, 0)
+    return r[0] == v
+}
+
+fn test_mqtt5() {
+    print("[mqtt5]")
+    check("varint 0",        varint_roundtrip(0))
+    check("varint 127",      varint_roundtrip(127))
+    check("varint 128",      varint_roundtrip(128))
+    check("varint 16383",    varint_roundtrip(16383))
+    check("varint 16384",    varint_roundtrip(16384))
+    check("varint 2097151",  varint_roundtrip(2097151))
+    check("varint 2097152",  varint_roundtrip(2097152))
+
+    let pkt = mqtt5_pingreq()
+    check("pingreq = [0xC0, 0x00]",
+          len(pkt) == 2 && pkt[0] == 0xC0 && pkt[1] == 0)
+
+    let packet = mqtt5_publish("a/b", 1, false, false, 9, [], bytes_of("hi"))
+    let parsed = mqtt5_parse_packet(packet, 0)
+    check("publish parse type=3", parsed["type"] == 3)
+}
+
+// ---------- stomp -------------------------------------------------
+
+fn test_stomp() {
+    print("[stomp]")
+    let f = stomp_encode_frame("SEND",
+                               [["destination", "/q/a"], ["x", "a:b\nc"]],
+                               "hello")
+    let p = stomp_parse_frame(f)
+    check("stomp command",     p["command"] == "SEND")
+    check("stomp body",        p["body"] == "hello")
+    let hs = p["headers"]
+    check("stomp header count", len(hs) == 2)
+    check("stomp dest decoded", hs[0][1] == "/q/a")
+    check("stomp colon/newline unescaped",
+          hs[1][1] == "a:b\nc")
+}
+
+// ---------- nats --------------------------------------------------
+
+fn test_nats() {
+    print("[nats]")
+    let line = nats_pub_msg("foo.bar", "", "hello")
+    check("nats PUB starts",   starts_with(line, "PUB foo.bar 5\r\n"))
+    check("nats PUB ends",     ends_with(line, "hello\r\n"))
+
+    let wire = "MSG foo.bar 1 5\r\nhello\r\n"
+    let m = nats_parse_message(wire)
+    check("nats MSG op",      m["op"] == "MSG")
+    check("nats MSG subject", m["subject"] == "foo.bar")
+    check("nats MSG payload", m["payload"] == "hello")
+    check("nats MSG consumed", m["consumed"] == len(wire))
+
+    let ok = nats_parse_message("+OK\r\n")
+    check("nats +OK",         ok["op"] == "OK")
+    let err = nats_parse_message("-ERR 'bad'\r\n")
+    check("nats -ERR",        err["op"] == "ERR")
+}
+
+// ---------- driver ------------------------------------------------
+
+fn main() {
+    print("=== Spiral Wave 5 — streaming/messaging ===")
+    test_kafka()
+    test_amqp()
+    test_mqtt5()
+    test_stomp()
+    test_nats()
+    print("---")
+    print("pass=" + str(PASS) + " fail=" + str(FAIL))
+}
+
+main()

@@ -1,0 +1,132 @@
+// ===================================================================
+// stdlib/nats.ltl  —  NATS core line protocol
+// -------------------------------------------------------------------
+// Minimal client-side codec for NATS (text-based, \r\n delimited).
+// Commands:
+//     CONNECT {json}\r\n
+//     PUB <subject> [reply] <#bytes>\r\n<payload>\r\n
+//     SUB <subject> [queue] <sid>\r\n
+//     UNSUB <sid> [max]\r\n
+//     PING\r\n  PONG\r\n
+// Server → client:
+//     MSG <subject> <sid> [reply] <#bytes>\r\n<payload>\r\n
+//     +OK\r\n  -ERR '<reason>'\r\n  INFO {json}\r\n
+// ===================================================================
+
+// -- Client → server ------------------------------------------------
+
+pub fn connect(opts_json: str) -> str {
+    return "CONNECT " + opts_json + "\r\n"
+}
+
+pub fn pub_msg(subject: str, reply: str, payload: str) -> str {
+    let hdr = "PUB " + subject
+    if reply != "" { hdr = hdr + " " + reply }
+    hdr = hdr + " " + str(len(payload)) + "\r\n"
+    return hdr + payload + "\r\n"
+}
+
+pub fn sub(subject: str, queue: str, sid: str) -> str {
+    let out = "SUB " + subject
+    if queue != "" { out = out + " " + queue }
+    out = out + " " + sid + "\r\n"
+    return out
+}
+
+pub fn unsub(sid: str, max: int) -> str {
+    let out = "UNSUB " + sid
+    if max > 0 { out = out + " " + str(max) }
+    return out + "\r\n"
+}
+
+pub fn ping() -> str { return "PING\r\n" }
+pub fn pong() -> str { return "PONG\r\n" }
+
+// -- Server → client parser ----------------------------------------
+
+fn split_ws(s: str) -> list {
+    // Split on runs of spaces/tabs; NATS uses single spaces but be
+    // forgiving.
+    let out = []
+    let cur = ""
+    let i = 0
+    while i < len(s) {
+        let c = char_at(s, i)
+        if c == " " || c == "\t" {
+            if len(cur) > 0 { out = out + [cur]; cur = "" }
+        } else {
+            cur = cur + c
+        }
+        i = i + 1
+    }
+    if len(cur) > 0 { out = out + [cur] }
+    return out
+}
+
+/// Parse one server line (and payload if MSG) out of `buf`.
+/// Returns a map with at least {"op": "...", "consumed": N} or
+/// nil if the frame is incomplete.
+pub fn parse_message(buf: str) -> map {
+    let n = len(buf)
+    let line_end = index_of(buf, "\r\n")
+    if line_end < 0 { return nil }
+    let line = slice(buf, 0, line_end)
+    let rest_start = line_end + 2
+    let m = {}
+    if starts_with(line, "PING") {
+        m["op"] = "PING"
+        m["consumed"] = rest_start
+        return m
+    }
+    if starts_with(line, "PONG") {
+        m["op"] = "PONG"
+        m["consumed"] = rest_start
+        return m
+    }
+    if starts_with(line, "+OK") {
+        m["op"] = "OK"
+        m["consumed"] = rest_start
+        return m
+    }
+    if starts_with(line, "-ERR") {
+        m["op"] = "ERR"
+        m["reason"] = slice(line, 5, len(line))
+        m["consumed"] = rest_start
+        return m
+    }
+    if starts_with(line, "INFO ") {
+        m["op"] = "INFO"
+        m["info"] = slice(line, 5, len(line))
+        m["consumed"] = rest_start
+        return m
+    }
+    if starts_with(line, "MSG ") {
+        let parts = split_ws(slice(line, 4, len(line)))
+        let np = len(parts)
+        if np < 3 { return nil }
+        let subject = parts[0]
+        let sid = parts[1]
+        let reply = ""
+        let nbytes = 0
+        if np == 3 {
+            nbytes = try_int(parts[2], 0)
+        } else {
+            reply = parts[2]
+            nbytes = try_int(parts[3], 0)
+        }
+        if n < rest_start + nbytes + 2 { return nil }
+        let payload = slice(buf, rest_start, rest_start + nbytes)
+        m["op"] = "MSG"
+        m["subject"] = subject
+        m["sid"] = sid
+        m["reply"] = reply
+        m["payload"] = payload
+        m["consumed"] = rest_start + nbytes + 2
+        return m
+    }
+    // Unknown / partial.
+    m["op"] = "UNKNOWN"
+    m["raw"] = line
+    m["consumed"] = rest_start
+    return m
+}
