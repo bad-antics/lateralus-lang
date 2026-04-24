@@ -1,80 +1,181 @@
-// ═══════════════════════════════════════════════════════════
-// LATERALUS — Rope
-// Standard library module for rope operations
-// ═══════════════════════════════════════════════════════════
-// ═══════════════════════════════════════════════════════════
-// Rope data structure for efficient large string manipulation —
-// ( O(1) prepend, append, insert, delete )
-// ═══════════════════════════════════════════════════════════
+// ===================================================================
+// stdlib/rope.ltl  —  Balanced rope (fast string edits)
+// -------------------------------------------------------------------
+// A rope is a binary tree of immutable string leaves that supports
+// O(log n) concat/split/insert/delete, beating the O(n²) cost of
+// naive string concatenation in hot loops (editors, log assemblers,
+// templating engines).
+//
+// Nodes:
+//     leaf:    {kind:"leaf",  text:str,  len:int}
+//     branch:  {kind:"branch",left:map,  right:map, len:int, weight:int}
+// `weight` is the total length of the left subtree (the classic
+// "rope weight" used to split at an index in O(log n)).
+// ===================================================================
 
--- module Rope
-import strings
+let ROPE_LEAF_MAX = 64   // leaves above this length get re-split
 
-struct Node {
-    char: str,
-    next: *Node,
+fn map_leaf(s: str) -> map {
+    let m = {}
+    m["kind"] = "leaf"
+    m["text"] = s
+    m["len"]  = len(s)
+    return m
 }
 
-struct Rope {
-    head: *Node,
-    tail: *Node,
+fn map_branch(l: map, r: map) -> map {
+    let m = {}
+    m["kind"]   = "branch"
+    m["left"]   = l
+    m["right"]  = r
+    m["len"]    = l["len"] + r["len"]
+    m["weight"] = l["len"]
+    return m
 }
 
-fn new() -> Rope {
-    let node = { char: '', next: nil };
-    Rope { head: node, tail: node }
-}
-
--- O(n) function to convert a string into a rope
-fn from_string(s: str) -> Rope {
-    let mut node = Rope::new();
-    let mut prev = s.chars().map(|c| { c: c, next: nil });
-    node.head.next = prev;
-    node.tail.next = nil;
-    Rope { head: node.head.next, tail: node.tail }
-}
-
--- O(1) prepends the given string onto the rope
-fn prepend(s: str, r: Rope) -> Rope {
-    let node = { char: s.chars().next().unwrap(), next: r.head };
-    Rope { head: node, tail: r.tail }
-}
-
--- O(1) appends the given string onto the rope
-fn append(s: str, r: Rope) -> Rope {
-    let node = { char: s.chars().last().unwrap(), next: r.tail };
-    Rope { head: r.head, tail: node }
-}
-
--- O(1) inserts the given string at the specified position in the rope
-fn insert(s: str, pos: int, r: Rope) -> Rope {
-    if pos == 0 {
-        return r.prepend(s);
-    } else if pos >= len(r) {
-        return r.append(s);
+pub fn from_str(s: str) -> map {
+    let n = map_leaf(s)
+    if len(s) > ROPE_LEAF_MAX {
+        return rebalance(n)
     }
-    let mut node = Rope::new();
-    let mut prev = s.chars().map(|c| { c: c, next: nil });
-    let mut curr = r.head;
-    for _ in 0..pos - 1 {
-        curr = curr.next;
-    }
-    node.char = curr.char;
-    node.next = curr.next;
-    node.next = merge(node, curr.next);
-    Rope { head: node.next, tail: r.tail }
+    return n
 }
 
--- O(1) removes the first character from the rope
-fn delete() -> Rope {
-    if r.head.next.next.is_none() {
-        Rope::new()
-    } else {
-        Rope { head: r.head.next, tail: r.head.next.next }
-    }
+/// Total length of the rope.
+pub fn length(n: map) -> int { return n["len"] }
+
+/// O(1) concat — rebalance when depth skew is unbearable.
+pub fn concat(a: map, b: map) -> map {
+    if a["len"] == 0 { return b }
+    if b["len"] == 0 { return a }
+    return map_branch(a, b)
 }
 
--- O(n log n) function to split a rope into multiple ropes
-fn split(r: Rope) -> [Rope] {
-    let mut res = [];
-    while !r.head.next.is_none() {
+/// Index into the rope (returns a 1-char string).
+pub fn index(n: map, i: int) -> str {
+    while n["kind"] == "branch" {
+        if i < n["weight"] {
+            n = n["left"]
+        } else {
+            i = i - n["weight"]
+            n = n["right"]
+        }
+    }
+    return char_at(n["text"], i)
+}
+
+/// Split `n` into [left, right] at index `i`.
+pub fn split_at(n: map, i: int) -> list {
+    if n["kind"] == "leaf" {
+        let t = n["text"]
+        return [map_leaf(slice(t, 0, i)), map_leaf(slice(t, i, len(t)))]
+    }
+    let w = n["weight"]
+    if i < w {
+        let parts = split_at(n["left"], i)
+        return [parts[0], concat(parts[1], n["right"])]
+    }
+    if i > w {
+        let parts = split_at(n["right"], i - w)
+        return [concat(n["left"], parts[0]), parts[1]]
+    }
+    return [n["left"], n["right"]]
+}
+
+/// Insert a string at index `i`.
+pub fn insert(n: map, i: int, s: str) -> map {
+    let parts = split_at(n, i)
+    return concat(concat(parts[0], from_str(s)), parts[1])
+}
+
+/// Delete `count` chars starting at `i`.
+pub fn delete(n: map, i: int, count: int) -> map {
+    let p1 = split_at(n, i)
+    let p2 = split_at(p1[1], count)
+    return concat(p1[0], p2[1])
+}
+
+/// Extract substring [i, j).
+pub fn substr(n: map, i: int, j: int) -> str {
+    let out = ""
+    let stack = [n]
+    let skipped = 0
+    let taken = 0
+    let want = j - i
+    while len(stack) > 0 && taken < want {
+        let top = stack[len(stack) - 1]
+        stack = slice(stack, 0, len(stack) - 1)
+        if top["kind"] == "branch" {
+            stack = stack + [top["right"]]
+            stack = stack + [top["left"]]
+        } else {
+            let t = top["text"]
+            let tl = len(t)
+            if skipped + tl <= i {
+                skipped = skipped + tl
+            } else {
+                let start = 0
+                if skipped < i { start = i - skipped }
+                let remaining = want - taken
+                let end = tl
+                if end - start > remaining { end = start + remaining }
+                out = out + slice(t, start, end)
+                taken = taken + (end - start)
+                skipped = skipped + tl
+            }
+        }
+    }
+    return out
+}
+
+/// Flatten to a single string.
+pub fn to_str(n: map) -> str {
+    return substr(n, 0, n["len"])
+}
+
+// -- Rebalance -----------------------------------------------------
+
+fn collect_leaves(n: map, out: list) -> list {
+    if n["kind"] == "leaf" {
+        if n["len"] > 0 { out = out + [n] }
+        return out
+    }
+    out = collect_leaves(n["left"], out)
+    out = collect_leaves(n["right"], out)
+    return out
+}
+
+pub fn rebalance(n: map) -> map {
+    let leaves = collect_leaves(n, [])
+    if len(leaves) == 0 { return map_leaf("") }
+    let split_leaves = []
+    let i = 0
+    while i < len(leaves) {
+        let l = leaves[i]
+        let t = l["text"]
+        if len(t) <= ROPE_LEAF_MAX {
+            split_leaves = split_leaves + [l]
+        } else {
+            let off = 0
+            while off < len(t) {
+                let end = off + ROPE_LEAF_MAX
+                if end > len(t) { end = len(t) }
+                split_leaves = split_leaves + [map_leaf(slice(t, off, end))]
+                off = end
+            }
+        }
+        i = i + 1
+    }
+    let layer = split_leaves
+    while len(layer) > 1 {
+        let next = []
+        let j = 0
+        while j + 1 < len(layer) {
+            next = next + [map_branch(layer[j], layer[j + 1])]
+            j = j + 2
+        }
+        if j < len(layer) { next = next + [layer[j]] }
+        layer = next
+    }
+    return layer[0]
+}

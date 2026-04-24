@@ -1,0 +1,133 @@
+// ===================================================================
+// stdlib/radix_sort.ltl  —  O(n) sorts that beat comparison sorts
+// -------------------------------------------------------------------
+// Three non-comparison sorts:
+//   - counting_sort    : O(n + k) for small-range nonneg ints
+//   - radix_sort_u32   : LSD byte radix for u32, 4 passes
+//   - radix_sort_u64   : LSD byte radix for u64, 8 passes
+//   - radix_sort_str   : MSD character-bucket sort for strings
+//
+// For n ≥ a few thousand keys these beat any O(n log n) sort in the
+// interpreter because the inner loop is a tight shift + bucket
+// append instead of a comparator call per pair.
+// ===================================================================
+
+/// Stable counting sort over nonneg ints with known upper bound k.
+pub fn counting_sort(xs: list, k: int) -> list {
+    let counts = []
+    let i = 0
+    while i <= k { counts = counts + [0]; i = i + 1 }
+    i = 0
+    while i < len(xs) {
+        let v = xs[i]
+        counts[v] = counts[v] + 1
+        i = i + 1
+    }
+    let out = []
+    let v = 0
+    while v <= k {
+        let c = counts[v]
+        let j = 0
+        while j < c { out = out + [v]; j = j + 1 }
+        v = v + 1
+    }
+    return out
+}
+
+fn radix_pass(xs: list, shift: int) -> list {
+    // 256-way bucket sort on one byte.
+    let buckets = []
+    let b = 0
+    while b < 256 { buckets = buckets + [[]]; b = b + 1 }
+    let i = 0
+    while i < len(xs) {
+        let v = xs[i]
+        let k = (v >> shift) & 0xff
+        buckets[k] = buckets[k] + [v]
+        i = i + 1
+    }
+    let out = []
+    b = 0
+    while b < 256 {
+        out = out + buckets[b]
+        b = b + 1
+    }
+    return out
+}
+
+/// LSD byte radix sort for 32-bit unsigned ints.
+pub fn radix_sort_u32(xs: list) -> list {
+    xs = radix_pass(xs, 0)
+    xs = radix_pass(xs, 8)
+    xs = radix_pass(xs, 16)
+    xs = radix_pass(xs, 24)
+    return xs
+}
+
+/// LSD byte radix sort for 64-bit unsigned ints.
+pub fn radix_sort_u64(xs: list) -> list {
+    let shift = 0
+    while shift < 64 {
+        xs = radix_pass(xs, shift)
+        shift = shift + 8
+    }
+    return xs
+}
+
+/// Signed 32-bit: flip the sign bit before/after unsigned radix.
+pub fn radix_sort_i32(xs: list) -> list {
+    let flip = 0x80000000
+    let mask = 0xffffffff
+    let flipped = []
+    let i = 0
+    while i < len(xs) {
+        flipped = flipped + [(xs[i] ^ flip) & mask]
+        i = i + 1
+    }
+    flipped = radix_sort_u32(flipped)
+    let out = []
+    let j = 0
+    while j < len(flipped) {
+        let v = (flipped[j] ^ flip) & mask
+        // restore sign-extended negative
+        if (v & flip) != 0 { v = v - (1 << 32) }
+        out = out + [v]
+        j = j + 1
+    }
+    return out
+}
+
+// -- MSD string radix sort -----------------------------------------
+
+fn str_char_at(s: str, i: int) -> int {
+    if i >= len(s) { return -1 }
+    return bytes_of(char_at(s, i))[0]
+}
+
+fn msd_sort(xs: list, depth: int) -> list {
+    if len(xs) <= 1 { return xs }
+    // buckets[0] for "end of string", [1..256] for each byte value
+    let buckets = []
+    let b = 0
+    while b < 257 { buckets = buckets + [[]]; b = b + 1 }
+    let i = 0
+    while i < len(xs) {
+        let c = str_char_at(xs[i], depth)
+        let idx = c + 1   // -1 → 0
+        buckets[idx] = buckets[idx] + [xs[i]]
+        i = i + 1
+    }
+    let out = buckets[0]   // strings whose length == depth
+    b = 1
+    while b < 257 {
+        out = out + msd_sort(buckets[b], depth + 1)
+        b = b + 1
+    }
+    return out
+}
+
+/// MSD radix sort for a list of strings.  Stable with respect to
+/// equal keys.
+pub fn radix_sort_str(xs: list) -> list {
+    return msd_sort(xs, 0)
+}

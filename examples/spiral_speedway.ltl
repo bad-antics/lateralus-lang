@@ -1,0 +1,84 @@
+// ===================================================================
+// examples/spiral_speedway.ltl
+// -------------------------------------------------------------------
+// Wave 7 integrative demo — a single benchmark harness that exercises
+// every perf module introduced in this wave.
+//
+// This isn't about wall-clock numbers in the interpreter; it's about
+// demonstrating that the APIs compose into a sensible pipeline:
+//
+//   raw text → rope edits → byte hash → lz4 compress → roaring set
+//   of hashes → radix-sorted output
+// ===================================================================
+
+fn banner(s: str) {
+    print("-- " + s + " " + repeat("-", 48 - len(s)))
+}
+
+fn main() {
+    print("=== Spiral Speedway (Wave 7) ===")
+
+    // -- rope: build a 2 KB document via 32 inserts -----------------
+    banner("rope")
+    let r = rope_from_str("Lateralus ")
+    let i = 0
+    while i < 32 {
+        r = rope_insert(r, rope_length(r),
+                         "block-" + str(i) + " spiralling outward. ")
+        i = i + 1
+    }
+    let doc = rope_to_str(r)
+    print("rope length = " + str(len(doc)) + " chars")
+    print("first 60    = " + slice(doc, 0, 60))
+
+    // -- xxhash every word ------------------------------------------
+    banner("xxhash")
+    let words = split(doc, " ")
+    let hashes = []
+    let j = 0
+    while j < len(words) {
+        hashes = hashes + [xxhash_hash64_str(words[j], 0)]
+        j = j + 1
+    }
+    print("words     = " + str(len(words)))
+    print("h[0]      = " + str(hashes[0]))
+    print("h[last]   = " + str(hashes[len(hashes) - 1]))
+
+    // -- lz4 round-trip on the document bytes -----------------------
+    banner("lz4")
+    let src_bytes = bytes_of(doc)
+    let packed = lz4_compress(src_bytes)
+    let back   = lz4_decompress(packed)
+    let ratio  = (len(packed) * 1000) / len(src_bytes)
+    print("raw  = " + str(len(src_bytes)) + "B")
+    print("lz4  = " + str(len(packed))   + "B  (ratio " + str(ratio) + "‰)")
+    print("round-trip ok = " + str(len(back) == len(src_bytes)))
+
+    // -- roaring: the set of hashes (low32 only) --------------------
+    banner("roaring")
+    let bm = roaring_new_bitmap()
+    let k = 0
+    while k < len(hashes) {
+        bm = roaring_add(bm, hashes[k] & 0xffffffff)
+        k = k + 1
+    }
+    print("cardinality = " + str(roaring_cardinality(bm)))
+
+    // -- radix sort the low16 of each hash --------------------------
+    banner("radix_sort")
+    let lo16s = []
+    k = 0
+    while k < len(hashes) {
+        lo16s = lo16s + [hashes[k] & 0xffff]
+        k = k + 1
+    }
+    let sorted_lo = radix_sort_radix_sort_u32(lo16s)
+    print("sorted[0..5] = "
+          + str(sorted_lo[0]) + " "
+          + str(sorted_lo[1]) + " "
+          + str(sorted_lo[2]) + " "
+          + str(sorted_lo[3]) + " "
+          + str(sorted_lo[4]))
+}
+
+main()

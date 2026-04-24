@@ -1,0 +1,288 @@
+// ===================================================================
+// stdlib/roaring.ltl  —  Roaring bitmap (compressed integer sets)
+// -------------------------------------------------------------------
+// The data structure behind Lucene, ClickHouse, Druid, Apache Pinot.
+// 32-bit integers are split into a 16-bit container key (the high
+// word) and a 16-bit value (the low word).  Each container is either
+// - an ARRAY container (sorted list of u16) when cardinality <= 4096
+// - a BITMAP container (8192-byte bitmap over 65536 bits) otherwise
+//
+// This implementation uses a map[int→map] for containers keyed by
+// hi16.  Each container map carries:
+//     kind:   "array" | "bitmap"
+//     values: list[int]           (sorted, array containers only)
+//     bits:   list[int]           (length 1024 of u64, bitmap only)
+//     card:   int
+// ===================================================================
+
+let ROAR_ARR_MAX = 4096
+
+fn make_array_container() -> map {
+    let c = {}
+    c["kind"]   = "array"
+    c["values"] = []
+    c["card"]   = 0
+    return c
+}
+
+fn make_bitmap_container() -> map {
+    let c = {}
+    c["kind"] = "bitmap"
+    let bits = []
+    let i = 0
+    while i < 1024 { bits = bits + [0]; i = i + 1 }
+    c["bits"] = bits
+    c["card"] = 0
+    return c
+}
+
+/// Create an empty bitmap.
+pub fn new_bitmap() -> map {
+    let b = {}
+    b["containers"] = {}   // int hi16 → container map
+    return b
+}
+
+// -- internal array container ops ----------------------------------
+
+fn arr_lower_bound(xs: list, v: int) -> int {
+    let lo = 0
+    let hi = len(xs)
+    while lo < hi {
+        let mid = (lo + hi) >> 1
+        if xs[mid] < v { lo = mid + 1 }
+        else           { hi = mid }
+    }
+    return lo
+}
+
+fn arr_insert(c: map, v: int) -> map {
+    let xs = c["values"]
+    let idx = arr_lower_bound(xs, v)
+    if idx < len(xs) && xs[idx] == v { return c }
+    // insert at idx
+    let left  = slice(xs, 0, idx)
+    let right = slice(xs, idx, len(xs))
+    c["values"] = left + [v] + right
+    c["card"]   = c["card"] + 1
+    return c
+}
+
+fn arr_contains(c: map, v: int) -> bool {
+    let xs = c["values"]
+    let idx = arr_lower_bound(xs, v)
+    if idx < len(xs) && xs[idx] == v { return true }
+    return false
+}
+
+fn arr_to_bitmap(c: map) -> map {
+    let b = make_bitmap_container()
+    let xs = c["values"]
+    let i = 0
+    while i < len(xs) {
+        let v = xs[i]
+        let w = v >> 6
+        let bit = v & 63
+        let bits = b["bits"]
+        bits[w] = bits[w] | (1 << bit)
+        b["bits"] = bits
+        i = i + 1
+    }
+    b["card"] = c["card"]
+    return b
+}
+
+// -- internal bitmap container ops ---------------------------------
+
+fn bmp_set(c: map, v: int) -> map {
+    let w = v >> 6
+    let bit = v & 63
+    let bits = c["bits"]
+    let mask = 1 << bit
+    if (bits[w] & mask) == 0 {
+        bits[w] = bits[w] | mask
+        c["bits"] = bits
+        c["card"] = c["card"] + 1
+    }
+    return c
+}
+
+fn bmp_contains(c: map, v: int) -> bool {
+    let w = v >> 6
+    let bit = v & 63
+    let bits = c["bits"]
+    if (bits[w] & (1 << bit)) != 0 { return true }
+    return false
+}
+
+fn popcount64(x: int) -> int {
+    let c = 0
+    while x != 0 {
+        x = x & (x - 1)
+        c = c + 1
+    }
+    return c
+}
+
+// -- public surface ------------------------------------------------
+
+pub fn add(b: map, v: int) -> map {
+    let hi = (v >> 16) & 0xffff
+    let lo = v & 0xffff
+    let containers = b["containers"]
+    let key = str(hi)
+    let c = nil
+    if contains(containers, key) {
+        c = containers[key]
+    } else {
+        c = make_array_container()
+    }
+    if c["kind"] == "array" {
+        c = arr_insert(c, lo)
+        if c["card"] > ROAR_ARR_MAX {
+            c = arr_to_bitmap(c)
+        }
+    } else {
+        c = bmp_set(c, lo)
+    }
+    containers[key] = c
+    b["containers"] = containers
+    return b
+}
+
+pub fn has(b: map, v: int) -> bool {
+    let hi = (v >> 16) & 0xffff
+    let lo = v & 0xffff
+    let containers = b["containers"]
+    let key = str(hi)
+    if not contains(containers, key) { return false }
+    let c = containers[key]
+    if c["kind"] == "array" { return arr_contains(c, lo) }
+    return bmp_contains(c, lo)
+}
+
+pub fn cardinality(b: map) -> int {
+    let total = 0
+    let ks = keys(b["containers"])
+    let i = 0
+    while i < len(ks) {
+        total = total + b["containers"][ks[i]]["card"]
+        i = i + 1
+    }
+    return total
+}
+
+/// Union two bitmaps into a new one.  O(total elements).
+pub fn union(a: map, b: map) -> map {
+    let out = new_bitmap()
+    let ca = a["containers"]
+    let cb = b["containers"]
+    // re-add all elements (simple, correct).
+    let kas = keys(ca)
+    let i = 0
+    while i < len(kas) {
+        let k = kas[i]
+        let c = ca[k]
+        let hi = try_int(k, 0)
+        if c["kind"] == "array" {
+            let xs = c["values"]
+            let j = 0
+            while j < len(xs) {
+                out = add(out, (hi << 16) | xs[j])
+                j = j + 1
+            }
+        } else {
+            let bits = c["bits"]
+            let w = 0
+            while w < 1024 {
+                let word = bits[w]
+                if word != 0 {
+                    let bit = 0
+                    while bit < 64 {
+                        if (word & (1 << bit)) != 0 {
+                            out = add(out, (hi << 16) | ((w << 6) | bit))
+                        }
+                        bit = bit + 1
+                    }
+                }
+                w = w + 1
+            }
+        }
+        i = i + 1
+    }
+    let kbs = keys(cb)
+    let j = 0
+    while j < len(kbs) {
+        let k = kbs[j]
+        let c = cb[k]
+        let hi = try_int(k, 0)
+        if c["kind"] == "array" {
+            let xs = c["values"]
+            let m = 0
+            while m < len(xs) {
+                out = add(out, (hi << 16) | xs[m])
+                m = m + 1
+            }
+        } else {
+            let bits = c["bits"]
+            let w = 0
+            while w < 1024 {
+                let word = bits[w]
+                if word != 0 {
+                    let bit = 0
+                    while bit < 64 {
+                        if (word & (1 << bit)) != 0 {
+                            out = add(out, (hi << 16) | ((w << 6) | bit))
+                        }
+                        bit = bit + 1
+                    }
+                }
+                w = w + 1
+            }
+        }
+        j = j + 1
+    }
+    return out
+}
+
+/// Materialise as a sorted list.  For debugging / tests.
+pub fn to_list(b: map) -> list {
+    let out = []
+    let ks = keys(b["containers"])
+    // collect hi keys as ints and sort
+    let his = []
+    let i = 0
+    while i < len(ks) { his = his + [try_int(ks[i], 0)]; i = i + 1 }
+    his = sorted(his)
+    let k = 0
+    while k < len(his) {
+        let hi = his[k]
+        let c = b["containers"][str(hi)]
+        if c["kind"] == "array" {
+            let xs = c["values"]
+            let j = 0
+            while j < len(xs) {
+                out = out + [(hi << 16) | xs[j]]
+                j = j + 1
+            }
+        } else {
+            let bits = c["bits"]
+            let w = 0
+            while w < 1024 {
+                let word = bits[w]
+                if word != 0 {
+                    let bit = 0
+                    while bit < 64 {
+                        if (word & (1 << bit)) != 0 {
+                            out = out + [(hi << 16) | ((w << 6) | bit)]
+                        }
+                        bit = bit + 1
+                    }
+                }
+                w = w + 1
+            }
+        }
+        k = k + 1
+    }
+    return out
+}

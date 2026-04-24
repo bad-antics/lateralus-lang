@@ -1,0 +1,163 @@
+// ===================================================================
+// stdlib/lz4.ltl  —  LZ4 block format codec (pure Lateralus)
+// -------------------------------------------------------------------
+// Implements the LZ4 block format (lz4 frame NOT included — use the
+// "legacy" block mode: token byte, literal length extension, literal
+// bytes, 2-byte little-endian match offset, match length extension).
+//
+// Reference: https://github.com/lz4/lz4/blob/dev/doc/lz4_Block_format.md
+//
+// The compressor is a simple 16-bit hash-chain greedy matcher
+// (lz4-style "fast" mode); the decompressor is canonical.
+// ===================================================================
+
+let LZ4_MINMATCH   = 4
+let LZ4_HASH_BITS  = 12
+let LZ4_HASH_SIZE  = 4096       // 1 << 12
+let LZ4_HASH_MASK  = 4095
+let LZ4_MF_LIMIT   = 12         // last match cannot start within 12 of end
+let LZ4_LAST_LITS  = 5          // last 5 bytes are always literals
+let LZ4_MAXD       = 65535
+
+fn hash4(buf: list, i: int) -> int {
+    let v = buf[i] | (buf[i + 1] << 8)
+          | (buf[i + 2] << 16) | (buf[i + 3] << 24)
+    // Knuth multiplicative hash → top LZ4_HASH_BITS bits.
+    return ((v * 2654435761) >> (32 - LZ4_HASH_BITS)) & LZ4_HASH_MASK
+}
+
+fn emit_var_len(out: list, v: int) -> list {
+    while v >= 255 {
+        out = out + [255]
+        v = v - 255
+    }
+    return out + [v]
+}
+
+/// Compress a byte list to an LZ4 block (no frame header).
+pub fn compress(src: list) -> list {
+    let n = len(src)
+    let out = []
+    let anchor = 0       // start of pending literals
+    let i = 0
+    if n < LZ4_MF_LIMIT + LZ4_LAST_LITS {
+        // too small — whole thing as one literal run
+        let tok = 0
+        let lit_len = n
+        if lit_len >= 15 {
+            tok = 0xf0
+            out = out + [tok]
+            out = emit_var_len(out, lit_len - 15)
+        } else {
+            tok = (lit_len << 4) & 0xff
+            out = out + [tok]
+        }
+        let k = 0
+        while k < n { out = out + [src[k]]; k = k + 1 }
+        return out
+    }
+    // hash table: position of last occurrence for each 4-byte prefix
+    let htab = []
+    let h = 0
+    while h < LZ4_HASH_SIZE { htab = htab + [-1]; h = h + 1 }
+    let end_limit = n - LZ4_MF_LIMIT - LZ4_LAST_LITS
+    while i <= end_limit {
+        let hv = hash4(src, i)
+        let ref_pos = htab[hv]
+        htab[hv] = i
+        if ref_pos >= 0 && i - ref_pos <= LZ4_MAXD
+           && src[ref_pos]     == src[i]
+           && src[ref_pos + 1] == src[i + 1]
+           && src[ref_pos + 2] == src[i + 2]
+           && src[ref_pos + 3] == src[i + 3] {
+            // match — extend
+            let mlen = 4
+            while i + mlen < n - LZ4_LAST_LITS
+                  && src[ref_pos + mlen] == src[i + mlen] {
+                mlen = mlen + 1
+            }
+            let lit_len = i - anchor
+            let mlen_t = mlen - LZ4_MINMATCH
+            // token
+            let t_lit = lit_len
+            if t_lit > 15 { t_lit = 15 }
+            let t_m = mlen_t
+            if t_m > 15 { t_m = 15 }
+            let tok = ((t_lit << 4) | t_m) & 0xff
+            out = out + [tok]
+            if lit_len >= 15 { out = emit_var_len(out, lit_len - 15) }
+            // literals
+            let k2 = 0
+            while k2 < lit_len { out = out + [src[anchor + k2]]; k2 = k2 + 1 }
+            // match offset (little-endian)
+            let off = i - ref_pos
+            out = out + [off & 0xff, (off >> 8) & 0xff]
+            if mlen_t >= 15 { out = emit_var_len(out, mlen_t - 15) }
+            i = i + mlen
+            anchor = i
+        } else {
+            i = i + 1
+        }
+    }
+    // last literal run (contains the tail)
+    let lit_len = n - anchor
+    let tok = 0
+    if lit_len >= 15 {
+        tok = 0xf0
+        out = out + [tok]
+        out = emit_var_len(out, lit_len - 15)
+    } else {
+        tok = (lit_len << 4) & 0xff
+        out = out + [tok]
+    }
+    let k3 = 0
+    while k3 < lit_len { out = out + [src[anchor + k3]]; k3 = k3 + 1 }
+    return out
+}
+
+/// Decompress an LZ4 block.
+pub fn decompress(src: list) -> list {
+    let n = len(src)
+    let out = []
+    let i = 0
+    while i < n {
+        let tok = src[i]
+        i = i + 1
+        // -- literal length
+        let lit_len = (tok >> 4) & 0x0f
+        if lit_len == 15 {
+            let more = true
+            while more {
+                let b = src[i]
+                i = i + 1
+                lit_len = lit_len + b
+                if b != 255 { more = false }
+            }
+        }
+        // -- literals
+        let k = 0
+        while k < lit_len { out = out + [src[i + k]]; k = k + 1 }
+        i = i + lit_len
+        if i >= n { return out }
+        // -- match offset
+        let off = src[i] | (src[i + 1] << 8)
+        i = i + 2
+        // -- match length
+        let mlen = tok & 0x0f
+        if mlen == 15 {
+            let more2 = true
+            while more2 {
+                let b2 = src[i]
+                i = i + 1
+                mlen = mlen + b2
+                if b2 != 255 { more2 = false }
+            }
+        }
+        mlen = mlen + LZ4_MINMATCH
+        // -- copy from history (byte-wise to support overlap / RLE)
+        let start = len(out) - off
+        let m = 0
+        while m < mlen { out = out + [out[start + m]]; m = m + 1 }
+    }
+    return out
+}

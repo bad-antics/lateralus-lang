@@ -1,0 +1,171 @@
+// ===================================================================
+// tests/stdlib_spiral_wave_7.ltl
+// Perf / niche modules: xxhash, lz4, roaring, rope, radix_sort.
+// ===================================================================
+
+let PASS = 0
+let FAIL = 0
+
+fn check(name: str, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        print("  ok  " + name)
+    } else {
+        FAIL = FAIL + 1
+        print("  FAIL " + name)
+    }
+}
+
+// ---------- xxhash -------------------------------------------------
+
+fn test_xxhash() {
+    print("[xxhash]")
+    let h_empty = xxhash_hash64([], 0)
+    // Known XXH64 value for "" with seed 0.
+    check("xxh64('', 0) const", h_empty == 0xEF46DB3751D8E999)
+    let h_abc = xxhash_hash64_str("abc", 0)
+    // Same string, same seed, same hash.
+    let h_abc2 = xxhash_hash64_str("abc", 0)
+    check("xxh64 deterministic", h_abc == h_abc2)
+    // Different seed → different hash.
+    let h_abc_s = xxhash_hash64_str("abc", 1)
+    check("xxh64 seed differs", h_abc != h_abc_s)
+    // Bit width is 64.
+    check("xxh64 fits in 64 bits", h_abc <= 0xFFFFFFFFFFFFFFFF)
+    // FNV1a basic sanity.
+    let fa = xxhash_fnv1a_64_str("")
+    check("fnv1a empty = offset basis",
+          fa == 0xCBF29CE484222325)
+}
+
+// ---------- lz4 ----------------------------------------------------
+
+fn roundtrip_lz4(s: str) -> bool {
+    let src = bytes_of(s)
+    let packed = lz4_compress(src)
+    let back = lz4_decompress(packed)
+    if len(back) != len(src) { return false }
+    let i = 0
+    while i < len(src) {
+        if back[i] != src[i] { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn test_lz4() {
+    print("[lz4]")
+    check("empty",          roundtrip_lz4(""))
+    check("short",          roundtrip_lz4("hello"))
+    check("20B no match",   roundtrip_lz4("abcdefghijABCDEFGHIJ"))
+    // Highly repetitive payload — compressor should find matches.
+    check("RLE 512",        roundtrip_lz4(repeat("A", 512)))
+    check("pattern 300",    roundtrip_lz4(repeat("abcd", 75)))
+    // Mixed text.
+    check("mixed",
+          roundtrip_lz4("The quick brown fox jumps over the lazy dog. "
+                      + "The quick brown fox jumps over the lazy dog. "
+                      + "The quick brown fox jumps over the lazy dog."))
+}
+
+// ---------- roaring ------------------------------------------------
+
+fn test_roaring() {
+    print("[roaring]")
+    let b = roaring_new_bitmap()
+    b = roaring_add(b, 7)
+    b = roaring_add(b, 100000)
+    b = roaring_add(b, 7)        // duplicate
+    b = roaring_add(b, 0xfedcba) // high16 = 0xfe, low16 = 0xdcba
+    check("card = 3",       roaring_cardinality(b) == 3)
+    check("has 7",          roaring_has(b, 7))
+    check("has 100000",     roaring_has(b, 100000))
+    check("has 0xfedcba",   roaring_has(b, 0xfedcba))
+    check("lacks 8",        roaring_has(b, 8) == false)
+
+    // Stress: promote an array container to a bitmap container.
+    let big = roaring_new_bitmap()
+    let i = 0
+    while i < 5000 {
+        big = roaring_add(big, i)
+        i = i + 1
+    }
+    check("promoted card",  roaring_cardinality(big) == 5000)
+    check("promoted has 0", roaring_has(big, 0))
+    check("promoted has 4999", roaring_has(big, 4999))
+    check("promoted lacks 5000", roaring_has(big, 5000) == false)
+
+    // Union.
+    let a = roaring_new_bitmap()
+    a = roaring_add(a, 1)
+    a = roaring_add(a, 2)
+    let c = roaring_new_bitmap()
+    c = roaring_add(c, 2)
+    c = roaring_add(c, 3)
+    let u = roaring_union(a, c)
+    check("union card = 3", roaring_cardinality(u) == 3)
+}
+
+// ---------- rope ---------------------------------------------------
+
+fn test_rope() {
+    print("[rope]")
+    let r = rope_from_str("hello, world")
+    check("length",       rope_length(r) == 12)
+    check("index 0",      rope_index(r, 0) == "h")
+    check("index 7",      rope_index(r, 7) == "w")
+    let r2 = rope_insert(r, 5, " there")
+    check("insert length", rope_length(r2) == 18)
+    check("insert text",   rope_to_str(r2) == "hello there, world")
+    let r3 = rope_delete(r2, 5, 6)
+    check("delete text",   rope_to_str(r3) == "hello, world")
+    check("substr mid",    rope_substr(r, 7, 12) == "world")
+    // Stress: 500 concats → force rebalance path.
+    let stress = rope_from_str("")
+    let i = 0
+    while i < 500 {
+        stress = rope_concat(stress, rope_from_str("x"))
+        i = i + 1
+    }
+    check("stress length", rope_length(stress) == 500)
+    let rb = rope_rebalance(stress)
+    check("rebalance len", rope_length(rb) == 500)
+    check("rebalance str", rope_to_str(rb) == repeat("x", 500))
+}
+
+// ---------- radix_sort ---------------------------------------------
+
+fn test_radix() {
+    print("[radix_sort]")
+    let a = radix_sort_counting_sort([3, 1, 4, 1, 5, 9, 2, 6, 5], 9)
+    check("counting sorted",
+          len(a) == 9 && a[0] == 1 && a[1] == 1 && a[8] == 9)
+
+    let u = radix_sort_radix_sort_u32([0xdeadbeef, 1, 0xffff, 0x12345678, 0])
+    check("u32 sorted asc",
+          u[0] == 0 && u[1] == 1 && u[2] == 0xffff
+          && u[3] == 0x12345678 && u[4] == 0xdeadbeef)
+
+    let u64s = radix_sort_radix_sort_u64([0x100000000, 42, 0x200000000])
+    check("u64 sorted",
+          u64s[0] == 42 && u64s[1] == 0x100000000
+          && u64s[2] == 0x200000000)
+
+    let s = radix_sort_radix_sort_str(["banana", "apple", "app", "cherry", "applet"])
+    check("str sorted",
+          s[0] == "app" && s[1] == "apple" && s[2] == "applet"
+          && s[3] == "banana" && s[4] == "cherry")
+}
+
+fn main() {
+    print("=== Spiral Wave 7 — perf/niche ===")
+    test_xxhash()
+    test_lz4()
+    test_roaring()
+    test_rope()
+    test_radix()
+    print("---")
+    print("pass=" + str(PASS) + " fail=" + str(FAIL))
+}
+
+main()

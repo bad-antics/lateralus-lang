@@ -4,6 +4,47 @@
 
 All notable changes to the Lateralus Language toolchain are documented here.
 
+## [3.9.0-dev] — Spiral Wave 7: Performance & Niche Primitives
+
+Five speed-oriented stdlib modules — hot-loop primitives and fast
+codecs that fill gaps left by the mainstream standard libraries:
+
+- **stdlib/xxhash.ltl** — canonical XXH64 non-cryptographic hash
+  (byte-identical to Cyan4973/xxHash output), plus a compact
+  FNV-1a-64 helper for tiny-key use cases.  These are the hashes
+  behind ClickHouse, RocksDB, Parquet, and Zstd frame checksums.
+- **stdlib/lz4.ltl** — LZ4 block-format compressor and decompressor
+  in pure Lateralus.  Canonical token / literal-length / 2-byte
+  little-endian offset / match-length layout; greedy hash-chain
+  matcher on the compress side; overlap-safe byte copy on decode.
+- **stdlib/roaring.ltl** — Roaring bitmap (compressed integer sets).
+  Splits u32 keys into a 16-bit container key + 16-bit value,
+  choosing array or bitmap containers adaptively; automatic
+  promotion past 4096 elements.  `add`, `has`, `cardinality`,
+  `union`, `to_list`.
+- **stdlib/rope.ltl** — balanced-rope string, replacing the legacy
+  linked-list placeholder.  O(log n) concat/split/insert/delete,
+  Fibonacci-pair rebalance, and O(k) substring extraction that
+  walks only the leaves it needs.
+- **stdlib/radix_sort.ltl** — non-comparison sorts that beat
+  quicksort past a few thousand keys: `counting_sort`,
+  `radix_sort_u32` (4-pass LSD byte), `radix_sort_u64` (8-pass),
+  `radix_sort_i32` (sign-bit flip wrapper), and MSD `radix_sort_str`.
+
+### Examples
+
+- **examples/spiral_speedway.ltl** — single pipeline: rope → xxhash
+  → lz4 → roaring → radix_sort, exercising every Wave 7 module end
+  to end.
+
+### Tests
+
+- **tests/stdlib_spiral_wave_7.ltl** — canonical XXH64 empty-string
+  constant, LZ4 round-trips across empty / short / RLE / pattern /
+  mixed payloads, roaring array→bitmap promotion at >4096 elements
+  plus union, rope stress at 500 concats with rebalance equality,
+  and radix sort correctness for u32 / u64 / string keys.
+
 ## [3.8.0-dev] — Spiral Wave 6: Telemetry & Structured Logging
 
 Five stdlib modules covering the most common wire formats for
