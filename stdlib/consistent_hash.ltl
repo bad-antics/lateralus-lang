@@ -1,0 +1,132 @@
+// ===================================================================
+// stdlib/consistent_hash.ltl  —  Ring-based consistent hashing
+// -------------------------------------------------------------------
+// Classic consistent-hash ring with configurable virtual-node density.
+// Each (node, replica_index) pair is hashed via FNV-1a/64 onto a
+// 32-bit integer ring; lookups binary-search for the first vnode
+// clockwise from the key's hash.
+// ===================================================================
+
+import hash
+
+// -- Construction ---------------------------------------------------
+
+pub fn new_ring(vnodes_per_node: int) -> map {
+    let r = {}
+    r["vnodes"] = vnodes_per_node
+    r["points"]  = []  // sorted list of [hash, node_name]
+    r["nodes"]   = []  // registered node names
+    return r
+}
+
+pub fn ring_size(r: map) -> int {
+    return len(r["points"])
+}
+
+pub fn node_count(r: map) -> int {
+    return len(r["nodes"])
+}
+
+// -- Internal --------------------------------------------------------
+
+pub fn hash_point(node: str, replica: int) -> int {
+    return hash_fnv1a_64(node + "#" + str(replica)) & 0xffffffff
+}
+
+/// Insertion-sort helper — the ring stays sorted by hash so that
+/// `lookup` can binary-search.
+pub fn insort(points: list, entry: list) -> list {
+    let i = 0
+    while i < len(points) && points[i][0] < entry[0] {
+        i = i + 1
+    }
+    return slice(points, 0, i) + [entry] + slice(points, i, len(points))
+}
+
+// -- Public API -----------------------------------------------------
+
+pub fn add_node(r: map, name: str) {
+    // Skip duplicates.
+    let i = 0
+    while i < len(r["nodes"]) {
+        if r["nodes"][i] == name { return }
+        i = i + 1
+    }
+    r["nodes"] = r["nodes"] + [name]
+    let k = 0
+    while k < r["vnodes"] {
+        let h = hash_point(name, k)
+        r["points"] = insort(r["points"], [h, name])
+        k = k + 1
+    }
+}
+
+pub fn remove_node(r: map, name: str) {
+    let kept_points = []
+    let i = 0
+    while i < len(r["points"]) {
+        if r["points"][i][1] != name {
+            kept_points = kept_points + [r["points"][i]]
+        }
+        i = i + 1
+    }
+    r["points"] = kept_points
+    let kept_nodes = []
+    i = 0
+    while i < len(r["nodes"]) {
+        if r["nodes"][i] != name {
+            kept_nodes = kept_nodes + [r["nodes"][i]]
+        }
+        i = i + 1
+    }
+    r["nodes"] = kept_nodes
+}
+
+/// Map a key to the node that owns it.  Returns "" on an empty ring.
+pub fn lookup(r: map, key: str) -> str {
+    if len(r["points"]) == 0 { return "" }
+    let h = hash_fnv1a_64(key) & 0xffffffff
+    // Binary search for the first point with hash >= h.
+    let lo = 0
+    let hi = len(r["points"])
+    while lo < hi {
+        let mid = (lo + hi) / 2
+        if r["points"][mid][0] < h {
+            lo = mid + 1
+        } else {
+            hi = mid
+        }
+    }
+    if lo >= len(r["points"]) { lo = 0 }  // wrap
+    return r["points"][lo][1]
+}
+
+/// Pick the top-N distinct nodes clockwise from `key` — useful for
+/// picking replica owners.
+pub fn lookup_n(r: map, key: str, n: int) -> list {
+    if len(r["points"]) == 0 { return [] }
+    let h = hash_fnv1a_64(key) & 0xffffffff
+    let lo = 0
+    let hi = len(r["points"])
+    while lo < hi {
+        let mid = (lo + hi) / 2
+        if r["points"][mid][0] < h {
+            lo = mid + 1
+        } else {
+            hi = mid
+        }
+    }
+    let out = []
+    let seen = {}
+    let steps = 0
+    while len(out) < n && steps < len(r["points"]) {
+        let idx = (lo + steps) % len(r["points"])
+        let cand = r["points"][idx][1]
+        if not contains(keys(seen), cand) {
+            seen[cand] = true
+            out = out + [cand]
+        }
+        steps = steps + 1
+    }
+    return out
+}

@@ -1,0 +1,252 @@
+// ===================================================================
+// tests/stdlib_spiral_wave_3.ltl
+// -------------------------------------------------------------------
+// Round-trip + known-vector tests for every Spiral Wave 3 module.
+// ===================================================================
+
+import resp
+import protobuf
+import bloom
+import consistent_hash
+import merkle
+
+// -- resp -----------------------------------------------------------
+
+pub fn test_resp_command_roundtrip() -> bool {
+    let wire = resp_enc_command(["SET", "k", "v"])
+    let r = resp_decode(wire, 0)
+    let argv = r[0]
+    if len(argv) != 3 { return false }
+    return argv[0] == "SET" && argv[1] == "k" && argv[2] == "v"
+}
+
+pub fn test_resp_integer_roundtrip() -> bool {
+    let wire = resp_enc_integer(42)
+    let r = resp_decode(wire, 0)
+    return r[0] == 42
+}
+
+pub fn test_resp_null_bulk() -> bool {
+    let wire = resp_enc_null_bulk()
+    let r = resp_decode(wire, 0)
+    return r[0] == nil
+}
+
+pub fn test_resp_bulk_with_crlf_content() -> bool {
+    // Bulk strings are length-prefixed, so embedded CRLF must survive.
+    let payload = "line1\r\nline2"
+    let wire = resp_enc_bulk_string(payload)
+    let r = resp_decode(wire, 0)
+    return r[0] == payload
+}
+
+pub fn test_resp_nested_array() -> bool {
+    let inner = resp_enc_command(["A", "B"])
+    // Frame as a 1-element array containing the inner array.
+    let wire = "*1\r\n" + inner
+    let r = resp_decode(wire, 0)
+    if len(r[0]) != 1 { return false }
+    return len(r[0][0]) == 2 && r[0][0][0] == "A"
+}
+
+// -- protobuf -------------------------------------------------------
+
+pub fn test_protobuf_varint_roundtrip() -> bool {
+    let samples = [0, 1, 127, 128, 300, 16384, 2097152]
+    let i = 0
+    while i < len(samples) {
+        let enc = protobuf_enc_varint(samples[i])
+        let dec = protobuf_dec_varint(enc, 0)
+        if dec[0] != samples[i] { return false }
+        if dec[1] != len(enc) { return false }
+        i = i + 1
+    }
+    return true
+}
+
+pub fn test_protobuf_zigzag() -> bool {
+    let samples = [0, 1, 0 - 1, 2, 0 - 2, 2147483647, 0 - 2147483648]
+    let i = 0
+    while i < len(samples) {
+        if protobuf_zz_decode(protobuf_zz_encode(samples[i])) != samples[i] {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+pub fn test_protobuf_string_field() -> bool {
+    // field_number 3, wire_type 2 (length-delimited) for "hi"
+    // expected tag = (3 << 3) | 2 = 0x1a, then len=2, then "hi"
+    let bytes = protobuf_enc_string(3, "hi")
+    if bytes[0] != 0x1a { return false }
+    if bytes[1] != 2 { return false }
+    if bytes[2] != 104 { return false }
+    if bytes[3] != 105 { return false }
+    let parsed = protobuf_dec_field(bytes, 0)
+    if parsed[0] != 3 { return false }        // field_number
+    if parsed[1] != 2 { return false }        // wire_type
+    return len(parsed[2]) == 2 && parsed[2][0] == 104
+}
+
+pub fn test_protobuf_multi_field_roundtrip() -> bool {
+    let msg = protobuf_enc_int32(1, 150)
+            + protobuf_enc_string(2, "hello")
+            + protobuf_enc_bool(3, true)
+    let out = protobuf_decode_message(msg)
+    if out["1"] != 150 { return false }
+    if out["3"] != 1 { return false }
+    return len(out["2"]) == 5
+}
+
+pub fn test_protobuf_fixed32() -> bool {
+    let enc = protobuf_enc_fixed32(7, 0x01020304)
+    let parsed = protobuf_dec_field(enc, 0)
+    return parsed[0] == 7 && parsed[2] == 0x01020304
+}
+
+// -- bloom ----------------------------------------------------------
+
+pub fn test_bloom_contains_after_add() -> bool {
+    let f = bloom_new_filter(256, 4)
+    bloom_add(f, "alpha")
+    bloom_add(f, "beta")
+    bloom_add(f, "gamma")
+    if not bloom_contains_key(f, "alpha") { return false }
+    if not bloom_contains_key(f, "beta") { return false }
+    if not bloom_contains_key(f, "gamma") { return false }
+    return true
+}
+
+pub fn test_bloom_negative_lookup_usually_false() -> bool {
+    let f = bloom_new_filter(2048, 5)
+    let i = 0
+    while i < 20 {
+        bloom_add(f, "present-" + str(i))
+        i = i + 1
+    }
+    // With 20 items in a 2048-bit filter and k=5, FP rate should be
+    // tiny.  We accept a couple of false-positives across 50 probes.
+    let fps = 0
+    i = 0
+    while i < 50 {
+        if bloom_contains_key(f, "absent-" + str(i)) {
+            fps = fps + 1
+        }
+        i = i + 1
+    }
+    return fps < 5
+}
+
+pub fn test_bloom_union_is_superset() -> bool {
+    let a = bloom_new_filter(256, 4)
+    let b = bloom_new_filter(256, 4)
+    bloom_add(a, "foo")
+    bloom_add(b, "bar")
+    let u = bloom_union(a, b)
+    return bloom_contains_key(u, "foo") && bloom_contains_key(u, "bar")
+}
+
+pub fn test_bloom_optimal_params_scale() -> bool {
+    let p = bloom_optimal_params(1000, 10)   // 1% FP target
+    // m must scale with n; accept any sensible positive pair.
+    return p[0] > 1000 && p[1] >= 1
+}
+
+// -- consistent_hash ------------------------------------------------
+
+pub fn test_ring_lookup_stable() -> bool {
+    let r = consistent_hash_new_ring(32)
+    consistent_hash_add_node(r, "a")
+    consistent_hash_add_node(r, "b")
+    consistent_hash_add_node(r, "c")
+    let first = consistent_hash_lookup(r, "user:42")
+    // Looking up the same key twice must land on the same node.
+    return consistent_hash_lookup(r, "user:42") == first
+}
+
+pub fn test_ring_minimal_movement_on_add() -> bool {
+    // Adding a node should relocate a small fraction of keys.
+    let r = consistent_hash_new_ring(64)
+    consistent_hash_add_node(r, "a")
+    consistent_hash_add_node(r, "b")
+    consistent_hash_add_node(r, "c")
+    let before = []
+    let i = 0
+    while i < 200 {
+        before = before + [consistent_hash_lookup(r, "k-" + str(i))]
+        i = i + 1
+    }
+    consistent_hash_add_node(r, "d")
+    let moved = 0
+    i = 0
+    while i < 200 {
+        if consistent_hash_lookup(r, "k-" + str(i)) != before[i] {
+            moved = moved + 1
+        }
+        i = i + 1
+    }
+    // Expected ≈ 200/4 = 50 moves; allow a wide band.
+    return moved > 10 && moved < 120
+}
+
+pub fn test_ring_lookup_n_distinct() -> bool {
+    let r = consistent_hash_new_ring(32)
+    consistent_hash_add_node(r, "a")
+    consistent_hash_add_node(r, "b")
+    consistent_hash_add_node(r, "c")
+    consistent_hash_add_node(r, "d")
+    let replicas = consistent_hash_lookup_n(r, "session:xyz", 3)
+    if len(replicas) != 3 { return false }
+    // All three must be distinct.
+    return replicas[0] != replicas[1]
+        && replicas[1] != replicas[2]
+        && replicas[0] != replicas[2]
+}
+
+pub fn test_ring_remove_node() -> bool {
+    let r = consistent_hash_new_ring(16)
+    consistent_hash_add_node(r, "a")
+    consistent_hash_add_node(r, "b")
+    consistent_hash_remove_node(r, "a")
+    // All keys now land on "b".
+    return consistent_hash_lookup(r, "anything") == "b"
+}
+
+// -- merkle ---------------------------------------------------------
+
+pub fn test_merkle_single_leaf_root() -> bool {
+    let t = merkle_build_default(["only-leaf"])
+    // With one leaf the root equals hash_leaf of that leaf.
+    return t["root"] == merkle_hash_leaf(merkle_default_hash, "only-leaf")
+}
+
+pub fn test_merkle_build_and_verify() -> bool {
+    let items = ["a", "b", "c", "d", "e", "f", "g"]
+    let t = merkle_build_default(items)
+    let i = 0
+    while i < len(items) {
+        let p = merkle_proof(t, i)
+        if not merkle_verify_default(t["root"], items[i], p) {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+pub fn test_merkle_tampered_proof_rejected() -> bool {
+    let items = ["a", "b", "c", "d"]
+    let t = merkle_build_default(items)
+    let p = merkle_proof(t, 1)
+    // Verifying leaf 1's proof against leaf 0's data must fail.
+    return not merkle_verify_default(t["root"], items[0], p)
+}
+
+pub fn test_merkle_diff_detects_change() -> bool {
+    let a = merkle_build_default(["x", "y", "z"])
+    let b = merkle_build_default(["x", "Y", "z"])
+    let d = merkle_diff_leaves(a, b)
+    return len(d) == 1 && d[0] == 1
+}

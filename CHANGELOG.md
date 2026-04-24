@@ -7,6 +7,56 @@ Follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [3.5.0-dev] — Unreleased — Spiral Wave 3
+
+> *"the spiral keeps widening — storage & distribution edition"*
+
+Third wave of stdlib expansion.  Five new modules targeting storage
+wire formats and distributed-data primitives, all parse-clean,
+plus an integrative example and a full test suite.
+
+### Added — stdlib modules
+
+| Module | Purpose |
+|---|---|
+| `stdlib/resp.ltl`            | Redis Serialization Protocol codec — RESP2 core plus the RESP3 additions (null, boolean, double, big-number, map, set); symmetric `enc_command` / `decode` |
+| `stdlib/protobuf.ltl`        | proto3 wire-format codec — varints, zig-zag, tag packing, fixed32/64, length-delimited; encode helpers per scalar, `decode_message` returns a field-keyed map |
+| `stdlib/bloom.ltl`           | Bloom filter with double-hashing on FNV-1a/32 × FNV-1a/64, `optimal_params(n, fp_per_1000)`, union / intersect of same-shape filters, `fill_ppt` stat |
+| `stdlib/consistent_hash.ltl` | Sorted-ring consistent hashing with configurable virtual-node density, binary-search `lookup`, replica-aware `lookup_n(k, n)`, add / remove |
+| `stdlib/merkle.ltl`          | Binary Merkle tree parameterised over any hash function; default hasher uses FNV-1a/64 → hex so tests stay deterministic; inclusion proofs + `verify` + leaf-level `diff_leaves` |
+
+### Added — example
+
+* `examples/spiral_cache_cluster.ltl` — a replicated in-memory cache
+  that wires all five Wave 3 modules together: `consistent_hash`
+  picks owners, `bloom` gates existence probes, `resp` is the wire
+  protocol, `protobuf` frames replication log entries, and `merkle`
+  lets replicas reconcile in `O(log n)` exchanged hashes.
+
+### Added — tests
+
+* `tests/stdlib_spiral_wave_3.ltl` — covers:
+  * RESP command/integer/bulk/null/nested-array round-trips,
+  * protobuf varint and zig-zag round-trips across every size class,
+    tag packing for `(field=3, wire=2)`, mixed-field message decode,
+    and fixed32 encode/decode,
+  * bloom positive/negative lookup, union superset, and
+    `optimal_params` scaling,
+  * consistent-hash stability, distinctness under `lookup_n`, and
+    minimal-movement property when a node is added,
+  * Merkle build+verify for 7 leaves, tampered-proof rejection, and
+    leaf-diff detection.
+
+### Notes — dialect discoveries
+
+Landing Wave 3 surfaced one more reserved identifier:
+
+* `probe` joins `select, from, where, match, quote` on the
+  parse-blocking list.  (Encountered in `stdlib/resp.ltl` during
+  duck-typing a value — renamed the local to `p`.)
+
+---
+
 ## [3.4.0-dev] — Unreleased — Spiral Wave 2
 
 > *"the spiral keeps widening — networking edition"*

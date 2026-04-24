@@ -1,0 +1,197 @@
+// ===================================================================
+// stdlib/resp.ltl  —  Redis Serialization Protocol (RESP2 + RESP3)
+// -------------------------------------------------------------------
+// Pure-Ltl codec for the Redis wire format.  RESP2 tags are a subset
+// of RESP3 so both versions share the same parser; the encoder
+// emits RESP2 unless explicitly asked for a RESP3-only type.
+//
+// Reference: https://redis.io/docs/latest/develop/reference/protocol-spec/
+// ===================================================================
+
+// -- Type tags ------------------------------------------------------
+
+pub fn tag_simple_string() -> str { return "+" }
+pub fn tag_error()         -> str { return "-" }
+pub fn tag_integer()       -> str { return ":" }
+pub fn tag_bulk_string()   -> str { return "$" }
+pub fn tag_array()         -> str { return "*" }
+// RESP3 additions:
+pub fn tag_null()          -> str { return "_" }
+pub fn tag_boolean()       -> str { return "#" }
+pub fn tag_double()        -> str { return "," }
+pub fn tag_big_number()    -> str { return "(" }
+pub fn tag_map()           -> str { return "%" }
+pub fn tag_set()           -> str { return "~" }
+
+pub fn crlf() -> str { return "\r\n" }
+
+// -- Encode ---------------------------------------------------------
+
+pub fn enc_simple_string(s: str) -> str {
+    return "+" + s + crlf()
+}
+
+pub fn enc_error(s: str) -> str {
+    return "-" + s + crlf()
+}
+
+pub fn enc_integer(n: int) -> str {
+    return ":" + str(n) + crlf()
+}
+
+pub fn enc_bulk_string(s: str) -> str {
+    return "$" + str(len(s)) + crlf() + s + crlf()
+}
+
+pub fn enc_null_bulk() -> str {
+    // RESP2 null bulk string.
+    return "$-1" + crlf()
+}
+
+pub fn enc_null_array() -> str {
+    return "*-1" + crlf()
+}
+
+pub fn enc_null3() -> str {
+    // RESP3 dedicated null.
+    return "_" + crlf()
+}
+
+pub fn enc_boolean(b: bool) -> str {
+    if b { return "#t" + crlf() }
+    return "#f" + crlf()
+}
+
+pub fn enc_double(x: str) -> str {
+    // Accepts pre-rendered decimal to sidestep float printing.
+    return "," + x + crlf()
+}
+
+/// Encode a command as an array of bulk strings — the canonical
+/// client→server request format on any Redis connection.
+pub fn enc_command(argv: list) -> str {
+    let out = "*" + str(len(argv)) + crlf()
+    let i = 0
+    while i < len(argv) {
+        out = out + enc_bulk_string(argv[i])
+        i = i + 1
+    }
+    return out
+}
+
+// -- Decode ---------------------------------------------------------
+
+/// Parse one value starting at offset `i`.  Returns [value, next_i]
+/// or [nil, i] if the buffer is incomplete.
+pub fn decode(buf: str, i: int) -> list {
+    if i >= len(buf) { return [nil, i] }
+    let tag = char_at(buf, i)
+    i = i + 1
+    if tag == "+" { return read_line(buf, i, "simple") }
+    if tag == "-" { return read_line(buf, i, "error") }
+    if tag == ":" {
+        let r = read_line(buf, i, "raw")
+        let v = try_int(r[0])
+        return [v, r[1]]
+    }
+    if tag == "$" { return decode_bulk(buf, i) }
+    if tag == "*" { return decode_array(buf, i) }
+    if tag == "_" {
+        let r = read_line(buf, i, "raw")
+        return [nil, r[1]]
+    }
+    if tag == "#" {
+        let r = read_line(buf, i, "raw")
+        return [r[0] == "t", r[1]]
+    }
+    if tag == "," {
+        let r = read_line(buf, i, "raw")
+        return [r[0], r[1]]
+    }
+    if tag == "(" {
+        let r = read_line(buf, i, "raw")
+        return [r[0], r[1]]
+    }
+    if tag == "%" { return decode_map(buf, i) }
+    if tag == "~" { return decode_array(buf, i) }
+    return [nil, i]
+}
+
+pub fn read_line(buf: str, i: int, kind: str) -> list {
+    let start = i
+    while i < len(buf) - 1 {
+        if char_at(buf, i) == "\r" && char_at(buf, i + 1) == "\n" {
+            let payload = slice(buf, start, i)
+            let result = {}
+            result["kind"] = kind
+            result["value"] = payload
+            if kind == "raw" {
+                return [payload, i + 2]
+            }
+            return [result, i + 2]
+        }
+        i = i + 1
+    }
+    return [nil, i]
+}
+
+pub fn decode_bulk(buf: str, i: int) -> list {
+    let hdr = read_line(buf, i, "raw")
+    if hdr[0] == nil { return [nil, i] }
+    let n = try_int(hdr[0])
+    i = hdr[1]
+    if n < 0 { return [nil, i] }
+    if i + n + 2 > len(buf) { return [nil, i] }
+    let payload = slice(buf, i, i + n)
+    return [payload, i + n + 2]
+}
+
+pub fn decode_array(buf: str, i: int) -> list {
+    let hdr = read_line(buf, i, "raw")
+    if hdr[0] == nil { return [nil, i] }
+    let n = try_int(hdr[0])
+    i = hdr[1]
+    if n < 0 { return [nil, i] }
+    let items = []
+    let k = 0
+    while k < n {
+        let r = decode(buf, i)
+        items = items + [r[0]]
+        i = r[1]
+        k = k + 1
+    }
+    return [items, i]
+}
+
+pub fn decode_map(buf: str, i: int) -> list {
+    let hdr = read_line(buf, i, "raw")
+    if hdr[0] == nil { return [nil, i] }
+    let n = try_int(hdr[0])
+    i = hdr[1]
+    let m = {}
+    let k = 0
+    while k < n {
+        let kr = decode(buf, i)
+        i = kr[1]
+        let vr = decode(buf, i)
+        i = vr[1]
+        // Keys are usually bulk/simple strings; coerce to str.
+        let key_str = ""
+        if type_of_simple(kr[0]) == "str" {
+            key_str = kr[0]
+        } else {
+            key_str = str(kr[0])
+        }
+        m[key_str] = vr[0]
+        k = k + 1
+    }
+    return [m, i]
+}
+
+pub fn type_of_simple(v) -> str {
+    if v == nil { return "nil" }
+    // Duck-typing: a string will concat with "" cleanly.
+    let p = v + ""
+    if p == v { return "str" }
+    return "other"
+}

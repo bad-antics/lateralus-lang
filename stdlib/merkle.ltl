@@ -1,0 +1,161 @@
+// ===================================================================
+// stdlib/merkle.ltl  —  Merkle trees + inclusion proofs
+// -------------------------------------------------------------------
+// Generic binary Merkle tree parameterised over any string-producing
+// hash function.  Defaults are provided that delegate to `hash.ltl`'s
+// FNV-1a/64 rendered as a hex string, so tests stay deterministic
+// without pulling in SHA.  For production use, callers can wrap
+// SHA-256 and hand it in as `hasher`.
+// ===================================================================
+
+import hash
+
+// -- Default hasher -------------------------------------------------
+
+pub fn default_hash(data: str) -> str {
+    return to_hex64(hash_fnv1a_64(data))
+}
+
+pub fn to_hex64(n: int) -> str {
+    let hex_chars = "0123456789abcdef"
+    let out = ""
+    let k = 0
+    while k < 16 {
+        let nibble = (n >> ((15 - k) * 4)) & 0x0f
+        out = out + char_at(hex_chars, nibble)
+        k = k + 1
+    }
+    return out
+}
+
+pub fn hash_leaf(hasher, data: str) -> str {
+    // Prefix domain-separates leaves from internal nodes (RFC 6962).
+    return hasher("L:" + data)
+}
+
+pub fn hash_pair(hasher, left: str, right: str) -> str {
+    return hasher("N:" + left + "|" + right)
+}
+
+// -- Build ----------------------------------------------------------
+
+/// Build a tree.  Returns a map with:
+///   levels   — list of levels, level 0 = leaf hashes, top = root
+///   root     — convenience alias for levels[last]
+///   leaves   — original leaf hashes
+pub fn build(items: list, hasher) -> map {
+    let leaves = []
+    let i = 0
+    while i < len(items) {
+        leaves = leaves + [hash_leaf(hasher, items[i])]
+        i = i + 1
+    }
+    if len(leaves) == 0 {
+        let t = {}
+        t["levels"] = [[]]
+        t["leaves"] = []
+        t["root"]   = hasher("")
+        return t
+    }
+    let levels = [leaves]
+    let current = leaves
+    while len(current) > 1 {
+        let next_level = []
+        let k = 0
+        while k < len(current) {
+            let left = current[k]
+            let right = left
+            if k + 1 < len(current) {
+                right = current[k + 1]
+            }
+            next_level = next_level + [hash_pair(hasher, left, right)]
+            k = k + 2
+        }
+        levels = levels + [next_level]
+        current = next_level
+    }
+    let t = {}
+    t["levels"] = levels
+    t["leaves"] = leaves
+    t["root"]   = current[0]
+    return t
+}
+
+pub fn build_default(items: list) -> map {
+    return build(items, default_hash)
+}
+
+// -- Inclusion proof ------------------------------------------------
+
+/// Return the audit path for the leaf at `index`.  Each element is
+/// [sibling_hash, is_right_sibling].
+pub fn proof(tree: map, index: int) -> list {
+    let path = []
+    let levels = tree["levels"]
+    let k = 0
+    while k < len(levels) - 1 {
+        let level = levels[k]
+        let sibling_idx = index ^ 1
+        if sibling_idx >= len(level) {
+            // Odd leaf on this level — duplicated in build(), so the
+            // sibling is the leaf itself; skip emitting it.
+            path = path + [[level[index], sibling_idx > index]]
+        } else {
+            path = path + [[level[sibling_idx], sibling_idx > index]]
+        }
+        index = index / 2
+        k = k + 1
+    }
+    return path
+}
+
+/// Verify an audit path against a declared root.
+pub fn verify(root: str, leaf_data: str, path: list, hasher) -> bool {
+    let running = hash_leaf(hasher, leaf_data)
+    let i = 0
+    while i < len(path) {
+        let step = path[i]
+        let sibling = step[0]
+        let sibling_on_right = step[1]
+        if sibling_on_right {
+            running = hash_pair(hasher, running, sibling)
+        } else {
+            running = hash_pair(hasher, sibling, running)
+        }
+        i = i + 1
+    }
+    return running == root
+}
+
+pub fn verify_default(root: str, leaf_data: str, path: list) -> bool {
+    return verify(root, leaf_data, path, default_hash)
+}
+
+// -- Diffing --------------------------------------------------------
+
+/// Return the leaf indices whose hashes differ between two trees of
+/// equal leaf count.  Useful for cheap cross-replica reconciliation.
+pub fn diff_leaves(a: map, b: map) -> list {
+    let la = a["leaves"]
+    let lb = b["leaves"]
+    let n = len(la)
+    if len(lb) < n { n = len(lb) }
+    let diffs = []
+    let i = 0
+    while i < n {
+        if la[i] != lb[i] {
+            diffs = diffs + [i]
+        }
+        i = i + 1
+    }
+    // Tail of whichever side is longer.
+    while i < len(la) {
+        diffs = diffs + [i]
+        i = i + 1
+    }
+    while i < len(lb) {
+        diffs = diffs + [i]
+        i = i + 1
+    }
+    return diffs
+}

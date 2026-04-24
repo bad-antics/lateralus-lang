@@ -1,0 +1,184 @@
+// ===================================================================
+// examples/spiral_cache_cluster.ltl
+// -------------------------------------------------------------------
+// Spiral Wave 3 integrative demo — a tiny replicated cache cluster:
+//
+//   * consistent_hash — pick the primary + replicas for each key
+//   * bloom           — per-node membership summary for cheap "do I
+//                        have this key?" probes before touching RAM
+//   * resp            — the protocol we speak to clients
+//   * merkle          — periodic cross-replica reconciliation
+//   * protobuf        — on-wire replication log entries
+//
+// Everything runs in-memory; no sockets, no threads.  The goal is to
+// show the modules composing sensibly.
+// ===================================================================
+
+import resp
+import protobuf
+import bloom
+import consistent_hash
+import merkle
+
+// -- Cluster state ---------------------------------------------------
+
+pub fn new_node(name: str) -> map {
+    let n = {}
+    n["name"]   = name
+    n["store"]  = {}
+    n["log"]    = []   // list of protobuf-encoded replication entries
+    n["filter"] = bloom_new_filter(1024, 4)
+    return n
+}
+
+pub fn new_cluster(names: list, vnodes: int, replicas: int) -> map {
+    let c = {}
+    c["ring"]     = consistent_hash_new_ring(vnodes)
+    c["replicas"] = replicas
+    c["nodes"]    = {}
+    let i = 0
+    while i < len(names) {
+        consistent_hash_add_node(c["ring"], names[i])
+        c["nodes"][names[i]] = new_node(names[i])
+        i = i + 1
+    }
+    return c
+}
+
+// -- SET / GET -------------------------------------------------------
+
+pub fn owners_for(c: map, key: str) -> list {
+    return consistent_hash_lookup_n(c["ring"], key, c["replicas"])
+}
+
+pub fn cluster_set(c: map, key: str, value: str) -> list {
+    let owners = owners_for(c, key)
+    let i = 0
+    while i < len(owners) {
+        let n = c["nodes"][owners[i]]
+        n["store"][key] = value
+        bloom_add(n["filter"], key)
+        // Append a replication log entry:
+        //   field 1 (string) = key
+        //   field 2 (string) = value
+        let entry = protobuf_enc_string(1, key) + protobuf_enc_string(2, value)
+        n["log"] = n["log"] + [entry]
+        i = i + 1
+    }
+    return owners
+}
+
+pub fn cluster_get(c: map, key: str) -> str {
+    let owners = owners_for(c, key)
+    let i = 0
+    while i < len(owners) {
+        let n = c["nodes"][owners[i]]
+        // Fast-path: bloom says "definitely not" — skip the map lookup.
+        if not bloom_contains_key(n["filter"], key) {
+            i = i + 1
+            continue
+        }
+        if contains(keys(n["store"]), key) {
+            return n["store"][key]
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// -- RESP surface ----------------------------------------------------
+
+/// Handle a single parsed command (list of bulk-string argv).
+pub fn handle_command(c: map, argv: list) -> str {
+    if len(argv) == 0 {
+        return resp_enc_error("ERR empty command")
+    }
+    let verb = argv[0]
+    if verb == "PING" {
+        return resp_enc_simple_string("PONG")
+    }
+    if verb == "SET" && len(argv) == 3 {
+        cluster_set(c, argv[1], argv[2])
+        return resp_enc_simple_string("OK")
+    }
+    if verb == "GET" && len(argv) == 2 {
+        let v = cluster_get(c, argv[1])
+        if v == "" { return resp_enc_null_bulk() }
+        return resp_enc_bulk_string(v)
+    }
+    if verb == "EXISTS" && len(argv) == 2 {
+        let owners = owners_for(c, argv[1])
+        let any_has = false
+        let i = 0
+        while i < len(owners) {
+            if bloom_contains_key(c["nodes"][owners[i]]["filter"], argv[1]) {
+                any_has = true
+            }
+            i = i + 1
+        }
+        if any_has { return resp_enc_integer(1) }
+        return resp_enc_integer(0)
+    }
+    return resp_enc_error("ERR unknown command")
+}
+
+// -- Replication reconciliation --------------------------------------
+
+/// Compute a Merkle root over one node's replication log so replicas
+/// can detect divergence in O(log n) exchanged hashes.
+pub fn node_log_root(node: map) -> str {
+    let strs = []
+    let i = 0
+    while i < len(node["log"]) {
+        // Each log entry is a list of bytes; render as a stable string.
+        let entry = node["log"][i]
+        let s = ""
+        let j = 0
+        while j < len(entry) {
+            s = s + chr(entry[j])
+            j = j + 1
+        }
+        strs = strs + [s]
+        i = i + 1
+    }
+    let t = merkle_build_default(strs)
+    return t["root"]
+}
+
+pub fn replicas_agree(c: map, key: str) -> bool {
+    let owners = owners_for(c, key)
+    if len(owners) < 2 { return true }
+    let r0 = node_log_root(c["nodes"][owners[0]])
+    let i = 1
+    while i < len(owners) {
+        if node_log_root(c["nodes"][owners[i]]) != r0 {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+// -- Driver ----------------------------------------------------------
+
+pub fn demo() -> map {
+    let c = new_cluster(["cache-a", "cache-b", "cache-c", "cache-d"], 64, 2)
+
+    cluster_set(c, "user:1",     "alice")
+    cluster_set(c, "user:2",     "bob")
+    cluster_set(c, "session:42", "token-xyz")
+
+    let result = {}
+    result["owners_user_1"] = owners_for(c, "user:1")
+    result["get_user_1"]    = cluster_get(c, "user:1")
+    result["get_missing"]   = cluster_get(c, "no_such_key")
+
+    // Simulate a RESP request round-trip:
+    let req = resp_enc_command(["SET", "greeting", "hello spiral"])
+    let decoded = resp_decode(req, 0)
+    let reply  = handle_command(c, decoded[0])
+    result["resp_reply"] = reply
+
+    result["replicas_agree"] = replicas_agree(c, "user:1")
+    return result
+}
