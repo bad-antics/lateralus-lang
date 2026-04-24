@@ -7,6 +7,81 @@ Follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [3.3.0-dev] — Unreleased — Spiral Wave 1
+
+> *"we are the language that spirals outward"*
+
+First wave of the open-ended stdlib expansion programme.  Ten new modules,
+all parse-clean under the current front-end, all written in the restricted
+functional dialect used by `semver`, `ini`, `lru` and friends.
+
+### Added — stdlib modules
+
+| Module | Purpose |
+|---|---|
+| `stdlib/jwt.ltl`     | RFC 7519 JSON Web Tokens (HS256/384/512), constant-time verify, `iat/nbf/exp` issuance |
+| `stdlib/totp.ltl`    | RFC 6238 TOTP + RFC 4226 HOTP, ±drift verify, `otpauth://` URI builder |
+| `stdlib/argon2.ltl`  | Argon2id password hashing with PHC-format serialisation, `needs_rehash` check, 3 tuning profiles |
+| `stdlib/cbor.ltl`    | RFC 8949 Concise Binary Object Representation encode/decode |
+| `stdlib/msgpack.ltl` | MessagePack encode/decode (`nil`/bool/int/str/array/map) |
+| `stdlib/yaml.ltl`    | YAML 1.2 subset parser (block maps, block seqs, plain scalars) |
+| `stdlib/toml.ltl`    | TOML 1.0 parser (tables, arrays-of-tables, scalars) |
+| `stdlib/tar.ltl`     | ustar/POSIX tar reader & writer with checksum |
+| `stdlib/metrics.ltl` | In-process counters/gauges/histograms + Prometheus text exposition |
+| `stdlib/tracing.ltl` | OpenTelemetry-style spans with W3C `traceparent` wire format |
+
+### Added — examples
+
+- `examples/spiral_auth_server.ltl` — integrative demo wiring **argon2**
+  (password hashing) + **jwt** (session tokens) + **totp** (2FA) through
+  a **metrics** registry and **tracing** spans.  Minimal auth-server
+  skeleton showing how the new modules interlock.
+
+### Added — tests
+
+- `tests/stdlib_spiral_wave_1.ltl` — 19 parse-clean test functions
+  covering every Wave 1 module: argon2 hash/verify + rehash-check,
+  JWT sign/verify + bad-signature rejection, HOTP RFC 4226 known
+  vectors, TOTP ±drift window, CBOR & MessagePack round-trips,
+  YAML flat-map + comment stripping, TOML tables + arrays-of-tables,
+  tar ustar round-trip, Prometheus counter + histogram rendering,
+  tracing span lifecycle + W3C traceparent round-trip.
+  Run via `pub fn run_all() -> map`.
+
+### Dialect notes discovered during Wave 1
+
+The front-end parser is stricter than many existing stdlib files assume
+(52 of the 93 pre-Wave-1 `.ltl` stdlib files do not parse under the
+current grammar).  Wave 1 modules target the **verified-clean subset**:
+
+- `nil` not `null`; `not` keyword for negation (also `&&`, `||`)
+- Bare builtin calls (`len`, `slice`, `split`, `index_of`, `keys`,
+  `contains`, `chr`, `str`, `int`, `bytes_of`, `char_at`, `starts_with`,
+  `ends_with`, `trim`, `join`, `sorted`, `try_int`, `parse_int_base`,
+  `itoa_base`, `pad_left`) — no method-call `.foo()` syntax
+- Maps constructed by `let m = {} ; m["k"] = v` (no inline `{"k":v}`)
+- Lists extended by `xs = xs + [item]` (no `.append`)
+- **Reserved identifiers** to avoid as variable names:
+  `quote` (shadows a parser token), plus the usual keywords
+- `for k in keys(m)` for map iteration; `contains(keys(m), k)` for has-key
+- Cross-module calls are flat-named (`argon2_hash`, `jwt_sign_hmac`,
+  `metrics_inc`) — the module namespace is honoured by `import` but
+  call-site syntax remains bare-identifier
+
+### Spiral roadmap
+
+Wave 1 consciously landed ten security/serialisation/observability
+primitives.  Future waves will spiral outward into:
+
+- **Wave 2**: networking (`smtp`, `ldap`, `graphql`, `websocket`, `quic`)
+- **Wave 3**: data-science (`dataframe`, `parquet`, `arrow`, `sqlite_vfs`)
+- **Wave 4**: distributed (`raft`, `gossip`, `vector_clock`, `crdt`)
+- **Wave 5**: crypto upgrades (`ed25519`, `x25519`, `age`, `noise_protocol`)
+
+Waves are additive; existing modules are never broken.
+
+---
+
 ## [3.2.0-dev] — Unreleased — `@law` Executable Specifications
 
 ### � Groundbreaking: Ternary algebraic structure (10th pillar)

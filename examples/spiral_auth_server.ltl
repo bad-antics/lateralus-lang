@@ -1,0 +1,100 @@
+// ===================================================================
+// examples/spiral_auth_server.ltl
+// -------------------------------------------------------------------
+// Spiral Wave 1 integrative demo — ties together the new stdlib
+// modules (argon2 + jwt + totp + metrics + tracing) into a tiny
+// auth service skeleton.  Wires every request through a span, meters
+// it in a registry, and hashes/verifies passwords with argon2id.
+// ===================================================================
+
+import argon2
+import jwt
+import totp
+import metrics
+import tracing
+import time
+
+// -- Bootstrap ------------------------------------------------------
+
+pub fn build_registry() -> map {
+    let reg = metrics_new_registry()
+    metrics_register_counter(reg, "auth_requests_total",
+        "Number of authentication requests, labelled by outcome.")
+    metrics_register_histogram(reg, "auth_latency_seconds",
+        "Server-side latency for auth requests.",
+        [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0])
+    return reg
+}
+
+pub fn stdout_exporter(span: map) {
+    println("span " + span["name"] + " status=" + span["status"])
+}
+
+pub fn build_tracer() -> map {
+    return tracing_new_tracer("auth-server", stdout_exporter, tracing_always_sample)
+}
+
+// -- Signup ---------------------------------------------------------
+
+/// Hash a new password with the `sensitive` profile.
+pub fn signup(password: str) -> str {
+    return argon2_hash(password, argon2_profile_sensitive())
+}
+
+// -- Login ----------------------------------------------------------
+
+/// Authenticate `(user, password, totp_code)`. Returns [ok, token_or_error].
+pub fn login(ctx: map, user: str, password: str, totp_code: str,
+             stored_hash: str, totp_secret: list, jwt_key: list) -> list {
+    let span = tracing_start(ctx["tracer"], "auth.login", nil, "server", {})
+    tracing_set_attr(span, "user", user)
+
+    let started = time_mono_now()
+    let lbl = {}
+    lbl["outcome"] = "pending"
+
+    if not argon2_verify(password, stored_hash) {
+        lbl["outcome"] = "bad_password"
+        metrics_inc(ctx["metrics"], "auth_requests_total", lbl, 1.0)
+        metrics_observe(ctx["metrics"], "auth_latency_seconds",
+            lbl, time_mono_now() - started)
+        tracing_end_error(span, "bad_password")
+        return [false, "invalid_credentials"]
+    }
+
+    if not totp_verify(totp_secret, totp_code, -1, 30, 6, 1, "sha1") {
+        lbl["outcome"] = "bad_totp"
+        metrics_inc(ctx["metrics"], "auth_requests_total", lbl, 1.0)
+        metrics_observe(ctx["metrics"], "auth_latency_seconds",
+            lbl, time_mono_now() - started)
+        tracing_end_error(span, "bad_totp")
+        return [false, "invalid_2fa"]
+    }
+
+    let extras = {}
+    extras["role"] = "user"
+    let token = jwt_issue(user, jwt_key, 3600, extras, "HS256")
+
+    lbl["outcome"] = "ok"
+    metrics_inc(ctx["metrics"], "auth_requests_total", lbl, 1.0)
+    metrics_observe(ctx["metrics"], "auth_latency_seconds",
+        lbl, time_mono_now() - started)
+    tracing_end_ok(span)
+    return [true, token]
+}
+
+// -- Verify session -------------------------------------------------
+
+/// Validate a bearer JWT on every protected request.
+pub fn authorize(ctx: map, bearer: str, jwt_key: list) -> list {
+    let span = tracing_start(ctx["tracer"], "auth.verify", nil, "server", {})
+    let opts = {}
+    opts["leeway_s"] = 5
+    let result = jwt_verify_hmac(bearer, jwt_key, "HS256", opts)
+    if result[0] {
+        tracing_end_ok(span)
+    } else {
+        tracing_end_error(span, result[1])
+    }
+    return result
+}

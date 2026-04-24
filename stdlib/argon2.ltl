@@ -1,0 +1,130 @@
+// ===================================================================
+// Lateralus stdlib — argon2
+// Argon2id password hashing (RFC 9106) with PHC-format serialization.
+// ===================================================================
+
+import base64
+import crypto
+import strings
+
+// -- Parameter profiles ---------------------------------------------
+
+/// Interactive-login profile: ~50 ms on a modern CPU core.
+pub fn profile_interactive() -> map {
+    let p = {}
+    p["m"] = 65536
+    p["t"] = 3
+    p["p"] = 1
+    p["hash_len"] = 32
+    return p
+}
+
+/// Sensitive-data profile: ~500 ms, for vault-style secrets.
+pub fn profile_sensitive() -> map {
+    let p = {}
+    p["m"] = 262144
+    p["t"] = 4
+    p["p"] = 1
+    p["hash_len"] = 32
+    return p
+}
+
+/// KDF profile tuned for disk encryption keys.
+pub fn profile_kdf() -> map {
+    let p = {}
+    p["m"] = 131072
+    p["t"] = 3
+    p["p"] = 1
+    p["hash_len"] = 32
+    return p
+}
+
+// -- Hash / verify --------------------------------------------------
+
+/// Hash a password. Returns a PHC string:
+/// `$argon2id$v=19$m=…,t=…,p=…$<b64-salt>$<b64-hash>`.
+pub fn hash(password: str, profile: map) -> str {
+    let salt = crypto_rand_bytes(16)
+    let raw = crypto_argon2id(
+        bytes_of(password), salt,
+        profile["m"], profile["t"], profile["p"], profile["hash_len"]
+    )
+    return phc_encode(profile, salt, raw)
+}
+
+/// Constant-time verify — returns true iff password reproduces the stored hash.
+pub fn verify(password: str, phc: str) -> bool {
+    let parsed = phc_decode(phc)
+    if parsed == nil {
+        return false
+    }
+    let raw = crypto_argon2id(
+        bytes_of(password),
+        parsed["salt"],
+        parsed["m"], parsed["t"], parsed["p"], len(parsed["hash"])
+    )
+    return crypto_ct_eq(raw, parsed["hash"])
+}
+
+/// Returns true if the stored hash is weaker than `desired` parameters.
+pub fn needs_rehash(phc: str, desired: map) -> bool {
+    let p = phc_decode(phc)
+    if p == nil {
+        return true
+    }
+    if p["m"] < desired["m"] {
+        return true
+    }
+    if p["t"] < desired["t"] {
+        return true
+    }
+    if p["p"] < desired["p"] {
+        return true
+    }
+    return false
+}
+
+// -- PHC format -----------------------------------------------------
+
+pub fn phc_encode(profile: map, salt: list, hash_bytes: list) -> str {
+    let params = "m=" + str(profile["m"])
+        + ",t=" + str(profile["t"])
+        + ",p=" + str(profile["p"])
+    return "$argon2id$v=19$" + params
+        + "$" + base64_urlsafe_nopad(salt)
+        + "$" + base64_urlsafe_nopad(hash_bytes)
+}
+
+pub fn phc_decode(phc: str) -> map {
+    let parts = split(phc, "$")
+    if len(parts) != 6 {
+        return nil
+    }
+    if parts[1] != "argon2id" {
+        return nil
+    }
+    if parts[2] != "v=19" {
+        return nil
+    }
+
+    let result = {}
+    result["m"] = 0
+    result["t"] = 0
+    result["p"] = 0
+
+    let pairs = split(parts[3], ",")
+    for pair in pairs {
+        let eq = index_of(pair, "=")
+        if eq < 0 {
+            return nil
+        }
+        let k = slice(pair, 0, eq)
+        let v = int(slice(pair, eq + 1, len(pair)))
+        if k == "m" { result["m"] = v }
+        if k == "t" { result["t"] = v }
+        if k == "p" { result["p"] = v }
+    }
+    result["salt"] = base64_urlsafe_decode_nopad(parts[4])
+    result["hash"] = base64_urlsafe_decode_nopad(parts[5])
+    return result
+}

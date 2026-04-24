@@ -1,0 +1,84 @@
+// ===================================================================
+// Lateralus stdlib — totp
+// RFC 6238 TOTP + RFC 4226 HOTP. Google-Authenticator compatible.
+// ===================================================================
+
+import base32
+import crypto
+import strings
+import time
+
+// -- HOTP / TOTP -----------------------------------------------------
+
+/// RFC 4226 HOTP. Returns a `digits`-length zero-padded decimal string.
+pub fn hotp(secret: list, counter: int, digits: int, algo: str) -> str {
+    let buf = _u64_be(counter)
+    let h = crypto.hmac(algo, secret, buf)
+    let off = h[len(h) - 1] & 15
+    let bin = ((h[off] & 127) * 16777216)
+            + ((h[off + 1] & 255) * 65536)
+            + ((h[off + 2] & 255) * 256)
+            +  (h[off + 3] & 255)
+    let mod = 1
+    let i = 0
+    while i < digits {
+        mod = mod * 10
+        i = i + 1
+    }
+    return strings.pad_left(str(bin % mod), digits, "0")
+}
+
+/// RFC 6238 TOTP at current time (or `at` if >= 0).
+pub fn totp(secret: list, at: int, step_s: int, digits: int, algo: str) -> str {
+    let now = at
+    if at < 0 { now = time.unix_now() }
+    let counter = now / step_s
+    return hotp(secret, counter, digits, algo)
+}
+
+/// Verify with ±`drift` steps of clock-skew tolerance.
+pub fn verify(secret: list, code: str, at: int, step_s: int, digits: int, drift: int, algo: str) -> bool {
+    let now = at
+    if at < 0 { now = time.unix_now() }
+    let counter = now / step_s
+    let d = 0 - drift
+    while d <= drift {
+        let candidate = hotp(secret, counter + d, digits, algo)
+        if crypto.ct_eq(bytes_of(candidate), bytes_of(code)) {
+            return true
+        }
+        d = d + 1
+    }
+    return false
+}
+
+// -- Provisioning ----------------------------------------------------
+
+/// Build otpauth:// URI for QR-code provisioning.
+pub fn otpauth_uri(account: str, secret: list, issuer: str, digits: int, step_s: int, algo: str) -> str {
+    let b32 = base32.encode_nopad(secret)
+    let label = strings.url_encode(issuer) + ":" + strings.url_encode(account)
+    return "otpauth://totp/" + label
+        + "?secret=" + b32
+        + "&issuer=" + strings.url_encode(issuer)
+        + "&algorithm=" + algo
+        + "&digits=" + str(digits)
+        + "&period=" + str(step_s)
+}
+
+/// Generate a fresh 160-bit TOTP secret.
+pub fn random_secret() -> list {
+    return crypto.rand_bytes(20)
+}
+
+// -- Internals -------------------------------------------------------
+
+fn _u64_be(n: int) -> list {
+    let b = [0, 0, 0, 0, 0, 0, 0, 0]
+    let i = 0
+    while i < 8 {
+        b[7 - i] = (n / (1 << (i * 8))) & 255
+        i = i + 1
+    }
+    return b
+}

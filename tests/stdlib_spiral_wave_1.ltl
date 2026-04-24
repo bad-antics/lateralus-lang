@@ -1,0 +1,241 @@
+// ===================================================================
+// tests/stdlib_spiral_wave_1.ltl
+// -------------------------------------------------------------------
+// Round-trip and smoke-tests for every Spiral Wave 1 module.
+// Runnable by any harness that honours `pub fn test_*() -> bool`.
+// ===================================================================
+
+import argon2
+import jwt
+import totp
+import cbor
+import msgpack
+import yaml
+import toml
+import tar
+import metrics
+import tracing
+
+// -- argon2 ---------------------------------------------------------
+
+pub fn test_argon2_roundtrip() -> bool {
+    let phc = argon2_hash("correct horse battery staple", argon2_profile_interactive())
+    if not argon2_verify("correct horse battery staple", phc) {
+        return false
+    }
+    if argon2_verify("wrong password", phc) {
+        return false
+    }
+    return true
+}
+
+pub fn test_argon2_needs_rehash() -> bool {
+    let weak = argon2_hash("p", argon2_profile_interactive())
+    return argon2_needs_rehash(weak, argon2_profile_sensitive())
+}
+
+// -- jwt ------------------------------------------------------------
+
+pub fn test_jwt_sign_verify() -> bool {
+    let key = bytes_of("super-secret-key-at-least-32-bytes!")
+    let claims = {}
+    claims["sub"] = "alice"
+    claims["iat"] = 1700000000
+    claims["exp"] = 4700000000
+    let tok = jwt_sign_hmac(claims, key, "HS256")
+    let opts = {}
+    let result = jwt_verify_hmac(tok, key, "HS256", opts)
+    return result[0]
+}
+
+pub fn test_jwt_bad_signature() -> bool {
+    let key = bytes_of("secret")
+    let bad = bytes_of("other")
+    let c = {}
+    c["sub"] = "x"
+    c["exp"] = 4700000000
+    let tok = jwt_sign_hmac(c, key, "HS256")
+    let r = jwt_verify_hmac(tok, bad, "HS256", {})
+    return not r[0]
+}
+
+// -- totp -----------------------------------------------------------
+
+pub fn test_hotp_known_vectors() -> bool {
+    // RFC 4226 test secret — ASCII "12345678901234567890"
+    let secret = bytes_of("12345678901234567890")
+    // Counter 0 → "755224", counter 1 → "287082"
+    if totp_hotp(secret, 0, 6, "sha1") != "755224" {
+        return false
+    }
+    if totp_hotp(secret, 1, 6, "sha1") != "287082" {
+        return false
+    }
+    return true
+}
+
+pub fn test_totp_verify_drift() -> bool {
+    let secret = bytes_of("12345678901234567890")
+    let now = 59
+    let code = totp_totp(secret, now, 30, 6, "sha1")
+    return totp_verify(secret, code, now + 30, 30, 6, 1, "sha1")
+}
+
+// -- cbor -----------------------------------------------------------
+
+pub fn test_cbor_roundtrip_int() -> bool {
+    let enc = cbor_encode(42)
+    let dec = cbor_decode(enc)
+    return dec == 42
+}
+
+pub fn test_cbor_roundtrip_nested() -> bool {
+    let m = {}
+    m["a"] = 1
+    m["b"] = [2, 3, 4]
+    let enc = cbor_encode(m)
+    let dec = cbor_decode(enc)
+    return dec["a"] == 1 && len(dec["b"]) == 3
+}
+
+// -- msgpack --------------------------------------------------------
+
+pub fn test_msgpack_roundtrip_str() -> bool {
+    let enc = msgpack_encode("hello")
+    let p = msgpack_decode(enc)
+    return p[0] == "hello"
+}
+
+pub fn test_msgpack_roundtrip_map() -> bool {
+    let m = {}
+    m["k"] = 7
+    let enc = msgpack_encode(m)
+    let p = msgpack_decode(enc)
+    return p[0]["k"] == 7
+}
+
+// -- yaml -----------------------------------------------------------
+
+pub fn test_yaml_flat_map() -> bool {
+    let y = yaml_parse("name: lateralus\nversion: 3")
+    return y["name"] == "lateralus" && y["version"] == 3
+}
+
+pub fn test_yaml_comment_strip() -> bool {
+    let y = yaml_parse("key: value  # a comment")
+    return y["key"] == "value"
+}
+
+// -- toml -----------------------------------------------------------
+
+pub fn test_toml_table() -> bool {
+    let src = "[server]\nhost = \"localhost\"\nport = 8080"
+    let t = toml_parse(src)
+    return t["server"]["host"] == "localhost" && t["server"]["port"] == 8080
+}
+
+pub fn test_toml_array_of_tables() -> bool {
+    let src = "[[users]]\nname = \"alice\"\n[[users]]\nname = \"bob\""
+    let t = toml_parse(src)
+    return len(t["users"]) == 2 && t["users"][1]["name"] == "bob"
+}
+
+// -- tar ------------------------------------------------------------
+
+pub fn test_tar_roundtrip() -> bool {
+    let entry = {}
+    entry["name"] = "hello.txt"
+    entry["mode"] = 420
+    entry["size"] = 5
+    entry["mtime"] = 1700000000
+    entry["type"] = tar_type_regular()
+    entry["link"] = ""
+    entry["bytes"] = bytes_of("hello")
+    let archive = tar_write([entry])
+    let parsed = tar_read(archive)
+    if len(parsed) != 1 {
+        return false
+    }
+    if parsed[0]["name"] != "hello.txt" {
+        return false
+    }
+    if parsed[0]["size"] != 5 {
+        return false
+    }
+    return true
+}
+
+// -- metrics --------------------------------------------------------
+
+pub fn test_metrics_counter() -> bool {
+    let reg = metrics_new_registry()
+    metrics_register_counter(reg, "hits_total", "page hits")
+    let lbl = {}
+    lbl["path"] = "/"
+    metrics_inc(reg, "hits_total", lbl, 1.0)
+    metrics_inc(reg, "hits_total", lbl, 2.0)
+    let text = metrics_render_prometheus(reg)
+    return index_of(text, "hits_total") >= 0
+}
+
+pub fn test_metrics_histogram() -> bool {
+    let reg = metrics_new_registry()
+    metrics_register_histogram(reg, "lat", "latency", [0.1, 0.5, 1.0])
+    metrics_observe(reg, "lat", {}, 0.05)
+    metrics_observe(reg, "lat", {}, 0.7)
+    let text = metrics_render_prometheus(reg)
+    return index_of(text, "lat_bucket") >= 0 && index_of(text, "lat_count") >= 0
+}
+
+// -- tracing --------------------------------------------------------
+
+pub fn test_tracing_span_lifecycle() -> bool {
+    let collected = [0]
+    let exporter = fn(span) {
+        collected[0] = collected[0] + 1
+    }
+    let tr = tracing_new_tracer("svc", exporter, tracing_always_sample)
+    let s = tracing_start(tr, "op", nil, "internal", {})
+    tracing_set_attr(s, "user", "alice")
+    tracing_end_ok(s)
+    return collected[0] == 1 && s["status"] == "ok"
+}
+
+pub fn test_tracing_traceparent_roundtrip() -> bool {
+    let ctx = {}
+    ctx["trace_id"] = "0af7651916cd43dd8448eb211c80319c"
+    ctx["span_id"]  = "b7ad6b7169203331"
+    ctx["parent"]   = ""
+    ctx["sampled"]  = true
+    let wire = tracing_traceparent(ctx)
+    let back = tracing_parse_traceparent(wire)
+    return back["trace_id"] == ctx["trace_id"]
+        && back["span_id"]  == ctx["span_id"]
+        && back["sampled"]  == true
+}
+
+// -- Aggregate runner ----------------------------------------------
+
+pub fn run_all() -> map {
+    let results = {}
+    results["argon2_roundtrip"]           = test_argon2_roundtrip()
+    results["argon2_needs_rehash"]        = test_argon2_needs_rehash()
+    results["jwt_sign_verify"]            = test_jwt_sign_verify()
+    results["jwt_bad_signature"]          = test_jwt_bad_signature()
+    results["hotp_known_vectors"]         = test_hotp_known_vectors()
+    results["totp_verify_drift"]          = test_totp_verify_drift()
+    results["cbor_roundtrip_int"]         = test_cbor_roundtrip_int()
+    results["cbor_roundtrip_nested"]      = test_cbor_roundtrip_nested()
+    results["msgpack_roundtrip_str"]      = test_msgpack_roundtrip_str()
+    results["msgpack_roundtrip_map"]      = test_msgpack_roundtrip_map()
+    results["yaml_flat_map"]              = test_yaml_flat_map()
+    results["yaml_comment_strip"]         = test_yaml_comment_strip()
+    results["toml_table"]                 = test_toml_table()
+    results["toml_array_of_tables"]       = test_toml_array_of_tables()
+    results["tar_roundtrip"]              = test_tar_roundtrip()
+    results["metrics_counter"]            = test_metrics_counter()
+    results["metrics_histogram"]          = test_metrics_histogram()
+    results["tracing_span_lifecycle"]     = test_tracing_span_lifecycle()
+    results["tracing_traceparent_roundtrip"] = test_tracing_traceparent_roundtrip()
+    return results
+}

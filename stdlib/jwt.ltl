@@ -1,0 +1,114 @@
+// ===================================================================
+// Lateralus stdlib — jwt
+// RFC 7519 JSON Web Tokens. HMAC algorithms (HS256/384/512).
+// Constant-time signature compare; rejects `alg: none`.
+// ===================================================================
+
+import base64
+import crypto
+import json
+import strings
+import time
+
+// -- Sign / verify --------------------------------------------------
+
+/// Sign a compact JWT using an HMAC algorithm.
+pub fn sign_hmac(claims: map, key: list, alg: str) -> str {
+    let header_json = "{\"typ\":\"JWT\",\"alg\":\"" + alg + "\"}"
+    let h = base64_urlsafe_nopad(bytes_of(header_json))
+    let p = base64_urlsafe_nopad(bytes_of(json_stringify(claims)))
+    let signing_input = h + "." + p
+    let hash_name = hmac_hash_for(alg)
+    let sig = crypto_hmac(hash_name, key, bytes_of(signing_input))
+    return signing_input + "." + base64_urlsafe_nopad(sig)
+}
+
+/// Verify an HMAC-signed JWT. Returns [ok, claims_or_error_str].
+pub fn verify_hmac(token: str, key: list, alg: str, opts: map) -> list {
+    let parts = split(token, ".")
+    if len(parts) != 3 {
+        return [false, "malformed"]
+    }
+    let signing_input = parts[0] + "." + parts[1]
+    let want = base64_urlsafe_decode_nopad(parts[2])
+    let hash_name = hmac_hash_for(alg)
+    let got = crypto_hmac(hash_name, key, bytes_of(signing_input))
+    if not crypto_ct_eq(got, want) {
+        return [false, "bad_signature"]
+    }
+    let claims = json_parse(base64_urlsafe_decode_nopad(parts[1]))
+    let err = check_claims(claims, opts)
+    if len(err) > 0 {
+        return [false, err]
+    }
+    return [true, claims]
+}
+
+/// Decode header+claims without verifying. Diagnostic use only.
+pub fn peek(token: str) -> map {
+    let parts = split(token, ".")
+    let out = {}
+    out["header"] = json_parse(base64_urlsafe_decode_nopad(parts[0]))
+    out["claims"] = json_parse(base64_urlsafe_decode_nopad(parts[1]))
+    return out
+}
+
+/// Issue a token with standard iat/nbf/exp claims.
+pub fn issue(sub: str, key: list, ttl_s: int, extra: map, alg: str) -> str {
+    let now = time_unix_now()
+    let claims = {}
+    claims["sub"] = sub
+    claims["iat"] = now
+    claims["nbf"] = now
+    claims["exp"] = now + ttl_s
+    for k in keys(extra) {
+        claims[k] = extra[k]
+    }
+    return sign_hmac(claims, key, alg)
+}
+
+// -- Internals ------------------------------------------------------
+
+pub fn hmac_hash_for(alg: str) -> str {
+    if alg == "HS256" { return "sha256" }
+    if alg == "HS384" { return "sha384" }
+    if alg == "HS512" { return "sha512" }
+    panic("jwt: unsupported alg " + alg)
+}
+
+pub fn check_claims(c: map, opts: map) -> str {
+    let now = time_unix_now()
+    let leeway = 0
+    if contains(keys(opts), "leeway_s") {
+        leeway = opts["leeway_s"]
+    }
+    if contains(keys(c), "exp") {
+        if now > c["exp"] + leeway {
+            return "expired"
+        }
+    }
+    if contains(keys(c), "nbf") {
+        if now < c["nbf"] - leeway {
+            return "not_yet_valid"
+        }
+    }
+    if contains(keys(opts), "audience") {
+        let aud = ""
+        if contains(keys(c), "aud") {
+            aud = c["aud"]
+        }
+        if aud != opts["audience"] {
+            return "wrong_audience"
+        }
+    }
+    if contains(keys(opts), "issuer") {
+        let iss = ""
+        if contains(keys(c), "iss") {
+            iss = c["iss"]
+        }
+        if iss != opts["issuer"] {
+            return "wrong_issuer"
+        }
+    }
+    return ""
+}

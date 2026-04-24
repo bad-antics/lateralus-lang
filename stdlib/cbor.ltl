@@ -1,0 +1,144 @@
+// ===================================================================
+// Lateralus stdlib — cbor
+// RFC 8949 Concise Binary Object Representation. Core encode/decode.
+// Major types: uint, nint, bytes, str, array, map, simple (null/bool/f64).
+// ===================================================================
+
+// Major type tags (top 3 bits of initial byte).
+pub fn mt_uint()    -> int { return 0 }
+pub fn mt_nint()    -> int { return 1 }
+pub fn mt_bytes()   -> int { return 2 }
+pub fn mt_str()     -> int { return 3 }
+pub fn mt_arr()     -> int { return 4 }
+pub fn mt_map()     -> int { return 5 }
+pub fn mt_tag()     -> int { return 6 }
+pub fn mt_simple()  -> int { return 7 }
+
+// -- Encode ----------------------------------------------------------
+
+pub fn encode(v) -> list {
+    let out = []
+    _enc(out, v)
+    return out
+}
+
+fn _enc(out: list, v) {
+    let t = typeof(v)
+    if t == "null"  { out.append(0xf6); return }
+    if t == "bool"  {
+        if v { out.append(0xf5) } else { out.append(0xf4) }
+        return
+    }
+    if t == "int" {
+        if v >= 0 { _enc_head(out, mt_uint(), v) }
+        else       { _enc_head(out, mt_nint(), -1 - v) }
+        return
+    }
+    if t == "str" {
+        let b = bytes_of(v)
+        _enc_head(out, mt_str(), len(b))
+        for x in b { out.append(x) }
+        return
+    }
+    if t == "list" {
+        _enc_head(out, mt_arr(), len(v))
+        for x in v { _enc(out, x) }
+        return
+    }
+    if t == "map" {
+        _enc_head(out, mt_map(), len(v))
+        for k in v { _enc(out, k); _enc(out, v[k]) }
+        return
+    }
+    panic("cbor: unencodable type " + t)
+}
+
+fn _enc_head(out: list, mt: int, n: int) {
+    let tag = mt * 32
+    if n < 24 {
+        out.append(tag + n)
+    } else if n < 256 {
+        out.append(tag + 24); out.append(n)
+    } else if n < 65536 {
+        out.append(tag + 25)
+        out.append((n / 256) & 255); out.append(n & 255)
+    } else {
+        out.append(tag + 26)
+        out.append((n / 16777216) & 255)
+        out.append((n / 65536) & 255)
+        out.append((n / 256) & 255)
+        out.append(n & 255)
+    }
+}
+
+// -- Decode ----------------------------------------------------------
+
+/// Decode the CBOR item starting at byte `b`. Returns [value, next_index].
+pub fn decode(b: list) -> list {
+    let pair = _dec(b, 0)
+    return pair[0]
+}
+
+fn _dec(b: list, i: int) -> list {
+    let h = b[i]
+    let mt = h / 32
+    let ai = h & 31
+    let hp = _read_len(b, i + 1, ai)
+    let n = hp[0]
+    let j = hp[1]
+
+    if mt == 0 { return [n, j] }
+    if mt == 1 { return [-1 - n, j] }
+    if mt == 2 {
+        let out = []
+        let k = 0
+        while k < n { out.append(b[j + k]); k = k + 1 }
+        return [out, j + n]
+    }
+    if mt == 3 {
+        let s = ""
+        let k = 0
+        while k < n { s = s + chr(b[j + k]); k = k + 1 }
+        return [s, j + n]
+    }
+    if mt == 4 {
+        let out = []
+        let k = j
+        let c = 0
+        while c < n {
+            let p = _dec(b, k); out.append(p[0]); k = p[1]; c = c + 1
+        }
+        return [out, k]
+    }
+    if mt == 5 {
+        let out = {}
+        let k = j
+        let c = 0
+        while c < n {
+            let kp = _dec(b, k)
+            let vp = _dec(b, kp[1])
+            out[kp[0]] = vp[0]
+            k = vp[1]
+            c = c + 1
+        }
+        return [out, k]
+    }
+    if mt == 6 { return _dec(b, j) }  // pass tag through
+    if mt == 7 {
+        if ai == 20 { return [false, j] }
+        if ai == 21 { return [true,  j] }
+        if ai == 22 { return [null,  j] }
+        if ai == 23 { return [null,  j] }
+    }
+    panic("cbor: unsupported major type " + str(mt))
+}
+
+fn _read_len(b: list, i: int, ai: int) -> list {
+    if ai < 24  { return [ai, i] }
+    if ai == 24 { return [b[i], i + 1] }
+    if ai == 25 { return [b[i] * 256 + b[i + 1], i + 2] }
+    if ai == 26 {
+        return [b[i] * 16777216 + b[i + 1] * 65536 + b[i + 2] * 256 + b[i + 3], i + 4]
+    }
+    panic("cbor: indefinite-length not supported")
+}

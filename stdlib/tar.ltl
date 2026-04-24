@@ -1,0 +1,219 @@
+// ===================================================================
+// Lateralus stdlib — tar
+// ustar/POSIX tar archive reader and writer.
+// Entries are maps: {name, mode, size, mtime, type, link, uid, gid, bytes}
+// ===================================================================
+
+import strings
+
+pub fn block_size() -> int { return 512 }
+pub fn type_regular() -> str { return "0" }
+pub fn type_link()    -> str { return "1" }
+pub fn type_symlink() -> str { return "2" }
+pub fn type_dir()     -> str { return "5" }
+
+// -- Read -----------------------------------------------------------
+
+pub fn read(archive: list) -> list {
+    let out = []
+    let bs = block_size()
+    let i = 0
+    while i + bs <= len(archive) {
+        let hdr = slice(archive, i, i + bs)
+        if all_zero(hdr) {
+            return out
+        }
+        let entry = {}
+        let name   = cstr(hdr, 0, 100)
+        let prefix = cstr(hdr, 345, 155)
+        if len(prefix) > 0 {
+            entry["name"] = prefix + "/" + name
+        } else {
+            entry["name"] = name
+        }
+        entry["mode"]  = octal(hdr, 100, 8)
+        entry["uid"]   = octal(hdr, 108, 8)
+        entry["gid"]   = octal(hdr, 116, 8)
+        entry["size"]  = octal(hdr, 124, 12)
+        entry["mtime"] = octal(hdr, 136, 12)
+        entry["type"]  = cstr(hdr, 156, 1)
+        entry["link"]  = cstr(hdr, 157, 100)
+
+        let data_start = i + bs
+        let data_end = data_start + entry["size"]
+        entry["bytes"] = slice(archive, data_start, data_end)
+        out = out + [entry]
+
+        i = data_end
+        let rem = entry["size"] % bs
+        if rem != 0 {
+            i = i + (bs - rem)
+        }
+    }
+    return out
+}
+
+// -- Write ----------------------------------------------------------
+
+pub fn write(entries: list) -> list {
+    let out = []
+    for e in entries {
+        out = out + write_entry(e)
+    }
+    let bs = block_size()
+    let pad = 0
+    let tail = []
+    while pad < bs * 2 {
+        tail = tail + [0]
+        pad = pad + 1
+    }
+    return out + tail
+}
+
+pub fn write_entry(e: map) -> list {
+    let bs = block_size()
+    let name = e["name"]
+    let data = []
+    if contains(keys(e), "bytes") {
+        data = e["bytes"]
+    }
+    let size = len(data)
+    let type_ = type_regular()
+    if contains(keys(e), "type") {
+        type_ = e["type"]
+    }
+    let mode = 420
+    if contains(keys(e), "mode") {
+        mode = e["mode"]
+    }
+    let mtime = 0
+    if contains(keys(e), "mtime") {
+        mtime = e["mtime"]
+    }
+    let link = ""
+    if contains(keys(e), "link") {
+        link = e["link"]
+    }
+
+    // Build zero-filled header.
+    let hdr = make_zeros(bs)
+    hdr = put_str(hdr, 0,   100, name)
+    hdr = put_oct(hdr, 100, 8,   mode)
+    hdr = put_oct(hdr, 108, 8,   0)
+    hdr = put_oct(hdr, 116, 8,   0)
+    hdr = put_oct(hdr, 124, 12,  size)
+    hdr = put_oct(hdr, 136, 12,  mtime)
+    hdr = put_str(hdr, 148, 8,   "        ")
+    hdr = put_str(hdr, 156, 1,   type_)
+    hdr = put_str(hdr, 157, 100, link)
+    hdr = put_str(hdr, 257, 6,   "ustar")
+    hdr = put_str(hdr, 263, 2,   "00")
+
+    let sum = 0
+    for b in hdr {
+        sum = sum + b
+    }
+    hdr = put_oct(hdr, 148, 7, sum)
+    hdr[155] = 32
+
+    let result = hdr
+    if size > 0 {
+        result = result + data
+        let rem = size % bs
+        if rem != 0 {
+            let zpad = make_zeros(bs - rem)
+            result = result + zpad
+        }
+    }
+    return result
+}
+
+// -- Helpers --------------------------------------------------------
+
+pub fn make_zeros(n: int) -> list {
+    let out = []
+    let i = 0
+    while i < n {
+        out = out + [0]
+        i = i + 1
+    }
+    return out
+}
+
+pub fn all_zero(b: list) -> bool {
+    for x in b {
+        if x != 0 {
+            return false
+        }
+    }
+    return true
+}
+
+pub fn cstr(b: list, off: int, n: int) -> str {
+    let end = off
+    while end < off + n {
+        if b[end] == 0 {
+            end = off + n + 1
+        } else {
+            end = end + 1
+        }
+    }
+    if end > off + n {
+        end = end - 1
+    }
+    // Actually: find terminator
+    let real_end = off
+    while real_end < off + n {
+        if b[real_end] == 0 {
+            return bytes_to_str(slice(b, off, real_end))
+        }
+        real_end = real_end + 1
+    }
+    return bytes_to_str(slice(b, off, off + n))
+}
+
+pub fn bytes_to_str(b: list) -> str {
+    let s = ""
+    for x in b {
+        s = s + chr(x)
+    }
+    return s
+}
+
+pub fn octal(b: list, off: int, n: int) -> int {
+    let s = ""
+    let i = off
+    while i < off + n {
+        let c = b[i]
+        if c >= 48 {
+            if c <= 55 {
+                s = s + chr(c)
+            }
+        }
+        i = i + 1
+    }
+    if len(s) == 0 {
+        return 0
+    }
+    return parse_int_base(s, 8)
+}
+
+pub fn put_str(buf: list, off: int, n: int, s: str) -> list {
+    let bs = bytes_of(s)
+    let i = 0
+    while i < n {
+        if i < len(bs) {
+            buf[off + i] = bs[i]
+        } else {
+            buf[off + i] = 0
+        }
+        i = i + 1
+    }
+    return buf
+}
+
+pub fn put_oct(buf: list, off: int, n: int, v: int) -> list {
+    let body = itoa_base(v, 8)
+    let padded = pad_left(body, n - 1, "0") + " "
+    return put_str(buf, off, n, padded)
+}

@@ -1,0 +1,186 @@
+// ===================================================================
+// Lateralus stdlib — msgpack
+// MessagePack (msgpack.org) encode/decode.
+// Supports nil, bool, int, str, array, map.
+// ===================================================================
+
+// -- Encode ---------------------------------------------------------
+
+pub fn encode(v) -> list {
+    let t = type_of(v)
+    if t == "nil" {
+        return [0xc0]
+    }
+    if t == "bool" {
+        if v {
+            return [0xc3]
+        }
+        return [0xc2]
+    }
+    if t == "int" {
+        return encode_int(v)
+    }
+    if t == "str" {
+        return encode_str(v)
+    }
+    if t == "list" {
+        return encode_arr(v)
+    }
+    if t == "map" {
+        return encode_map(v)
+    }
+    panic("msgpack: unencodable " + t)
+}
+
+pub fn encode_int(n: int) -> list {
+    if n >= 0 {
+        if n < 128 { return [n] }
+        if n < 256 { return [0xcc, n] }
+        if n < 65536 {
+            return [0xcd, (n / 256) & 255, n & 255]
+        }
+        return [0xce,
+            (n / 16777216) & 255,
+            (n / 65536) & 255,
+            (n / 256) & 255,
+            n & 255]
+    }
+    if n >= -32  { return [0xe0 | (n & 31)] }
+    if n >= -128 { return [0xd0, n & 255] }
+    let u = n & 0xffff
+    return [0xd1, (u / 256) & 255, u & 255]
+}
+
+pub fn encode_str(s: str) -> list {
+    let b = bytes_of(s)
+    let n = len(b)
+    let head = []
+    if n < 32 {
+        head = [0xa0 | n]
+    } else {
+        if n < 256 {
+            head = [0xd9, n]
+        } else {
+            head = [0xda, (n / 256) & 255, n & 255]
+        }
+    }
+    return head + b
+}
+
+pub fn encode_arr(a: list) -> list {
+    let n = len(a)
+    let out = []
+    if n < 16 {
+        out = [0x90 | n]
+    } else {
+        if n < 65536 {
+            out = [0xdc, (n / 256) & 255, n & 255]
+        } else {
+            out = [0xdd,
+                (n / 16777216) & 255, (n / 65536) & 255,
+                (n / 256) & 255, n & 255]
+        }
+    }
+    for x in a {
+        out = out + encode(x)
+    }
+    return out
+}
+
+pub fn encode_map(m: map) -> list {
+    let ks = keys(m)
+    let n = len(ks)
+    let out = []
+    if n < 16 {
+        out = [0x80 | n]
+    } else {
+        out = [0xde, (n / 256) & 255, n & 255]
+    }
+    for k in ks {
+        out = out + encode(k)
+        out = out + encode(m[k])
+    }
+    return out
+}
+
+// -- Decode ---------------------------------------------------------
+
+/// Decode one msgpack item starting at offset 0. Returns [value, next_index].
+pub fn decode(b: list) -> list {
+    return decode_at(b, 0)
+}
+
+pub fn decode_at(b: list, i: int) -> list {
+    let c = b[i]
+    if c < 128 {
+        return [c, i + 1]
+    }
+    if c >= 0xe0 {
+        return [c - 256, i + 1]
+    }
+    if (c & 0xe0) == 0xa0 {
+        return read_str(b, i + 1, c & 31)
+    }
+    if (c & 0xf0) == 0x90 {
+        return decode_arr(b, i + 1, c & 15)
+    }
+    if (c & 0xf0) == 0x80 {
+        return decode_map(b, i + 1, c & 15)
+    }
+    if c == 0xc0 { return [nil,   i + 1] }
+    if c == 0xc2 { return [false, i + 1] }
+    if c == 0xc3 { return [true,  i + 1] }
+    if c == 0xcc { return [b[i + 1], i + 2] }
+    if c == 0xcd { return [b[i + 1] * 256 + b[i + 2], i + 3] }
+    if c == 0xce {
+        let v = b[i + 1] * 16777216 + b[i + 2] * 65536 + b[i + 3] * 256 + b[i + 4]
+        return [v, i + 5]
+    }
+    if c == 0xd0 {
+        let v = b[i + 1]
+        if v > 127 { v = v - 256 }
+        return [v, i + 2]
+    }
+    if c == 0xd9 { return read_str(b, i + 2, b[i + 1]) }
+    if c == 0xda { return read_str(b, i + 3, b[i + 1] * 256 + b[i + 2]) }
+    if c == 0xdc { return decode_arr(b, i + 3, b[i + 1] * 256 + b[i + 2]) }
+    if c == 0xde { return decode_map(b, i + 3, b[i + 1] * 256 + b[i + 2]) }
+    panic("msgpack: unsupported tag " + str(c))
+}
+
+pub fn read_str(b: list, i: int, n: int) -> list {
+    let s = ""
+    let k = 0
+    while k < n {
+        s = s + chr(b[i + k])
+        k = k + 1
+    }
+    return [s, i + n]
+}
+
+pub fn decode_arr(b: list, i: int, n: int) -> list {
+    let out = []
+    let k = i
+    let c = 0
+    while c < n {
+        let p = decode_at(b, k)
+        out = out + [p[0]]
+        k = p[1]
+        c = c + 1
+    }
+    return [out, k]
+}
+
+pub fn decode_map(b: list, i: int, n: int) -> list {
+    let out = {}
+    let k = i
+    let c = 0
+    while c < n {
+        let kp = decode_at(b, k)
+        let vp = decode_at(b, kp[1])
+        out[kp[0]] = vp[0]
+        k = vp[1]
+        c = c + 1
+    }
+    return [out, k]
+}

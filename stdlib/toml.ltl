@@ -1,0 +1,196 @@
+// ===================================================================
+// Lateralus stdlib — toml
+// TOML 1.0 parser for core types: strings, ints, bools, arrays,
+// tables and arrays-of-tables.
+// ===================================================================
+
+import strings
+
+pub fn parse(text: str) -> map {
+    let root = {}
+    let current = root
+    let lines = split(text, "\n")
+
+    for raw in lines {
+        let l = strip_comment(raw)
+        let t = trim(l)
+        if len(t) == 0 {
+            continue
+        }
+        if starts_with(t, "[[") && ends_with(t, "]]") {
+            let path = slice(t, 2, len(t) - 2)
+            current = open_array_table(root, path)
+            continue
+        }
+        if starts_with(t, "[") && ends_with(t, "]") {
+            let path = slice(t, 1, len(t) - 1)
+            current = open_table(root, path)
+            continue
+        }
+        let eq = find_unquoted(t, "=")
+        if eq < 0 {
+            continue
+        }
+        let key = trim(slice(t, 0, eq))
+        let val = trim(slice(t, eq + 1, len(t)))
+        current[unquote_key(key)] = parse_value(val)
+    }
+    return root
+}
+
+pub fn strip_comment(l: str) -> str {
+    let in_str = false
+    let q = " "
+    let i = 0
+    while i < len(l) {
+        let c = char_at(l, i)
+        if in_str {
+            if c == q {
+                in_str = false
+            }
+        } else {
+            if c == "\"" { in_str = true; q = "\"" }
+            if c == "'"  { in_str = true; q = "'" }
+            if c == "#"  { return slice(l, 0, i) }
+        }
+        i = i + 1
+    }
+    return l
+}
+
+pub fn find_unquoted(s: str, needle: str) -> int {
+    let in_str = false
+    let q = " "
+    let i = 0
+    while i < len(s) {
+        let c = char_at(s, i)
+        if in_str {
+            if c == q {
+                in_str = false
+            }
+        } else {
+            if c == "\"" { in_str = true; q = "\"" }
+            if c == "'"  { in_str = true; q = "'" }
+            if c == needle { return i }
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+pub fn unquote_key(k: str) -> str {
+    if len(k) >= 2 {
+        let a = char_at(k, 0)
+        let b = char_at(k, len(k) - 1)
+        if a == "\"" && b == "\"" {
+            return slice(k, 1, len(k) - 1)
+        }
+        if a == "'" && b == "'" {
+            return slice(k, 1, len(k) - 1)
+        }
+    }
+    return k
+}
+
+pub fn split_path(path: str) -> list {
+    let parts = []
+    let buf = ""
+    let in_str = false
+    let q = " "
+    let i = 0
+    while i < len(path) {
+        let c = char_at(path, i)
+        if in_str {
+            if c == q {
+                in_str = false
+            } else {
+                buf = buf + c
+            }
+        } else {
+            if c == "\"" { in_str = true; q = "\"" }
+            if c == "'"  { in_str = true; q = "'" }
+            if c == "." {
+                parts = parts + [trim(buf)]
+                buf = ""
+            } else {
+                if c != "\"" && c != "'" {
+                    buf = buf + c
+                }
+            }
+        }
+        i = i + 1
+    }
+    if len(buf) > 0 {
+        parts = parts + [trim(buf)]
+    }
+    return parts
+}
+
+pub fn open_table(root: map, path: str) -> map {
+    let parts = split_path(path)
+    let cur = root
+    for p in parts {
+        if not contains(keys(cur), p) {
+            cur[p] = {}
+        }
+        cur = cur[p]
+    }
+    return cur
+}
+
+pub fn open_array_table(root: map, path: str) -> map {
+    let parts = split_path(path)
+    let cur = root
+    let i = 0
+    while i < len(parts) - 1 {
+        let p = parts[i]
+        if not contains(keys(cur), p) {
+            cur[p] = {}
+        }
+        cur = cur[p]
+        i = i + 1
+    }
+    let last = parts[len(parts) - 1]
+    if not contains(keys(cur), last) {
+        cur[last] = []
+    }
+    let entry = {}
+    cur[last] = cur[last] + [entry]
+    return entry
+}
+
+pub fn parse_value(v: str) -> any {
+    if v == "true"  { return true }
+    if v == "false" { return false }
+    if len(v) >= 2 {
+        let a = char_at(v, 0)
+        let b = char_at(v, len(v) - 1)
+        if a == "\"" && b == "\"" {
+            return slice(v, 1, len(v) - 1)
+        }
+        if a == "'" && b == "'" {
+            return slice(v, 1, len(v) - 1)
+        }
+    }
+    if starts_with(v, "[") {
+        return parse_array(v)
+    }
+    let n = try_int(v)
+    if n != nil {
+        return n
+    }
+    return v
+}
+
+pub fn parse_array(v: str) -> list {
+    let inner = slice(v, 1, len(v) - 1)
+    let out = []
+    let items = split(inner, ",")
+    for p in items {
+        let t = trim(p)
+        if len(t) > 0 {
+            out = out + [parse_value(t)]
+        }
+    }
+    return out
+}

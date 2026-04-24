@@ -1,0 +1,182 @@
+// ===================================================================
+// Lateralus stdlib — metrics
+// In-process counters, gauges and histograms with Prometheus-text
+// exposition. A registry is a map of metric families.
+// ===================================================================
+
+import strings
+import time
+
+// -- Registry construction -----------------------------------------
+
+/// Create an empty registry.
+pub fn new_registry() -> map {
+    let r = {}
+    r["families"] = {}
+    return r
+}
+
+pub fn register_counter(reg: map, name: str, help: str) {
+    ensure_family(reg, name, help, "counter", [])
+}
+
+pub fn register_gauge(reg: map, name: str, help: str) {
+    ensure_family(reg, name, help, "gauge", [])
+}
+
+pub fn register_histogram(reg: map, name: str, help: str, buckets: list) {
+    ensure_family(reg, name, help, "histogram", buckets)
+}
+
+pub fn ensure_family(reg: map, name: str, help: str, kind: str, buckets: list) {
+    let fams = reg["families"]
+    if contains(keys(fams), name) {
+        return
+    }
+    let fam = {}
+    fam["name"] = name
+    fam["help"] = help
+    fam["kind"] = kind
+    fam["buckets"] = buckets
+    fam["series"] = {}
+    fams[name] = fam
+}
+
+// -- Writes ---------------------------------------------------------
+
+pub fn inc(reg: map, name: str, labels: map, by: float) {
+    let s = touch(reg, name, labels)
+    s["value"] = s["value"] + by
+}
+
+pub fn set_value(reg: map, name: str, labels: map, v: float) {
+    let s = touch(reg, name, labels)
+    s["value"] = v
+}
+
+pub fn observe(reg: map, name: str, labels: map, v: float) {
+    let s = touch(reg, name, labels)
+    let fam = reg["families"][name]
+    s["count"] = s["count"] + 1
+    s["sum"] = s["sum"] + v
+
+    if len(s["bucket_counts"]) == 0 {
+        let nb = len(fam["buckets"]) + 1
+        let k = 0
+        let bc = []
+        while k < nb {
+            bc = bc + [0]
+            k = k + 1
+        }
+        s["bucket_counts"] = bc
+    }
+
+    let placed = false
+    let i = 0
+    while i < len(fam["buckets"]) {
+        if not placed {
+            if v <= fam["buckets"][i] {
+                s["bucket_counts"][i] = s["bucket_counts"][i] + 1
+                placed = true
+            }
+        }
+        i = i + 1
+    }
+    if not placed {
+        let last = len(fam["buckets"])
+        s["bucket_counts"][last] = s["bucket_counts"][last] + 1
+    }
+}
+
+// -- Exposition ----------------------------------------------------
+
+/// Render the registry in Prometheus text-exposition format.
+pub fn render_prometheus(reg: map) -> str {
+    let out = ""
+    let names = keys(reg["families"])
+    for name in names {
+        let fam = reg["families"][name]
+        if len(fam["help"]) > 0 {
+            out = out + "# HELP " + fam["name"] + " " + fam["help"] + "\n"
+        }
+        out = out + "# TYPE " + fam["name"] + " " + fam["kind"] + "\n"
+        let fps = keys(fam["series"])
+        for fp in fps {
+            let s = fam["series"][fp]
+            let lbl = labels_fmt(s["labels"])
+            if fam["kind"] == "counter" {
+                out = out + fam["name"] + lbl + " " + str(s["value"]) + "\n"
+            }
+            if fam["kind"] == "gauge" {
+                out = out + fam["name"] + lbl + " " + str(s["value"]) + "\n"
+            }
+            if fam["kind"] == "histogram" {
+                let cum = 0
+                let i = 0
+                while i < len(fam["buckets"]) {
+                    cum = cum + s["bucket_counts"][i]
+                    out = out + fam["name"] + "_bucket"
+                        + merge_label(s["labels"], "le", str(fam["buckets"][i]))
+                        + " " + str(cum) + "\n"
+                    i = i + 1
+                }
+                cum = cum + s["bucket_counts"][len(fam["buckets"])]
+                out = out + fam["name"] + "_bucket"
+                    + merge_label(s["labels"], "le", "+Inf")
+                    + " " + str(cum) + "\n"
+                out = out + fam["name"] + "_sum" + lbl + " " + str(s["sum"]) + "\n"
+                out = out + fam["name"] + "_count" + lbl + " " + str(s["count"]) + "\n"
+            }
+        }
+    }
+    return out
+}
+
+// -- Internals ------------------------------------------------------
+
+pub fn touch(reg: map, name: str, labels: map) -> map {
+    let fam = reg["families"][name]
+    let fp = fingerprint(labels)
+    let series = fam["series"]
+    if not contains(keys(series), fp) {
+        let s = {}
+        s["labels"] = labels
+        s["value"] = 0.0
+        s["count"] = 0
+        s["sum"] = 0.0
+        s["bucket_counts"] = []
+        series[fp] = s
+    }
+    return series[fp]
+}
+
+pub fn fingerprint(labels: map) -> str {
+    let ks = sorted(keys(labels))
+    let parts = []
+    for k in ks {
+        parts = parts + [k + "=" + str(labels[k])]
+    }
+    return join(parts, ",")
+}
+
+pub fn labels_fmt(labels: map) -> str {
+    let ks = keys(labels)
+    if len(ks) == 0 {
+        return ""
+    }
+    let parts = []
+    for k in ks {
+        parts = parts + [k + "=\"" + str(labels[k]) + "\""]
+    }
+    return "{" + join(parts, ",") + "}"
+}
+
+pub fn merge_label(labels: map, k: str, v: str) -> str {
+    let m = {}
+    let src_keys = keys(labels)
+    for kk in src_keys {
+        m[kk] = labels[kk]
+    }
+    m[k] = v
+    return labels_fmt(m)
+}

@@ -1,0 +1,161 @@
+// ===================================================================
+// Lateralus stdlib — yaml
+// YAML 1.2 subset: block maps, block sequences, plain scalars
+// (nil/bool/int/float/str). Comments start with `#`.
+// Anchors, aliases and merge keys are not resolved.
+// ===================================================================
+
+import strings
+
+// -- Parse ---------------------------------------------------------
+
+pub fn parse(text: str) -> any {
+    let lines = normalise(text)
+    let result = parse_block(lines, 0, 0)
+    return result[0]
+}
+
+pub fn normalise(text: str) -> list {
+    let raw = split(text, "\n")
+    let out = []
+    for line in raw {
+        let l = strip_comment(line)
+        if len(trim(l)) > 0 {
+            out = out + [l]
+        }
+    }
+    return out
+}
+
+pub fn strip_comment(l: str) -> str {
+    let in_str = false
+    let qc = " "
+    let i = 0
+    while i < len(l) {
+        let c = char_at(l, i)
+        if in_str {
+            if c == qc {
+                in_str = false
+            }
+            i = i + 1
+        }
+        if not in_str {
+            if c == "\"" {
+                in_str = true
+                qc = "\""
+            }
+            if c == "'" {
+                in_str = true
+                qc = "'"
+            }
+            if c == "#" {
+                return slice(l, 0, i)
+            }
+            i = i + 1
+        }
+    }
+    return l
+}
+
+pub fn indent_of(l: str) -> int {
+    let i = 0
+    while i < len(l) {
+        if char_at(l, i) != " " {
+            return i
+        }
+        i = i + 1
+    }
+    return i
+}
+
+pub fn parse_block(lines: list, idx: int, min_indent: int) -> list {
+    if idx >= len(lines) {
+        return [nil, idx]
+    }
+    let ind = indent_of(lines[idx])
+    if ind < min_indent {
+        return [nil, idx]
+    }
+    let first = trim(lines[idx])
+    if starts_with(first, "-") {
+        return parse_seq(lines, idx, ind)
+    }
+    if index_of(first, ":") > 0 {
+        return parse_map(lines, idx, ind)
+    }
+    return [scalarize(first), idx + 1]
+}
+
+pub fn parse_seq(lines: list, idx: int, ind: int) -> list {
+    let out = []
+    let i = idx
+    while i < len(lines) {
+        if indent_of(lines[i]) != ind {
+            return [out, i]
+        }
+        let s = trim(lines[i])
+        if not starts_with(s, "-") {
+            return [out, i]
+        }
+        if s == "-" {
+            let res = parse_block(lines, i + 1, ind + 1)
+            out = out + [res[0]]
+            i = res[1]
+        } else {
+            let rest = trim(slice(s, 2, len(s)))
+            out = out + [scalarize(rest)]
+            i = i + 1
+        }
+    }
+    return [out, i]
+}
+
+pub fn parse_map(lines: list, idx: int, ind: int) -> list {
+    let out = {}
+    let i = idx
+    while i < len(lines) {
+        if indent_of(lines[i]) != ind {
+            return [out, i]
+        }
+        let line = trim(lines[i])
+        let ci = index_of(line, ":")
+        if ci < 0 {
+            return [out, i]
+        }
+        let key = trim(slice(line, 0, ci))
+        let rest = trim(slice(line, ci + 1, len(line)))
+        let k = scalarize(key)
+        if len(rest) == 0 {
+            let res = parse_block(lines, i + 1, ind + 1)
+            out[k] = res[0]
+            i = res[1]
+        } else {
+            out[k] = scalarize(rest)
+            i = i + 1
+        }
+    }
+    return [out, i]
+}
+
+pub fn scalarize(raw: str) -> any {
+    if len(raw) == 0         { return nil }
+    if raw == "~"            { return nil }
+    if raw == "null"         { return nil }
+    if raw == "true"         { return true }
+    if raw == "false"        { return false }
+    if len(raw) >= 2 {
+        let a = char_at(raw, 0)
+        let b = char_at(raw, len(raw) - 1)
+        if a == "\"" && b == "\"" {
+            return slice(raw, 1, len(raw) - 1)
+        }
+        if a == "'" && b == "'" {
+            return slice(raw, 1, len(raw) - 1)
+        }
+    }
+    let n = try_int(raw)
+    if n != nil {
+        return n
+    }
+    return raw
+}

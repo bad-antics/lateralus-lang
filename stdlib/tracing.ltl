@@ -1,0 +1,126 @@
+// ===================================================================
+// Lateralus stdlib — tracing
+// OpenTelemetry-compatible spans with W3C traceparent wire format.
+// Tracers and spans are plain maps; exporters are single-arg functions.
+// ===================================================================
+
+import crypto
+import strings
+import time
+
+// -- Tracer --------------------------------------------------------
+
+/// Create a tracer with a named service, an exporter function, and a sampler.
+pub fn new_tracer(service: str, exporter, sampler) -> map {
+    let t = {}
+    t["service"] = service
+    t["exporter"] = exporter
+    t["sampler"] = sampler
+    return t
+}
+
+pub fn always_sample(ctx: map) -> bool { return true }
+pub fn never_sample(ctx: map)  -> bool { return false }
+
+// -- Span lifecycle ------------------------------------------------
+
+/// Start a new span. `parent` may be nil (new root) or a span-context map.
+pub fn start(tracer: map, name: str, parent: map, kind: str, attrs: map) -> map {
+    let ctx = {}
+    if parent == nil {
+        ctx["trace_id"] = hex_encode(crypto_rand_bytes(16))
+        ctx["parent"] = ""
+    } else {
+        ctx["trace_id"] = parent["trace_id"]
+        ctx["parent"] = parent["span_id"]
+    }
+    ctx["span_id"] = hex_encode(crypto_rand_bytes(8))
+    if parent == nil {
+        let sampler = tracer["sampler"]
+        ctx["sampled"] = sampler(ctx)
+    } else {
+        let inherited = true
+        if contains(keys(parent), "sampled") {
+            inherited = parent["sampled"]
+        }
+        ctx["sampled"] = inherited
+    }
+
+    let span = {}
+    span["ctx"] = ctx
+    span["name"] = name
+    span["kind"] = kind
+    span["start_ns"] = time_wall_ns()
+    span["end_ns"] = 0
+    span["attributes"] = attrs
+    span["events"] = []
+    span["status"] = "unset"
+    span["status_msg"] = ""
+    span["tracer"] = tracer
+    return span
+}
+
+pub fn set_attr(span: map, k: str, v) {
+    span["attributes"][k] = v
+}
+
+pub fn add_event(span: map, event_name: str, attrs: map) {
+    let ev = {}
+    ev["t"] = time_wall_ns()
+    ev["name"] = event_name
+    ev["attrs"] = attrs
+    span["events"] = span["events"] + [ev]
+}
+
+pub fn end_ok(span: map) {
+    span["end_ns"] = time_wall_ns()
+    span["status"] = "ok"
+    emit_span(span)
+}
+
+pub fn end_error(span: map, msg: str) {
+    span["end_ns"] = time_wall_ns()
+    span["status"] = "error"
+    span["status_msg"] = msg
+    emit_span(span)
+}
+
+pub fn duration_ns(span: map) -> int {
+    return span["end_ns"] - span["start_ns"]
+}
+
+pub fn emit_span(span: map) {
+    if not span["ctx"]["sampled"] {
+        return
+    }
+    let exporter = span["tracer"]["exporter"]
+    exporter(span)
+}
+
+// -- W3C traceparent ----------------------------------------------
+
+/// Parse `00-{trace-id}-{span-id}-{flags}` into a span context, or nil.
+pub fn parse_traceparent(h: str) -> map {
+    let p = split(h, "-")
+    if len(p) != 4 {
+        return nil
+    }
+    if p[0] != "00" {
+        return nil
+    }
+    let flags = parse_int_base(p[3], 16)
+    let ctx = {}
+    ctx["trace_id"] = p[1]
+    ctx["span_id"] = p[2]
+    ctx["parent"] = ""
+    ctx["sampled"] = (flags & 1) != 0
+    return ctx
+}
+
+pub fn traceparent(ctx: map) -> str {
+    let flags = "00"
+    if ctx["sampled"] {
+        flags = "01"
+    }
+    return "00-" + ctx["trace_id"] + "-" + ctx["span_id"] + "-" + flags
+}
