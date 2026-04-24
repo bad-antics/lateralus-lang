@@ -1,0 +1,135 @@
+// ===================================================================
+// stdlib/parquet.ltl  —  Parquet file structure helpers
+// -------------------------------------------------------------------
+// Parquet is a columnar file format with this on-disk layout:
+//
+//     "PAR1" magic
+//     <row group 1: column chunks of pages>
+//     ...
+//     <row group N>
+//     <FileMetaData (Thrift-serialised)>
+//     <i32 little-endian: footer length>
+//     "PAR1" magic
+//
+// The Thrift schema is large enough that we don't ship a full
+// encoder here.  Instead we provide:
+//   - magic number constants and footer framing
+//   - data page v1 header byte layout (the part that's stable
+//     regardless of Thrift)
+//   - a Thrift compact-protocol primitive emitter for callers
+//     building their own FileMetaData
+// ===================================================================
+
+let PARQUET_MAGIC = [0x50, 0x41, 0x52, 0x31]   // "PAR1"
+
+// -- Compression / encoding constants ------------------------------
+
+pub fn enc_plain()           -> int { return 0 }
+pub fn enc_plain_dict()      -> int { return 2 }
+pub fn enc_rle()             -> int { return 3 }
+pub fn enc_bit_packed()      -> int { return 4 }
+pub fn enc_delta_bin_packed()-> int { return 5 }
+pub fn enc_delta_byte_array()-> int { return 6 }
+pub fn enc_delta_length_ba() -> int { return 7 }
+pub fn enc_rle_dictionary()  -> int { return 8 }
+
+pub fn comp_uncompressed() -> int { return 0 }
+pub fn comp_snappy()       -> int { return 1 }
+pub fn comp_gzip()         -> int { return 2 }
+pub fn comp_lzo()          -> int { return 3 }
+pub fn comp_brotli()       -> int { return 4 }
+pub fn comp_lz4()          -> int { return 5 }
+pub fn comp_zstd()         -> int { return 6 }
+
+pub fn type_boolean()    -> int { return 0 }
+pub fn type_int32()      -> int { return 1 }
+pub fn type_int64()      -> int { return 2 }
+pub fn type_float()      -> int { return 4 }
+pub fn type_double()     -> int { return 5 }
+pub fn type_byte_array() -> int { return 6 }
+pub fn type_fixed_len_byte_array() -> int { return 7 }
+
+// -- Magic + footer framing ----------------------------------------
+
+pub fn magic() -> list { return PARQUET_MAGIC }
+
+fn enc_i32_le(v: int) -> list {
+    if v < 0 { v = v + 0x100000000 }
+    return [v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, (v >> 24) & 0xff]
+}
+
+/// Wrap a finished file: PAR1 + body + footer + len + PAR1.
+pub fn assemble_file(body: list, footer: list) -> list {
+    return PARQUET_MAGIC + body + footer
+         + enc_i32_le(len(footer)) + PARQUET_MAGIC
+}
+
+/// Parse the trailing 8 bytes to find footer length + verify magic.
+/// Returns {footer_len, footer_offset} or nil.
+pub fn parse_footer_pointer(buf: list) -> map {
+    let n = len(buf)
+    if n < 12 { return nil }
+    if buf[n-4] != 0x50 || buf[n-3] != 0x41
+       || buf[n-2] != 0x52 || buf[n-1] != 0x31 { return nil }
+    let flen = buf[n-8] | (buf[n-7] << 8) | (buf[n-6] << 16) | (buf[n-5] << 24)
+    if n < 12 + flen { return nil }
+    let m = {}
+    m["footer_len"]    = flen
+    m["footer_offset"] = n - 8 - flen
+    return m
+}
+
+// -- Thrift compact protocol primitives ----------------------------
+// (Just enough to let callers hand-roll FileMetaData if they choose.)
+
+pub fn thrift_zz_i32(v: int) -> int {
+    return ((v << 1) ^ (v >> 31)) & 0xffffffff
+}
+
+pub fn thrift_zz_i64(v: int) -> int {
+    return ((v << 1) ^ (v >> 63)) & 0xffffffffffffffff
+}
+
+pub fn thrift_uvarint(v: int) -> list {
+    let out = []
+    let go = true
+    while go {
+        let b = v & 0x7f
+        v = v >> 7
+        if v > 0 { b = b | 0x80 } else { go = false }
+        out = out + [b]
+    }
+    return out
+}
+
+pub fn thrift_varint_i32(v: int) -> list {
+    return thrift_uvarint(thrift_zz_i32(v))
+}
+
+pub fn thrift_varint_i64(v: int) -> list {
+    return thrift_uvarint(thrift_zz_i64(v))
+}
+
+pub fn thrift_binary(b: list) -> list {
+    return thrift_uvarint(len(b)) + b
+}
+
+pub fn thrift_string(s: str) -> list {
+    return thrift_binary(bytes_of(s))
+}
+
+// -- Data page v1 header byte fragment ------------------------------
+// Real callers will wrap this in Thrift, but the inner bytes here
+// are stable and what most pure-Lateralus encoders need.
+
+pub fn data_page_v1_header(num_values: int, encoding: int,
+                            def_level_enc: int, rep_level_enc: int) -> map {
+    // We return the logical fields; serialisation to Thrift is the
+    // caller's job because real implementations cache field IDs.
+    let h = {}
+    h["num_values"]                = num_values
+    h["encoding"]                  = encoding
+    h["definition_level_encoding"] = def_level_enc
+    h["repetition_level_encoding"] = rep_level_enc
+    return h
+}

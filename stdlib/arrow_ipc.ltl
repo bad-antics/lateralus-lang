@@ -1,0 +1,126 @@
+// ===================================================================
+// stdlib/arrow_ipc.ltl  —  Apache Arrow IPC stream skeleton
+// -------------------------------------------------------------------
+// Builds the Arrow IPC stream framing:
+//
+//     Continuation marker (0xFFFFFFFF) + i32 metadata length
+//     + metadata bytes (FlatBuffer; here treated as opaque)
+//     + body bytes (Arrow buffers concatenated)
+//
+// We don't own a FlatBuffer compiler in pure Lateralus, so the
+// metadata payload is supplied by the caller.  The framing,
+// 8-byte alignment, EOS marker, and validity-bitmap helpers are
+// what's hard to get right, and are what we provide here.
+//
+// Refs:
+//   https://arrow.apache.org/docs/format/Columnar.html#serialization-and-interprocess-communication-ipc
+// ===================================================================
+
+let ARROW_CONT_MARKER = 0xFFFFFFFF
+let ARROW_ALIGN       = 8
+
+fn enc_u32_le(v: int) -> list {
+    return [v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, (v >> 24) & 0xff]
+}
+
+fn enc_i32_le(v: int) -> list {
+    if v < 0 { v = v + 0x100000000 }
+    return enc_u32_le(v)
+}
+
+fn pad_to(buf: list, multiple: int) -> list {
+    let n = len(buf)
+    let r = n % multiple
+    if r == 0 { return buf }
+    let pad = multiple - r
+    let i = 0
+    while i < pad { buf = buf + [0]; i = i + 1 }
+    return buf
+}
+
+/// Wrap one IPC message: continuation + length + metadata + body.
+/// `metadata` and `body` are opaque byte lists supplied by caller.
+pub fn frame_message(metadata: list, body: list) -> list {
+    let md = pad_to(metadata, ARROW_ALIGN)
+    let bd = pad_to(body, ARROW_ALIGN)
+    let header = enc_u32_le(ARROW_CONT_MARKER) + enc_i32_le(len(md))
+    return header + md + bd
+}
+
+/// End-of-stream marker (continuation followed by zero length).
+pub fn end_of_stream() -> list {
+    return enc_u32_le(ARROW_CONT_MARKER) + enc_i32_le(0)
+}
+
+/// Build a validity bitmap from a list of bools.  LSB of byte 0 is
+/// element 0 (Arrow uses little-endian bit order).
+pub fn validity_bitmap(flags: list) -> list {
+    let n = len(flags)
+    let nbytes = (n + 7) / 8
+    let bits = []
+    let i = 0
+    while i < nbytes { bits = bits + [0]; i = i + 1 }
+    i = 0
+    while i < n {
+        if flags[i] {
+            let byte_i = i / 8
+            let bit_i  = i % 8
+            bits[byte_i] = bits[byte_i] | (1 << bit_i)
+        }
+        i = i + 1
+    }
+    return pad_to(bits, ARROW_ALIGN)
+}
+
+/// Pack a list of i32 into a little-endian buffer (Arrow Int32 layout).
+pub fn buffer_i32(values: list) -> list {
+    let out = []
+    let i = 0
+    while i < len(values) {
+        out = out + enc_i32_le(values[i])
+        i = i + 1
+    }
+    return pad_to(out, ARROW_ALIGN)
+}
+
+/// Pack u8 list directly with alignment padding.
+pub fn buffer_u8(values: list) -> list {
+    return pad_to(values, ARROW_ALIGN)
+}
+
+/// Variable-length string column: returns [offsets_buffer, data_buffer].
+/// Offsets are i32, monotonically non-decreasing.
+pub fn buffers_utf8(strings: list) -> list {
+    let offsets = []
+    let data = []
+    let off = 0
+    offsets = offsets + [off]
+    let i = 0
+    while i < len(strings) {
+        let b = bytes_of(strings[i])
+        data = data + b
+        off = off + len(b)
+        offsets = offsets + [off]
+        i = i + 1
+    }
+    let off_buf = []
+    let j = 0
+    while j < len(offsets) {
+        off_buf = off_buf + enc_i32_le(offsets[j])
+        j = j + 1
+    }
+    return [pad_to(off_buf, ARROW_ALIGN), pad_to(data, ARROW_ALIGN)]
+}
+
+/// Parse an IPC framing header.  Returns nil if buffer too short,
+/// otherwise {metadata_len, header_size}.
+pub fn parse_frame_header(buf: list, i: int) -> map {
+    if len(buf) < i + 8 { return nil }
+    let cont = buf[i] | (buf[i+1] << 8) | (buf[i+2] << 16) | (buf[i+3] << 24)
+    if cont != ARROW_CONT_MARKER { return nil }
+    let mlen = buf[i+4] | (buf[i+5] << 8) | (buf[i+6] << 16) | (buf[i+7] << 24)
+    let m = {}
+    m["metadata_len"] = mlen
+    m["header_size"]  = 8
+    return m
+}

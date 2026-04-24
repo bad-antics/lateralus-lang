@@ -1,0 +1,81 @@
+// ===================================================================
+// stdlib/poly1305.ltl  —  Poly1305 one-time MAC (RFC 8439)
+// -------------------------------------------------------------------
+// 256-bit key (split into r||s, 16 bytes each) + arbitrary message
+// → 16-byte authentication tag.  Strength: forgery probability ≤
+// 8 * floor((L+15)/16) / 2^106.
+//
+// MUST use a fresh key per message (typically derived from a stream
+// cipher block; see chacha20-poly1305 AEAD construction).
+// ===================================================================
+
+let P1305_PRIME = 0x3FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFB    // 2^130 - 5
+
+fn read_le_int(buf: list, i: int, n: int) -> int {
+    let v = 0
+    let k = 0
+    while k < n {
+        v = v | (buf[i + k] << (8 * k))
+        k = k + 1
+    }
+    return v
+}
+
+fn clamp_r(key: list) -> int {
+    let r0 = key[ 0]; let r1 = key[ 1]; let r2 = key[ 2]; let r3 = key[ 3]
+    let r4 = key[ 4]; let r5 = key[ 5]; let r6 = key[ 6]; let r7 = key[ 7]
+    let r8 = key[ 8]; let r9 = key[ 9]; let r10= key[10]; let r11= key[11]
+    let r12= key[12]; let r13= key[13]; let r14= key[14]; let r15= key[15]
+    // RFC 8439 § 2.5.1 clamping
+    r3  = r3  & 15
+    r7  = r7  & 15
+    r11 = r11 & 15
+    r15 = r15 & 15
+    r4  = r4  & 252
+    r8  = r8  & 252
+    r12 = r12 & 252
+    let bytes = [r0,r1,r2,r3,r4,r5,r6,r7,r8,r9,r10,r11,r12,r13,r14,r15]
+    return read_le_int(bytes, 0, 16)
+}
+
+/// Compute the 16-byte tag for `msg` under the 32-byte one-time key.
+pub fn mac(key: list, msg: list) -> list {
+    let r = clamp_r(key)
+    let s = read_le_int(key, 16, 16)
+    let acc = 0
+    let n = len(msg)
+    let i = 0
+    while i < n {
+        let take = 16
+        if n - i < 16 { take = n - i }
+        // n[take] = msg slice + 0x01 + zero pad to 17 bytes
+        let block_bytes = []
+        let j = 0
+        while j < take { block_bytes = block_bytes + [msg[i + j]]; j = j + 1 }
+        block_bytes = block_bytes + [1]
+        while len(block_bytes) < 17 { block_bytes = block_bytes + [0] }
+        let n_int = read_le_int(block_bytes, 0, 17)
+        acc = ((acc + n_int) * r) % P1305_PRIME
+        i = i + 16
+    }
+    let tag_int = (acc + s) & 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF   // mod 2^128
+    let out = []
+    let b = 0
+    while b < 16 {
+        out = out + [(tag_int >> (8 * b)) & 0xff]
+        b = b + 1
+    }
+    return out
+}
+
+/// Constant-time tag comparison.
+pub fn verify(tag_a: list, tag_b: list) -> bool {
+    if len(tag_a) != 16 || len(tag_b) != 16 { return false }
+    let diff = 0
+    let i = 0
+    while i < 16 {
+        diff = diff | (tag_a[i] ^ tag_b[i])
+        i = i + 1
+    }
+    return diff == 0
+}

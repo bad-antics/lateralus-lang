@@ -1,0 +1,63 @@
+// ===================================================================
+// stdlib/dict_encoding.ltl  —  Dictionary encoding for columnar data
+// -------------------------------------------------------------------
+// Replaces a column of strings (or other comparable values) with two
+// arrays:
+//   - dictionary: deduplicated values in first-seen order
+//   - indices:    list[int] same length as input, pointing into dict
+//
+// Used by Parquet's PLAIN_DICTIONARY, Arrow's DictionaryArray, and
+// every modern OLAP engine for low-cardinality columns.
+// ===================================================================
+
+pub fn encode(values: list) -> map {
+    let dict = []
+    let dict_idx = {}     // str(v) → int index
+    let indices = []
+    let i = 0
+    while i < len(values) {
+        let v = values[i]
+        let k = str(v)
+        let idx = -1
+        if contains(dict_idx, k) {
+            idx = dict_idx[k]
+        } else {
+            idx = len(dict)
+            dict = dict + [v]
+            dict_idx[k] = idx
+        }
+        indices = indices + [idx]
+        i = i + 1
+    }
+    let m = {}
+    m["dictionary"] = dict
+    m["indices"]    = indices
+    return m
+}
+
+pub fn decode(enc: map) -> list {
+    let dict = enc["dictionary"]
+    let idx  = enc["indices"]
+    let out = []
+    let i = 0
+    while i < len(idx) {
+        out = out + [dict[idx[i]]]
+        i = i + 1
+    }
+    return out
+}
+
+/// Estimate effective bits-per-value once dictionary is shared once.
+/// Returns ceil(log2(card)) — bit width for the indices.
+pub fn index_bit_width(enc: map) -> int {
+    let n = len(enc["dictionary"])
+    if n <= 1 { return 1 }
+    let bits = 0
+    let v = n - 1
+    while v > 0 { v = v >> 1; bits = bits + 1 }
+    return bits
+}
+
+pub fn cardinality(enc: map) -> int {
+    return len(enc["dictionary"])
+}

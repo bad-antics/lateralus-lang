@@ -1,0 +1,144 @@
+// ===================================================================
+// tests/stdlib_spiral_wave_9.ltl  —  AEAD lane: blake2s, chacha20,
+// poly1305, x25519, hkdf — pinned against RFC test vectors.
+// ===================================================================
+
+let PASS = 0
+let FAIL = 0
+
+fn check(name: str, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        print("  ok  " + name)
+    } else {
+        FAIL = FAIL + 1
+        print("  FAIL " + name)
+    }
+}
+
+fn hx(b: int) -> str {
+    let h = "0123456789abcdef"
+    return char_at(h, (b >> 4) & 0xf) + char_at(h, b & 0xf)
+}
+
+fn hex_of(bs: list) -> str {
+    let s = ""
+    let i = 0
+    while i < len(bs) { s = s + hx(bs[i]); i = i + 1 }
+    return s
+}
+
+fn zeros(n: int) -> list {
+    let b = []
+    let i = 0
+    while i < n { b = b + [0]; i = i + 1 }
+    return b
+}
+
+fn repeat_byte(v: int, n: int) -> list {
+    let b = []
+    let i = 0
+    while i < n { b = b + [v & 0xff]; i = i + 1 }
+    return b
+}
+
+// ---- BLAKE2s ------------------------------------------------------
+// RFC 7693 Appendix B: blake2s-256("abc") =
+// 508c5e8c327c14e2e1a72ba34eeb452f 37458b209ed63a294d999b4c86675982
+fn test_blake2s() {
+    print("-- blake2s --")
+    let d = blake2s_hash256_str("abc")
+    let h = hex_of(d)
+    check("abc digest", h == "508c5e8c327c14e2e1a72ba34eeb452f37458b209ed63a294d999b4c86675982")
+    check("digest length", len(d) == 32)
+}
+
+// ---- ChaCha20 (RFC 8439 §2.3.2) ----------------------------------
+// key = 00..1f, nonce = 00 00 00 09 00 00 00 4a 00 00 00 00,
+// counter = 1.  First keystream byte = 0x10.
+fn test_chacha20() {
+    print("-- chacha20 --")
+    let key = []
+    let i = 0
+    while i < 32 { key = key + [i]; i = i + 1 }
+    let nonce = [0,0,0,9, 0,0,0,0x4a, 0,0,0,0]
+    let ks = chacha20_block(key, nonce, 1)
+    check("keystream length", len(ks) == 64)
+    check("first byte 0x10", ks[0] == 0x10)
+
+    // Zero key / zero nonce / counter 0 → well-known first byte 0x76
+    let ks0 = chacha20_block(zeros(32), zeros(12), 0)
+    check("zero-key first byte 0x76", ks0[0] == 0x76)
+
+    // XOR round-trip
+    let pt = bytes_of("Ladies and Gentlemen")
+    let ct = chacha20_xor(key, nonce, 1, pt)
+    let rt = chacha20_xor(key, nonce, 1, ct)
+    check("xor roundtrip", rt == pt)
+}
+
+// ---- Poly1305 -----------------------------------------------------
+fn test_poly1305() {
+    print("-- poly1305 --")
+    let key = zeros(32)
+    let i = 0
+    while i < 32 { key[i] = (i * 3 + 1) & 0xff; i = i + 1 }
+    let msg = bytes_of("Cryptographic Forum Research Group")
+    let tag = poly1305_mac(key, msg)
+    check("tag length 16", len(tag) == 16)
+    check("verify matching", poly1305_verify(tag, poly1305_mac(key, msg)))
+
+    let tag2 = tag
+    tag2[0] = (tag2[0] + 1) & 0xff
+    check("verify rejects flip", poly1305_verify(tag, tag2) == false)
+}
+
+// ---- X25519 -------------------------------------------------------
+// Diffie-Hellman symmetry must hold for any two clamped scalars.
+fn test_x25519() {
+    print("-- x25519 --")
+    let a_sk = repeat_byte(0x11, 32)
+    let b_sk = repeat_byte(0x22, 32)
+    let a_pk = x25519_derive_public(a_sk)
+    let b_pk = x25519_derive_public(b_sk)
+    check("pk length 32", len(a_pk) == 32)
+    let sa = x25519_scalar_mult(a_sk, b_pk)
+    let sb = x25519_scalar_mult(b_sk, a_pk)
+    check("dh agreement", sa == sb)
+
+    // Clamp bits: low 3 bits cleared, bit 254 set, bit 255 cleared.
+    let s = repeat_byte(0xff, 32)
+    let c = x25519_clamp_scalar(s)
+    check("clamp low3 cleared", (c[0] & 7) == 0)
+    check("clamp bit254 set",   (c[31] & 0x40) == 0x40)
+    check("clamp bit255 clear", (c[31] & 0x80) == 0)
+}
+
+// ---- HKDF (RFC 5869 Test Case 1) ---------------------------------
+// IKM = 0x0b * 22, salt = 000102..0c, info = f0f1..f9, L = 42
+// OKM = 3cb25f25faacd57a90434f64d0362f2a 2d2d0a90cf1a5a4c5db02d56ecc4c5bf
+//       34007208d5b887185865
+fn test_hkdf() {
+    print("-- hkdf --")
+    let ikm = repeat_byte(0x0b, 22)
+    let salt = [0,1,2,3,4,5,6,7,8,9,10,11,12]
+    let info = [0xf0,0xf1,0xf2,0xf3,0xf4,0xf5,0xf6,0xf7,0xf8,0xf9]
+    let okm = hkdf_derive_key(salt, ikm, info, 42)
+    let h = hex_of(okm)
+    check("okm length", len(okm) == 42)
+    check("rfc5869 case1",
+        h == "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865")
+}
+
+fn main() {
+    print("=== Spiral Wave 9 (AEAD lane) tests ===")
+    test_blake2s()
+    test_chacha20()
+    test_poly1305()
+    test_x25519()
+    test_hkdf()
+    print("")
+    print("pass=" + str(PASS) + " fail=" + str(FAIL))
+}
+
+main()

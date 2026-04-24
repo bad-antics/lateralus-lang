@@ -4,6 +4,101 @@
 
 All notable changes to the Lateralus Language toolchain are documented here.
 
+## [3.11.0-dev] — Spiral Wave 9: AEAD & Modern Crypto Lane
+
+Five crypto primitives aligned with the WireGuard / Noise / TLS 1.3
+stack — the bricks a modern secure channel is built from, all in
+pure Lateralus and wired together end-to-end in one example:
+
+- **stdlib/blake2s.ltl** — RFC 7693 BLAKE2s-256 with the full `IV` /
+  `SIGMA` tables and the 10-round G-function compressor.  Exports
+  `hash(msg, key, digest_len)`, `hash256(msg)`, `hash256_str(s)`.
+  Pinned against the RFC 7693 Appendix B `"abc"` test vector.
+- **stdlib/chacha20.ltl** — RFC 8439 ChaCha20 with the canonical
+  `"expand 32-byte k"` constants, 20-round quarter-round schedule,
+  64-byte `block(key, nonce, counter)` keystream, and a streaming
+  `xor(key, nonce, counter, data)` that encrypts or decrypts in one
+  pass.  First keystream byte of the zero-key zero-nonce case
+  matches the RFC pinned value (`0x76`).
+- **stdlib/poly1305.ltl** — RFC 8439 one-time MAC over the
+  $2^{130} - 5$ prime field, RFC § 2.5.1 `clamp_r` on the key, plus
+  a constant-time `verify` so flipped-byte forgeries are rejected
+  without an early exit.
+- **stdlib/x25519.ltl** — RFC 7748 Montgomery-ladder scalar
+  multiplication with `clamp_scalar`, `scalar_mult`, and
+  `derive_public`.  Fermat-inverse `fp_inv` for the final affine
+  recovery; DH agreement is symmetric for any two clamped scalars.
+- **stdlib/hkdf.ltl** — RFC 5869 HKDF-SHA-256 extract / expand,
+  delegating to `crypto_hmac` from stdlib/crypto.ltl.  Exports
+  `extract`, `expand`, `derive_key`, and `derive_many` for bulk
+  key-schedule generation.  Pinned against RFC 5869 Test Case 1.
+
+### Examples
+
+- **examples/spiral_handshake.ltl** — full secure-channel demo:
+  X25519 ephemeral key exchange on both sides, BLAKE2s transcript
+  hash, HKDF expansion into a session key + nonce, ChaCha20
+  encryption, Poly1305 authentication, and round-trip decrypt +
+  verify.  The exact brick-for-brick layout of a Noise handshake.
+
+### Tests
+
+- **tests/stdlib_spiral_wave_9.ltl** — BLAKE2s `"abc"` matches the
+  RFC 7693 digest byte-for-byte; ChaCha20 zero-key first byte
+  `0x76` and XOR round-trip; Poly1305 tag length + verify accepts
+  a match and rejects a single flipped byte; X25519 DH agreement
+  and clamp bit-pattern; HKDF RFC 5869 Test Case 1 OKM.
+
+## [3.10.0-dev] — Spiral Wave 8: Columnar & Analytics Lane
+
+Five columnar-analytics primitives that fill the gap where most
+stdlibs stop — the encodings behind Arrow, Parquet, ClickHouse,
+Druid, and every modern OLAP engine:
+
+- **stdlib/run_length.ltl** — RLE with two payload modes:
+  `encode_pairs` / `decode_pairs` (value + run-length) and
+  `encode_packed` / `decode_packed` (Parquet-style hybrid byte
+  stream).  `ratio_permille` reports compression ratio per-mille
+  so callers can decide whether to keep the plain encoding.
+- **stdlib/dict_encoding.ltl** — dictionary encoding with order-
+  preserving `encode` → `{"dictionary", "indices"}`, a matching
+  `decode`, `cardinality`, and `index_bit_width` that picks the
+  minimum index width (1/2/4/8/16/32) for downstream bit-packing.
+- **stdlib/frame_of_reference.ltl** — two FOR variants: classic
+  `encode` / `decode` (subtract reference, store deltas) and a
+  Gorilla-style `encode_dod` / `decode_dod` delta-of-delta codec
+  for monotonically increasing timeseries clocks.
+- **stdlib/arrow_ipc.ltl** — Apache Arrow IPC streaming framing:
+  `ARROW_CONT_MARKER` + length prefix, `frame_message`,
+  `end_of_stream`, `validity_bitmap` (LSB-first as per spec),
+  fixed-width `buffer_i32` / `buffer_u8`, `buffers_utf8` for
+  variable-length string arrays, and a `parse_frame_header` that
+  inverts the framing back into `{length, body_offset}`.
+- **stdlib/parquet.ltl** — Parquet file glue: `PARQUET_MAGIC`
+  (`PAR1`), encoding / compression / type constants, file
+  assembly (`assemble_file`), footer-pointer parsing, and the
+  Thrift Compact Protocol primitives every Parquet writer needs —
+  `zz_i32` / `zz_i64` zig-zag, `uvarint` / `varint_i32` /
+  `varint_i64`, `binary`, `string`, plus a `data_page_v1_header`
+  emitter.
+
+### Examples
+
+- **examples/spiral_columnar.ltl** — end-to-end pipeline: a stream
+  of `(city, timestamp)` rows is dictionary-encoded, the indices
+  run-length-compressed, the timestamps delta-of-delta encoded,
+  then wrapped as an Arrow IPC stream and bolted into a minimal
+  Parquet file (PAR1 magic, footer, PAR1 magic).
+
+### Tests
+
+- **tests/stdlib_spiral_wave_8.ltl** — pinned encoder output:
+  Thrift zig-zag (`zz(0)=0, zz(-1)=1, zz(1)=2`), uvarint of 300
+  = `[0xAC, 0x02]`, Arrow LSB-first validity bitmap of a 9-bit
+  mask yielding `[0xCD, 0x01]`, RLE round-trips on runs and
+  singletons, dict round-trip preserving ordering, and FOR /
+  FOR-dod round-trips on monotonic clocks.
+
 ## [3.9.0-dev] — Spiral Wave 7: Performance & Niche Primitives
 
 Five speed-oriented stdlib modules — hot-loop primitives and fast

@@ -1,0 +1,120 @@
+// ===================================================================
+// stdlib/x25519.ltl  —  X25519 Diffie-Hellman (RFC 7748)
+// -------------------------------------------------------------------
+// Curve25519 scalar multiplication via the Montgomery ladder, used
+// in TLS 1.3, WireGuard, Signal, age, and SSH.  This implementation
+// uses Lateralus arbitrary-precision integers — it is correct but
+// not constant-time; suitable for KEM exchanges, not for adversarial
+// side-channel environments.
+// ===================================================================
+
+let X25_P = 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFED
+//          == 2^255 - 19
+let X25_A24 = 121665
+
+fn read_le_le32(buf: list) -> int {
+    // Read 32 little-endian bytes as a single integer.
+    let v = 0
+    let i = 0
+    while i < 32 {
+        v = v | (buf[i] << (8 * i))
+        i = i + 1
+    }
+    return v
+}
+
+fn write_le_le32(v: int) -> list {
+    let out = []
+    let i = 0
+    while i < 32 {
+        out = out + [(v >> (8 * i)) & 0xff]
+        i = i + 1
+    }
+    return out
+}
+
+/// RFC 7748 § 5: clamp the scalar before use.
+pub fn clamp_scalar(scalar: list) -> list {
+    let s = []
+    let i = 0
+    while i < 32 { s = s + [scalar[i]]; i = i + 1 }
+    s[0]  = s[0]  & 248
+    s[31] = s[31] & 127
+    s[31] = s[31] | 64
+    return s
+}
+
+fn fp_inv(a: int) -> int {
+    // Fermat's little theorem: a^(p-2) mod p.
+    let exp = X25_P - 2
+    let result = 1
+    let base = a % X25_P
+    while exp > 0 {
+        if (exp & 1) == 1 { result = (result * base) % X25_P }
+        base = (base * base) % X25_P
+        exp = exp >> 1
+    }
+    return result
+}
+
+fn cswap(swap: int, a: int, b: int) -> list {
+    // Conditional swap (not constant time in this impl).
+    if swap == 1 { return [b, a] }
+    return [a, b]
+}
+
+/// Montgomery-ladder scalar multiplication on Curve25519.
+/// `scalar` and `u_coord` are 32-byte little-endian byte lists.
+pub fn scalar_mult(scalar: list, u_coord: list) -> list {
+    let k = clamp_scalar(scalar)
+    let k_int = read_le_le32(k)
+    let u = read_le_le32(u_coord) & ((1 << 255) - 1)   // mask top bit
+
+    let x_1 = u
+    let x_2 = 1
+    let z_2 = 0
+    let x_3 = u
+    let z_3 = 1
+    let swap = 0
+
+    let t = 254
+    while t >= 0 {
+        let k_t = (k_int >> t) & 1
+        swap = swap ^ k_t
+        let s23 = cswap(swap, x_2, x_3); x_2 = s23[0]; x_3 = s23[1]
+        let z23 = cswap(swap, z_2, z_3); z_2 = z23[0]; z_3 = z23[1]
+        swap = k_t
+
+        let A   = (x_2 + z_2) % X25_P
+        let AA  = (A * A) % X25_P
+        let B   = (x_2 - z_2 + X25_P) % X25_P
+        let BB  = (B * B) % X25_P
+        let E   = (AA - BB + X25_P) % X25_P
+        let C   = (x_3 + z_3) % X25_P
+        let D   = (x_3 - z_3 + X25_P) % X25_P
+        let DA  = (D * A) % X25_P
+        let CB  = (C * B) % X25_P
+
+        x_3 = ((DA + CB) % X25_P)
+        x_3 = (x_3 * x_3) % X25_P
+
+        let t1 = (DA - CB + X25_P) % X25_P
+        z_3 = (x_1 * ((t1 * t1) % X25_P)) % X25_P
+        x_2 = (AA * BB) % X25_P
+        z_2 = (E * (AA + (X25_A24 * E) % X25_P)) % X25_P
+        t = t - 1
+    }
+    let s23 = cswap(swap, x_2, x_3); x_2 = s23[0]; x_3 = s23[1]
+    let z23 = cswap(swap, z_2, z_3); z_2 = z23[0]; z_3 = z23[1]
+    let result = (x_2 * fp_inv(z_2)) % X25_P
+    return write_le_le32(result)
+}
+
+/// Compute the public key for a private scalar (multiply by base point u=9).
+pub fn derive_public(secret: list) -> list {
+    let base = []
+    let i = 0
+    base = base + [9]
+    while len(base) < 32 { base = base + [0] }
+    return scalar_mult(secret, base)
+}

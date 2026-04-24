@@ -1,0 +1,46 @@
+// ===================================================================
+// examples/spiral_columnar.ltl  —  Wave 8 demo
+// One column of integers + one column of strings encoded through the
+// full columnar pipeline: dict + FoR + RLE + Arrow IPC + Parquet wrap.
+// ===================================================================
+
+fn main() {
+    print("=== Spiral Columnar (Wave 8) ===")
+
+    // -- string column → dictionary encoding -----------------------
+    let cities = ["NYC","LA","NYC","SF","LA","NYC","SF","SF","NYC","LA"]
+    let de = dict_encoding_encode(cities)
+    print("dict card  = " + str(dict_encoding_cardinality(de)))
+    print("dict bits  = " + str(dict_encoding_index_bit_width(de)))
+    print("indices    = " + str(de["indices"]))
+
+    // -- run-length on the dictionary indices ----------------------
+    let rle = run_length_encode_pairs(de["indices"])
+    print("RLE pairs  = " + str(len(rle)))
+    print("RLE ratio  = " + str(run_length_ratio_permille(len(de["indices"]),
+                                                            len(rle))) + "‰")
+
+    // -- timestamp column → delta-of-delta -------------------------
+    let ts = [1745500000, 1745500030, 1745500060, 1745500091,
+              1745500120, 1745500150, 1745500180]
+    let dod = frame_of_reference_encode_dod(ts)
+    print("first ts   = " + str(dod["first"]))
+    print("dods       = " + str(dod["dods"]))
+    let back = frame_of_reference_decode_dod(dod)
+    print("dod ok     = " + str(back[6] == ts[6]))
+
+    // -- pack into Arrow IPC frames --------------------------------
+    let utf8 = arrow_ipc_buffers_utf8(de["dictionary"])
+    let idx_buf = arrow_ipc_buffer_i32(de["indices"])
+    let frame = arrow_ipc_frame_message([], utf8[0] + utf8[1] + idx_buf)
+    print("arrow IPC frame = " + str(len(frame)) + "B")
+
+    // -- wrap as a (toy) Parquet file ------------------------------
+    let file = parquet_assemble_file(idx_buf, [])
+    print("parquet file    = " + str(len(file)) + "B (PAR1 ... PAR1)")
+    let fp = parquet_parse_footer_pointer(file)
+    print("parquet footer @" + str(fp["footer_offset"])
+          + " len=" + str(fp["footer_len"]))
+}
+
+main()

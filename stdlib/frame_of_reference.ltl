@@ -1,0 +1,119 @@
+// ===================================================================
+// stdlib/frame_of_reference.ltl  —  FoR encoding for integer columns
+// -------------------------------------------------------------------
+// Subtracts a reference value (typically the column min) from each
+// element, leaving small deltas that bit-pack well.  Used by
+// Parquet DELTA_BINARY_PACKED, Lucene DocValues, BtrBlocks.
+//
+// A second variant `delta_of_delta` is provided — the codec used by
+// time-series databases (Gorilla / InfluxDB / Prometheus TSDB) for
+// monotonic timestamp columns.
+// ===================================================================
+
+fn min_of(xs: list) -> int {
+    let m = xs[0]
+    let i = 1
+    while i < len(xs) {
+        if xs[i] < m { m = xs[i] }
+        i = i + 1
+    }
+    return m
+}
+
+fn max_of(xs: list) -> int {
+    let m = xs[0]
+    let i = 1
+    while i < len(xs) {
+        if xs[i] > m { m = xs[i] }
+        i = i + 1
+    }
+    return m
+}
+
+fn bit_width(v: int) -> int {
+    if v <= 0 { return 1 }
+    let b = 0
+    while v > 0 { v = v >> 1; b = b + 1 }
+    return b
+}
+
+/// Encode by subtracting the min.  Returns {ref, deltas, bit_width}.
+pub fn encode(xs: list) -> map {
+    if len(xs) == 0 {
+        let e = {}
+        e["ref"] = 0; e["deltas"] = []; e["bit_width"] = 0
+        return e
+    }
+    let r = min_of(xs)
+    let deltas = []
+    let i = 0
+    while i < len(xs) {
+        deltas = deltas + [xs[i] - r]
+        i = i + 1
+    }
+    let bw = bit_width(max_of(deltas))
+    let m = {}
+    m["ref"]       = r
+    m["deltas"]    = deltas
+    m["bit_width"] = bw
+    return m
+}
+
+pub fn decode(enc: map) -> list {
+    let r = enc["ref"]
+    let d = enc["deltas"]
+    let out = []
+    let i = 0
+    while i < len(d) {
+        out = out + [r + d[i]]
+        i = i + 1
+    }
+    return out
+}
+
+// -- Delta-of-delta (Gorilla style) --------------------------------
+
+/// For time-series timestamps.  Returns {first, second_delta, dods}.
+pub fn encode_dod(xs: list) -> map {
+    let m = {}
+    if len(xs) == 0 {
+        m["first"] = 0; m["second_delta"] = 0; m["dods"] = []
+        return m
+    }
+    if len(xs) == 1 {
+        m["first"] = xs[0]; m["second_delta"] = 0; m["dods"] = []
+        return m
+    }
+    m["first"] = xs[0]
+    let prev_d = xs[1] - xs[0]
+    m["second_delta"] = prev_d
+    let dods = []
+    let i = 2
+    while i < len(xs) {
+        let d = xs[i] - xs[i - 1]
+        dods = dods + [d - prev_d]
+        prev_d = d
+        i = i + 1
+    }
+    m["dods"] = dods
+    return m
+}
+
+pub fn decode_dod(enc: map) -> list {
+    let out = [enc["first"]]
+    if len(enc["dods"]) == 0 && enc["second_delta"] == 0 && len(out) == 1 {
+        // single-element column
+        return out
+    }
+    let prev_d = enc["second_delta"]
+    out = out + [enc["first"] + prev_d]
+    let dods = enc["dods"]
+    let i = 0
+    while i < len(dods) {
+        let d = prev_d + dods[i]
+        out = out + [out[len(out) - 1] + d]
+        prev_d = d
+        i = i + 1
+    }
+    return out
+}

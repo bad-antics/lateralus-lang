@@ -1,0 +1,68 @@
+// ===================================================================
+// examples/spiral_handshake.ltl  —  Wave 9 demo
+// X25519 ephemeral key exchange → HKDF expansion → ChaCha20+Poly1305
+// AEAD seal — i.e. the WireGuard / Noise / TLS 1.3 KEM core.
+// ===================================================================
+
+fn hex_byte(b: int) -> str {
+    let hex = "0123456789abcdef"
+    return char_at(hex, (b >> 4) & 0xf) + char_at(hex, b & 0xf)
+}
+
+fn hex_dump(bytes: list) -> str {
+    let s = ""
+    let i = 0
+    while i < len(bytes) {
+        s = s + hex_byte(bytes[i])
+        i = i + 1
+    }
+    return s
+}
+
+fn make_secret(seed: int) -> list {
+    let s = []
+    let i = 0
+    while i < 32 { s = s + [(seed + i * 7) & 0xff]; i = i + 1 }
+    return s
+}
+
+fn main() {
+    print("=== Spiral Handshake (Wave 9) ===")
+
+    // -- 1. X25519 ephemeral key exchange --------------------------
+    let alice_sk = make_secret(0x42)
+    let bob_sk   = make_secret(0xA5)
+    let alice_pk = x25519_derive_public(alice_sk)
+    let bob_pk   = x25519_derive_public(bob_sk)
+    let shared_a = x25519_scalar_mult(alice_sk, bob_pk)
+    let shared_b = x25519_scalar_mult(bob_sk,   alice_pk)
+    print("alice_pk = " + slice(hex_dump(alice_pk), 0, 16) + "...")
+    print("shared agree = " + str(hex_dump(shared_a) == hex_dump(shared_b)))
+
+    // -- 2. BLAKE2s the shared secret as a transcript hash ---------
+    let transcript = blake2s_hash256(shared_a + alice_pk + bob_pk)
+    print("transcript = " + slice(hex_dump(transcript), 0, 16) + "...")
+
+    // -- 3. HKDF expansion → 32-byte session key + 12-byte nonce ---
+    let prk = hkdf_extract(transcript, shared_a)
+    let key = hkdf_expand(prk, bytes_of("session-key"), 32)
+    let nonce = hkdf_expand(prk, bytes_of("session-nonce"), 12)
+    print("session_key = " + slice(hex_dump(key), 0, 16) + "...")
+
+    // -- 4. ChaCha20 + Poly1305 seal a payload ---------------------
+    let payload = bytes_of("hello from the spiral!")
+    // RFC 8439: derive Poly1305 one-time key from ChaCha20 block 0.
+    let p1key = slice(chacha20_block(key, nonce, 0), 0, 32)
+    let ct    = chacha20_xor(key, nonce, 1, payload)
+    let tag   = poly1305_mac(p1key, ct)
+    print("ciphertext  = " + hex_dump(ct))
+    print("tag         = " + hex_dump(tag))
+
+    // -- 5. Round-trip on the receiver side -----------------------
+    let ok    = poly1305_verify(tag, poly1305_mac(p1key, ct))
+    let pt    = chacha20_xor(key, nonce, 1, ct)
+    print("tag verify  = " + str(ok))
+    print("decrypted   = " + str(pt == payload))
+}
+
+main()

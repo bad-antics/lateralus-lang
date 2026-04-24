@@ -1,0 +1,73 @@
+// ===================================================================
+// stdlib/run_length.ltl  —  Run-Length Encoding (RLE)
+// -------------------------------------------------------------------
+// Two encoders:
+//   - encode_pairs   : list[v] → list[[v,count],...]
+//   - encode_packed  : list[int] → list[int] alternating value,count
+// Plus a streaming-style int-only RLE with byte output for tiny payloads.
+// ===================================================================
+
+pub fn encode_pairs(xs: list) -> list {
+    let out = []
+    if len(xs) == 0 { return out }
+    let cur = xs[0]
+    let cnt = 1
+    let i = 1
+    while i < len(xs) {
+        if xs[i] == cur {
+            cnt = cnt + 1
+        } else {
+            out = out + [[cur, cnt]]
+            cur = xs[i]
+            cnt = 1
+        }
+        i = i + 1
+    }
+    out = out + [[cur, cnt]]
+    return out
+}
+
+pub fn decode_pairs(rle: list) -> list {
+    let out = []
+    let i = 0
+    while i < len(rle) {
+        let p = rle[i]
+        let v = p[0]
+        let c = p[1]
+        let j = 0
+        while j < c { out = out + [v]; j = j + 1 }
+        i = i + 1
+    }
+    return out
+}
+
+/// Compact int RLE: alternating value,count integer pairs.
+pub fn encode_packed(xs: list) -> list {
+    let pairs = encode_pairs(xs)
+    let out = []
+    let i = 0
+    while i < len(pairs) {
+        out = out + [pairs[i][0], pairs[i][1]]
+        i = i + 1
+    }
+    return out
+}
+
+pub fn decode_packed(packed: list) -> list {
+    let out = []
+    let i = 0
+    while i + 1 < len(packed) {
+        let v = packed[i]
+        let c = packed[i + 1]
+        let j = 0
+        while j < c { out = out + [v]; j = j + 1 }
+        i = i + 2
+    }
+    return out
+}
+
+/// Compression ratio in permille (‰).  1000 = no compression.
+pub fn ratio_permille(orig_len: int, rle_pair_count: int) -> int {
+    if orig_len == 0 { return 1000 }
+    return (rle_pair_count * 2 * 1000) / orig_len
+}
