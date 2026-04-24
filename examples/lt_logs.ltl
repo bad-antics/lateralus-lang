@@ -1,0 +1,228 @@
+// examples/lt_logs.ltl — "lt-logs": a killer demo for log triage in Lateralus
+// -----------------------------------------------------------------------------
+// Takes structured logfmt lines and:
+//   1. parses them into key/value records
+//   2. filters by a level threshold (e.g. warn and above)
+//   3. groups by a chosen key (e.g. "service") and counts occurrences
+//   4. shows a top-N table with a bar chart
+//
+// Why this exists:
+//   - Demonstrates the Observability lane end-to-end in one file
+//   - Zero external deps — pure Lateralus, no OpenSSL, no Python libs
+//   - A ready template for a real CLI once `import stdlib.logfmt` is wired up
+//
+// Run:  lateralus run examples/lt_logs.ltl
+// -----------------------------------------------------------------------------
+
+// ---------- sample input (baked so the demo is self-verifying) ----------------
+
+let SAMPLE = "ts=2026-04-24T12:00:01Z level=info  service=api     msg=\"request ok\"      user=42  dur_ms=12
+ts=2026-04-24T12:00:02Z level=warn  service=api     msg=\"slow query\"      user=42  dur_ms=412
+ts=2026-04-24T12:00:03Z level=info  service=web     msg=\"cache hit\"       user=7   dur_ms=1
+ts=2026-04-24T12:00:04Z level=error service=api     msg=\"db timeout\"      user=42  dur_ms=5000
+ts=2026-04-24T12:00:05Z level=info  service=web     msg=\"cache hit\"       user=7   dur_ms=1
+ts=2026-04-24T12:00:06Z level=error service=auth    msg=\"token invalid\"   user=99  dur_ms=3
+ts=2026-04-24T12:00:07Z level=warn  service=auth    msg=\"rate limited\"    user=99  dur_ms=2
+ts=2026-04-24T12:00:08Z level=error service=api     msg=\"db timeout\"      user=42  dur_ms=5000
+ts=2026-04-24T12:00:09Z level=info  service=worker  msg=\"job done\"        job=123  dur_ms=880
+ts=2026-04-24T12:00:10Z level=error service=api     msg=\"db timeout\"      user=7   dur_ms=5000"
+
+// ---------- level helpers -----------------------------------------------------
+
+fn level_rank(lvl: str) -> int {
+    if lvl == "trace" { return 0 }
+    if lvl == "debug" { return 1 }
+    if lvl == "info"  { return 2 }
+    if lvl == "warn"  { return 3 }
+    if lvl == "error" { return 4 }
+    if lvl == "fatal" { return 5 }
+    return -1
+}
+
+// ---------- logfmt parser (fields: list of [k, v]) ----------------------------
+
+fn parse_line(line: str) -> list {
+    let fields = []
+    let i = 0
+    let n = len(line)
+    while i < n {
+        // skip spaces
+        while i < n && slice(line, i, i + 1) == " " { i = i + 1 }
+        if i >= n { break }
+
+        // read key up to '='
+        let k_start = i
+        while i < n && slice(line, i, i + 1) != "=" && slice(line, i, i + 1) != " " {
+            i = i + 1
+        }
+        let key = slice(line, k_start, i)
+        let value = ""
+        if i < n && slice(line, i, i + 1) == "=" {
+            i = i + 1
+            // quoted value?
+            if i < n && slice(line, i, i + 1) == "\"" {
+                i = i + 1
+                let v_start = i
+                while i < n && slice(line, i, i + 1) != "\"" {
+                    if slice(line, i, i + 1) == "\\" && i + 1 < n { i = i + 2 }
+                    else { i = i + 1 }
+                }
+                value = slice(line, v_start, i)
+                if i < n { i = i + 1 }  // closing quote
+            } else {
+                let v_start = i
+                while i < n && slice(line, i, i + 1) != " " { i = i + 1 }
+                value = slice(line, v_start, i)
+            }
+        }
+        if len(key) > 0 { fields = fields + [[key, value]] }
+    }
+    return fields
+}
+
+fn field_get(fields: list, key: str) -> str {
+    let i = 0
+    while i < len(fields) {
+        if fields[i][0] == key { return fields[i][1] }
+        i = i + 1
+    }
+    return ""
+}
+
+// ---------- parse all lines ---------------------------------------------------
+
+fn parse_all(text: str) -> list {
+    let lines = str_split(text, "\n")
+    let out = []
+    let i = 0
+    while i < len(lines) {
+        let line = str_trim(lines[i])
+        if len(line) > 0 { out = out + [parse_line(line)] }
+        i = i + 1
+    }
+    return out
+}
+
+// ---------- filter: level >= min_level ----------------------------------------
+
+fn filter_level(records: list, min_level: str) -> list {
+    let threshold = level_rank(min_level)
+    let out = []
+    let i = 0
+    while i < len(records) {
+        let r = records[i]
+        if level_rank(field_get(r, "level")) >= threshold {
+            out = out + [r]
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// ---------- group-by-key frequency counter ------------------------------------
+
+fn count_by(records: list, key: str) -> list {
+    let keys = []
+    let counts = []
+    let i = 0
+    while i < len(records) {
+        let v = field_get(records[i], key)
+        let found = -1
+        let j = 0
+        while j < len(keys) {
+            if keys[j] == v { found = j; j = len(keys) }
+            else { j = j + 1 }
+        }
+        if found >= 0 {
+            counts[found] = counts[found] + 1
+        } else {
+            keys = keys + [v]
+            counts = counts + [1]
+        }
+        i = i + 1
+    }
+    // sort desc by count (small n, simple selection sort)
+    let n = len(keys)
+    let a = 0
+    while a < n {
+        let best = a
+        let b = a + 1
+        while b < n {
+            if counts[b] > counts[best] { best = b }
+            b = b + 1
+        }
+        if best != a {
+            let tk = keys[a];   keys[a]   = keys[best];   keys[best]   = tk
+            let tc = counts[a]; counts[a] = counts[best]; counts[best] = tc
+        }
+        a = a + 1
+    }
+    let pairs = []
+    let k = 0
+    while k < n {
+        pairs = pairs + [[keys[k], counts[k]]]
+        k = k + 1
+    }
+    return pairs
+}
+
+// ---------- pretty printers ---------------------------------------------------
+
+fn pad(s: str, width: int) -> str {
+    let out = s
+    while len(out) < width { out = out + " " }
+    return out
+}
+
+fn bar(count: int, max_count: int, width: int) -> str {
+    if max_count <= 0 { return "" }
+    let n = (count * width) / max_count
+    let out = ""
+    let i = 0
+    while i < n { out = out + "█"; i = i + 1 }
+    return out
+}
+
+fn print_topn(title: str, pairs: list, n: int) {
+    print("")
+    print("== " + title + " ==")
+    let max_count = 0
+    let i = 0
+    while i < len(pairs) && i < n {
+        if pairs[i][1] > max_count { max_count = pairs[i][1] }
+        i = i + 1
+    }
+    i = 0
+    while i < len(pairs) && i < n {
+        let key = pairs[i][0]
+        let cnt = pairs[i][1]
+        print("  " + pad(key, 14) + pad(str(cnt), 4) + " " + bar(cnt, max_count, 30))
+        i = i + 1
+    }
+}
+
+// ---------- main --------------------------------------------------------------
+
+fn main() {
+    let records = parse_all(SAMPLE)
+    print("lt-logs  —  parsed " + str(len(records)) + " structured log lines")
+
+    // All records: top services
+    print_topn("Top services (all levels)", count_by(records, "service"), 10)
+
+    // Filter to warn+ and summarize
+    let problems = filter_level(records, "warn")
+    print("")
+    print("Lines at level >= warn: " + str(len(problems)))
+    print_topn("Top problem services (warn+)", count_by(problems, "service"), 10)
+    print_topn("Top problem messages (warn+)", count_by(problems, "msg"), 5)
+
+    // Error-only breakdown by user
+    let errors = filter_level(records, "error")
+    print_topn("Users hitting errors", count_by(errors, "user"), 10)
+
+    print("")
+    print("Done. Pipe your own logs in by replacing SAMPLE with file_read(path).")
+}
+
+main()
