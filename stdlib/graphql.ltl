@@ -1,0 +1,252 @@
+// ===================================================================
+// Lateralus stdlib — graphql
+// Query-document builder and a minimal lexer/parser for the
+// SDL-free query subset (OperationDefinition + SelectionSet).
+// Useful for typed client code without a full schema compiler.
+// ===================================================================
+
+import strings
+
+// -- Builder API ---------------------------------------------------
+// A query document is a map:
+//   {"operation": "query"|"mutation"|"subscription",
+//    "name": str,
+//    "variables": [ {"name","type","default"} ],
+//    "selections": [ selection ] }
+// A selection is a map with keys:
+//   {"field", "alias", "args": map, "selections": [ selection ]}
+
+pub fn new_query(name: str) -> map {
+    return make_op("query", name)
+}
+
+pub fn new_mutation(name: str) -> map {
+    return make_op("mutation", name)
+}
+
+pub fn make_op(kind: str, name: str) -> map {
+    let op = {}
+    op["operation"] = kind
+    op["name"] = name
+    op["variables"] = []
+    op["selections"] = []
+    return op
+}
+
+pub fn add_variable(op: map, name: str, type_: str, default_val: str) {
+    let v = {}
+    v["name"] = name
+    v["type"] = type_
+    v["default"] = default_val
+    op["variables"] = op["variables"] + [v]
+}
+
+pub fn field(name: str) -> map {
+    return field_as(name, "")
+}
+
+pub fn field_as(name: str, alias: str) -> map {
+    let f = {}
+    f["field"] = name
+    f["alias"] = alias
+    f["args"] = {}
+    f["selections"] = []
+    return f
+}
+
+pub fn set_arg(f: map, name: str, raw: str) {
+    f["args"][name] = raw
+}
+
+pub fn add_child(parent: map, child: map) {
+    parent["selections"] = parent["selections"] + [child]
+}
+
+// -- Render --------------------------------------------------------
+
+pub fn render(op: map) -> str {
+    let out = op["operation"] + " " + op["name"]
+    if len(op["variables"]) > 0 {
+        out = out + "("
+        let first = true
+        for v in op["variables"] {
+            if not first { out = out + ", " }
+            first = false
+            out = out + "$" + v["name"] + ": " + v["type"]
+            if len(v["default"]) > 0 {
+                out = out + " = " + v["default"]
+            }
+        }
+        out = out + ")"
+    }
+    out = out + " " + render_selections(op["selections"], 0)
+    return out
+}
+
+pub fn render_selections(sels: list, depth: int) -> str {
+    if len(sels) == 0 { return "" }
+    let pad_outer = repeat("  ", depth)
+    let pad_inner = repeat("  ", depth + 1)
+    let out = chr(123) + "\n"
+    for s in sels {
+        out = out + pad_inner
+        if len(s["alias"]) > 0 {
+            out = out + s["alias"] + ": "
+        }
+        out = out + s["field"]
+        let arg_keys = keys(s["args"])
+        if len(arg_keys) > 0 {
+            out = out + "("
+            let first = true
+            for k in arg_keys {
+                if not first { out = out + ", " }
+                first = false
+                out = out + k + ": " + s["args"][k]
+            }
+            out = out + ")"
+        }
+        if len(s["selections"]) > 0 {
+            out = out + " " + render_selections(s["selections"], depth + 1)
+        }
+        out = out + "\n"
+    }
+    out = out + pad_outer + chr(125)
+    return out
+}
+
+pub fn repeat(unit: str, n: int) -> str {
+    let out = ""
+    let i = 0
+    while i < n {
+        out = out + unit
+        i = i + 1
+    }
+    return out
+}
+
+// -- Lightweight query lexer/parser --------------------------------
+
+/// Tokenise a query document. Whitespace-separated; punctuators are
+/// split individually. Comments (`#...`) are stripped.
+pub fn lex(text: str) -> list {
+    let tokens = []
+    let i = 0
+    let n = len(text)
+    while i < n {
+        let c = char_at(text, i)
+        if c == " " || c == "\t" || c == "\n" || c == "\r" || c == "," {
+            i = i + 1
+            continue
+        }
+        if c == "#" {
+            while i < n {
+                if char_at(text, i) == "\n" {
+                    i = i + 1
+                    break
+                }
+                i = i + 1
+            }
+            continue
+        }
+        if c == chr(123) || c == chr(125) || c == "(" || c == ")" || c == ":" || c == "$" {
+            tokens = tokens + [c]
+            i = i + 1
+            continue
+        }
+        if c == "\"" {
+            let start = i + 1
+            i = start
+            while i < n {
+                if char_at(text, i) == "\"" {
+                    break
+                }
+                i = i + 1
+            }
+            tokens = tokens + ["\"" + slice(text, start, i) + "\""]
+            i = i + 1
+            continue
+        }
+        let start = i
+        while i < n {
+            let ch = char_at(text, i)
+            if ch == " " || ch == "\t" || ch == "\n" || ch == "\r" || ch == ","
+                || ch == chr(123) || ch == chr(125) || ch == "(" || ch == ")" || ch == ":" {
+                break
+            }
+            i = i + 1
+        }
+        tokens = tokens + [slice(text, start, i)]
+    }
+    return tokens
+}
+
+/// Build a simple AST from a tokenised query (operation + selections).
+/// Args are captured as raw token strings to avoid a full value grammar.
+pub fn parse(text: str) -> map {
+    let toks = lex(text)
+    let state = {}
+    state["toks"] = toks
+    state["i"] = 0
+    let kind = "query"
+    let name = ""
+    if toks[0] == "query" || toks[0] == "mutation" || toks[0] == "subscription" {
+        kind = toks[0]
+        state["i"] = 1
+        if state["i"] < len(toks) && toks[state["i"]] != chr(123) {
+            name = toks[state["i"]]
+            state["i"] = state["i"] + 1
+        }
+    }
+    let op = make_op(kind, name)
+    op["selections"] = parse_selection_set(state)
+    return op
+}
+
+pub fn parse_selection_set(state: map) -> list {
+    let out = []
+    if state["toks"][state["i"]] != chr(123) {
+        return out
+    }
+    state["i"] = state["i"] + 1
+    while state["i"] < len(state["toks"]) {
+        let t = state["toks"][state["i"]]
+        if t == chr(125) {
+            state["i"] = state["i"] + 1
+            return out
+        }
+        let f = parse_field(state)
+        out = out + [f]
+    }
+    return out
+}
+
+pub fn parse_field(state: map) -> map {
+    let name = state["toks"][state["i"]]
+    state["i"] = state["i"] + 1
+    let alias = ""
+    if state["i"] < len(state["toks"]) && state["toks"][state["i"]] == ":" {
+        alias = name
+        state["i"] = state["i"] + 1
+        name = state["toks"][state["i"]]
+        state["i"] = state["i"] + 1
+    }
+    let f = field_as(name, alias)
+    if state["i"] < len(state["toks"]) && state["toks"][state["i"]] == "(" {
+        state["i"] = state["i"] + 1
+        while state["i"] < len(state["toks"]) && state["toks"][state["i"]] != ")" {
+            let aname = state["toks"][state["i"]]
+            state["i"] = state["i"] + 1
+            if state["toks"][state["i"]] == ":" {
+                state["i"] = state["i"] + 1
+            }
+            let aval = state["toks"][state["i"]]
+            state["i"] = state["i"] + 1
+            f["args"][aname] = aval
+        }
+        state["i"] = state["i"] + 1
+    }
+    if state["i"] < len(state["toks"]) && state["toks"][state["i"]] == chr(123) {
+        f["selections"] = parse_selection_set(state)
+    }
+    return f
+}

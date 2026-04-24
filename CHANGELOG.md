@@ -7,6 +7,60 @@ Follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [3.4.0-dev] — Unreleased — Spiral Wave 2
+
+> *"the spiral keeps widening — networking edition"*
+
+Second wave of stdlib expansion.  Five new networking modules, all
+parse-clean under the current front-end, plus one integrative example
+and a test suite covering every module's hot path.
+
+### Added — stdlib modules
+
+| Module | Purpose |
+|---|---|
+| `stdlib/websocket.ltl` | RFC 6455 frame codec, Sec-WebSocket-Accept handshake, masked/unmasked encode, close frames |
+| `stdlib/smtp.ltl`      | ESMTP client — EHLO/MAIL/RCPT/DATA/STARTTLS/QUIT, multi-line response parser, dot-stuffing, AUTH LOGIN + AUTH PLAIN |
+| `stdlib/graphql.ltl`   | Query document builder (`query`/`mutation`, variables, args, aliases), renderer, and a lightweight lex+parse round-trip |
+| `stdlib/ldap.ltl`      | Minimal BER/DER codec + LDAPv3 Bind/Unbind/Search(present) request builders and message framing |
+| `stdlib/quic.ltl`      | RFC 9000 §16 variable-length integers, long/short header parsing, frame-type constants, STREAM-frame tag helper |
+
+### Added — example
+
+* `examples/spiral_chat_relay.ltl` — a self-contained chat-relay demo
+  wiring **websocket** + **graphql** together with Wave 1's **metrics**
+  and **tracing** over an in-memory transport.
+
+### Added — tests
+
+* `tests/stdlib_spiral_wave_2.ltl` — covers:
+  * the RFC 6455 §1.3 known-vector for `Sec-WebSocket-Accept`,
+  * websocket frame round-trips across the 7-bit, 16-bit and masked
+    length encodings,
+  * SMTP line parsing (final vs continuation) and dot-stuffing,
+  * GraphQL build/render and lex/parse round-trip,
+  * LDAP TLV encode/decode for INTEGER and OCTET STRING, plus
+    structural checks for Bind and Unbind,
+  * QUIC varint round-trips across all four size classes,
+  * QUIC header-form / fixed-bit / long-packet-type / STREAM-tag bits.
+
+### Notes — dialect discoveries
+
+Landing Wave 2 surfaced two front-end quirks worth recording for
+future waves:
+
+* **Reserved identifiers** — `select`, `from`, `where` and `match`
+  cannot be used as function or variable names (in addition to the
+  already-known `quote`).  Wave 2's GraphQL module works around this
+  by spelling the "select a child into a parent" helper `add_child`.
+* **Brace-string lexer quirk** — a string literal whose content begins
+  with an unmatched `{` (e.g. `"{"` or `"{\n"`) is interpreted by the
+  lexer as the start of an f-string interpolation and silently
+  consumes the rest of the source.  Workaround: use `chr(123)` in
+  place of a bare `"{"` literal; `"}"` on its own is unaffected.
+
+---
+
 ## [3.3.0-dev] — Unreleased — Spiral Wave 1
 
 > *"we are the language that spirals outward"*

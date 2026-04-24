@@ -1,0 +1,150 @@
+// ===================================================================
+// Lateralus stdlib — websocket
+// RFC 6455 frame encoding/decoding plus the Sec-WebSocket-Accept
+// handshake helper. Network I/O is left to the caller — this module
+// is a pure codec.
+// ===================================================================
+
+import base64
+import crypto
+import strings
+
+// -- Opcodes --------------------------------------------------------
+
+pub fn op_continuation() -> int { return 0x0 }
+pub fn op_text()         -> int { return 0x1 }
+pub fn op_binary()       -> int { return 0x2 }
+pub fn op_close()        -> int { return 0x8 }
+pub fn op_ping()         -> int { return 0x9 }
+pub fn op_pong()         -> int { return 0xA }
+
+// The magic GUID from RFC 6455 §1.3.
+pub fn accept_guid() -> str {
+    return "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+}
+
+// -- Handshake ------------------------------------------------------
+
+/// Compute the Sec-WebSocket-Accept response value for a client key.
+pub fn compute_accept(client_key: str) -> str {
+    let combined = client_key + accept_guid()
+    let digest = crypto_sha1(bytes_of(combined))
+    return base64_encode(digest)
+}
+
+// -- Encode ---------------------------------------------------------
+
+/// Encode a single unmasked server-to-client frame.
+/// `fin` must be 0 or 1, `opcode` one of `op_*()`, `payload` a byte list.
+pub fn encode_frame(fin: int, opcode: int, payload: list) -> list {
+    let out = [(fin << 7) | (opcode & 0x0f)]
+    let n = len(payload)
+    if n < 126 {
+        out = out + [n]
+    } else {
+        if n < 65536 {
+            out = out + [126, (n / 256) & 255, n & 255]
+        } else {
+            out = out + [127, 0, 0, 0, 0,
+                (n / 16777216) & 255,
+                (n / 65536) & 255,
+                (n / 256) & 255,
+                n & 255]
+        }
+    }
+    return out + payload
+}
+
+/// Encode a masked client-to-server frame. `mask_key` must be 4 bytes.
+pub fn encode_masked(fin: int, opcode: int, payload: list, mask_key: list) -> list {
+    let out = [(fin << 7) | (opcode & 0x0f)]
+    let n = len(payload)
+    let mask_bit = 0x80
+    if n < 126 {
+        out = out + [mask_bit | n]
+    } else {
+        if n < 65536 {
+            out = out + [mask_bit | 126, (n / 256) & 255, n & 255]
+        } else {
+            out = out + [mask_bit | 127, 0, 0, 0, 0,
+                (n / 16777216) & 255,
+                (n / 65536) & 255,
+                (n / 256) & 255,
+                n & 255]
+        }
+    }
+    out = out + mask_key
+    let i = 0
+    while i < n {
+        out = out + [payload[i] ^ mask_key[i % 4]]
+        i = i + 1
+    }
+    return out
+}
+
+// -- Decode ---------------------------------------------------------
+
+/// Decode one frame starting at offset 0. Returns a map with keys
+/// `fin`, `opcode`, `mask`, `payload`, `consumed`, or `nil` if
+/// the buffer is too short.
+pub fn decode_frame(buf: list) -> map {
+    if len(buf) < 2 {
+        return nil
+    }
+    let b0 = buf[0]
+    let b1 = buf[1]
+    let fin = (b0 >> 7) & 1
+    let opcode = b0 & 0x0f
+    let masked = (b1 >> 7) & 1
+    let plen = b1 & 0x7f
+    let off = 2
+    if plen == 126 {
+        if len(buf) < 4 {
+            return nil
+        }
+        plen = buf[2] * 256 + buf[3]
+        off = 4
+    }
+    if plen == 127 {
+        if len(buf) < 10 {
+            return nil
+        }
+        plen = buf[6] * 16777216 + buf[7] * 65536 + buf[8] * 256 + buf[9]
+        off = 10
+    }
+    let mask_key = []
+    if masked == 1 {
+        if len(buf) < off + 4 {
+            return nil
+        }
+        mask_key = slice(buf, off, off + 4)
+        off = off + 4
+    }
+    if len(buf) < off + plen {
+        return nil
+    }
+    let payload = slice(buf, off, off + plen)
+    if masked == 1 {
+        let unmasked = []
+        let i = 0
+        while i < plen {
+            unmasked = unmasked + [payload[i] ^ mask_key[i % 4]]
+            i = i + 1
+        }
+        payload = unmasked
+    }
+    let frame = {}
+    frame["fin"] = fin
+    frame["opcode"] = opcode
+    frame["mask"] = mask_key
+    frame["payload"] = payload
+    frame["consumed"] = off + plen
+    return frame
+}
+
+// -- Close helpers --------------------------------------------------
+
+pub fn close_frame(code: int, reason: str) -> list {
+    let payload = [(code / 256) & 255, code & 255] + bytes_of(reason)
+    return encode_frame(1, op_close(), payload)
+}

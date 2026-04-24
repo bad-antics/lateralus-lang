@@ -1,0 +1,128 @@
+// ===================================================================
+// examples/spiral_chat_relay.ltl
+// -------------------------------------------------------------------
+// Spiral Wave 2 integrative demo — a tiny chat-relay skeleton that
+// wires together:
+//   * websocket  — RFC 6455 frame codec + handshake
+//   * graphql    — parse the client's subscription query
+//   * metrics    — in-process counters (Wave 1)
+//   * tracing    — span-per-message (Wave 1)
+//
+// No real sockets; the "transport" is a pair of in-memory lists so
+// the whole thing runs under any harness that can execute pure-Ltl.
+// ===================================================================
+
+import websocket
+import graphql
+import metrics
+import tracing
+
+// -- Fake transport --------------------------------------------------
+
+pub fn new_transport() -> map {
+    let t = {}
+    t["inbox"]  = []     // bytes delivered "from" the client
+    t["outbox"] = []     // bytes we've "sent" to the client
+    return t
+}
+
+pub fn tx_send(t: map, buf: list) {
+    t["outbox"] = t["outbox"] + buf
+}
+
+pub fn tx_feed(t: map, buf: list) {
+    t["inbox"] = t["inbox"] + buf
+}
+
+// -- Handshake -------------------------------------------------------
+
+/// Compute the Sec-WebSocket-Accept header value for a client key.
+pub fn handshake_accept(client_key: str) -> str {
+    return websocket_compute_accept(client_key)
+}
+
+// -- Session state ---------------------------------------------------
+
+pub fn new_session(name: str) -> map {
+    let s = {}
+    s["name"]    = name
+    s["query"]   = nil   // parsed graphql op
+    s["fields"]  = []    // field names the subscription asked for
+    s["msgs"]    = 0
+    return s
+}
+
+// -- Handle a single text frame --------------------------------------
+
+/// Consume one frame's worth of payload. If it is a GraphQL
+/// `subscription` document we remember the selected fields; anything
+/// else is broadcast back framed as a text message.
+pub fn handle_frame(session: map, reg: map, payload: list) -> list {
+    let span = tracing_start_span(reg, "handle_frame")
+    metrics_counter_inc(reg, "chat_frames_total", 1)
+    let text = ""
+    let i = 0
+    while i < len(payload) {
+        text = text + chr(payload[i])
+        i = i + 1
+    }
+    let reply = ""
+    if starts_with(text, "subscription") || starts_with(text, "query") {
+        let op = graphql_parse(text)
+        session["query"] = op
+        let fnames = []
+        for sel in op["selections"] {
+            fnames = fnames + [sel["field"]]
+        }
+        session["fields"] = fnames
+        reply = "ack: subscribed to " + join(fnames, ",")
+        metrics_counter_inc(reg, "chat_subscriptions_total", 1)
+    } else {
+        session["msgs"] = session["msgs"] + 1
+        reply = session["name"] + ": " + text
+        metrics_counter_inc(reg, "chat_messages_total", 1)
+    }
+    let out = websocket_encode_frame(1, websocket_op_text(), bytes_of(reply))
+    tracing_end_span(reg, span)
+    return out
+}
+
+// -- Driver ----------------------------------------------------------
+
+/// Demo entry point: build an in-memory chat, push two frames
+/// through it and return a summary map.
+pub fn demo() -> map {
+    let reg = metrics_registry()
+    tracing_init(reg)
+    metrics_counter_register(reg, "chat_frames_total", "Frames handled")
+    metrics_counter_register(reg, "chat_subscriptions_total", "Subscriptions accepted")
+    metrics_counter_register(reg, "chat_messages_total", "Chat messages relayed")
+
+    let t = new_transport()
+    let s = new_session("alice")
+
+    // Client subscribes via a GraphQL document.
+    let sub_doc = "subscription { messages room user text } "
+    let f1 = websocket_encode_frame(1, websocket_op_text(), bytes_of(sub_doc))
+    tx_feed(t, f1)
+    let frame1 = websocket_decode_frame(t["inbox"])
+    let reply1 = handle_frame(s, reg, frame1["payload"])
+    tx_send(t, reply1)
+
+    // Client sends a chat line.
+    let msg = "hello spiral"
+    let f2 = websocket_encode_frame(1, websocket_op_text(), bytes_of(msg))
+    tx_feed(t, f2)
+    // Skip past frame1 we already consumed.
+    let rest = slice(t["inbox"], frame1["consumed"], len(t["inbox"]))
+    let frame2 = websocket_decode_frame(rest)
+    let reply2 = handle_frame(s, reg, frame2["payload"])
+    tx_send(t, reply2)
+
+    let result = {}
+    result["fields"]   = s["fields"]
+    result["msgs"]     = s["msgs"]
+    result["outbytes"] = len(t["outbox"])
+    result["metrics"]  = metrics_render_prometheus(reg)
+    return result
+}

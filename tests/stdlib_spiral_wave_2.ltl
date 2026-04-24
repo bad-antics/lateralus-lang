@@ -1,0 +1,197 @@
+// ===================================================================
+// tests/stdlib_spiral_wave_2.ltl
+// -------------------------------------------------------------------
+// Smoke + round-trip tests for every Spiral Wave 2 module.
+// Any harness that honours `pub fn test_*() -> bool` can run these.
+// ===================================================================
+
+import websocket
+import smtp
+import graphql
+import ldap
+import quic
+
+// -- websocket ------------------------------------------------------
+
+/// RFC 6455 §1.3 worked example:
+///   client-key  "dGhlIHNhbXBsZSBub25jZQ=="
+///   expected    "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+pub fn test_ws_accept_known_vector() -> bool {
+    let got = websocket_compute_accept("dGhlIHNhbXBsZSBub25jZQ==")
+    return got == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+}
+
+pub fn test_ws_frame_roundtrip_text() -> bool {
+    let payload = bytes_of("hello spiral")
+    let buf = websocket_encode_frame(1, websocket_op_text(), payload)
+    let f = websocket_decode_frame(buf)
+    if f == nil { return false }
+    if f["opcode"] != websocket_op_text() { return false }
+    if f["fin"] != 1 { return false }
+    if len(f["payload"]) != len(payload) { return false }
+    let i = 0
+    while i < len(payload) {
+        if f["payload"][i] != payload[i] { return false }
+        i = i + 1
+    }
+    return true
+}
+
+pub fn test_ws_frame_masked_roundtrip() -> bool {
+    let payload = bytes_of("masked!")
+    let mask = [0x12, 0x34, 0x56, 0x78]
+    let buf = websocket_encode_masked(1, websocket_op_binary(), payload, mask)
+    let f = websocket_decode_frame(buf)
+    if f == nil { return false }
+    if f["opcode"] != websocket_op_binary() { return false }
+    let i = 0
+    while i < len(payload) {
+        if f["payload"][i] != payload[i] { return false }
+        i = i + 1
+    }
+    return true
+}
+
+pub fn test_ws_large_payload_roundtrip() -> bool {
+    // 200-byte payload exercises the 16-bit length branch.
+    let payload = []
+    let i = 0
+    while i < 200 {
+        payload = payload + [(i * 7) % 256]
+        i = i + 1
+    }
+    let buf = websocket_encode_frame(1, websocket_op_binary(), payload)
+    let f = websocket_decode_frame(buf)
+    if f == nil { return false }
+    return len(f["payload"]) == 200 && f["payload"][199] == payload[199]
+}
+
+// -- smtp -----------------------------------------------------------
+
+pub fn test_smtp_parse_final_line() -> bool {
+    let r = smtp_parse_line("250 OK")
+    return r[0] == 250 && r[1] == "OK" && r[2] == false
+}
+
+pub fn test_smtp_parse_continuation_line() -> bool {
+    let r = smtp_parse_line("250-mail.example.com Hello")
+    return r[0] == 250 && r[2] == true
+}
+
+pub fn test_smtp_dot_stuffing() -> bool {
+    let body = "line one\r\n.dotted\r\nlast"
+    let enc = smtp_encode_body(body)
+    // Dot-stuffed copy must start with ".." where the single "." was,
+    // and must terminate with the CRLF.CRLF end-of-data marker.
+    if not contains(enc, "\r\n..dotted\r\n") { return false }
+    if not ends_with(enc, "\r\n.\r\n") { return false }
+    return true
+}
+
+pub fn test_smtp_auth_plain_shape() -> bool {
+    let cmd = smtp_auth_plain("alice", "secret")
+    return starts_with(cmd, "AUTH PLAIN ")
+}
+
+// -- graphql --------------------------------------------------------
+
+pub fn test_graphql_build_and_render() -> bool {
+    let q = graphql_new_query("Feed")
+    let user = graphql_field("user")
+    graphql_set_arg(user, "id", "\"42\"")
+    let name = graphql_field("name")
+    let email = graphql_field("email")
+    graphql_add_child(user, name)
+    graphql_add_child(user, email)
+    graphql_add_child(q, user)
+    let rendered = graphql_render(q)
+    if not contains(rendered, "query Feed") { return false }
+    if not contains(rendered, "user(id: \"42\")") { return false }
+    if not contains(rendered, "name") { return false }
+    if not contains(rendered, "email") { return false }
+    return true
+}
+
+pub fn test_graphql_lex_basic() -> bool {
+    let toks = graphql_lex("query X { a b }")
+    if len(toks) < 6 { return false }
+    return toks[0] == "query" && toks[1] == "X"
+}
+
+pub fn test_graphql_parse_roundtrip() -> bool {
+    let doc = "query Hello { user name email } "
+    let op = graphql_parse(doc)
+    if op["kind"] != "query" { return false }
+    if op["name"] != "Hello" { return false }
+    return len(op["selections"]) == 3
+}
+
+// -- ldap -----------------------------------------------------------
+
+pub fn test_ldap_integer_roundtrip() -> bool {
+    let enc = ldap_enc_integer(42)
+    let parsed = ldap_decode_tlv(enc, 0)
+    if parsed[0] != ldap_tag_integer() { return false }
+    return ldap_int_from_bytes(parsed[2]) == 42
+}
+
+pub fn test_ldap_octet_string_roundtrip() -> bool {
+    let enc = ldap_enc_octet_string("cn=admin")
+    let parsed = ldap_decode_tlv(enc, 0)
+    if parsed[0] != ldap_tag_octetstr() { return false }
+    let bytes = parsed[2]
+    let got = ""
+    let i = 0
+    while i < len(bytes) {
+        got = got + chr(bytes[i])
+        i = i + 1
+    }
+    return got == "cn=admin"
+}
+
+pub fn test_ldap_bind_request_structural() -> bool {
+    let msg = ldap_bind_request(1, 3, "uid=alice,dc=example,dc=com", "pw")
+    // Must be a SEQUENCE envelope (tag 0x30) with content.
+    if len(msg) < 2 { return false }
+    return msg[0] == ldap_tag_sequence()
+}
+
+pub fn test_ldap_unbind_is_minimal() -> bool {
+    let msg = ldap_unbind_request(7)
+    return msg[0] == ldap_tag_sequence() && len(msg) >= 5
+}
+
+// -- quic -----------------------------------------------------------
+
+pub fn test_quic_varint_roundtrip() -> bool {
+    // One representative per RFC 9000 §16 size class.
+    let samples = [0, 63, 64, 16383, 16384, 1073741823]
+    let i = 0
+    while i < len(samples) {
+        let enc = quic_enc_varint(samples[i])
+        let dec = quic_dec_varint(enc, 0)
+        if dec[0] != samples[i] { return false }
+        if dec[1] != len(enc) { return false }
+        i = i + 1
+    }
+    return true
+}
+
+pub fn test_quic_header_form_bits() -> bool {
+    // 0x80 set => long header; 0x00 => short header.
+    if quic_header_form(0xC0) != 1 { return false }
+    if quic_header_form(0x40) != 0 { return false }
+    return quic_fixed_bit(0xC0) == 1
+}
+
+pub fn test_quic_long_packet_type() -> bool {
+    // Initial packet has type bits 00.
+    let first = 0xC0        // long + fixed + type=0
+    return quic_long_packet_type(first) == quic_pkt_type_initial()
+}
+
+pub fn test_quic_stream_frame_tag() -> bool {
+    let tag = quic_stream_frame_tag(true, true, true)
+    // Base 0x08 with all three low bits set => 0x0F.
+    return tag == 0x0F
+}

@@ -1,0 +1,156 @@
+// ===================================================================
+// Lateralus stdlib — smtp
+// ESMTP client protocol driver.  Command emission and response
+// parsing; socket I/O is delegated to a transport map supplied by
+// the caller:  { "send": fn(str), "recv_line": fn() -> str }.
+// ===================================================================
+
+import base64
+import strings
+
+// -- Response parsing ----------------------------------------------
+
+/// Parse a single SMTP response line like "250 OK" into [code, text, more].
+/// `more` is true when the fourth char is '-' (continued reply).
+pub fn parse_line(line: str) -> list {
+    let s = line
+    if len(s) >= 2 {
+        let last = char_at(s, len(s) - 1)
+        if last == "\n" {
+            s = slice(s, 0, len(s) - 1)
+        }
+    }
+    if len(s) >= 1 {
+        let last = char_at(s, len(s) - 1)
+        if last == "\r" {
+            s = slice(s, 0, len(s) - 1)
+        }
+    }
+    if len(s) < 4 {
+        return [0, s, false]
+    }
+    let code = int(slice(s, 0, 3))
+    let sep = char_at(s, 3)
+    let text = slice(s, 4, len(s))
+    return [code, text, sep == "-"]
+}
+
+/// Read a full multi-line response through `transport.recv_line`.
+/// Returns [code, combined_text_lines_joined_by_lf].
+pub fn read_response(transport: map) -> list {
+    let recv = transport["recv_line"]
+    let lines = []
+    let code = 0
+    let more = true
+    while more {
+        let raw = recv()
+        let p = parse_line(raw)
+        code = p[0]
+        lines = lines + [p[1]]
+        more = p[2]
+    }
+    return [code, join(lines, "\n")]
+}
+
+// -- Command emission ----------------------------------------------
+
+pub fn cmd_ehlo(host: str) -> str {
+    return "EHLO " + host + "\r\n"
+}
+
+pub fn cmd_mail_from(addr: str) -> str {
+    return "MAIL FROM:<" + addr + ">\r\n"
+}
+
+pub fn cmd_rcpt_to(addr: str) -> str {
+    return "RCPT TO:<" + addr + ">\r\n"
+}
+
+pub fn cmd_data() -> str       { return "DATA\r\n" }
+pub fn cmd_starttls() -> str   { return "STARTTLS\r\n" }
+pub fn cmd_quit() -> str       { return "QUIT\r\n" }
+pub fn cmd_rset() -> str       { return "RSET\r\n" }
+pub fn cmd_noop() -> str       { return "NOOP\r\n" }
+
+/// AUTH LOGIN — builds the three commands to send sequentially.
+pub fn auth_login(user: str, password: str) -> list {
+    return [
+        "AUTH LOGIN\r\n",
+        base64_encode(bytes_of(user)) + "\r\n",
+        base64_encode(bytes_of(password)) + "\r\n",
+    ]
+}
+
+/// AUTH PLAIN — single-command form.
+pub fn auth_plain(user: str, password: str) -> str {
+    let blob = bytes_of("\0" + user + "\0" + password)
+    return "AUTH PLAIN " + base64_encode(blob) + "\r\n"
+}
+
+// -- Message body --------------------------------------------------
+
+/// Dot-stuff a message body per RFC 5321 §4.5.2 and append the
+/// terminator `.\r\n`.
+pub fn encode_body(body: str) -> str {
+    let lines = split(body, "\n")
+    let out = []
+    for line in lines {
+        let l = line
+        if len(l) > 0 {
+            let last = char_at(l, len(l) - 1)
+            if last == "\r" {
+                l = slice(l, 0, len(l) - 1)
+            }
+        }
+        if starts_with(l, ".") {
+            l = "." + l
+        }
+        out = out + [l]
+    }
+    return join(out, "\r\n") + "\r\n.\r\n"
+}
+
+// -- Simple send orchestrator --------------------------------------
+
+/// Send one message. Returns [ok, final_response_text].
+/// Requires a transport supporting `send` and `recv_line`.
+pub fn send_mail(transport: map, from_addr: str, to_addrs: list,
+                 body: str) -> list {
+    let send = transport["send"]
+    // Greeting
+    let greet = read_response(transport)
+    if greet[0] < 200 || greet[0] >= 300 {
+        return [false, "greeting: " + greet[1]]
+    }
+    send(cmd_ehlo("localhost"))
+    let r = read_response(transport)
+    if r[0] != 250 {
+        return [false, "ehlo: " + r[1]]
+    }
+    send(cmd_mail_from(from_addr))
+    r = read_response(transport)
+    if r[0] != 250 {
+        return [false, "from: " + r[1]]
+    }
+    for addr in to_addrs {
+        send(cmd_rcpt_to(addr))
+        r = read_response(transport)
+        if r[0] != 250 {
+            if r[0] != 251 {
+                return [false, "rcpt: " + r[1]]
+            }
+        }
+    }
+    send(cmd_data())
+    r = read_response(transport)
+    if r[0] != 354 {
+        return [false, "data: " + r[1]]
+    }
+    send(encode_body(body))
+    r = read_response(transport)
+    if r[0] != 250 {
+        return [false, "body: " + r[1]]
+    }
+    send(cmd_quit())
+    return [true, "ok"]
+}

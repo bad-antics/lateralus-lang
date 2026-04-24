@@ -1,0 +1,136 @@
+// ===================================================================
+// Lateralus stdlib — quic
+// Variable-length integer (RFC 9000 §16) and long/short header
+// parsing.  Cryptographic packet protection is OUT OF SCOPE — this
+// is the wire-format primer that higher layers build on.
+// ===================================================================
+
+// -- Varint encode/decode ------------------------------------------
+
+/// Encode a 62-bit unsigned int per RFC 9000 §16.
+pub fn enc_varint(v: int) -> list {
+    if v < 64 {
+        return [v]
+    }
+    if v < 16384 {
+        let hi = (v / 256) & 0x3f
+        return [0x40 | hi, v & 255]
+    }
+    if v < 1073741824 {
+        let b0 = 0x80 | ((v / 16777216) & 0x3f)
+        return [b0, (v / 65536) & 255, (v / 256) & 255, v & 255]
+    }
+    let b0 = 0xc0 | ((v / 72057594037927936) & 0x3f)
+    return [b0,
+        (v / 281474976710656) & 255,
+        (v / 1099511627776)   & 255,
+        (v / 4294967296)      & 255,
+        (v / 16777216)        & 255,
+        (v / 65536)           & 255,
+        (v / 256)             & 255,
+        v & 255]
+}
+
+/// Decode one varint. Returns [value, bytes_consumed].
+pub fn dec_varint(buf: list, i: int) -> list {
+    let b0 = buf[i]
+    let length_bits = (b0 >> 6) & 3
+    let vlen = 1
+    if length_bits == 1 { vlen = 2 }
+    if length_bits == 2 { vlen = 4 }
+    if length_bits == 3 { vlen = 8 }
+    let v = b0 & 0x3f
+    let k = 1
+    while k < vlen {
+        v = v * 256 + buf[i + k]
+        k = k + 1
+    }
+    return [v, vlen]
+}
+
+// -- Packet-header discrimination ----------------------------------
+
+/// Return 1 for long-header, 0 for short-header. Bit 7 of first byte.
+pub fn header_form(first_byte: int) -> int {
+    return (first_byte >> 7) & 1
+}
+
+/// Return 1 for a fixed-bit-respecting packet (always 1 in QUIC v1).
+pub fn fixed_bit(first_byte: int) -> int {
+    return (first_byte >> 6) & 1
+}
+
+pub fn long_packet_type(first_byte: int) -> int {
+    return (first_byte >> 4) & 3
+}
+
+pub fn pkt_type_initial()   -> int { return 0 }
+pub fn pkt_type_zero_rtt()  -> int { return 1 }
+pub fn pkt_type_handshake() -> int { return 2 }
+pub fn pkt_type_retry()     -> int { return 3 }
+
+// -- Long header parse ---------------------------------------------
+
+/// Parse a QUIC v1 long-header frame prefix. Returns a map:
+/// {type, version, dcid, scid, token, length, payload_offset}
+/// Cryptographic unprotection of the header byte and PN is NOT done.
+pub fn parse_long_header(buf: list) -> map {
+    let out = {}
+    let b0 = buf[0]
+    out["type"] = long_packet_type(b0)
+    out["version"] = buf[1] * 16777216 + buf[2] * 65536 + buf[3] * 256 + buf[4]
+    let dcil = buf[5]
+    let dcid_start = 6
+    out["dcid"] = slice(buf, dcid_start, dcid_start + dcil)
+    let scil_off = dcid_start + dcil
+    let scil = buf[scil_off]
+    let scid_start = scil_off + 1
+    out["scid"] = slice(buf, scid_start, scid_start + scil)
+    let off = scid_start + scil
+
+    if out["type"] == pkt_type_initial() {
+        let tvl = dec_varint(buf, off)
+        off = off + tvl[1]
+        out["token"] = slice(buf, off, off + tvl[0])
+        off = off + tvl[0]
+    } else {
+        out["token"] = []
+    }
+    let lvl = dec_varint(buf, off)
+    off = off + lvl[1]
+    out["length"] = lvl[0]
+    out["payload_offset"] = off
+    return out
+}
+
+// -- Short header (1-RTT) ------------------------------------------
+
+/// The DCID length on a short header is not self-describing — callers
+/// must know it from the connection state. This returns a map with
+/// `dcid` and `payload_offset`.
+pub fn parse_short_header(buf: list, dcid_len: int) -> map {
+    let out = {}
+    out["spin_bit"] = (buf[0] >> 5) & 1
+    out["key_phase"] = (buf[0] >> 2) & 1
+    out["dcid"] = slice(buf, 1, 1 + dcid_len)
+    out["payload_offset"] = 1 + dcid_len
+    return out
+}
+
+// -- Frame type enum ------------------------------------------------
+
+pub fn frame_padding()            -> int { return 0x00 }
+pub fn frame_ping()               -> int { return 0x01 }
+pub fn frame_ack()                -> int { return 0x02 }
+pub fn frame_crypto()              -> int { return 0x06 }
+pub fn frame_stream_base()        -> int { return 0x08 }
+pub fn frame_connection_close()   -> int { return 0x1c }
+
+/// Tag `frame_stream_base` with the low 3-bit flags (OFF, LEN, FIN).
+pub fn stream_frame_tag(off: bool, has_len: bool, fin: bool) -> int {
+    let t = frame_stream_base()
+    if off      { t = t | 0x04 }
+    if has_len  { t = t | 0x02 }
+    if fin      { t = t | 0x01 }
+    return t
+}

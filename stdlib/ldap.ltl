@@ -1,0 +1,163 @@
+// ===================================================================
+// Lateralus stdlib — ldap
+// Minimal BER/DER codec for LDAP v3 (RFC 4511).  Builds Bind,
+// Search, Unbind request bytes; parses response envelopes.
+// Transport is left to the caller.
+// ===================================================================
+
+// -- BER primitives ------------------------------------------------
+
+pub fn tag_boolean()  -> int { return 0x01 }
+pub fn tag_integer()  -> int { return 0x02 }
+pub fn tag_octetstr() -> int { return 0x04 }
+pub fn tag_null()     -> int { return 0x05 }
+pub fn tag_enum()     -> int { return 0x0a }
+pub fn tag_sequence() -> int { return 0x30 }
+pub fn tag_set()      -> int { return 0x31 }
+
+pub fn enc_len(n: int) -> list {
+    if n < 128 {
+        return [n]
+    }
+    if n < 256 {
+        return [0x81, n]
+    }
+    if n < 65536 {
+        return [0x82, (n / 256) & 255, n & 255]
+    }
+    return [0x83, (n / 65536) & 255, (n / 256) & 255, n & 255]
+}
+
+pub fn enc_tlv(tag: int, value: list) -> list {
+    return [tag] + enc_len(len(value)) + value
+}
+
+pub fn enc_integer(v: int) -> list {
+    if v == 0 {
+        return enc_tlv(tag_integer(), [0])
+    }
+    let bytes_list = []
+    let n = v
+    while n > 0 {
+        bytes_list = [n & 255] + bytes_list
+        n = n / 256
+    }
+    // Prepend 0 if high bit set, so it stays positive.
+    if bytes_list[0] >= 128 {
+        bytes_list = [0] + bytes_list
+    }
+    return enc_tlv(tag_integer(), bytes_list)
+}
+
+pub fn enc_octet_string(s: str) -> list {
+    return enc_tlv(tag_octetstr(), bytes_of(s))
+}
+
+pub fn enc_boolean(b: bool) -> list {
+    let v = 0
+    if b { v = 0xff }
+    return enc_tlv(tag_boolean(), [v])
+}
+
+pub fn enc_enumerated(v: int) -> list {
+    let inner = enc_integer(v)
+    // Swap tag to ENUMERATED.
+    inner[0] = tag_enum()
+    return inner
+}
+
+// -- Decode --------------------------------------------------------
+
+/// Decode the tag/length/value starting at `i`.
+/// Returns [tag, value_bytes, next_index].
+pub fn decode_tlv(buf: list, i: int) -> list {
+    let tag = buf[i]
+    let b = buf[i + 1]
+    let off = i + 2
+    let length = b
+    if b >= 0x80 {
+        let nlen = b - 0x80
+        length = 0
+        let k = 0
+        while k < nlen {
+            length = length * 256 + buf[off + k]
+            k = k + 1
+        }
+        off = off + nlen
+    }
+    let value = slice(buf, off, off + length)
+    return [tag, value, off + length]
+}
+
+// -- LDAP message envelopes ---------------------------------------
+
+/// BindRequest  (APPLICATION 0) — simple (password) authentication.
+/// LDAPMessage ::= SEQUENCE { messageID INTEGER, protocolOp BindRequest }
+pub fn bind_request(message_id: int, version: int,
+                    bind_dn: str, password: str) -> list {
+    // BindRequest body
+    let body = enc_integer(version)
+        + enc_octet_string(bind_dn)
+        + [0x80] + enc_len(len(password)) + bytes_of(password)  // [0] simple
+    // APPLICATION 0, constructed
+    let app = [0x60] + enc_len(len(body)) + body
+    let msg = enc_integer(message_id) + app
+    return enc_tlv(tag_sequence(), msg)
+}
+
+/// UnbindRequest (APPLICATION 2) — no body.
+pub fn unbind_request(message_id: int) -> list {
+    let app = [0x42, 0x00]
+    let msg = enc_integer(message_id) + app
+    return enc_tlv(tag_sequence(), msg)
+}
+
+pub fn scope_base()     -> int { return 0 }
+pub fn scope_one()      -> int { return 1 }
+pub fn scope_subtree()  -> int { return 2 }
+
+/// SearchRequest (APPLICATION 3) with a "present" filter `(attr=*)`.
+/// Caller supplies `attrs` as a list of attribute names to return.
+pub fn search_present(message_id: int, base_dn: str, scope: int,
+                      attr: str, attrs: list) -> list {
+    // deref=never, sizeLimit=0, timeLimit=0, typesOnly=FALSE
+    let filter = [0x87] + enc_len(len(attr)) + bytes_of(attr)  // [7] present
+    let attr_list_body = []
+    for a in attrs {
+        attr_list_body = attr_list_body + enc_octet_string(a)
+    }
+    let body = enc_octet_string(base_dn)
+        + enc_enumerated(scope)
+        + enc_enumerated(0)
+        + enc_integer(0)
+        + enc_integer(0)
+        + enc_boolean(false)
+        + filter
+        + enc_tlv(tag_sequence(), attr_list_body)
+    let app = [0x63] + enc_len(len(body)) + body
+    let msg = enc_integer(message_id) + app
+    return enc_tlv(tag_sequence(), msg)
+}
+
+// -- Response parsing ----------------------------------------------
+
+/// Pull the messageID and raw protocolOp bytes out of an LDAPMessage.
+pub fn parse_message(buf: list) -> map {
+    let top = decode_tlv(buf, 0)
+    let body = top[1]
+    let id_tlv = decode_tlv(body, 0)
+    let op_tlv = decode_tlv(body, id_tlv[2])
+    let out = {}
+    out["message_id"] = int_from_bytes(id_tlv[1])
+    out["op_tag"] = op_tlv[0]
+    out["op_body"] = op_tlv[1]
+    return out
+}
+
+pub fn int_from_bytes(b: list) -> int {
+    let n = 0
+    for x in b {
+        n = n * 256 + x
+    }
+    return n
+}
