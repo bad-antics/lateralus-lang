@@ -1,0 +1,158 @@
+// ===================================================================
+// stdlib/qgram.ltl  —  Spiral Wave 10
+// Q-gram (character n-gram) inverted index for approximate string
+// matching and fuzzy search.  Complements levenshtein: q-gram
+// overlap is a cheap prefilter before running the exact DP.
+// ===================================================================
+
+// Split a string into overlapping q-grams.  Pads with '\x01' so
+// prefix / suffix q-grams are still indexed.
+pub fn qgrams(text: str, q: int) -> list {
+    if q <= 0 { return [] }
+    let pad = ""
+    let p = 0
+    while p < q - 1 { pad = pad + chr(1); p = p + 1 }
+    let s = pad + text + pad
+    let out = []
+    let n = len(s)
+    let i = 0
+    while i + q <= n {
+        out = out + [slice(s, i, i + q)]
+        i = i + 1
+    }
+    return out
+}
+
+// Count distinct q-grams shared between two strings.
+pub fn overlap(a: str, b: str, q: int) -> int {
+    let ga = qgrams(a, q)
+    let gb = qgrams(b, q)
+    let seen = {}
+    let i = 0
+    while i < len(gb) { seen[gb[i]] = 1; i = i + 1 }
+    let count = 0
+    let j = 0
+    while j < len(ga) {
+        if contains(seen, ga[j]) { count = count + 1 }
+        j = j + 1
+    }
+    return count
+}
+
+// Jaccard similarity on q-gram sets, [0,1].
+pub fn jaccard(a: str, b: str, q: int) -> float {
+    let ga = qgrams(a, q)
+    let gb = qgrams(b, q)
+    let sa = {}
+    let sb = {}
+    let i = 0
+    while i < len(ga) { sa[ga[i]] = 1; i = i + 1 }
+    let j = 0
+    while j < len(gb) { sb[gb[j]] = 1; j = j + 1 }
+
+    let inter = 0
+    let un = 0
+    let ka = keys(sa)
+    let k = 0
+    while k < len(ka) {
+        un = un + 1
+        if contains(sb, ka[k]) { inter = inter + 1 }
+        k = k + 1
+    }
+    let kb = keys(sb)
+    let m = 0
+    while m < len(kb) {
+        if (contains(sa, kb[m]) == false) { un = un + 1 }
+        m = m + 1
+    }
+    if un == 0 { return 0.0 }
+    return inter / un
+}
+
+// Build an inverted index: q-gram -> list of doc-ids that contain it.
+pub fn build_index(docs: list, q: int) -> dict {
+    let idx = {}
+    let d = 0
+    while d < len(docs) {
+        let g = qgrams(docs[d], q)
+        let seen_here = {}
+        let i = 0
+        while i < len(g) {
+            let gg = g[i]
+            if (contains(seen_here, gg) == false) {
+                seen_here[gg] = 1
+                if contains(idx, gg) {
+                    idx[gg] = idx[gg] + [d]
+                } else {
+                    idx[gg] = [d]
+                }
+            }
+            i = i + 1
+        }
+        d = d + 1
+    }
+    return idx
+}
+
+// Rank documents by number of shared q-grams with the query.
+// Returns a list of [doc_id, score] pairs sorted by score desc.
+pub fn query(index: dict, q_text: str, q: int) -> list {
+    let grams = qgrams(q_text, q)
+    let scores = {}
+    let seen_q = {}
+    let i = 0
+    while i < len(grams) {
+        let gg = grams[i]
+        if (contains(seen_q, gg) == false) {
+            seen_q[gg] = 1
+            if contains(index, gg) {
+                let docs = index[gg]
+                let j = 0
+                while j < len(docs) {
+                    let dk = str(docs[j])
+                    if contains(scores, dk) {
+                        scores[dk] = scores[dk] + 1
+                    } else {
+                        scores[dk] = 1
+                    }
+                    j = j + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    // Convert to list and sort by score descending (insertion sort)
+    let ks = keys(scores)
+    let out = []
+    let k = 0
+    while k < len(ks) {
+        out = out + [[int_of(ks[k]), scores[ks[k]]]]
+        k = k + 1
+    }
+    let a = 1
+    while a < len(out) {
+        let cur = out[a]
+        let b = a - 1
+        while b >= 0 && out[b][1] < cur[1] {
+            out[b + 1] = out[b]
+            b = b - 1
+        }
+        out[b + 1] = cur
+        a = a + 1
+    }
+    return out
+}
+
+// Convert string to int — used by query() for keying numeric doc ids.
+fn int_of(s: str) -> int {
+    let n = 0
+    let i = 0
+    let neg = false
+    if len(s) > 0 && char_at(s, 0) == "-" { neg = true; i = 1 }
+    while i < len(s) {
+        n = n * 10 + (ord(char_at(s, i)) - 48)
+        i = i + 1
+    }
+    if neg { return -n }
+    return n
+}

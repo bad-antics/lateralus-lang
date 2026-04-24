@@ -1,0 +1,167 @@
+// ===================================================================
+// stdlib/aho_corasick.ltl  —  Spiral Wave 10
+// Multi-pattern matching.  Build goto/fail/output tables once, then
+// stream any input and emit every occurrence of every pattern.
+// Linear time in |input| + |patterns| + |matches|.
+// ===================================================================
+
+// Node representation: parallel lists indexed by node id.
+//   goto_map[id]  = dict { byte_int -> child_id }
+//   fail[id]      = int fallback node
+//   output[id]    = list of pattern-ids that end here
+// Automaton is returned as a dict of those three lists + patterns.
+
+fn ac_new_node(auto: dict) {
+    let gm = auto["goto"]
+    let fl = auto["fail"]
+    let op = auto["output"]
+    gm = gm + [{}]
+    fl = fl + [0]
+    op = op + [[]]
+    auto["goto"]   = gm
+    auto["fail"]   = fl
+    auto["output"] = op
+}
+
+pub fn build(patterns: list) -> dict {
+    let auto = {}
+    auto["goto"] = []
+    auto["fail"] = []
+    auto["output"] = []
+    auto["patterns"] = patterns
+    ac_new_node(auto)   // root = 0
+
+    // -- build goto/output trie ------------------------------------
+    let pi = 0
+    while pi < len(patterns) {
+        let p = patterns[pi]
+        let node = 0
+        let j = 0
+        while j < len(p) {
+            let c = ord(char_at(p, j))
+            let gm = auto["goto"]
+            let children = gm[node]
+            if contains(children, c) {
+                node = children[c]
+            } else {
+                ac_new_node(auto)
+                let new_id = len(auto["goto"]) - 1
+                gm = auto["goto"]
+                gm[node][c] = new_id
+                auto["goto"] = gm
+                node = new_id
+            }
+            j = j + 1
+        }
+        let op = auto["output"]
+        op[node] = op[node] + [pi]
+        auto["output"] = op
+        pi = pi + 1
+    }
+
+    // -- BFS compute fail pointers ---------------------------------
+    let queue = []
+    let gm = auto["goto"]
+    let root_kids = gm[0]
+    let root_keys = keys(root_kids)
+    let k = 0
+    while k < len(root_keys) {
+        let kk = root_keys[k]
+        let child = root_kids[kk]
+        let fl = auto["fail"]
+        fl[child] = 0
+        auto["fail"] = fl
+        queue = queue + [child]
+        k = k + 1
+    }
+
+    while len(queue) > 0 {
+        let u = queue[0]
+        queue = slice(queue, 1, len(queue))
+        let gm2 = auto["goto"]
+        let kids = gm2[u]
+        let ks = keys(kids)
+        let i = 0
+        while i < len(ks) {
+            let c = ks[i]
+            let v = kids[c]
+            queue = queue + [v]
+            // walk fail chain from u to find longest proper suffix
+            let f = auto["fail"][u]
+            while f > 0 && (contains(auto["goto"][f], c) == false) {
+                f = auto["fail"][f]
+            }
+            let fallback = 0
+            if contains(auto["goto"][f], c) && auto["goto"][f][c] != v {
+                fallback = auto["goto"][f][c]
+            }
+            let fl2 = auto["fail"]
+            fl2[v] = fallback
+            auto["fail"] = fl2
+            // merge output of fallback into v
+            let op2 = auto["output"]
+            op2[v] = op2[v] + op2[fallback]
+            auto["output"] = op2
+            i = i + 1
+        }
+    }
+    return auto
+}
+
+// find_all returns [[pattern_id, end_position_exclusive], ...]
+pub fn find_all(auto: dict, text: str) -> list {
+    let hits = []
+    let node = 0
+    let i = 0
+    while i < len(text) {
+        let c = ord(char_at(text, i))
+        while node > 0 && (contains(auto["goto"][node], c) == false) {
+            node = auto["fail"][node]
+        }
+        if contains(auto["goto"][node], c) {
+            node = auto["goto"][node][c]
+        }
+        let outs = auto["output"][node]
+        let j = 0
+        while j < len(outs) {
+            hits = hits + [[outs[j], i + 1]]
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return hits
+}
+
+// Convenience: return [(pattern_id, start_position)] pairs.
+pub fn find_all_starts(auto: dict, text: str) -> list {
+    let raw = find_all(auto, text)
+    let pats = auto["patterns"]
+    let out = []
+    let i = 0
+    while i < len(raw) {
+        let pid = raw[i][0]
+        let end = raw[i][1]
+        let start = end - len(pats[pid])
+        out = out + [[pid, start]]
+        i = i + 1
+    }
+    return out
+}
+
+// True if any pattern occurs in text.
+pub fn contains_any(auto: dict, text: str) -> bool {
+    let node = 0
+    let i = 0
+    while i < len(text) {
+        let c = ord(char_at(text, i))
+        while node > 0 && (contains(auto["goto"][node], c) == false) {
+            node = auto["fail"][node]
+        }
+        if contains(auto["goto"][node], c) {
+            node = auto["goto"][node][c]
+        }
+        if len(auto["output"][node]) > 0 { return true }
+        i = i + 1
+    }
+    return false
+}

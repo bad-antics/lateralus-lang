@@ -4,6 +4,51 @@
 
 All notable changes to the Lateralus Language toolchain are documented here.
 
+## [3.12.0-dev] — Spiral Wave 10: Search & Approximate Matching Lane
+
+Five primitives that cover the shape of every modern full-text
+search engine — exact multi-pattern matching, approximate matching,
+near-duplicate detection, and suffix-based queries:
+
+- **stdlib/suffix_array.ltl** — prefix-doubling suffix array (O(n
+  log² n)) plus Kasai's O(n) LCP construction.  Exports `build`,
+  `lcp`, `search` (O(m log n) substring binary search), and
+  `longest_repeated`.
+- **stdlib/aho_corasick.ltl** — classic goto/fail/output automaton
+  for multi-pattern search in a single linear pass.  Exports
+  `build(patterns)`, `find_all`, `find_all_starts`, and
+  `contains_any` — the engine behind `grep -F -f`, GNU `fgrep`,
+  and Snort-style IDS rule matching.
+- **stdlib/levenshtein.ltl** — Wagner-Fischer `distance`, banded
+  `bounded(a, b, k)` with early-exit cut-off, normalised
+  `similarity`, and full `damerau` variant with transposition.
+- **stdlib/simhash.ltl** — 64-bit SimHash fingerprinting using the
+  Wave 7 xxhash as the per-token hasher.  Exports `fingerprint`,
+  `fingerprint_all`, `hamming`, `similarity`, and
+  `near_duplicate` — the algorithm Google uses for web-scale
+  near-duplicate de-dup.
+- **stdlib/qgram.ltl** — q-gram (character n-gram) inverted index
+  for fuzzy prefilter + ranked retrieval.  Exports `qgrams`,
+  `overlap`, `jaccard`, `build_index`, and `query` returning
+  documents sorted by q-gram overlap score.
+
+### Examples
+
+- **examples/spiral_search.ltl** — mini full-text search engine
+  over a toy corpus: q-gram index picks candidates, bounded
+  Levenshtein re-ranks them, Aho-Corasick highlights fixed
+  phrases in the top hit, suffix-array finds the longest repeated
+  substring, and SimHash clusters near-duplicates.
+
+### Tests
+
+- **tests/stdlib_spiral_wave_10.ltl** — pinned constants: suffix
+  array of `"banana"` (including `sa[0]=5, sa[1]=3, sa[2]=1`),
+  Kasai LCP values, Aho-Corasick "ushers" classic test (3 hits
+  for he/she/hers), `kitten→sitting = 3`, `flaw→lawn = 2`,
+  Damerau transposition `ca↔ac = 1`, SimHash case-insensitivity,
+  and q-gram Jaccard reflexivity.
+
 ## [3.11.0-dev] — Spiral Wave 9: AEAD & Modern Crypto Lane
 
 Five crypto primitives aligned with the WireGuard / Noise / TLS 1.3

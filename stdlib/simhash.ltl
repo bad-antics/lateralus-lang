@@ -1,0 +1,95 @@
+// ===================================================================
+// stdlib/simhash.ltl  —  Spiral Wave 10
+// 64-bit SimHash for near-duplicate detection.  Uses xxhash as the
+// per-token hasher so documents hashed here compose cleanly with
+// the Wave 7 xxhash lane.  Hamming distance gives near-duplicate
+// similarity in constant time once fingerprints are computed.
+// ===================================================================
+
+// Tokenise on whitespace + punctuation into lowercase words.
+fn simhash_tokenize(text: str) -> list {
+    let toks = []
+    let buf = ""
+    let i = 0
+    while i < len(text) {
+        let c = char_at(text, i)
+        let oc = ord(c)
+        let is_alnum = false
+        if oc >= 48 && oc <= 57 { is_alnum = true }
+        if oc >= 97 && oc <= 122 { is_alnum = true }
+        if oc >= 65 && oc <= 90 {
+            is_alnum = true
+            c = chr(oc + 32)   // lowercase
+        }
+        if is_alnum {
+            buf = buf + c
+        } else {
+            if len(buf) > 0 { toks = toks + [buf]; buf = "" }
+        }
+        i = i + 1
+    }
+    if len(buf) > 0 { toks = toks + [buf] }
+    return toks
+}
+
+// Count each token once per occurrence — weighted by frequency.
+pub fn fingerprint(text: str) -> int {
+    let tokens = simhash_tokenize(text)
+    // 64 signed accumulators, one per bit position
+    let v = []
+    let i = 0
+    while i < 64 { v = v + [0]; i = i + 1 }
+
+    let t = 0
+    while t < len(tokens) {
+        let h = xxhash_hash64(tokens[t])
+        let b = 0
+        while b < 64 {
+            let bit = (h >> b) & 1
+            if bit == 1 { v[b] = v[b] + 1 } else { v[b] = v[b] - 1 }
+            b = b + 1
+        }
+        t = t + 1
+    }
+
+    let fp = 0
+    let k = 0
+    while k < 64 {
+        if v[k] >= 0 { fp = fp | (1 << k) }
+        k = k + 1
+    }
+    return fp
+}
+
+// Hamming distance between two 64-bit fingerprints.
+pub fn hamming(a: int, b: int) -> int {
+    let x = a ^ b
+    let count = 0
+    let i = 0
+    while i < 64 {
+        count = count + ((x >> i) & 1)
+        i = i + 1
+    }
+    return count
+}
+
+// Similarity in [0,1].  0 hamming bits flipped -> 1.0.
+pub fn similarity(a: int, b: int) -> float {
+    return 1.0 - (hamming(a, b) / 64)
+}
+
+// Simple near-duplicate check.
+pub fn near_duplicate(a: str, b: str, threshold_bits: int) -> bool {
+    return hamming(fingerprint(a), fingerprint(b)) <= threshold_bits
+}
+
+// Build fingerprints for a batch of documents.
+pub fn fingerprint_all(docs: list) -> list {
+    let out = []
+    let i = 0
+    while i < len(docs) {
+        out = out + [fingerprint(docs[i])]
+        i = i + 1
+    }
+    return out
+}

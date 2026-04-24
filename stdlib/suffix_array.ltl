@@ -1,0 +1,150 @@
+// ===================================================================
+// stdlib/suffix_array.ltl  —  Spiral Wave 10
+// Suffix array construction (prefix-doubling, O(n log^2 n)) and
+// Kasai's O(n) LCP algorithm.  Enables O(m log n) substring search,
+// longest-repeated-substring, and longest-common-substring queries.
+// ===================================================================
+
+// -- helpers -------------------------------------------------------
+fn sa_char_codes(text: str) -> list {
+    let n = len(text)
+    let out = []
+    let i = 0
+    while i < n {
+        out = out + [ord(char_at(text, i))]
+        i = i + 1
+    }
+    return out
+}
+
+fn sa_cmp_pair(rank: list, n: int, a: int, b: int, k: int) -> int {
+    let ra = rank[a]
+    let rb = rank[b]
+    if ra != rb {
+        if ra < rb { return -1 } else { return 1 }
+    }
+    let ra2 = -1
+    let rb2 = -1
+    if a + k < n { ra2 = rank[a + k] }
+    if b + k < n { rb2 = rank[b + k] }
+    if ra2 == rb2 { return 0 }
+    if ra2 < rb2 { return -1 }
+    return 1
+}
+
+// O(n log^2 n) suffix-array construction.  Simple, correct, and
+// good enough up to a few hundred thousand characters.
+pub fn build(text: str) -> list {
+    let n = len(text)
+    if n == 0 { return [] }
+
+    let sa = []
+    let rank = []
+    let i = 0
+    while i < n {
+        sa = sa + [i]
+        rank = rank + [ord(char_at(text, i))]
+        i = i + 1
+    }
+
+    let k = 1
+    while k < n {
+        // insertion sort by (rank[a], rank[a+k]) — fine for moderate n
+        let j = 1
+        while j < n {
+            let key = sa[j]
+            let m = j - 1
+            while m >= 0 && sa_cmp_pair(rank, n, sa[m], key, k) > 0 {
+                sa[m + 1] = sa[m]
+                m = m - 1
+            }
+            sa[m + 1] = key
+            j = j + 1
+        }
+
+        let new_rank = []
+        let q = 0
+        while q < n { new_rank = new_rank + [0]; q = q + 1 }
+        new_rank[sa[0]] = 0
+        let r = 1
+        while r < n {
+            let prev = sa_cmp_pair(rank, n, sa[r - 1], sa[r], k)
+            if prev == 0 {
+                new_rank[sa[r]] = new_rank[sa[r - 1]]
+            } else {
+                new_rank[sa[r]] = new_rank[sa[r - 1]] + 1
+            }
+            r = r + 1
+        }
+        rank = new_rank
+        if rank[sa[n - 1]] == n - 1 { return sa }
+        k = k * 2
+    }
+    return sa
+}
+
+// Kasai's O(n) LCP construction from the suffix array.
+pub fn lcp(text: str, sa: list) -> list {
+    let n = len(sa)
+    let lcp_arr = []
+    let i = 0
+    while i < n { lcp_arr = lcp_arr + [0]; i = i + 1 }
+    if n == 0 { return lcp_arr }
+
+    let inv = []
+    let j = 0
+    while j < n { inv = inv + [0]; j = j + 1 }
+    let k = 0
+    while k < n { inv[sa[k]] = k; k = k + 1 }
+
+    let h = 0
+    let p = 0
+    while p < n {
+        if inv[p] > 0 {
+            let q2 = sa[inv[p] - 1]
+            while p + h < n && q2 + h < n && char_at(text, p + h) == char_at(text, q2 + h) {
+                h = h + 1
+            }
+            lcp_arr[inv[p]] = h
+            if h > 0 { h = h - 1 }
+        } else {
+            h = 0
+        }
+        p = p + 1
+    }
+    return lcp_arr
+}
+
+// Binary-search a single occurrence; returns -1 if not present.
+pub fn search(text: str, sa: list, pattern: str) -> int {
+    let n = len(sa)
+    let m = len(pattern)
+    if m == 0 { return 0 }
+    let lo = 0
+    let hi = n - 1
+    while lo <= hi {
+        let mid = (lo + hi) / 2
+        let start = sa[mid]
+        let take = m
+        if start + take > len(text) { take = len(text) - start }
+        let sub = slice(text, start, start + take)
+        if sub == pattern { return start }
+        if sub < pattern { lo = mid + 1 } else { hi = mid - 1 }
+    }
+    return -1
+}
+
+// Longest repeated substring via max of LCP.
+pub fn longest_repeated(text: str) -> str {
+    let sa = build(text)
+    let l  = lcp(text, sa)
+    let best = 0
+    let idx = 0
+    let i = 1
+    while i < len(l) {
+        if l[i] > best { best = l[i]; idx = sa[i] }
+        i = i + 1
+    }
+    if best == 0 { return "" }
+    return slice(text, idx, idx + best)
+}

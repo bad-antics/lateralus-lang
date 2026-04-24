@@ -1,0 +1,85 @@
+// ===================================================================
+// examples/spiral_search.ltl  —  Wave 10 demo
+// Mini full-text search engine wiring all five search primitives:
+//   - qgram inverted index picks candidate docs
+//   - levenshtein.bounded re-ranks with exact edit distance
+//   - aho_corasick highlights fixed phrases in the top result
+//   - suffix_array.longest_repeated reveals repeated motifs
+//   - simhash clusters near-duplicate docs
+// ===================================================================
+
+fn main() {
+    print("=== Spiral Search Engine (Wave 10) ===")
+
+    let docs = [
+        "The quick brown fox jumps over the lazy dog",
+        "A fast brown fox leaps over a sleepy dog",
+        "Lorem ipsum dolor sit amet, consectetur",
+        "the quick brown fox jumps over the lazy dog",   // near-dup of 0
+        "Completely unrelated text about matrices"
+    ]
+
+    // -- 1. q-gram inverted index --------------------------------
+    let q = 3
+    let idx = qgram_build_index(docs, q)
+    let query_str = "quick brown fox"
+    let ranked = qgram_query(idx, query_str, q)
+    print("")
+    print("q-gram candidates for \"" + query_str + "\":")
+    let i = 0
+    while i < len(ranked) {
+        print("  doc " + str(ranked[i][0]) + " score=" + str(ranked[i][1]))
+        i = i + 1
+    }
+
+    // -- 2. Re-rank top 3 with bounded levenshtein ---------------
+    print("")
+    print("Levenshtein distance to query:")
+    let k = 0
+    while k < len(ranked) && k < 3 {
+        let did = ranked[k][0]
+        let d = levenshtein_bounded(query_str, docs[did], 50)
+        print("  doc " + str(did) + " dist=" + str(d))
+        k = k + 1
+    }
+
+    // -- 3. Aho-Corasick highlight --------------------------------
+    let phrases = ["brown fox", "lazy dog", "quick"]
+    let auto = aho_corasick_build(phrases)
+    let top_doc = docs[ranked[0][0]]
+    print("")
+    print("Phrase hits in top doc: " + top_doc)
+    let hits = aho_corasick_find_all_starts(auto, top_doc)
+    let h = 0
+    while h < len(hits) {
+        print("  pattern " + str(hits[h][0]) + " @ " + str(hits[h][1]))
+        h = h + 1
+    }
+
+    // -- 4. Suffix array: longest repeated substring in corpus ---
+    let corpus = ""
+    let c = 0
+    while c < len(docs) { corpus = corpus + docs[c] + " "; c = c + 1 }
+    let lrs = suffix_array_longest_repeated(corpus)
+    print("")
+    print("Longest repeated substring: \"" + lrs + "\"")
+
+    // -- 5. SimHash near-duplicate clustering --------------------
+    let fps = simhash_fingerprint_all(docs)
+    print("")
+    print("SimHash near-duplicate pairs (hamming <= 8):")
+    let a = 0
+    while a < len(docs) {
+        let b = a + 1
+        while b < len(docs) {
+            let hd = simhash_hamming(fps[a], fps[b])
+            if hd <= 8 {
+                print("  " + str(a) + " ~ " + str(b) + " (hamming=" + str(hd) + ")")
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+}
+
+main()

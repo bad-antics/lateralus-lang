@@ -1,0 +1,150 @@
+// ===================================================================
+// stdlib/levenshtein.ltl  —  Spiral Wave 10
+// Edit distance.  Three variants:
+//   distance(a, b)       — classic O(nm) Wagner-Fischer DP
+//   bounded(a, b, k)     — early-exit band DP, O(k*min(n,m))
+//   similarity(a, b)     — 1.0 - distance / max(|a|,|b|)
+// ===================================================================
+
+fn lev_min3(a: int, b: int, c: int) -> int {
+    let m = a
+    if b < m { m = b }
+    if c < m { m = c }
+    return m
+}
+
+// Classic Wagner-Fischer, O(nm) time / O(min(n,m)) space.
+pub fn distance(a: str, b: str) -> int {
+    let n = len(a)
+    let m = len(b)
+    if n == 0 { return m }
+    if m == 0 { return n }
+
+    // Ensure a is the shorter to minimise working row width
+    if n > m {
+        let t = a
+        a = b
+        b = t
+        let tn = n
+        n = m
+        m = tn
+    }
+
+    let prev = []
+    let i = 0
+    while i <= n { prev = prev + [i]; i = i + 1 }
+    let curr = prev
+
+    let j = 1
+    while j <= m {
+        curr = [j]
+        let k = 1
+        while k <= n {
+            let cost = 1
+            if char_at(a, k - 1) == char_at(b, j - 1) { cost = 0 }
+            let v = lev_min3(curr[k - 1] + 1,
+                             prev[k] + 1,
+                             prev[k - 1] + cost)
+            curr = curr + [v]
+            k = k + 1
+        }
+        prev = curr
+        j = j + 1
+    }
+    return curr[n]
+}
+
+// Banded DP with early exit once the minimum of a row exceeds k.
+// Returns k+1 when distance is proven to exceed the bound.
+pub fn bounded(a: str, b: str, k: int) -> int {
+    let n = len(a)
+    let m = len(b)
+    if abs_diff(n, m) > k { return k + 1 }
+    if n == 0 { return m }
+    if m == 0 { return n }
+
+    let prev = []
+    let i = 0
+    while i <= n { prev = prev + [i]; i = i + 1 }
+
+    let j = 1
+    while j <= m {
+        let curr = [j]
+        let row_min = j
+        let p = 1
+        while p <= n {
+            let cost = 1
+            if char_at(a, p - 1) == char_at(b, j - 1) { cost = 0 }
+            let v = lev_min3(curr[p - 1] + 1,
+                             prev[p] + 1,
+                             prev[p - 1] + cost)
+            curr = curr + [v]
+            if v < row_min { row_min = v }
+            p = p + 1
+        }
+        if row_min > k { return k + 1 }
+        prev = curr
+        j = j + 1
+    }
+    return prev[n]
+}
+
+fn abs_diff(a: int, b: int) -> int {
+    if a > b { return a - b }
+    return b - a
+}
+
+// Normalised similarity in [0,1].  1.0 = identical.
+pub fn similarity(a: str, b: str) -> float {
+    let mx = len(a)
+    if len(b) > mx { mx = len(b) }
+    if mx == 0 { return 1.0 }
+    let d = distance(a, b)
+    return 1.0 - (d / mx)
+}
+
+// Damerau-Levenshtein: adds transposition as a single edit.
+// O(nm) using a full DP matrix.
+pub fn damerau(a: str, b: str) -> int {
+    let n = len(a)
+    let m = len(b)
+    if n == 0 { return m }
+    if m == 0 { return n }
+
+    // Allocate (n+1) x (m+1) matrix as list of lists
+    let dp = []
+    let i = 0
+    while i <= n {
+        let row = []
+        let j = 0
+        while j <= m { row = row + [0]; j = j + 1 }
+        dp = dp + [row]
+        i = i + 1
+    }
+    let r = 0
+    while r <= n { dp[r][0] = r; r = r + 1 }
+    let c = 0
+    while c <= m { dp[0][c] = c; c = c + 1 }
+
+    let p = 1
+    while p <= n {
+        let q = 1
+        while q <= m {
+            let cost = 1
+            if char_at(a, p - 1) == char_at(b, q - 1) { cost = 0 }
+            let v = lev_min3(dp[p - 1][q] + 1,
+                             dp[p][q - 1] + 1,
+                             dp[p - 1][q - 1] + cost)
+            if p > 1 && q > 1 &&
+               char_at(a, p - 1) == char_at(b, q - 2) &&
+               char_at(a, p - 2) == char_at(b, q - 1) {
+                let t = dp[p - 2][q - 2] + 1
+                if t < v { v = t }
+            }
+            dp[p][q] = v
+            q = q + 1
+        }
+        p = p + 1
+    }
+    return dp[n][m]
+}

@@ -1,0 +1,133 @@
+// ===================================================================
+// tests/stdlib_spiral_wave_10.ltl  —  Search lane: suffix_array,
+// aho_corasick, levenshtein, simhash, qgram.
+// ===================================================================
+
+let PASS = 0
+let FAIL = 0
+
+fn check(name: str, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        print("  ok  " + name)
+    } else {
+        FAIL = FAIL + 1
+        print("  FAIL " + name)
+    }
+}
+
+// -- Suffix array -------------------------------------------------
+fn test_suffix_array() {
+    print("-- suffix_array --")
+    let t = "banana"
+    let sa = suffix_array_build(t)
+    // The sorted suffixes of "banana" are:
+    //   a      -> 5
+    //   ana    -> 3
+    //   anana  -> 1
+    //   banana -> 0
+    //   na     -> 4
+    //   nana   -> 2
+    check("sa length", len(sa) == 6)
+    check("sa[0]=5 (a)", sa[0] == 5)
+    check("sa[1]=3 (ana)", sa[1] == 3)
+    check("sa[2]=1 (anana)", sa[2] == 1)
+    check("sa[3]=0 (banana)", sa[3] == 0)
+
+    let lcp = suffix_array_lcp(t, sa)
+    check("lcp length", len(lcp) == 6)
+    // LCP between "a" and "ana" = 1, between "ana" and "anana" = 3
+    check("lcp[1]=1", lcp[1] == 1)
+    check("lcp[2]=3", lcp[2] == 3)
+
+    let pos = suffix_array_search(t, sa, "nan")
+    check("search nan", pos == 2)
+    check("search missing", suffix_array_search(t, sa, "xyz") == -1)
+
+    check("LRS = ana", suffix_array_longest_repeated("banana") == "ana")
+}
+
+// -- Aho-Corasick --------------------------------------------------
+fn test_aho_corasick() {
+    print("-- aho_corasick --")
+    let a = aho_corasick_build(["he", "she", "his", "hers"])
+    let hits = aho_corasick_find_all(a, "ushers")
+    // Expected matches in "ushers":
+    //   "she" ends at position 4
+    //   "he"  ends at position 4
+    //   "hers" ends at position 6
+    check("hit count", len(hits) == 3)
+    check("contains_any", aho_corasick_contains_any(a, "this is hers"))
+    check("contains_any false", aho_corasick_contains_any(a, "zzz") == false)
+
+    let starts = aho_corasick_find_all_starts(a, "ushers")
+    // Collect the pattern ids that fired
+    let ids = []
+    let i = 0
+    while i < len(starts) { ids = ids + [starts[i][0]]; i = i + 1 }
+    check("pattern 0 (he) fired", contains(ids, 0))
+    check("pattern 1 (she) fired", contains(ids, 1))
+    check("pattern 3 (hers) fired", contains(ids, 3))
+}
+
+// -- Levenshtein ---------------------------------------------------
+fn test_levenshtein() {
+    print("-- levenshtein --")
+    check("kitten/sitting = 3", levenshtein_distance("kitten", "sitting") == 3)
+    check("flaw/lawn = 2",      levenshtein_distance("flaw", "lawn") == 2)
+    check("same = 0",           levenshtein_distance("abc", "abc") == 0)
+    check("empty vs abc = 3",   levenshtein_distance("", "abc") == 3)
+
+    check("bounded within",     levenshtein_bounded("kitten", "sitting", 5) == 3)
+    check("bounded cut-off",    levenshtein_bounded("kitten", "sitting", 2) == 3)
+    // (bounded returns k+1 to signal "at least this far"; 3 > 2 means exceeded)
+
+    // Damerau-Levenshtein treats a transposition as one edit
+    check("damerau ca/ac = 1",  levenshtein_damerau("ca", "ac") == 1)
+    check("lev ca/ac = 2",      levenshtein_distance("ca", "ac") == 2)
+}
+
+// -- SimHash -------------------------------------------------------
+fn test_simhash() {
+    print("-- simhash --")
+    let a = simhash_fingerprint("the quick brown fox jumps over the lazy dog")
+    let b = simhash_fingerprint("THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG")
+    let c = simhash_fingerprint("completely unrelated matrix algebra text here")
+    check("case-insensitive identical", simhash_hamming(a, b) == 0)
+    check("hamming self 0",             simhash_hamming(a, a) == 0)
+    check("distinct > 5 bits",          simhash_hamming(a, c) > 5)
+    check("near_dup same",              simhash_near_duplicate("hello world foo", "hello world foo", 3))
+}
+
+// -- Q-gram --------------------------------------------------------
+fn test_qgram() {
+    print("-- qgram --")
+    let g = qgram_qgrams("cat", 2)
+    // Padded to \x01 c a t \x01 -> bigrams: \x01c, ca, at, t\x01 = 4
+    check("bigrams of cat = 4", len(g) == 4)
+
+    let docs = ["apple pie", "apple tart", "banana bread"]
+    let idx = qgram_build_index(docs, 3)
+    let r = qgram_query(idx, "apple", 3)
+    check("query returns results", len(r) > 0)
+    // Top doc should be 0 or 1 (both contain "apple")
+    let top = r[0][0]
+    check("top is apple doc", top == 0 || top == 1)
+
+    let j = qgram_jaccard("night", "nacht", 2)
+    check("jaccard in [0,1]", j >= 0.0 && j <= 1.0)
+    check("jaccard self = 1", qgram_jaccard("abc", "abc", 2) == 1.0)
+}
+
+fn main() {
+    print("=== Spiral Wave 10 (search lane) tests ===")
+    test_suffix_array()
+    test_aho_corasick()
+    test_levenshtein()
+    test_simhash()
+    test_qgram()
+    print("")
+    print("pass=" + str(PASS) + " fail=" + str(FAIL))
+}
+
+main()
