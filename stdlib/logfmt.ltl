@@ -1,0 +1,118 @@
+// ===================================================================
+// stdlib/logfmt.ltl  —  logfmt key=value log line codec
+// -------------------------------------------------------------------
+// Structured log format popularised by Heroku / go-kit:
+//     ts=2026-04-24T12:34:56Z level=info msg="hello world" user=42
+// Values containing space, equals, or double-quote must be quoted;
+// quoted values escape \" and \\.
+// ===================================================================
+
+// -- Emitter -------------------------------------------------------
+
+fn needs_quoting(v: str) -> bool {
+    if len(v) == 0 { return true }
+    let i = 0
+    while i < len(v) {
+        let c = char_at(v, i)
+        if c == " " || c == "=" || c == "\"" { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn escape_quoted(v: str) -> str {
+    let out = ""
+    let i = 0
+    while i < len(v) {
+        let c = char_at(v, i)
+        if c == "\\" || c == "\"" { out = out + "\\" + c }
+        else                      { out = out + c }
+        i = i + 1
+    }
+    return out
+}
+
+pub fn format_value(v: str) -> str {
+    if needs_quoting(v) {
+        return "\"" + escape_quoted(v) + "\""
+    }
+    return v
+}
+
+/// Encode a list of [k,v] pairs into a logfmt line (no trailing newline).
+pub fn encode(pairs: list) -> str {
+    let out = ""
+    let i = 0
+    while i < len(pairs) {
+        if i > 0 { out = out + " " }
+        let p = pairs[i]
+        out = out + p[0] + "=" + format_value(p[1])
+        i = i + 1
+    }
+    return out
+}
+
+// -- Parser --------------------------------------------------------
+
+/// Parse one logfmt line into a list of [k,v] pairs.  Keys without
+/// values are recorded as [k, ""].
+pub fn parse(line: str) -> list {
+    let out = []
+    let n = len(line)
+    let i = 0
+    while i < n {
+        // skip leading spaces
+        while i < n && char_at(line, i) == " " { i = i + 1 }
+        if i >= n { return out }
+        // scan key up to '=' or space
+        let k_start = i
+        while i < n && char_at(line, i) != "=" && char_at(line, i) != " " {
+            i = i + 1
+        }
+        let k = slice(line, k_start, i)
+        let v = ""
+        if i < n && char_at(line, i) == "=" {
+            i = i + 1
+            if i < n && char_at(line, i) == "\"" {
+                // quoted
+                i = i + 1
+                let vb = ""
+                let scanning = true
+                while scanning && i < n {
+                    let c = char_at(line, i)
+                    if c == "\\" && i + 1 < n {
+                        vb = vb + char_at(line, i + 1)
+                        i = i + 2
+                    } else if c == "\"" {
+                        scanning = false
+                        i = i + 1
+                    } else {
+                        vb = vb + c
+                        i = i + 1
+                    }
+                }
+                v = vb
+            } else {
+                let v_start = i
+                while i < n && char_at(line, i) != " " { i = i + 1 }
+                v = slice(line, v_start, i)
+            }
+        }
+        if len(k) > 0 { out = out + [[k, v]] }
+    }
+    return out
+}
+
+/// Convenience: build a [k,v] list from a map (stable insertion order
+/// is caller's responsibility — we iterate `keys()`).
+pub fn encode_map(m: map) -> str {
+    let ks = keys(m)
+    let pairs = []
+    let i = 0
+    while i < len(ks) {
+        let k = ks[i]
+        pairs = pairs + [[k, m[k]]]
+        i = i + 1
+    }
+    return encode(pairs)
+}

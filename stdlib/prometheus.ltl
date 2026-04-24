@@ -1,0 +1,172 @@
+// ===================================================================
+// stdlib/prometheus.ltl  —  Prometheus text exposition format
+// -------------------------------------------------------------------
+// Emits and parses the text-based exposition format consumed by
+// `/metrics` scrape endpoints.  Reference:
+//   https://prometheus.io/docs/instrumenting/exposition_formats/
+// ===================================================================
+
+// -- Label formatting ----------------------------------------------
+
+fn escape_label_value(v: str) -> str {
+    let out = ""
+    let i = 0
+    while i < len(v) {
+        let c = char_at(v, i)
+        if c == "\\"      { out = out + "\\\\" }
+        else if c == "\"" { out = out + "\\\"" }
+        else if c == "\n" { out = out + "\\n" }
+        else              { out = out + c }
+        i = i + 1
+    }
+    return out
+}
+
+/// `labels` is a list of [key, value] pairs.  Returns `{k="v",...}`
+/// or empty string if no labels.
+pub fn format_labels(labels: list) -> str {
+    if len(labels) == 0 { return "" }
+    let out = chr(123)  // "{"
+    let i = 0
+    while i < len(labels) {
+        if i > 0 { out = out + "," }
+        let l = labels[i]
+        out = out + l[0] + "=\"" + escape_label_value(l[1]) + "\""
+        i = i + 1
+    }
+    return out + "}"
+}
+
+// -- Line emitters -------------------------------------------------
+
+pub fn help_line(metric: str, description: str) -> str {
+    return "# HELP " + metric + " " + description + "\n"
+}
+
+pub fn type_line(metric: str, kind: str) -> str {
+    return "# TYPE " + metric + " " + kind + "\n"
+}
+
+pub fn sample_line(metric: str, labels: list, value: str) -> str {
+    return metric + format_labels(labels) + " " + value + "\n"
+}
+
+/// Emit a full counter/gauge metric block.
+pub fn metric_block(name: str, description: str, kind: str,
+                    samples: list) -> str {
+    let out = help_line(name, description) + type_line(name, kind)
+    let i = 0
+    while i < len(samples) {
+        let s = samples[i]
+        // s = [labels, value]
+        out = out + sample_line(name, s[0], s[1])
+        i = i + 1
+    }
+    return out
+}
+
+/// Emit a histogram: `buckets` is a list of [le_string, count_string],
+/// plus overall `sum` and `count` values.
+pub fn histogram_block(name: str, description: str, labels: list,
+                        buckets: list, sum_v: str, count_v: str) -> str {
+    let out = help_line(name, description) + type_line(name, "histogram")
+    let i = 0
+    while i < len(buckets) {
+        let b = buckets[i]
+        let ls = labels + [["le", b[0]]]
+        out = out + sample_line(name + "_bucket", ls, b[1])
+        i = i + 1
+    }
+    out = out + sample_line(name + "_sum",   labels, sum_v)
+    out = out + sample_line(name + "_count", labels, count_v)
+    return out
+}
+
+// -- Parser --------------------------------------------------------
+
+fn parse_labels(s: str) -> list {
+    // Input: `k="v",k2="v2"`  (already stripped of surrounding braces).
+    let out = []
+    let n = len(s)
+    let i = 0
+    while i < n {
+        // key up to '='
+        let eq = index_of(slice(s, i, n), "=")
+        if eq < 0 { return out }
+        let k = slice(s, i, i + eq)
+        i = i + eq + 1
+        // value: opening quote, then scan with escape awareness.
+        if i >= n || char_at(s, i) != "\"" { return out }
+        i = i + 1
+        let v = ""
+        let scanning = true
+        while scanning && i < n {
+            let c = char_at(s, i)
+            if c == "\\" && i + 1 < n {
+                let nx = char_at(s, i + 1)
+                if nx == "n"      { v = v + "\n" }
+                else if nx == "\"" { v = v + "\"" }
+                else if nx == "\\" { v = v + "\\" }
+                else               { v = v + nx }
+                i = i + 2
+            } else if c == "\"" {
+                scanning = false
+                i = i + 1
+            } else {
+                v = v + c
+                i = i + 1
+            }
+        }
+        out = out + [[k, v]]
+        if i < n && char_at(s, i) == "," { i = i + 1 }
+    }
+    return out
+}
+
+/// Parse one non-comment, non-blank exposition line into
+/// {metric, labels, value} or nil if malformed.
+pub fn parse_line(line: str) -> map {
+    let n = len(line)
+    if n == 0 { return nil }
+    if char_at(line, 0) == "#" { return nil }
+    // Metric name runs until '{' or ' '.
+    let i = 0
+    while i < n && char_at(line, i) != chr(123) && char_at(line, i) != " " {
+        i = i + 1
+    }
+    let metric = slice(line, 0, i)
+    let labels = []
+    if i < n && char_at(line, i) == chr(123) {
+        i = i + 1  // past '{'
+        let close = index_of(slice(line, i, n), "}")
+        if close < 0 { return nil }
+        labels = parse_labels(slice(line, i, i + close))
+        i = i + close + 1
+    }
+    while i < n && char_at(line, i) == " " { i = i + 1 }
+    // Value runs until end-of-line or trailing timestamp (space).
+    let v_end = i
+    while v_end < n && char_at(line, v_end) != " " { v_end = v_end + 1 }
+    let value = slice(line, i, v_end)
+    let m = {}
+    m["metric"] = metric
+    m["labels"] = labels
+    m["value"]  = value
+    return m
+}
+
+/// Parse a whole exposition document into a list of sample maps.
+pub fn parse_exposition(doc: str) -> list {
+    let out = []
+    let lines = split(doc, "\n")
+    let i = 0
+    while i < len(lines) {
+        let ln = lines[i]
+        if len(ln) > 0 && char_at(ln, 0) != "#" {
+            let m = parse_line(ln)
+            if m != nil { out = out + [m] }
+        }
+        i = i + 1
+    }
+    return out
+}

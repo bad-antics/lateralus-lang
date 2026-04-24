@@ -1,0 +1,111 @@
+// ===================================================================
+// stdlib/statsd.ltl  —  StatsD wire protocol
+// -------------------------------------------------------------------
+// Packet format (one metric per line, UDP):
+//     <metric-name>:<value>|<type>[|@<sample-rate>][|#tag1:v1,tag2:v2]
+// Types:
+//   c    counter
+//   g    gauge (optional leading +/- for delta)
+//   ms   timer (milliseconds)
+//   h    histogram
+//   s    set
+//   d    distribution (DogStatsD)
+// ===================================================================
+
+// -- Tags -----------------------------------------------------------
+
+fn format_tags(tags: list) -> str {
+    if len(tags) == 0 { return "" }
+    let out = "|#"
+    let i = 0
+    while i < len(tags) {
+        if i > 0 { out = out + "," }
+        let t = tags[i]
+        if t[1] == "" { out = out + t[0] }
+        else          { out = out + t[0] + ":" + t[1] }
+        i = i + 1
+    }
+    return out
+}
+
+fn format_rate(rate: str) -> str {
+    if rate == "" { return "" }
+    return "|@" + rate
+}
+
+// -- Builders ------------------------------------------------------
+
+pub fn counter(name: str, delta: int, rate: str, tags: list) -> str {
+    return name + ":" + str(delta) + "|c" + format_rate(rate) + format_tags(tags)
+}
+
+pub fn gauge(name: str, value: str, tags: list) -> str {
+    return name + ":" + value + "|g" + format_tags(tags)
+}
+
+pub fn gauge_delta(name: str, delta: str, tags: list) -> str {
+    // `delta` must carry its own leading '+' or '-'.
+    return name + ":" + delta + "|g" + format_tags(tags)
+}
+
+pub fn timer(name: str, ms: str, rate: str, tags: list) -> str {
+    return name + ":" + ms + "|ms" + format_rate(rate) + format_tags(tags)
+}
+
+pub fn histogram(name: str, value: str, rate: str, tags: list) -> str {
+    return name + ":" + value + "|h" + format_rate(rate) + format_tags(tags)
+}
+
+pub fn distribution(name: str, value: str, rate: str, tags: list) -> str {
+    return name + ":" + value + "|d" + format_rate(rate) + format_tags(tags)
+}
+
+pub fn set_metric(name: str, member: str, tags: list) -> str {
+    return name + ":" + member + "|s" + format_tags(tags)
+}
+
+// -- Parser --------------------------------------------------------
+
+fn parse_tags_str(s: str) -> list {
+    let out = []
+    let parts = split(s, ",")
+    let i = 0
+    while i < len(parts) {
+        let p = parts[i]
+        let c = index_of(p, ":")
+        if c < 0 { out = out + [[p, ""]] }
+        else     { out = out + [[slice(p, 0, c), slice(p, c + 1, len(p))]] }
+        i = i + 1
+    }
+    return out
+}
+
+/// Parse one line.  Returns {name, value, kind, rate, tags} or nil.
+pub fn parse_line(line: str) -> map {
+    let colon = index_of(line, ":")
+    if colon < 0 { return nil }
+    let name = slice(line, 0, colon)
+    let rest = slice(line, colon + 1, len(line))
+    let parts = split(rest, "|")
+    if len(parts) < 2 { return nil }
+    let m = {}
+    m["name"]  = name
+    m["value"] = parts[0]
+    m["kind"]  = parts[1]
+    m["rate"]  = ""
+    m["tags"]  = []
+    let i = 2
+    while i < len(parts) {
+        let p = parts[i]
+        if len(p) > 1 {
+            let head = char_at(p, 0)
+            if head == "@" {
+                m["rate"] = slice(p, 1, len(p))
+            } else if head == "#" {
+                m["tags"] = parse_tags_str(slice(p, 1, len(p)))
+            }
+        }
+        i = i + 1
+    }
+    return m
+}

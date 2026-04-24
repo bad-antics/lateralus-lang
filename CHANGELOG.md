@@ -4,6 +4,46 @@
 
 All notable changes to the Lateralus Language toolchain are documented here.
 
+## [3.8.0-dev] — Spiral Wave 6: Telemetry & Structured Logging
+
+Five stdlib modules covering the most common wire formats for
+observability pipelines:
+
+- **stdlib/prometheus.ltl** — text exposition format: HELP/TYPE/sample
+  emitters, label escaping, counter/gauge blocks, histogram helper
+  (`_bucket`/`_sum`/`_count`), and a line-level + document-level
+  parser for `/metrics` scrape responses.
+- **stdlib/influx_line.ltl** — InfluxDB line protocol: measurement/tag
+  escaping, string/int/float/bool field formatting, nanosecond
+  timestamp emission, and a round-trip parser that handles quoted
+  string fields with embedded commas.
+- **stdlib/statsd.ltl** — StatsD wire protocol: counter/gauge/timer/
+  histogram/distribution/set builders with sample-rate and
+  DogStatsD-compatible tags, plus a line parser.
+- **stdlib/logfmt.ltl** — Heroku/go-kit logfmt encoder + parser with
+  automatic quoting of values containing space/equals/quote, and
+  backslash-escape handling inside quoted strings.
+- **stdlib/opentelemetry.ltl** — OTLP/JSON-shaped builders for the
+  three signals (traces, metrics, logs): attribute helpers for
+  string/int/bool/double, `resource`, `instrumentationScope`, `span`,
+  `number_data_point`, `gauge`/`sum_metric`, `log_record`, and the
+  top-level `trace_request` / `metrics_request` / `logs_request`
+  wrappers ready to serialise with stdlib/json.
+
+### Examples
+
+- **examples/spiral_telemetry.ltl** — one synthetic HTTP event
+  rendered simultaneously as a Prometheus scrape page, an Influx
+  line, a pair of StatsD UDP packets, a logfmt stdout line, and an
+  OTLP trace request.
+
+### Tests
+
+- **tests/stdlib_spiral_wave_6.ltl** — sample-line round-trip with
+  commas inside label values, Influx tag/field parse with nanosecond
+  timestamp, StatsD rate+tag parse, logfmt quoting+escape round-trip,
+  OTLP span structure invariants.
+
 ## [3.7.0-dev] — Spiral Wave 5: Streaming & Messaging
 
 Five new stdlib modules expanding the Lateralus surface into event-streaming

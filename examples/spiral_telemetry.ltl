@@ -1,0 +1,113 @@
+// ===================================================================
+// examples/spiral_telemetry.ltl
+// -------------------------------------------------------------------
+// Wave 6 integrative demo: a single event is observed through all
+// five telemetry dialects simultaneously.  Demonstrates that the
+// same numeric measurement can be serialised for Prometheus scrape,
+// Influx line ingest, StatsD UDP, logfmt stdout, and OTLP/JSON POST
+// — without any coupling between the emitters.
+// ===================================================================
+
+fn render_prometheus(req_count: int, latency_ms: int) -> str {
+    let out = ""
+    out = out + prometheus_metric_block(
+        "http_requests_total",
+        "Total HTTP requests served",
+        "counter",
+        [[[["method", "GET"], ["status", "200"]], str(req_count)]])
+    out = out + prometheus_histogram_block(
+        "http_request_duration_ms",
+        "Request duration in milliseconds",
+        [["method", "GET"]],
+        [["5",    str(req_count)],
+         ["50",   str(req_count)],
+         ["500",  str(req_count)],
+         ["+Inf", str(req_count)]],
+        str(latency_ms * req_count),
+        str(req_count))
+    return out
+}
+
+fn render_influx(req_count: int, latency_ms: int, ts_ns: int) -> str {
+    return influx_line_line(
+        "http_requests",
+        [["method", "GET"], ["status", "200"]],
+        [["count",    influx_line_field_int(req_count)],
+         ["latency",  influx_line_field_int(latency_ms)]],
+        ts_ns)
+}
+
+fn render_statsd(req_count: int, latency_ms: int) -> list {
+    let lines = []
+    lines = lines + [statsd_counter("http.requests", req_count, "",
+                                      [["method", "GET"], ["status", "200"]])]
+    lines = lines + [statsd_timer("http.latency", str(latency_ms), "",
+                                    [["method", "GET"]])]
+    return lines
+}
+
+fn render_logfmt(req_count: int, latency_ms: int) -> str {
+    return logfmt_encode([
+        ["ts",      "2026-04-24T12:34:56Z"],
+        ["level",   "info"],
+        ["msg",     "served request"],
+        ["method",  "GET"],
+        ["status",  "200"],
+        ["count",   str(req_count)],
+        ["latency", str(latency_ms) + "ms"]
+    ])
+}
+
+fn render_otlp(req_count: int, latency_ms: int, ts_ns: int) -> map {
+    let res = opentelemetry_resource([
+        opentelemetry_attr_string("service.name", "spiral-demo"),
+        opentelemetry_attr_string("service.version", "3.8.0")
+    ])
+    let scope = opentelemetry_instrumentation_scope("lateralus.stdlib", "3.8.0")
+
+    let span = opentelemetry_span(
+        "4bf92f3577b34da6a3ce929d0e0e4736", "00f067aa0ba902b7", "",
+        "GET /api/v1/resource",
+        opentelemetry_kind_server(),
+        ts_ns - latency_ms * 1000000, ts_ns,
+        [opentelemetry_attr_string("http.method", "GET"),
+         opentelemetry_attr_int("http.status_code", 200)],
+        opentelemetry_status_ok(), "")
+    let ss = opentelemetry_scope_spans(scope, [span])
+    let rs = opentelemetry_resource_spans(res, [ss])
+    return opentelemetry_trace_request([rs])
+}
+
+fn main() {
+    print("=== Spiral Telemetry (Wave 6) ===")
+    let req_count = 42
+    let latency_ms = 12
+    let ts_ns = 1745500000000000000
+
+    print("--- prometheus /metrics ---")
+    print(render_prometheus(req_count, latency_ms))
+
+    print("--- influx line protocol ---")
+    print(render_influx(req_count, latency_ms, ts_ns))
+
+    print("--- statsd packets ---")
+    let sd = render_statsd(req_count, latency_ms)
+    let i = 0
+    while i < len(sd) {
+        print("  " + sd[i])
+        i = i + 1
+    }
+
+    print("--- logfmt ---")
+    print(render_logfmt(req_count, latency_ms))
+
+    print("--- OTLP/JSON (trace request) ---")
+    let otlp = render_otlp(req_count, latency_ms, ts_ns)
+    let rs = otlp["resourceSpans"]
+    print("resourceSpans count = " + str(len(rs)))
+    let spans = rs[0]["scopeSpans"][0]["spans"]
+    print("first span name    = " + spans[0]["name"])
+    print("first span status  = " + str(spans[0]["status"]["code"]))
+}
+
+main()

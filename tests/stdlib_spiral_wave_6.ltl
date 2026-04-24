@@ -1,0 +1,141 @@
+// ===================================================================
+// tests/stdlib_spiral_wave_6.ltl
+// Telemetry/logging formats: prometheus, influx_line, statsd,
+// logfmt, opentelemetry.
+// ===================================================================
+
+let PASS = 0
+let FAIL = 0
+
+fn check(name: str, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        print("  ok  " + name)
+    } else {
+        FAIL = FAIL + 1
+        print("  FAIL " + name)
+    }
+}
+
+// ---------- prometheus --------------------------------------------
+
+fn test_prometheus() {
+    print("[prometheus]")
+    let line = prometheus_sample_line("http_requests_total",
+        [["method", "GET"], ["status", "200"]], "42")
+    check("sample line endswith 42\\n", ends_with(line, "42\n"))
+    check("sample line has {method",  index_of(line, chr(123) + "method") >= 0)
+
+    let parsed = prometheus_parse_line("http_requests_total"
+        + chr(123) + "method=\"GET\",path=\"/a,b\"" + "}" + " 7")
+    check("parse metric", parsed["metric"] == "http_requests_total")
+    check("parse value",  parsed["value"] == "7")
+    let labs = parsed["labels"]
+    check("parse label count", len(labs) == 2)
+    check("parse label value comma preserved", labs[1][1] == "/a,b")
+}
+
+// ---------- influx_line -------------------------------------------
+
+fn test_influx() {
+    print("[influx_line]")
+    let ln = influx_line_line("cpu",
+        [["host", "h1"], ["region", "us"]],
+        [["usage", "0.64"], ["count", influx_line_field_int(3)]],
+        1700000000000000000)
+    check("influx starts 'cpu,host='", starts_with(ln, "cpu,host=h1"))
+    check("influx has usage=0.64",    index_of(ln, "usage=0.64") >= 0)
+    check("influx count has i suffix", index_of(ln, "count=3i") >= 0)
+    check("influx ends with timestamp",
+          ends_with(ln, " 1700000000000000000"))
+
+    let p = influx_line_parse_line(ln)
+    check("parse measurement", p["measurement"] == "cpu")
+    check("parse tag h1",      p["tags"][0][1] == "h1")
+    check("parse field count", len(p["fields"]) == 2)
+    check("parse timestamp",   p["timestamp"] == 1700000000000000000)
+}
+
+// ---------- statsd ------------------------------------------------
+
+fn test_statsd() {
+    print("[statsd]")
+    let c = statsd_counter("requests", 5, "0.1", [["env", "prod"]])
+    check("counter format",
+          c == "requests:5|c|@0.1|#env:prod")
+    let g = statsd_gauge("q.size", "42", [])
+    check("gauge format", g == "q.size:42|g")
+
+    let m = statsd_parse_line("latency:23|ms|@0.5|#service:api,unit:ms")
+    check("parse name",  m["name"]  == "latency")
+    check("parse value", m["value"] == "23")
+    check("parse kind",  m["kind"]  == "ms")
+    check("parse rate",  m["rate"]  == "0.5")
+    check("parse tags",  len(m["tags"]) == 2)
+    check("parse tag k", m["tags"][0][0] == "service")
+    check("parse tag v", m["tags"][0][1] == "api")
+}
+
+// ---------- logfmt ------------------------------------------------
+
+fn test_logfmt() {
+    print("[logfmt]")
+    let line = logfmt_encode([
+        ["level", "info"],
+        ["msg",   "hello world"],
+        ["path",  "/a=b"],
+        ["empty", ""]
+    ])
+    check("logfmt quoted space", index_of(line, "msg=\"hello world\"") >= 0)
+    check("logfmt quoted equals", index_of(line, "path=\"/a=b\"") >= 0)
+    check("logfmt empty quoted",  index_of(line, "empty=\"\"") >= 0)
+
+    let pairs = logfmt_parse("a=1 b=\"two words\" c=\"q\\\"t\" d")
+    check("parse count", len(pairs) == 4)
+    check("parse a=1",   pairs[0][0] == "a" && pairs[0][1] == "1")
+    check("parse quoted", pairs[1][1] == "two words")
+    check("parse escape", pairs[2][1] == "q\"t")
+    check("bare key empty v", pairs[3][0] == "d" && pairs[3][1] == "")
+}
+
+// ---------- opentelemetry -----------------------------------------
+
+fn test_otlp() {
+    print("[opentelemetry]")
+    let a = opentelemetry_attr_string("service.name", "demo")
+    check("attr key", a["key"] == "service.name")
+    check("attr stringValue",
+          a["value"]["stringValue"] == "demo")
+
+    let s = opentelemetry_span("t", "s", "", "op",
+            opentelemetry_kind_client(), 10, 20, [],
+            opentelemetry_status_ok(), "")
+    check("span kind=client", s["kind"] == 3)
+    check("span start is str", s["startTimeUnixNano"] == "10")
+    check("span no parent",    contains(s, "parentSpanId") == false)
+    check("span status code ok", s["status"]["code"] == 1)
+
+    let req = opentelemetry_trace_request([
+        opentelemetry_resource_spans(
+            opentelemetry_resource([a]),
+            [opentelemetry_scope_spans(
+                opentelemetry_instrumentation_scope("x", "1"),
+                [s])])])
+    check("trace request shape",
+          len(req["resourceSpans"]) == 1)
+}
+
+// ---------- driver ------------------------------------------------
+
+fn main() {
+    print("=== Spiral Wave 6 — telemetry/logging ===")
+    test_prometheus()
+    test_influx()
+    test_statsd()
+    test_logfmt()
+    test_otlp()
+    print("---")
+    print("pass=" + str(PASS) + " fail=" + str(FAIL))
+}
+
+main()

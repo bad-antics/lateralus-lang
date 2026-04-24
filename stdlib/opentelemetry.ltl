@@ -1,0 +1,221 @@
+// ===================================================================
+// stdlib/opentelemetry.ltl  —  OTLP/JSON-shaped span + metric builders
+// -------------------------------------------------------------------
+// Constructs in-memory maps that mirror the OpenTelemetry Protocol
+// JSON payload shape (opentelemetry.proto.collector.*).  Callers can
+// then serialise with stdlib/json.ltl and POST to an OTLP/HTTP
+// collector on /v1/traces, /v1/metrics, or /v1/logs.
+//
+// Refs:
+//   https://opentelemetry.io/docs/specs/otlp/
+//   https://github.com/open-telemetry/opentelemetry-proto
+// ===================================================================
+
+// -- Span status codes ---------------------------------------------
+
+pub fn status_unset() -> int { return 0 }
+pub fn status_ok()    -> int { return 1 }
+pub fn status_error() -> int { return 2 }
+
+// -- Span kinds ----------------------------------------------------
+
+pub fn kind_internal() -> int { return 1 }
+pub fn kind_server()   -> int { return 2 }
+pub fn kind_client()   -> int { return 3 }
+pub fn kind_producer() -> int { return 4 }
+pub fn kind_consumer() -> int { return 5 }
+
+// -- Attributes ----------------------------------------------------
+
+/// Build a single OTLP attribute {key, value: {stringValue: ...}}.
+pub fn attr_string(key: str, value: str) -> map {
+    let inner = {}
+    inner["stringValue"] = value
+    let m = {}
+    m["key"]   = key
+    m["value"] = inner
+    return m
+}
+
+pub fn attr_int(key: str, value: int) -> map {
+    let inner = {}
+    inner["intValue"] = str(value)  // OTLP JSON encodes int64 as string
+    let m = {}
+    m["key"]   = key
+    m["value"] = inner
+    return m
+}
+
+pub fn attr_bool(key: str, value: bool) -> map {
+    let inner = {}
+    inner["boolValue"] = value
+    let m = {}
+    m["key"]   = key
+    m["value"] = inner
+    return m
+}
+
+pub fn attr_double(key: str, value: str) -> map {
+    let inner = {}
+    inner["doubleValue"] = value
+    let m = {}
+    m["key"]   = key
+    m["value"] = inner
+    return m
+}
+
+// -- Resource / scope ----------------------------------------------
+
+pub fn resource(attrs: list) -> map {
+    let r = {}
+    r["attributes"] = attrs
+    return r
+}
+
+pub fn instrumentation_scope(name: str, version: str) -> map {
+    let s = {}
+    s["name"]    = name
+    s["version"] = version
+    return s
+}
+
+// -- Span ----------------------------------------------------------
+
+pub fn span(trace_id_hex: str, span_id_hex: str, parent_id_hex: str,
+             name: str, kind: int, start_ns: int, end_ns: int,
+             attrs: list, status_code: int, status_msg: str) -> map {
+    let st = {}
+    st["code"] = status_code
+    if status_msg != "" { st["message"] = status_msg }
+    let s = {}
+    s["traceId"]           = trace_id_hex
+    s["spanId"]            = span_id_hex
+    if parent_id_hex != "" { s["parentSpanId"] = parent_id_hex }
+    s["name"]              = name
+    s["kind"]              = kind
+    s["startTimeUnixNano"] = str(start_ns)
+    s["endTimeUnixNano"]   = str(end_ns)
+    s["attributes"]        = attrs
+    s["status"]            = st
+    return s
+}
+
+// -- Scope / resource spans wrappers -------------------------------
+
+pub fn scope_spans(scope: map, spans: list) -> map {
+    let s = {}
+    s["scope"] = scope
+    s["spans"] = spans
+    return s
+}
+
+pub fn resource_spans(res: map, scope_list: list) -> map {
+    let r = {}
+    r["resource"]   = res
+    r["scopeSpans"] = scope_list
+    return r
+}
+
+/// Top-level ExportTraceServiceRequest payload.
+pub fn trace_request(resource_spans_list: list) -> map {
+    let m = {}
+    m["resourceSpans"] = resource_spans_list
+    return m
+}
+
+// -- Metric data points --------------------------------------------
+
+pub fn number_data_point(attrs: list, start_ns: int, time_ns: int,
+                          value_str: str) -> map {
+    let p = {}
+    p["attributes"]        = attrs
+    p["startTimeUnixNano"] = str(start_ns)
+    p["timeUnixNano"]      = str(time_ns)
+    p["asDouble"]          = value_str
+    return p
+}
+
+pub fn gauge(name: str, description: str, unit: str,
+              points: list) -> map {
+    let body = {}
+    body["dataPoints"] = points
+    let m = {}
+    m["name"]        = name
+    m["description"] = description
+    m["unit"]        = unit
+    m["gauge"]       = body
+    return m
+}
+
+pub fn sum_metric(name: str, description: str, unit: str,
+                   points: list, is_monotonic: bool,
+                   aggregation_temporality: int) -> map {
+    let body = {}
+    body["dataPoints"]             = points
+    body["isMonotonic"]            = is_monotonic
+    body["aggregationTemporality"] = aggregation_temporality
+    let m = {}
+    m["name"]        = name
+    m["description"] = description
+    m["unit"]        = unit
+    m["sum"]         = body
+    return m
+}
+
+pub fn scope_metrics(scope: map, metrics: list) -> map {
+    let s = {}
+    s["scope"]   = scope
+    s["metrics"] = metrics
+    return s
+}
+
+pub fn resource_metrics(res: map, scope_list: list) -> map {
+    let r = {}
+    r["resource"]     = res
+    r["scopeMetrics"] = scope_list
+    return r
+}
+
+pub fn metrics_request(resource_metrics_list: list) -> map {
+    let m = {}
+    m["resourceMetrics"] = resource_metrics_list
+    return m
+}
+
+// -- Log record ----------------------------------------------------
+
+pub fn log_record(time_ns: int, severity_number: int, severity_text: str,
+                   body: str, attrs: list, trace_id_hex: str,
+                   span_id_hex: str) -> map {
+    let body_v = {}
+    body_v["stringValue"] = body
+    let r = {}
+    r["timeUnixNano"]   = str(time_ns)
+    r["severityNumber"] = severity_number
+    r["severityText"]   = severity_text
+    r["body"]           = body_v
+    r["attributes"]     = attrs
+    if trace_id_hex != "" { r["traceId"] = trace_id_hex }
+    if span_id_hex != ""  { r["spanId"]  = span_id_hex }
+    return r
+}
+
+pub fn scope_logs(scope: map, records: list) -> map {
+    let s = {}
+    s["scope"]      = scope
+    s["logRecords"] = records
+    return s
+}
+
+pub fn resource_logs(res: map, scope_list: list) -> map {
+    let r = {}
+    r["resource"]  = res
+    r["scopeLogs"] = scope_list
+    return r
+}
+
+pub fn logs_request(resource_logs_list: list) -> map {
+    let m = {}
+    m["resourceLogs"] = resource_logs_list
+    return m
+}

@@ -1,0 +1,197 @@
+// ===================================================================
+// stdlib/influx_line.ltl  —  InfluxDB line protocol
+// -------------------------------------------------------------------
+// Format:
+//     measurement[,tag=val,...] field=val[,field=val,...] [timestamp]
+//
+// Measurement/tag keys/tag values/field keys escape: comma, equals,
+// space (and double-quote inside a string field value).
+// ===================================================================
+
+// -- Escaping ------------------------------------------------------
+
+fn escape_ident(s: str) -> str {
+    // For measurement: escape , and space.
+    // For tag key / tag value / field key: escape , = and space.
+    // We use the superset for simplicity.
+    let out = ""
+    let i = 0
+    while i < len(s) {
+        let c = char_at(s, i)
+        if c == "," || c == "=" || c == " " {
+            out = out + "\\" + c
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn escape_measurement(s: str) -> str {
+    let out = ""
+    let i = 0
+    while i < len(s) {
+        let c = char_at(s, i)
+        if c == "," || c == " " { out = out + "\\" + c }
+        else                    { out = out + c }
+        i = i + 1
+    }
+    return out
+}
+
+fn escape_string_field(s: str) -> str {
+    let out = ""
+    let i = 0
+    while i < len(s) {
+        let c = char_at(s, i)
+        if c == "\"" || c == "\\" { out = out + "\\" + c }
+        else                      { out = out + c }
+        i = i + 1
+    }
+    return out
+}
+
+// -- Field value formatting ----------------------------------------
+
+/// Quote a string field value.
+pub fn field_string(v: str) -> str {
+    return "\"" + escape_string_field(v) + "\""
+}
+
+/// Integer field values are suffixed with `i` in line protocol.
+pub fn field_int(v: int) -> str { return str(v) + "i" }
+pub fn field_float(v: str) -> str { return v }  // caller formats
+pub fn field_bool(v: bool) -> str {
+    if v { return "true" }
+    return "false"
+}
+
+// -- Line builder --------------------------------------------------
+
+/// Build one line.  `tags` is a list of [k,v] (sorted by key for
+/// best performance), `fields` is a list of [k, v_already_formatted].
+/// Pass `timestamp_ns` <= 0 to omit the timestamp.
+pub fn line(measurement: str, tags: list, fields: list,
+             timestamp_ns: int) -> str {
+    let out = escape_measurement(measurement)
+    let i = 0
+    while i < len(tags) {
+        let t = tags[i]
+        out = out + "," + escape_ident(t[0]) + "=" + escape_ident(t[1])
+        i = i + 1
+    }
+    out = out + " "
+    let j = 0
+    while j < len(fields) {
+        let f = fields[j]
+        if j > 0 { out = out + "," }
+        out = out + escape_ident(f[0]) + "=" + f[1]
+        j = j + 1
+    }
+    if timestamp_ns > 0 {
+        out = out + " " + str(timestamp_ns)
+    }
+    return out
+}
+
+// -- Parser (single line) ------------------------------------------
+
+fn scan_unescaped(s: str, start: int, stops: str) -> int {
+    // Return index of first unescaped char in `stops` at or after
+    // `start`, or len(s) if not found.
+    let n = len(s)
+    let i = start
+    while i < n {
+        let c = char_at(s, i)
+        if c == "\\" && i + 1 < n { i = i + 2 }
+        else if index_of(stops, c) >= 0 { return i }
+        else { i = i + 1 }
+    }
+    return n
+}
+
+fn unescape_simple(s: str) -> str {
+    let out = ""
+    let i = 0
+    let n = len(s)
+    while i < n {
+        let c = char_at(s, i)
+        if c == "\\" && i + 1 < n {
+            out = out + char_at(s, i + 1)
+            i = i + 2
+        } else {
+            out = out + c
+            i = i + 1
+        }
+    }
+    return out
+}
+
+/// Parse one line.  Returns {measurement, tags, fields, timestamp}
+/// or nil.  `tags` is a list of [k,v] strings; `fields` is a list of
+/// [k, raw_value_string] — callers interpret the trailing `i`, quotes,
+/// or `t/f` to derive the typed value.
+pub fn parse_line(line: str) -> map {
+    let n = len(line)
+    // measurement up to first unescaped ',' or ' '
+    let m_end = scan_unescaped(line, 0, ", ")
+    if m_end >= n { return nil }
+    let measurement = unescape_simple(slice(line, 0, m_end))
+    let i = m_end
+    let tags = []
+    while i < n && char_at(line, i) == "," {
+        i = i + 1
+        let k_end = scan_unescaped(line, i, "=")
+        if k_end >= n { return nil }
+        let k = unescape_simple(slice(line, i, k_end))
+        i = k_end + 1
+        let v_end = scan_unescaped(line, i, ", ")
+        let v = unescape_simple(slice(line, i, v_end))
+        tags = tags + [[k, v]]
+        i = v_end
+    }
+    if i >= n || char_at(line, i) != " " { return nil }
+    i = i + 1
+    // fields until space or end
+    let fields = []
+    let parsing = true
+    while parsing {
+        let k_end = scan_unescaped(line, i, "=")
+        if k_end >= n { return nil }
+        let k = unescape_simple(slice(line, i, k_end))
+        i = k_end + 1
+        // Field value: may be a quoted string (allow commas inside)
+        // or a bare token terminated by ',' or ' '.
+        let v = ""
+        if i < n && char_at(line, i) == "\"" {
+            // scan for unescaped closing quote
+            let j = i + 1
+            while j < n {
+                let c = char_at(line, j)
+                if c == "\\" && j + 1 < n { j = j + 2 }
+                else if c == "\"" { j = j + 1; break }
+                else { j = j + 1 }
+            }
+            v = slice(line, i, j)
+            i = j
+        } else {
+            let v_end = scan_unescaped(line, i, ", ")
+            v = slice(line, i, v_end)
+            i = v_end
+        }
+        fields = fields + [[k, v]]
+        if i < n && char_at(line, i) == "," { i = i + 1 }
+        else { parsing = false }
+    }
+    let ts = 0
+    if i < n && char_at(line, i) == " " {
+        ts = try_int(slice(line, i + 1, n), 0)
+    }
+    let out = {}
+    out["measurement"] = measurement
+    out["tags"]        = tags
+    out["fields"]      = fields
+    out["timestamp"]   = ts
+    return out
+}
