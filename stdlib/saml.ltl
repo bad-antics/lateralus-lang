@@ -1,0 +1,220 @@
+// ===================================================================
+// stdlib/saml.ltl  —  SAML 2.0 helpers (browser-SSO profile)
+// -------------------------------------------------------------------
+// SAML's wire format is XML, but the HTTP-Redirect and HTTP-POST
+// bindings only really require:
+//   * DEFLATE + base64 of the AuthnRequest / LogoutRequest
+//   * URL-safe query packing (SAMLRequest / SAMLResponse / RelayState)
+//   * A response-parsing helper that extracts the <Assertion> shell
+//     using a deliberately small XML scanner (no generic XML parser
+//     in the stdlib yet).
+//
+// We do NOT implement XML-DSig here — callers verifying production
+// responses must route the assertion through a proper XMLDSIG lib.
+// What this module covers is the *protocol envelope*, which is the
+// piece OIDC-style flows need to speak to SAML-only IdPs.
+// ===================================================================
+
+import base64
+import oauth2
+
+// -- AuthnRequest construction -------------------------------------
+
+pub fn new_authn_request(sp_entity_id: str, acs_url: str,
+                         idp_sso_url: str, request_id: str,
+                         issue_instant: str) -> map {
+    let r = {}
+    r["sp_entity_id"] = sp_entity_id
+    r["acs_url"]      = acs_url
+    r["idp_sso_url"]  = idp_sso_url
+    r["id"]           = request_id       // must start with a letter: "_" + hex is typical
+    r["issue_instant"] = issue_instant   // e.g. "2026-04-24T12:00:00Z"
+    return r
+}
+
+/// Render an AuthnRequest as SAML-compliant XML.  Minimal subset —
+/// NameIDPolicy is transient, AuthnContext is unspecified.
+pub fn render_authn_request(req: map) -> str {
+    let out = "<samlp:AuthnRequest xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\""
+    out = out + " xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\""
+    out = out + " ID=\"" + xml_escape(req["id"]) + "\""
+    out = out + " Version=\"2.0\""
+    out = out + " IssueInstant=\"" + xml_escape(req["issue_instant"]) + "\""
+    out = out + " Destination=\"" + xml_escape(req["idp_sso_url"]) + "\""
+    out = out + " AssertionConsumerServiceURL=\"" + xml_escape(req["acs_url"]) + "\""
+    out = out + " ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\">"
+    out = out + "<saml:Issuer>" + xml_escape(req["sp_entity_id"]) + "</saml:Issuer>"
+    out = out + "<samlp:NameIDPolicy Format=\"urn:oasis:names:tc:SAML:2.0:nameid-format:transient\" AllowCreate=\"true\"/>"
+    out = out + "</samlp:AuthnRequest>"
+    return out
+}
+
+pub fn render_logout_request(sp_entity_id: str, idp_slo_url: str,
+                             request_id: str, issue_instant: str,
+                             name_id: str, session_index: str) -> str {
+    let out = "<samlp:LogoutRequest xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\""
+    out = out + " xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\""
+    out = out + " ID=\"" + xml_escape(request_id) + "\""
+    out = out + " Version=\"2.0\""
+    out = out + " IssueInstant=\"" + xml_escape(issue_instant) + "\""
+    out = out + " Destination=\"" + xml_escape(idp_slo_url) + "\">"
+    out = out + "<saml:Issuer>" + xml_escape(sp_entity_id) + "</saml:Issuer>"
+    out = out + "<saml:NameID>" + xml_escape(name_id) + "</saml:NameID>"
+    if session_index != "" {
+        out = out + "<samlp:SessionIndex>" + xml_escape(session_index) + "</samlp:SessionIndex>"
+    }
+    out = out + "</samlp:LogoutRequest>"
+    return out
+}
+
+// -- Bindings -------------------------------------------------------
+
+/// HTTP-Redirect binding — the XML goes through DEFLATE first then
+/// base64, then URL-encoded as the `SAMLRequest` query parameter.
+/// Since no compress module is guaranteed to be in scope, the caller
+/// hands in a `deflate_raw` function; when `nil` we skip it (the IdP
+/// end must accept identity encoding, which most do for small
+/// requests under testing).
+pub fn redirect_binding_url(xml: str, deflate_raw, relay_state: str,
+                             destination: str) -> str {
+    let compressed = xml
+    if deflate_raw != nil {
+        compressed = deflate_raw(xml)
+    }
+    let encoded = oauth2_strip_padding(base64_encode(compressed))
+    let params = {}
+    params["SAMLRequest"] = encoded
+    if relay_state != "" {
+        params["RelayState"] = relay_state
+    }
+    return destination + "?" + oauth2_form_encode(params)
+}
+
+/// HTTP-POST binding — the XML is base64-encoded (no DEFLATE) and
+/// embedded in an auto-submitting form.  Returns the pair
+/// [encoded_request, form_html] so callers can choose their own
+/// rendering.
+pub fn post_binding(xml: str, destination: str, relay_state: str) -> list {
+    let encoded = base64_encode(xml)
+    let html = "<form method=\"POST\" action=\"" + xml_escape(destination) + "\">"
+    html = html + "<input type=\"hidden\" name=\"SAMLRequest\" value=\"" + xml_escape(encoded) + "\"/>"
+    if relay_state != "" {
+        html = html + "<input type=\"hidden\" name=\"RelayState\" value=\"" + xml_escape(relay_state) + "\"/>"
+    }
+    html = html + "<noscript><input type=\"submit\" value=\"Submit\"/></noscript>"
+    html = html + "</form>"
+    return [encoded, html]
+}
+
+// -- Response parsing -----------------------------------------------
+
+/// Shallow Response-envelope parse.  Extracts the common fields any
+/// SP needs *before* it shells out to an XML-DSig verifier:
+///   * Response/@ID, @InResponseTo, @Destination, @IssueInstant
+///   * the StatusCode/@Value
+///   * the encoded NameID if present
+/// Everything is returned as plain strings; absent fields are "".
+pub fn parse_response(xml: str) -> map {
+    let m = {}
+    m["id"]             = attr_of(xml, "Response", "ID")
+    m["in_response_to"] = attr_of(xml, "Response", "InResponseTo")
+    m["destination"]    = attr_of(xml, "Response", "Destination")
+    m["issue_instant"]  = attr_of(xml, "Response", "IssueInstant")
+    m["status_code"]    = attr_of(xml, "StatusCode", "Value")
+    m["name_id"]        = between_tags(xml, "NameID")
+    m["assertion"]      = extract_assertion(xml)
+    return m
+}
+
+/// Does the StatusCode indicate success?
+pub fn is_success(resp: map) -> bool {
+    return resp["status_code"] == "urn:oasis:names:tc:SAML:2.0:status:Success"
+}
+
+// -- Tiny XML helpers (NOT a general parser) -----------------------
+
+pub fn xml_escape(s: str) -> str {
+    let out = ""
+    let i = 0
+    while i < len(s) {
+        let ch = char_at(s, i)
+        if ch == "<"      { out = out + "&lt;" }
+        else { if ch == ">" { out = out + "&gt;" }
+        else { if ch == "&" { out = out + "&amp;" }
+        else { if ch == "\"" { out = out + "&quot;" }
+        else { if ch == "'"  { out = out + "&apos;" }
+        else { out = out + ch } } } } }
+        i = i + 1
+    }
+    return out
+}
+
+/// Find `attr="..."` on an element whose *local* name is `local`.
+pub fn attr_of(xml: str, local: str, attr: str) -> str {
+    // Try both un-prefixed and common samlp:/saml: prefixes.
+    let candidates = ["<" + local + " ",
+                      "<saml:" + local + " ",
+                      "<samlp:" + local + " "]
+    let i = 0
+    while i < len(candidates) {
+        let start = index_of(xml, candidates[i])
+        if start >= 0 {
+            // Narrow to this element's opening tag.
+            let tag_end = index_of_from(xml, ">", start)
+            let tag = slice(xml, start, tag_end)
+            let needle = " " + attr + "=\""
+            let a = index_of(tag, needle)
+            if a >= 0 {
+                let start_at = a + len(needle)
+                let to = index_of_from(tag, "\"", start_at)
+                return slice(tag, start_at, to)
+            }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+pub fn index_of_from(s: str, needle: str, start_at: int) -> int {
+    let i = start_at
+    let n = len(needle)
+    while i + n <= len(s) {
+        if slice(s, i, i + n) == needle {
+            return i
+        }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+pub fn between_tags(xml: str, local: str) -> str {
+    let candidates = ["<" + local + ">",
+                      "<saml:" + local + ">"]
+    let i = 0
+    while i < len(candidates) {
+        let start = index_of(xml, candidates[i])
+        if start >= 0 {
+            let content_start = start + len(candidates[i])
+            let close_tag = "</" + slice(candidates[i], 1, len(candidates[i]) - 1) + ">"
+            let end = index_of_from(xml, close_tag, content_start)
+            if end > 0 {
+                return slice(xml, content_start, end)
+            }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+pub fn extract_assertion(xml: str) -> str {
+    let open = index_of(xml, "<saml:Assertion")
+    if open < 0 { open = index_of(xml, "<Assertion") }
+    if open < 0 { return "" }
+    let close_end = index_of_from(xml, "</saml:Assertion>", open)
+    if close_end < 0 {
+        close_end = index_of_from(xml, "</Assertion>", open)
+        if close_end < 0 { return "" }
+        return slice(xml, open, close_end + len("</Assertion>"))
+    }
+    return slice(xml, open, close_end + len("</saml:Assertion>"))
+}

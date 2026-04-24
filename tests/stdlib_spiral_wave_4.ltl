@@ -1,0 +1,255 @@
+// ===================================================================
+// tests/stdlib_spiral_wave_4.ltl
+// -------------------------------------------------------------------
+// Round-trip + known-vector tests for every Spiral Wave 4 module.
+// ===================================================================
+
+import oauth2
+import oidc
+import saml
+import webauthn
+import scim
+
+// -- oauth2 ---------------------------------------------------------
+
+pub fn test_oauth2_percent_encode_unreserved() -> bool {
+    return oauth2_percent_encode("abcXYZ012-._~") == "abcXYZ012-._~"
+}
+
+pub fn test_oauth2_percent_encode_reserved() -> bool {
+    let got = oauth2_percent_encode("a b&c=d/e")
+    return got == "a%20b%26c%3Dd%2Fe"
+}
+
+pub fn test_oauth2_authorization_url_basic() -> bool {
+    let c = oauth2_new_client("cid", "csecret",
+                              "https://idp/authorize",
+                              "https://idp/token",
+                              "https://app/cb",
+                              ["openid", "profile"])
+    let url = oauth2_authorization_url(c, "st1", "", {})
+    if not starts_with(url, "https://idp/authorize?") { return false }
+    if not contains(url, "client_id=cid") { return false }
+    if not contains(url, "state=st1") { return false }
+    if not contains(url, "response_type=code") { return false }
+    // Space in scope must be percent-encoded.
+    return contains(url, "scope=openid%20profile")
+}
+
+pub fn test_oauth2_token_body_fields() -> bool {
+    let c = oauth2_new_client("cid", "", "", "", "https://app/cb", [])
+    let body = oauth2_token_request_body(c, "the-code", "ver-123")
+    if not contains(body, "grant_type=authorization_code") { return false }
+    if not contains(body, "code=the-code") { return false }
+    if not contains(body, "code_verifier=ver-123") { return false }
+    // Absent client_secret must not be encoded.
+    return not contains(body, "client_secret=")
+}
+
+pub fn test_oauth2_parse_token_response_defaults() -> bool {
+    let raw = {}
+    raw["access_token"] = "at"
+    raw["expires_in"]   = 3600
+    let t = oauth2_parse_token_response(raw)
+    return t["access_token"] == "at"
+        && t["expires_in"] == 3600
+        && t["token_type"] == "Bearer"
+}
+
+pub fn test_oauth2_validate_state_constant_time() -> bool {
+    if not oauth2_validate_state("abc123", "abc123") { return false }
+    if oauth2_validate_state("abc123", "abc124") { return false }
+    if oauth2_validate_state("abc123", "abc12") { return false }
+    return true
+}
+
+// -- oidc -----------------------------------------------------------
+
+pub fn test_oidc_parse_discovery() -> bool {
+    let raw = {}
+    raw["issuer"]                 = "https://idp"
+    raw["authorization_endpoint"] = "https://idp/a"
+    raw["token_endpoint"]         = "https://idp/t"
+    raw["unknown_field"]          = "dropped"
+    let m = oidc_parse_discovery(raw)
+    if m["issuer"] != "https://idp" { return false }
+    return not contains(keys(m), "unknown_field")
+}
+
+pub fn test_oidc_client_adds_openid_scope() -> bool {
+    let disco = {}
+    disco["authorization_endpoint"] = "https://idp/a"
+    disco["token_endpoint"]         = "https://idp/t"
+    let parsed = oidc_parse_discovery(disco)
+    let c = oidc_client_from_discovery("cid", "", "https://app/cb",
+                                       ["profile"], parsed)
+    return c["scopes"][0] == "openid"
+}
+
+pub fn test_oidc_authz_url_has_nonce() -> bool {
+    let disco = {}
+    disco["authorization_endpoint"] = "https://idp/a"
+    disco["token_endpoint"]         = "https://idp/t"
+    let parsed = oidc_parse_discovery(disco)
+    let c = oidc_client_from_discovery("cid", "", "https://app/cb", [], parsed)
+    let url = oidc_authorization_url(c, "s", "n-123", "")
+    return contains(url, "nonce=n-123")
+}
+
+// -- saml -----------------------------------------------------------
+
+pub fn test_saml_xml_escape() -> bool {
+    return saml_xml_escape("a<b & c>\"d") == "a&lt;b &amp; c&gt;&quot;d"
+}
+
+pub fn test_saml_authn_request_shape() -> bool {
+    let req = saml_new_authn_request("sp-ent", "https://sp/acs",
+                                      "https://idp/sso",
+                                      "_id-1", "2026-04-24T12:00:00Z")
+    let xml = saml_render_authn_request(req)
+    if not contains(xml, "<samlp:AuthnRequest") { return false }
+    if not contains(xml, "ID=\"_id-1\"") { return false }
+    if not contains(xml, "<saml:Issuer>sp-ent</saml:Issuer>") { return false }
+    return contains(xml, "Destination=\"https://idp/sso\"")
+}
+
+pub fn test_saml_redirect_binding_url() -> bool {
+    let xml = "<x/>"
+    let url = saml_redirect_binding_url(xml, nil, "relay-1", "https://idp/sso")
+    if not starts_with(url, "https://idp/sso?") { return false }
+    return contains(url, "SAMLRequest=")
+        && contains(url, "RelayState=relay-1")
+}
+
+pub fn test_saml_parse_response_success() -> bool {
+    let xml = "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\""
+           + " ID=\"r-1\" InResponseTo=\"_id-1\" Destination=\"https://sp/acs\""
+           + " IssueInstant=\"2026-04-24T12:01:00Z\">"
+           + "<samlp:Status><samlp:StatusCode Value=\"urn:oasis:names:tc:SAML:2.0:status:Success\"/></samlp:Status>"
+           + "<saml:Assertion xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\">"
+           + "<saml:NameID>alice@example</saml:NameID>"
+           + "</saml:Assertion></samlp:Response>"
+    let parsed = saml_parse_response(xml)
+    if parsed["id"] != "r-1" { return false }
+    if parsed["in_response_to"] != "_id-1" { return false }
+    if not saml_is_success(parsed) { return false }
+    if parsed["name_id"] != "alice@example" { return false }
+    return starts_with(parsed["assertion"], "<saml:Assertion")
+}
+
+// -- webauthn -------------------------------------------------------
+
+pub fn test_webauthn_registration_options_shape() -> bool {
+    let o = webauthn_new_registration_options("user-id", "alice", "Alice A",
+                                              "spiral.example", "Spiral",
+                                              "chal-b64url", 60000)
+    if o["rp"]["id"] != "spiral.example" { return false }
+    if o["user"]["name"] != "alice" { return false }
+    if o["challenge"] != "chal-b64url" { return false }
+    // Must advertise ES256 (-7) and RS256 (-257).
+    let params = o["pubKeyCredParams"]
+    let have_es256 = false
+    let have_rs256 = false
+    let i = 0
+    while i < len(params) {
+        if params[i]["alg"] == 0 - 7 { have_es256 = true }
+        if params[i]["alg"] == 0 - 257 { have_rs256 = true }
+        i = i + 1
+    }
+    return have_es256 && have_rs256
+}
+
+pub fn test_webauthn_client_data_happy_path() -> bool {
+    let cd = {}
+    cd["type"]      = "webauthn.get"
+    cd["challenge"] = "ch-1"
+    cd["origin"]    = "https://spiral.example"
+    let r = webauthn_verify_client_data(cd, "webauthn.get", "ch-1",
+                                        "https://spiral.example", "")
+    return r[0]
+}
+
+pub fn test_webauthn_client_data_challenge_mismatch() -> bool {
+    let cd = {}
+    cd["type"]      = "webauthn.get"
+    cd["challenge"] = "wrong"
+    cd["origin"]    = "https://spiral.example"
+    let r = webauthn_verify_client_data(cd, "webauthn.get", "ch-1",
+                                        "https://spiral.example", "")
+    return not r[0] && r[1] == "challenge mismatch"
+}
+
+pub fn test_webauthn_authenticator_data_flags() -> bool {
+    // Construct a minimal authenticatorData: 32-byte rp_id_hash, flags=0x05
+    // (UP + UV set), sign_count = 7 (big-endian 00 00 00 07).
+    let buf = []
+    let i = 0
+    while i < 32 { buf = buf + [i]; i = i + 1 }
+    buf = buf + [0x05]                         // flags
+    buf = buf + [0, 0, 0, 7]                   // sign_count
+    let ad = webauthn_parse_authenticator_data(buf)
+    if not ad["ok"] { return false }
+    if not ad["flag_up"] { return false }
+    if not ad["flag_uv"] { return false }
+    if ad["flag_at"] { return false }
+    return ad["sign_count"] == 7
+}
+
+pub fn test_webauthn_counter_monotonic() -> bool {
+    if not webauthn_check_counter(0, 0) { return false }      // both zero → ok
+    if not webauthn_check_counter(3, 4) { return false }
+    if webauthn_check_counter(5, 5) { return false }          // equal rejected
+    if webauthn_check_counter(5, 4) { return false }          // regression rejected
+    return true
+}
+
+// -- scim -----------------------------------------------------------
+
+pub fn test_scim_user_envelope() -> bool {
+    let u = scim_new_user("u-1", "alice", true)
+    u = scim_with_email(u, "alice@x", "work", true)
+    if u["schemas"][0] != scim_schema_user() { return false }
+    if u["meta"]["resourceType"] != "User" { return false }
+    return u["emails"][0]["value"] == "alice@x"
+}
+
+pub fn test_scim_list_response_shape() -> bool {
+    let r = scim_list_response([{}, {}], 1, 2, 2)
+    return r["schemas"][0] == scim_schema_list_response()
+        && r["totalResults"] == 2
+        && r["itemsPerPage"] == 2
+}
+
+pub fn test_scim_patch_parsing() -> bool {
+    let ops = [scim_patch_op("replace", "active", false),
+               scim_patch_op("remove",  "active", nil)]
+    let doc = scim_patch_document(ops)
+    let parsed = scim_parse_patch(doc)
+    if len(parsed) != 2 { return false }
+    return parsed[0][0] == "replace"
+        && parsed[0][1] == "active"
+        && parsed[1][0] == "remove"
+}
+
+pub fn test_scim_filter_eq() -> bool {
+    let u = scim_new_user("u-1", "alice", true)
+    let ast = scim_parse_filter("userName eq \"alice\"")
+    return scim_eval_filter(ast, u)
+}
+
+pub fn test_scim_filter_and_or() -> bool {
+    let u = scim_new_user("u-1", "alice", true)
+    u = scim_with_email(u, "alice@x", "work", true)
+    let ast = scim_parse_filter("userName eq \"alice\" and active pr")
+    if not scim_eval_filter(ast, u) { return false }
+    let ast2 = scim_parse_filter("userName eq \"bob\" or userName sw \"al\"")
+    return scim_eval_filter(ast2, u)
+}
+
+pub fn test_scim_filter_co_and_pr() -> bool {
+    let u = scim_new_user("u-42", "charlotte", true)
+    let ast = scim_parse_filter("userName co \"arlo\"")
+    if not scim_eval_filter(ast, u) { return false }
+    let ast2 = scim_parse_filter("displayName pr")
+    return not scim_eval_filter(ast2, u)   // displayName not set
+}

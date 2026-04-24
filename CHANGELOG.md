@@ -7,6 +7,58 @@ Follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [3.6.0-dev] — Unreleased — Spiral Wave 4
+
+> *"the spiral keeps widening — identity & auth edition"*
+
+Fourth wave of stdlib expansion.  Five new modules covering
+federated-identity protocols and credential ceremonies, all
+parse-clean, plus an integrative broker example and tests.
+
+### Added — stdlib modules
+
+| Module | Purpose |
+|---|---|
+| `stdlib/oauth2.ltl`   | RFC 6749 + RFC 7636 client — PKCE S256 helpers, authorization-URL builder, token / refresh / revoke request bodies, constant-time state validation |
+| `stdlib/oidc.ltl`     | OpenID Connect on top of oauth2 + jwt — discovery parser, OIDC client factory (auto-adds `openid` scope), `verify_id_token` (iss/aud/exp/nonce), `at_hash_s256`, `end_session_url` |
+| `stdlib/saml.ltl`     | SAML 2.0 browser-SSO envelope — AuthnRequest + LogoutRequest XML, HTTP-Redirect and HTTP-POST bindings, shallow Response parser, `is_success`, assertion extraction |
+| `stdlib/webauthn.ltl` | W3C WebAuthn server-side — registration/authentication options builders, `clientDataJSON` verification, authenticatorData parser (flags + rp_id_hash + sign_count), counter-regression check, orchestrated `verify_authentication` shell |
+| `stdlib/scim.ltl`     | RFC 7643/7644 SCIM 2.0 — canonical User/Group envelopes, ListResponse / Error / Bulk / PatchOp documents, patch-op normaliser, and a full filter-language parser (`eq ne co sw ew pr`, `and` / `or` / parens) with `eval_filter` |
+
+### Added — example
+
+* `examples/spiral_identity_broker.ltl` — an in-memory identity broker
+  that wires all five modules: speaks OIDC + SAML outward to upstream
+  IdPs, issues WebAuthn passkey challenges for step-up auth, and
+  exposes a SCIM 2.0 surface for provisioning and search.
+
+### Added — tests
+
+* `tests/stdlib_spiral_wave_4.ltl` — covers:
+  * OAuth 2: percent-encoding (reserved + unreserved), authorization
+    URL shape, token-body fields, response normalisation, and
+    constant-time state comparison,
+  * OIDC: discovery parse (drops unknown fields), `openid` scope
+    auto-insertion, nonce in authorization URL,
+  * SAML: XML escape, AuthnRequest shape + Destination, redirect
+    binding URL, full Response → assertion + NameID round-trip with
+    `is_success`,
+  * WebAuthn: registration options advertising ES256 + RS256,
+    clientData happy-path + challenge-mismatch, authenticatorData
+    flag / counter parse, counter-monotonic policy,
+  * SCIM: User envelope + email, ListResponse shape, PATCH op
+    normaliser, filter evaluator for `eq / and / or / co / pr / sw`.
+
+### Notes — dialect discoveries
+
+Landing Wave 4 surfaced no new reserved identifiers — the running
+list stays at `select, from, where, match, quote, probe`.  One
+practical reminder: `from` struck again inside
+`stdlib/saml.ltl`'s `index_of_from(s, needle, from)` helper, renamed
+to `start_at` during development.
+
+---
+
 ## [3.5.0-dev] — Unreleased — Spiral Wave 3
 
 > *"the spiral keeps widening — storage & distribution edition"*

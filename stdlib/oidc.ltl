@@ -1,0 +1,155 @@
+// ===================================================================
+// stdlib/oidc.ltl  —  OpenID Connect helpers on top of oauth2 + jwt
+// -------------------------------------------------------------------
+// OIDC is OAuth 2.0 plus a signed id_token and a tight discovery
+// document.  This module:
+//   * parses the RFC 8414 / OIDC-Discovery metadata JSON
+//   * builds the OIDC-flavour authorization URL (nonce + scope=openid)
+//   * verifies an id_token's claims against an issuer + audience
+//
+// Signature verification is delegated to `jwt.ltl` — callers pass in
+// the HMAC key (for HS*) or a pre-bound verifier function (for RS*).
+// ===================================================================
+
+import oauth2
+import jwt
+import base64
+
+// -- Discovery ------------------------------------------------------
+
+pub fn parse_discovery(doc: map) -> map {
+    let m = {}
+    m["issuer"]                 = ""
+    m["authorization_endpoint"] = ""
+    m["token_endpoint"]         = ""
+    m["userinfo_endpoint"]      = ""
+    m["jwks_uri"]               = ""
+    m["end_session_endpoint"]   = ""
+    m["scopes_supported"]       = []
+    m["response_types_supported"]     = []
+    m["id_token_signing_alg_values_supported"] = []
+    let ks = keys(doc)
+    let i = 0
+    while i < len(ks) {
+        let k = ks[i]
+        if contains(keys(m), k) {
+            m[k] = doc[k]
+        }
+        i = i + 1
+    }
+    return m
+}
+
+// -- Client binding -------------------------------------------------
+
+pub fn client_from_discovery(client_id: str, client_secret: str,
+                             redirect_uri: str, scopes: list,
+                             disco: map) -> map {
+    // Ensure "openid" is always first in the scope list.
+    let has_openid = false
+    let i = 0
+    while i < len(scopes) {
+        if scopes[i] == "openid" { has_openid = true }
+        i = i + 1
+    }
+    if not has_openid {
+        scopes = ["openid"] + scopes
+    }
+    return oauth2_new_client(client_id, client_secret,
+                             disco["authorization_endpoint"],
+                             disco["token_endpoint"],
+                             redirect_uri, scopes)
+}
+
+// -- Authorization URL ---------------------------------------------
+
+/// OIDC authorization URL — identical to OAuth 2 plus `nonce` for
+/// id_token replay protection.
+pub fn authorization_url(client: map, state: str, nonce: str,
+                         pkce_challenge: str) -> str {
+    let extra = {}
+    extra["nonce"] = nonce
+    return oauth2_authorization_url(client, state, pkce_challenge, extra)
+}
+
+// -- id_token validation --------------------------------------------
+
+/// Verify an id_token's signature (via jwt_verify_hmac) and check the
+/// standard OIDC claims: iss, aud, exp, iat, nonce.
+/// Returns [ok, claims_or_error_string].
+pub fn verify_id_token(token: str, key: list, alg: str,
+                       issuer: str, audience: str, expected_nonce: str,
+                       now_s: int) -> list {
+    let opts = {}
+    opts["now"] = now_s
+    let res = jwt_verify_hmac(token, key, alg, opts)
+    if not res[0] {
+        return [false, res[1]]
+    }
+    let claims = res[1]
+    if not contains(keys(claims), "iss") || claims["iss"] != issuer {
+        return [false, "iss mismatch"]
+    }
+    // aud may be a string or a list; accept either.
+    let aud_ok = false
+    if contains(keys(claims), "aud") {
+        let aud = claims["aud"]
+        if aud == audience {
+            aud_ok = true
+        } else {
+            // list form — linear search
+            let j = 0
+            while j < len(aud) {
+                if aud[j] == audience { aud_ok = true }
+                j = j + 1
+            }
+        }
+    }
+    if not aud_ok {
+        return [false, "aud mismatch"]
+    }
+    if expected_nonce != "" {
+        if not contains(keys(claims), "nonce") || claims["nonce"] != expected_nonce {
+            return [false, "nonce mismatch"]
+        }
+    }
+    return [true, claims]
+}
+
+/// Compute the `at_hash` claim value for an access_token bound to a
+/// given signing algorithm (first-half truncation rule from the OIDC
+/// Core §3.1.3.6).  Caller provides a sha256_bytes hook.
+pub fn at_hash_s256(access_token: str, sha256_bytes) -> str {
+    let d = sha256_bytes(access_token)
+    let half = len(d) / 2
+    let raw = ""
+    let i = 0
+    while i < half {
+        raw = raw + chr(d[i])
+        i = i + 1
+    }
+    return oauth2_strip_padding(base64_encode_url_str(raw))
+}
+
+/// base64 wrapper so callers can import only oidc.
+pub fn base64_encode_url_str(s: str) -> str {
+    return base64_encode_url(s)
+}
+
+// -- Logout ---------------------------------------------------------
+
+pub fn end_session_url(disco: map, id_token_hint: str,
+                       post_logout_redirect_uri: str, state: str) -> str {
+    if disco["end_session_endpoint"] == "" {
+        return ""
+    }
+    let params = {}
+    params["id_token_hint"] = id_token_hint
+    if post_logout_redirect_uri != "" {
+        params["post_logout_redirect_uri"] = post_logout_redirect_uri
+    }
+    if state != "" {
+        params["state"] = state
+    }
+    return disco["end_session_endpoint"] + "?" + oauth2_form_encode(params)
+}

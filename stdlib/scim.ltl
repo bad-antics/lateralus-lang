@@ -1,0 +1,338 @@
+// ===================================================================
+// stdlib/scim.ltl  —  System for Cross-domain Identity Management 2.0
+// -------------------------------------------------------------------
+// RFC 7643 (schema) + RFC 7644 (protocol) in compact form:
+//   * canonicalise a User / Group resource into the SCIM envelope
+//   * build Bulk / PATCH operation documents
+//   * parse PATCH ops into a list of normalised [op, path, value]
+//   * a tiny filter-language parser (eq / ne / co / sw / ew / pr,
+//     plus `and` / `or` / parentheses) — enough for most SCIM clients
+// ===================================================================
+
+// -- Schema URNs ----------------------------------------------------
+
+pub fn schema_user()           -> str { return "urn:ietf:params:scim:schemas:core:2.0:User" }
+pub fn schema_group()          -> str { return "urn:ietf:params:scim:schemas:core:2.0:Group" }
+pub fn schema_list_response()  -> str { return "urn:ietf:params:scim:api:messages:2.0:ListResponse" }
+pub fn schema_patch_op()       -> str { return "urn:ietf:params:scim:api:messages:2.0:PatchOp" }
+pub fn schema_bulk_request()   -> str { return "urn:ietf:params:scim:api:messages:2.0:BulkRequest" }
+pub fn schema_error()          -> str { return "urn:ietf:params:scim:api:messages:2.0:Error" }
+pub fn schema_enterprise_user() -> str { return "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User" }
+
+// -- Resource canonicalisation --------------------------------------
+
+pub fn new_user(id: str, username: str, active: bool) -> map {
+    let u = {}
+    u["schemas"]    = [schema_user()]
+    u["id"]         = id
+    u["userName"]   = username
+    u["active"]     = active
+    let meta = {}
+    meta["resourceType"] = "User"
+    u["meta"] = meta
+    return u
+}
+
+pub fn with_name(user: map, given: str, family: str, formatted: str) -> map {
+    let name = {}
+    name["givenName"]  = given
+    name["familyName"] = family
+    name["formatted"]  = formatted
+    user["name"] = name
+    return user
+}
+
+pub fn with_email(user: map, value: str, kind: str, primary: bool) -> map {
+    let emails = []
+    if contains(keys(user), "emails") {
+        emails = user["emails"]
+    }
+    let e = {}
+    e["value"]   = value
+    e["type"]    = kind
+    e["primary"] = primary
+    user["emails"] = emails + [e]
+    return user
+}
+
+pub fn new_group(id: str, display_name: str, member_ids: list) -> map {
+    let g = {}
+    g["schemas"]     = [schema_group()]
+    g["id"]          = id
+    g["displayName"] = display_name
+    let members = []
+    let i = 0
+    while i < len(member_ids) {
+        let m = {}
+        m["value"] = member_ids[i]
+        m["type"]  = "User"
+        members = members + [m]
+        i = i + 1
+    }
+    g["members"] = members
+    return g
+}
+
+// -- ListResponse ---------------------------------------------------
+
+pub fn list_response(resources: list, start_index: int, items_per_page: int,
+                     total_results: int) -> map {
+    let m = {}
+    m["schemas"]       = [schema_list_response()]
+    m["totalResults"]  = total_results
+    m["startIndex"]    = start_index
+    m["itemsPerPage"]  = items_per_page
+    m["Resources"]     = resources
+    return m
+}
+
+// -- Error ----------------------------------------------------------
+
+pub fn error(status: int, scim_type: str, detail: str) -> map {
+    let m = {}
+    m["schemas"] = [schema_error()]
+    m["status"]  = str(status)
+    if scim_type != "" {
+        m["scimType"] = scim_type
+    }
+    m["detail"] = detail
+    return m
+}
+
+// -- PATCH ----------------------------------------------------------
+
+pub fn patch_op(op: str, path: str, value) -> map {
+    let m = {}
+    m["op"]   = op         // add | remove | replace
+    if path != "" {
+        m["path"] = path
+    }
+    if op != "remove" {
+        m["value"] = value
+    }
+    return m
+}
+
+pub fn patch_document(ops: list) -> map {
+    let m = {}
+    m["schemas"]    = [schema_patch_op()]
+    m["Operations"] = ops
+    return m
+}
+
+/// Normalise the Operations array of a PATCH document into a list of
+/// [op_name, path_or_empty, value_or_nil] triples.  Keeps downstream
+/// applier code free of JSON-shape juggling.
+pub fn parse_patch(doc: map) -> list {
+    let out = []
+    if not contains(keys(doc), "Operations") {
+        return out
+    }
+    let ops = doc["Operations"]
+    let i = 0
+    while i < len(ops) {
+        let o = ops[i]
+        let name = ""
+        if contains(keys(o), "op") { name = o["op"] }
+        let path = ""
+        if contains(keys(o), "path") { path = o["path"] }
+        let value = nil
+        if contains(keys(o), "value") { value = o["value"] }
+        out = out + [[name, path, value]]
+        i = i + 1
+    }
+    return out
+}
+
+// -- Bulk -----------------------------------------------------------
+
+pub fn bulk_operation(method: str, path: str, bulk_id: str, data) -> map {
+    let m = {}
+    m["method"] = method
+    m["path"]   = path
+    if bulk_id != "" { m["bulkId"] = bulk_id }
+    if data != nil  { m["data"]   = data }
+    return m
+}
+
+pub fn bulk_request(fail_on_errors: int, operations: list) -> map {
+    let m = {}
+    m["schemas"]      = [schema_bulk_request()]
+    m["failOnErrors"] = fail_on_errors
+    m["Operations"]   = operations
+    return m
+}
+
+// -- Filter language ------------------------------------------------
+
+/// Tokenise a SCIM filter expression.  The grammar is small enough
+/// that we can whitespace-split + special-case the punctuators.
+pub fn lex_filter(expr: str) -> list {
+    let toks = []
+    let i = 0
+    let n = len(expr)
+    while i < n {
+        let c = char_at(expr, i)
+        if c == " " || c == "\t" {
+            i = i + 1
+            continue
+        }
+        if c == "(" || c == ")" {
+            toks = toks + [c]
+            i = i + 1
+            continue
+        }
+        if c == "\"" {
+            let start = i + 1
+            i = start
+            while i < n && char_at(expr, i) != "\"" {
+                i = i + 1
+            }
+            toks = toks + ["\"" + slice(expr, start, i) + "\""]
+            i = i + 1
+            continue
+        }
+        let start = i
+        while i < n {
+            let ch = char_at(expr, i)
+            if ch == " " || ch == "\t" || ch == "(" || ch == ")" {
+                break
+            }
+            i = i + 1
+        }
+        toks = toks + [slice(expr, start, i)]
+    }
+    return toks
+}
+
+/// Parse a tokenised filter into a nested AST of maps:
+///   {kind: "cmp", attr, op, value}
+///   {kind: "pr",  attr}
+///   {kind: "and"|"or", left, right}
+pub fn parse_filter(expr: str) -> map {
+    let toks = lex_filter(expr)
+    let state = {}
+    state["toks"] = toks
+    state["i"]    = 0
+    return parse_or(state)
+}
+
+pub fn parse_or(state: map) -> map {
+    let left = parse_and(state)
+    while state["i"] < len(state["toks"]) && low(state["toks"][state["i"]]) == "or" {
+        state["i"] = state["i"] + 1
+        let right = parse_and(state)
+        let n = {}
+        n["kind"]  = "or"
+        n["left"]  = left
+        n["right"] = right
+        left = n
+    }
+    return left
+}
+
+pub fn parse_and(state: map) -> map {
+    let left = parse_atom(state)
+    while state["i"] < len(state["toks"]) && low(state["toks"][state["i"]]) == "and" {
+        state["i"] = state["i"] + 1
+        let right = parse_atom(state)
+        let n = {}
+        n["kind"]  = "and"
+        n["left"]  = left
+        n["right"] = right
+        left = n
+    }
+    return left
+}
+
+pub fn parse_atom(state: map) -> map {
+    let t = state["toks"][state["i"]]
+    if t == "(" {
+        state["i"] = state["i"] + 1
+        let inner = parse_or(state)
+        // skip closing ")"
+        state["i"] = state["i"] + 1
+        return inner
+    }
+    let attr = t
+    state["i"] = state["i"] + 1
+    let op = low(state["toks"][state["i"]])
+    state["i"] = state["i"] + 1
+    if op == "pr" {
+        let n = {}
+        n["kind"] = "pr"
+        n["attr"] = attr
+        return n
+    }
+    let val = state["toks"][state["i"]]
+    state["i"] = state["i"] + 1
+    // Strip surrounding quotes if any.
+    if len(val) >= 2 && char_at(val, 0) == "\"" {
+        val = slice(val, 1, len(val) - 1)
+    }
+    let n = {}
+    n["kind"]  = "cmp"
+    n["attr"]  = attr
+    n["op"]    = op
+    n["value"] = val
+    return n
+}
+
+pub fn low(s: str) -> str {
+    let out = ""
+    let i = 0
+    while i < len(s) {
+        let ch = char_at(s, i)
+        if ch >= "A" && ch <= "Z" {
+            let b = bytes_of(ch)[0]
+            out = out + chr(b + 32)
+        } else {
+            out = out + ch
+        }
+        i = i + 1
+    }
+    return out
+}
+
+/// Evaluate a parsed filter AST against a SCIM resource map.
+/// Only top-level attributes are supported; sub-path evaluation
+/// (e.g. `emails[type eq "work"].value`) is out of scope for this
+/// first pass — attr strings with a dot select the nested path.
+pub fn eval_filter(node: map, resource: map) -> bool {
+    let kind = node["kind"]
+    if kind == "and" {
+        return eval_filter(node["left"], resource)
+            && eval_filter(node["right"], resource)
+    }
+    if kind == "or" {
+        return eval_filter(node["left"], resource)
+            || eval_filter(node["right"], resource)
+    }
+    let attr_val = get_path(resource, node["attr"])
+    if kind == "pr" {
+        return attr_val != nil && attr_val != ""
+    }
+    // Comparison.
+    let op = node["op"]
+    let target = node["value"]
+    if attr_val == nil { return false }
+    let a = str(attr_val)
+    if op == "eq" { return a == target }
+    if op == "ne" { return a != target }
+    if op == "co" { return contains(a, target) }
+    if op == "sw" { return starts_with(a, target) }
+    if op == "ew" { return ends_with(a, target) }
+    return false
+}
+
+pub fn get_path(resource: map, path: str) -> str {
+    let parts = split(path, ".")
+    let cur = resource
+    let i = 0
+    while i < len(parts) {
+        if not contains(keys(cur), parts[i]) { return "" }
+        cur = cur[parts[i]]
+        i = i + 1
+    }
+    return cur
+}

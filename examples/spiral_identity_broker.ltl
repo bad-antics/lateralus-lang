@@ -1,0 +1,192 @@
+// ===================================================================
+// examples/spiral_identity_broker.ltl
+// -------------------------------------------------------------------
+// Spiral Wave 4 integrative demo — a tiny identity broker that:
+//
+//   * speaks OAuth 2.0 / OIDC outward to upstream IdPs
+//     (oauth2_authorization_url + pkce + oidc_verify_id_token)
+//   * supports SAML IdPs as a fallback binding
+//     (saml_render_authn_request + saml_redirect_binding_url)
+//   * issues first-party WebAuthn passkeys for session step-up
+//     (webauthn_new_authentication_options)
+//   * exposes a SCIM 2.0 surface for provisioning users + groups
+//     (scim_new_user, scim_list_response, scim_eval_filter)
+//
+// Everything runs in-memory; no sockets.  The goal is to show the
+// modules composing sensibly.
+// ===================================================================
+
+import oauth2
+import oidc
+import saml
+import webauthn
+import scim
+
+// -- Broker state ---------------------------------------------------
+
+pub fn new_broker() -> map {
+    let b = {}
+    b["oidc_client"]   = nil
+    b["saml_sp"]       = {}
+    b["users"]         = []     // list of SCIM User resources
+    b["sessions"]      = {}     // session_id → {user_id, step_up}
+    b["webauthn_keys"] = {}     // user_id → [credential_id, ...]
+    return b
+}
+
+// -- Upstream OIDC --------------------------------------------------
+
+pub fn configure_oidc_from_discovery(b: map, client_id: str, secret: str,
+                                      redirect_uri: str, disco: map) -> map {
+    b["oidc_client"] = oidc_client_from_discovery(client_id, secret,
+                                                  redirect_uri,
+                                                  ["profile", "email"],
+                                                  disco)
+    return b
+}
+
+pub fn begin_oidc_login(b: map, state: str, nonce: str,
+                         pkce_challenge: str) -> str {
+    return oidc_authorization_url(b["oidc_client"], state, nonce, pkce_challenge)
+}
+
+// -- Upstream SAML --------------------------------------------------
+
+pub fn configure_saml(b: map, sp_entity_id: str, acs_url: str,
+                       idp_sso_url: str) {
+    let sp = {}
+    sp["sp_entity_id"] = sp_entity_id
+    sp["acs_url"]      = acs_url
+    sp["idp_sso_url"]  = idp_sso_url
+    b["saml_sp"] = sp
+}
+
+pub fn begin_saml_login(b: map, request_id: str, issue_instant: str,
+                         relay_state: str) -> str {
+    let req = saml_new_authn_request(b["saml_sp"]["sp_entity_id"],
+                                     b["saml_sp"]["acs_url"],
+                                     b["saml_sp"]["idp_sso_url"],
+                                     request_id, issue_instant)
+    let xml = saml_render_authn_request(req)
+    return saml_redirect_binding_url(xml, nil, relay_state,
+                                     b["saml_sp"]["idp_sso_url"])
+}
+
+// -- SCIM provisioning ----------------------------------------------
+
+pub fn scim_create_user(b: map, id: str, username: str,
+                         given: str, family: str, email: str) -> map {
+    let u = scim_new_user(id, username, true)
+    u = scim_with_name(u, given, family, given + " " + family)
+    u = scim_with_email(u, email, "work", true)
+    b["users"] = b["users"] + [u]
+    return u
+}
+
+pub fn scim_search(b: map, filter_expr: str) -> map {
+    let ast = scim_parse_filter(filter_expr)
+    let matched = []
+    let i = 0
+    while i < len(b["users"]) {
+        if scim_eval_filter(ast, b["users"][i]) {
+            matched = matched + [b["users"][i]]
+        }
+        i = i + 1
+    }
+    return scim_list_response(matched, 1, len(matched), len(matched))
+}
+
+pub fn scim_apply_patch(b: map, user_id: str, patch_doc: map) -> map {
+    let target_idx = 0 - 1
+    let i = 0
+    while i < len(b["users"]) {
+        if b["users"][i]["id"] == user_id {
+            target_idx = i
+        }
+        i = i + 1
+    }
+    if target_idx < 0 {
+        return scim_error(404, "", "user not found")
+    }
+    let target = b["users"][target_idx]
+    let ops = scim_parse_patch(patch_doc)
+    let j = 0
+    while j < len(ops) {
+        let op = ops[j]
+        let name = op[0]
+        let path = op[1]
+        let value = op[2]
+        if name == "replace" && path != "" {
+            target[path] = value
+        }
+        if name == "remove" && path != "" {
+            // Mark inactive rather than actually deleting keys.
+            if path == "active" {
+                target["active"] = false
+            }
+        }
+        j = j + 1
+    }
+    b["users"][target_idx] = target
+    return target
+}
+
+// -- WebAuthn step-up -----------------------------------------------
+
+pub fn issue_passkey_challenge(b: map, user_id: str,
+                                challenge_b64url: str) -> map {
+    let allow = []
+    if contains(keys(b["webauthn_keys"]), user_id) {
+        allow = b["webauthn_keys"][user_id]
+    }
+    return webauthn_new_authentication_options("spiral.example",
+                                                challenge_b64url,
+                                                allow, 60000)
+}
+
+pub fn register_passkey(b: map, user_id: str, credential_id_b64url: str) {
+    let existing = []
+    if contains(keys(b["webauthn_keys"]), user_id) {
+        existing = b["webauthn_keys"][user_id]
+    }
+    b["webauthn_keys"][user_id] = existing + [credential_id_b64url]
+}
+
+// -- Driver ----------------------------------------------------------
+
+pub fn demo() -> map {
+    let b = new_broker()
+
+    // Upstream OIDC from a (stub) discovery document.
+    let disco = {}
+    disco["issuer"]                 = "https://login.example.com"
+    disco["authorization_endpoint"] = "https://login.example.com/authorize"
+    disco["token_endpoint"]         = "https://login.example.com/token"
+    disco["jwks_uri"]               = "https://login.example.com/jwks.json"
+    disco["scopes_supported"]       = ["openid", "profile", "email"]
+    let parsed = oidc_parse_discovery(disco)
+    configure_oidc_from_discovery(b, "spiral-broker", "shh",
+                                  "https://broker.example/callback", parsed)
+
+    // Upstream SAML for the legacy tenant.
+    configure_saml(b, "https://broker.example/saml",
+                   "https://broker.example/saml/acs",
+                   "https://idp.legacy.example/sso")
+
+    // Provision two users via SCIM.
+    scim_create_user(b, "u-1", "alice", "Alice", "Zero", "alice@example.com")
+    scim_create_user(b, "u-2", "bob",   "Bob",   "One",  "bob@example.com")
+
+    // Register a passkey for Alice.
+    register_passkey(b, "u-1", "cred-alice-1")
+
+    let result = {}
+    result["oidc_login_url"] = begin_oidc_login(b, "csrf-state-xyz",
+                                                "nonce-abc", "pkce-chal-123")
+    result["saml_login_url"] = begin_saml_login(b, "_spiral-001",
+                                                "2026-04-24T12:00:00Z",
+                                                "rs-1")
+    result["scim_search"]    = scim_search(b, "userName eq \"alice\"")
+    result["passkey_opts"]   = issue_passkey_challenge(b, "u-1", "ch-b64url")
+    return result
+}

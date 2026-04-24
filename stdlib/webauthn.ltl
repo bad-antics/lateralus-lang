@@ -1,0 +1,191 @@
+// ===================================================================
+// stdlib/webauthn.ltl  —  W3C WebAuthn server-side helpers
+// -------------------------------------------------------------------
+// The WebAuthn ceremonies (registration + authentication) are:
+//   1. server issues a random challenge bound to {user, origin, rp_id}
+//   2. browser returns a `clientDataJSON` + an `authenticatorData`
+//      (plus an `attestation` on register or `signature` on auth)
+//   3. server verifies origin/type/challenge, parses
+//      authenticatorData flags + counter, then delegates signature
+//      verification to the caller's crypto (EC/RS/Ed25519).
+//
+// This module covers steps 1 and most of 3; signature verification
+// is left to caller-supplied hooks.
+// ===================================================================
+
+import base64
+
+// -- Challenge issuance --------------------------------------------
+
+pub fn new_registration_options(user_id: str, user_name: str,
+                                user_display: str,
+                                rp_id: str, rp_name: str,
+                                challenge_b64url: str,
+                                timeout_ms: int) -> map {
+    let opts = {}
+    let rp = {}
+    rp["id"]   = rp_id
+    rp["name"] = rp_name
+    opts["rp"] = rp
+    let user = {}
+    user["id"]          = user_id
+    user["name"]        = user_name
+    user["displayName"] = user_display
+    opts["user"]      = user
+    opts["challenge"] = challenge_b64url
+    opts["pubKeyCredParams"] = [
+        kp(-7,   "public-key"),     // ES256
+        kp(-257, "public-key")      // RS256
+    ]
+    opts["timeout"] = timeout_ms
+    opts["attestation"] = "none"
+    return opts
+}
+
+pub fn kp(alg: int, type_: str) -> map {
+    let m = {}
+    m["alg"] = alg
+    m["type"] = type_
+    return m
+}
+
+pub fn new_authentication_options(rp_id: str, challenge_b64url: str,
+                                   allow_credential_ids: list,
+                                   timeout_ms: int) -> map {
+    let opts = {}
+    opts["challenge"] = challenge_b64url
+    opts["rpId"]      = rp_id
+    opts["timeout"]   = timeout_ms
+    opts["userVerification"] = "preferred"
+    let allow = []
+    let i = 0
+    while i < len(allow_credential_ids) {
+        let c = {}
+        c["type"] = "public-key"
+        c["id"]   = allow_credential_ids[i]
+        allow = allow + [c]
+        i = i + 1
+    }
+    opts["allowCredentials"] = allow
+    return opts
+}
+
+// -- clientDataJSON verification ------------------------------------
+
+/// The browser sends back a base64url-encoded JSON blob.  Once the
+/// caller has decoded + parsed it into a map, this checks the static
+/// fields per WebAuthn §7.
+/// `expected_type` is "webauthn.create" for register, ".get" for auth.
+pub fn verify_client_data(client_data: map, expected_type: str,
+                          expected_challenge: str, expected_origin: str,
+                          expected_token_binding_status: str) -> list {
+    if not contains(keys(client_data), "type") {
+        return [false, "missing type"]
+    }
+    if client_data["type"] != expected_type {
+        return [false, "type mismatch"]
+    }
+    if client_data["challenge"] != expected_challenge {
+        return [false, "challenge mismatch"]
+    }
+    if client_data["origin"] != expected_origin {
+        return [false, "origin mismatch"]
+    }
+    if expected_token_binding_status != "" {
+        if contains(keys(client_data), "tokenBinding") {
+            let tb = client_data["tokenBinding"]
+            if tb["status"] != expected_token_binding_status {
+                return [false, "tokenBinding.status mismatch"]
+            }
+        }
+    }
+    return [true, "ok"]
+}
+
+// -- authenticatorData parsing --------------------------------------
+
+/// Layout (WebAuthn §6.1):
+///   rp_id_hash  : 32 bytes
+///   flags       : 1 byte
+///   sign_count  : 4 bytes big-endian
+///   (attested credential data / extensions — variable)
+pub fn parse_authenticator_data(buf: list) -> map {
+    let m = {}
+    if len(buf) < 37 {
+        m["ok"] = false
+        return m
+    }
+    m["ok"]         = true
+    m["rp_id_hash"] = slice(buf, 0, 32)
+    let flags = buf[32]
+    m["flags"]      = flags
+    m["flag_up"]    = (flags & 0x01) != 0
+    m["flag_uv"]    = (flags & 0x04) != 0
+    m["flag_at"]    = (flags & 0x40) != 0   // attested credential data
+    m["flag_ed"]    = (flags & 0x80) != 0
+    m["sign_count"] = (buf[33] << 24) | (buf[34] << 16) | (buf[35] << 8) | buf[36]
+    // Attested credential data, when flag_at:
+    //   aaguid          : 16 bytes
+    //   credential_id_len : 2 bytes big-endian
+    //   credential_id   : credential_id_len bytes
+    //   credential_public_key : CBOR-encoded COSE key (remainder)
+    if m["flag_at"] && len(buf) >= 55 {
+        m["aaguid"]          = slice(buf, 37, 53)
+        let id_len = (buf[53] << 8) | buf[54]
+        m["credential_id"]   = slice(buf, 55, 55 + id_len)
+        m["cose_public_key"] = slice(buf, 55 + id_len, len(buf))
+    }
+    return m
+}
+
+// -- Counter-replay check -------------------------------------------
+
+/// Per WebAuthn §7.2 step 17: the new sign_count must be strictly
+/// greater than the stored one, *unless* both are zero (authenticator
+/// doesn't implement counters).
+pub fn check_counter(stored: int, received: int) -> bool {
+    if stored == 0 && received == 0 { return true }
+    return received > stored
+}
+
+// -- Full authentication verify shell -------------------------------
+
+/// Orchestrates the non-crypto checks for an authentication ceremony.
+/// Caller supplies a `verify_signature(pub_key, message, signature)`
+/// function that does the EC/RS work.  The signed message is
+/// `authenticator_data_bytes || sha256(client_data_json_bytes)` —
+/// the caller passes the already-built message in `signed_msg`.
+pub fn verify_authentication(client_data: map, expected_challenge: str,
+                              expected_origin: str, expected_rp_id_hash: list,
+                              auth_data_buf: list, stored_counter: int,
+                              pub_key, signed_msg: list, signature: list,
+                              verify_signature) -> list {
+    let cd_ok = verify_client_data(client_data, "webauthn.get",
+                                   expected_challenge, expected_origin, "")
+    if not cd_ok[0] { return cd_ok }
+    let ad = parse_authenticator_data(auth_data_buf)
+    if not ad["ok"] { return [false, "bad authenticator_data"] }
+    // Compare rp_id_hash byte-by-byte.
+    if len(ad["rp_id_hash"]) != len(expected_rp_id_hash) {
+        return [false, "rp_id_hash length"]
+    }
+    let i = 0
+    while i < len(ad["rp_id_hash"]) {
+        if ad["rp_id_hash"][i] != expected_rp_id_hash[i] {
+            return [false, "rp_id_hash mismatch"]
+        }
+        i = i + 1
+    }
+    if not ad["flag_up"] {
+        return [false, "user-presence flag not set"]
+    }
+    if not check_counter(stored_counter, ad["sign_count"]) {
+        return [false, "counter regression"]
+    }
+    if not verify_signature(pub_key, signed_msg, signature) {
+        return [false, "bad signature"]
+    }
+    let out = {}
+    out["sign_count"] = ad["sign_count"]
+    return [true, out]
+}

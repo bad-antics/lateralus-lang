@@ -1,0 +1,212 @@
+// ===================================================================
+// stdlib/oauth2.ltl  —  OAuth 2.0 + PKCE client helpers
+// -------------------------------------------------------------------
+// Pure functions to build an OAuth 2.0 authorization-code flow:
+//   * `new_client` — bundle client config
+//   * `authorization_url` — build the /authorize redirect
+//   * `pkce_*` — RFC 7636 S256 code-verifier/challenge helpers
+//   * `token_request_body` — x-www-form-urlencoded POST body
+//   * `parse_token_response` — JSON → normalised token map
+//   * `refresh_request_body` / `revoke_request_body`
+//   * `validate_state` — constant-time compare of CSRF state
+//
+// Ref: RFC 6749, RFC 7636, RFC 7009.
+// ===================================================================
+
+import base64
+import hash
+
+// -- Config ---------------------------------------------------------
+
+pub fn new_client(client_id: str, client_secret: str,
+                  auth_url: str, token_url: str,
+                  redirect_uri: str, scopes: list) -> map {
+    let c = {}
+    c["client_id"]     = client_id
+    c["client_secret"] = client_secret
+    c["auth_url"]      = auth_url
+    c["token_url"]     = token_url
+    c["redirect_uri"]  = redirect_uri
+    c["scopes"]        = scopes
+    return c
+}
+
+// -- URL-encoding ---------------------------------------------------
+
+pub fn is_unreserved(ch: str) -> bool {
+    if ch >= "a" && ch <= "z" { return true }
+    if ch >= "A" && ch <= "Z" { return true }
+    if ch >= "0" && ch <= "9" { return true }
+    return ch == "-" || ch == "_" || ch == "." || ch == "~"
+}
+
+pub fn hex_nibble(n: int) -> str {
+    return char_at("0123456789ABCDEF", n & 0x0f)
+}
+
+pub fn percent_encode(s: str) -> str {
+    let out = ""
+    let i = 0
+    while i < len(s) {
+        let ch = char_at(s, i)
+        if is_unreserved(ch) {
+            out = out + ch
+        } else {
+            let b = bytes_of(ch)
+            let j = 0
+            while j < len(b) {
+                out = out + "%" + hex_nibble(b[j] >> 4) + hex_nibble(b[j])
+                j = j + 1
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+pub fn form_encode(pairs: map) -> str {
+    let ks = keys(pairs)
+    let out = ""
+    let i = 0
+    while i < len(ks) {
+        if i > 0 { out = out + "&" }
+        out = out + percent_encode(ks[i]) + "=" + percent_encode(pairs[ks[i]])
+        i = i + 1
+    }
+    return out
+}
+
+// -- PKCE -----------------------------------------------------------
+
+/// Build a PKCE verifier from a pre-generated high-entropy string.
+/// The caller is expected to pass ≥43 chars of URL-safe entropy.
+pub fn pkce_verifier(entropy: str) -> str {
+    // Already URL-safe if only unreserved chars are used.
+    return entropy
+}
+
+/// Build the S256 challenge: base64url(SHA-256(verifier)) with
+/// padding stripped.  Since the default toolchain exposes SHA only
+/// through `crypto.hash_sha256` (which returns hex), we fall back to
+/// a hex→bytes→base64url pipeline when crypto is in scope at the
+/// call site.  Here we just wrap a caller-provided sha256_bytes fn.
+pub fn pkce_challenge_s256(verifier: str, sha256_bytes) -> str {
+    let digest = sha256_bytes(verifier)
+    let raw = ""
+    let i = 0
+    while i < len(digest) {
+        raw = raw + chr(digest[i])
+        i = i + 1
+    }
+    let enc = base64_encode_url(raw)
+    return strip_padding(enc)
+}
+
+pub fn strip_padding(s: str) -> str {
+    let i = len(s)
+    while i > 0 && char_at(s, i - 1) == "=" {
+        i = i - 1
+    }
+    return slice(s, 0, i)
+}
+
+// -- Authorization URL ---------------------------------------------
+
+pub fn authorization_url(client: map, state: str, pkce_challenge: str,
+                         extra: map) -> str {
+    let params = {}
+    params["response_type"] = "code"
+    params["client_id"]     = client["client_id"]
+    params["redirect_uri"]  = client["redirect_uri"]
+    params["scope"]         = join(client["scopes"], " ")
+    params["state"]         = state
+    if pkce_challenge != "" {
+        params["code_challenge"]        = pkce_challenge
+        params["code_challenge_method"] = "S256"
+    }
+    let ks = keys(extra)
+    let i = 0
+    while i < len(ks) {
+        params[ks[i]] = extra[ks[i]]
+        i = i + 1
+    }
+    return client["auth_url"] + "?" + form_encode(params)
+}
+
+// -- Token exchange -------------------------------------------------
+
+pub fn token_request_body(client: map, code: str, pkce_verifier_s: str) -> str {
+    let params = {}
+    params["grant_type"]   = "authorization_code"
+    params["code"]         = code
+    params["redirect_uri"] = client["redirect_uri"]
+    params["client_id"]    = client["client_id"]
+    if client["client_secret"] != "" {
+        params["client_secret"] = client["client_secret"]
+    }
+    if pkce_verifier_s != "" {
+        params["code_verifier"] = pkce_verifier_s
+    }
+    return form_encode(params)
+}
+
+pub fn refresh_request_body(client: map, refresh_token: str) -> str {
+    let params = {}
+    params["grant_type"]    = "refresh_token"
+    params["refresh_token"] = refresh_token
+    params["client_id"]     = client["client_id"]
+    if client["client_secret"] != "" {
+        params["client_secret"] = client["client_secret"]
+    }
+    return form_encode(params)
+}
+
+pub fn revoke_request_body(client: map, token: str, hint: str) -> str {
+    let params = {}
+    params["token"]     = token
+    params["client_id"] = client["client_id"]
+    if hint != "" {
+        params["token_type_hint"] = hint
+    }
+    if client["client_secret"] != "" {
+        params["client_secret"] = client["client_secret"]
+    }
+    return form_encode(params)
+}
+
+/// Normalise a parsed JSON token response into a predictable shape.
+pub fn parse_token_response(json_map: map) -> map {
+    let t = {}
+    t["access_token"]  = ""
+    t["refresh_token"] = ""
+    t["id_token"]      = ""
+    t["token_type"]    = "Bearer"
+    t["expires_in"]    = 0
+    t["scope"]         = ""
+    let ks = keys(json_map)
+    let i = 0
+    while i < len(ks) {
+        let k = ks[i]
+        if contains(keys(t), k) {
+            t[k] = json_map[k]
+        }
+        i = i + 1
+    }
+    return t
+}
+
+// -- State validation -----------------------------------------------
+
+/// Constant-time comparison of CSRF state tokens.
+pub fn validate_state(expected: str, got: str) -> bool {
+    if len(expected) != len(got) { return false }
+    let diff = 0
+    let i = 0
+    while i < len(expected) {
+        let a = bytes_of(char_at(expected, i))[0]
+        let b = bytes_of(char_at(got, i))[0]
+        diff = diff | (a ^ b)
+        i = i + 1
+    }
+    return diff == 0
+}
