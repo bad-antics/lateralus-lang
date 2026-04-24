@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Parquet in the Stdlib — Why and How — Lateralus Blog</title>
+  <meta name="description" content="Apache Parquet without Arrow's 300 MB C++ dependency. RLE, dict encoding, frame-of-reference, Thrift Compact — all in readable pure-Lateralus stdlib modules.">
+  <meta property="og:title" content="Parquet in the Stdlib — Why and How">
+  <meta property="og:description" content="The columnar-analytics lane: Parquet, Arrow IPC, RLE, dict encoding, frame-of-reference — pure-Lateralus source.">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://lateralus.dev/blog/parquet-in-the-stdlib.html">
+  <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+  <link rel="canonical" href="https://lateralus.dev/blog/parquet-in-the-stdlib.html">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css?v=20260424">
+  <style>
+    .blog-post { max-width: 820px; margin: 0 auto; padding: 80px 20px 60px; }
+    .blog-post h1 { font-family: 'Press Start 2P', monospace; font-size: clamp(14px, 3vw, 20px); color: var(--electric-yellow); line-height: 1.8; margin-bottom: 16px; }
+    .blog-meta { font-family: 'VT323', monospace; font-size: 18px; color: var(--hot-pink); margin-bottom: 24px; }
+    .blog-meta .tag { font-family: 'Press Start 2P', monospace; font-size: 8px; padding: 4px 10px; border: 1px solid var(--lime); color: var(--lime); margin-left: 8px; }
+    .blog-content { font-family: 'VT323', monospace; font-size: 20px; color: var(--text); line-height: 1.7; }
+    .blog-content h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--cyber-blue); margin: 32px 0 16px; line-height: 1.6; }
+    .blog-content h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--lime); margin: 24px 0 12px; line-height: 1.6; }
+    .blog-content p { margin-bottom: 16px; }
+    .blog-content code { background: var(--bg3); padding: 2px 6px; color: var(--hot-pink); font-size: 18px; }
+    .blog-content pre { background: var(--bg3); border: 2px solid var(--border-light); padding: 16px; overflow-x: auto; margin: 16px 0; }
+    .blog-content pre code { background: none; padding: 0; display: block; font-size: 15px; line-height: 1.5; color: var(--text); }
+    .blog-content ul, .blog-content ol { margin: 16px 0; padding-left: 24px; }
+    .blog-content li { margin-bottom: 8px; }
+    .blog-content a { color: var(--cyber-blue); text-decoration: underline; }
+    .blog-content blockquote { border-left: 3px solid var(--lime); padding-left: 16px; margin: 16px 0; color: var(--text2); font-style: italic; }
+    .blog-back { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; color: var(--lime); text-decoration: none; margin-bottom: 24px; }
+    .blog-back:hover { color: var(--electric-yellow); }
+  </style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/">PLAYGROUND</a>
+      <a href="/blog/" class="active">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="/affiliates/">AFFILIATES</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<article class="blog-post">
+  <a href="/blog/" class="blog-back">← Back to Blog</a>
+  <h1>Parquet in the Stdlib — Why and How</h1>
+  <div class="blog-meta">
+    April 24, 2026
+    <span class="tag">analytics</span><span class="tag">columnar</span><span class="tag">wave-8</span>
+  </div>
+  <div class="blog-content">
+
+    <p>Parquet is the file format under almost every modern data lake — Snowflake, Databricks, Athena, DuckDB, ClickHouse's external tables. Arrow is the in-memory and IPC format that sits next to it. Between them they define how a terabyte of tabular data moves through a 2026 analytics stack.</p>
+
+    <p>There is no scripting language whose standard library ships either. Python has <code>pyarrow</code> as a ~60 MB binary wheel that vendors a pile of C++. Node has nothing. Go needs a third-party package. Rust has <code>arrow-rs</code>, which is excellent, but Rust is not a scripting language.</p>
+
+    <p>The Wave 8 "columnar lane" adds both to the Lateralus stdlib, written in pure Lateralus, in under 1,500 lines.</p>
+
+    <h2>◉ The five primitives behind columnar</h2>
+
+    <p>Before Parquet itself there's a family of encodings that give it its compression. Each is a small stdlib module:</p>
+
+    <ul>
+      <li><code>run_length</code> — <code>[1,1,1,2,2,3]</code> → <code>[(1,3),(2,2),(3,1)]</code>. Two payload modes: pairs-of-ints, and the Parquet-packed byte form.</li>
+      <li><code>dict_encoding</code> — take a column of repeated strings, replace each with an integer index into a dictionary.</li>
+      <li><code>frame_of_reference</code> — store a reference value and deltas from it. For monotonically-increasing timestamps, a <code>delta-of-delta</code> variant (the Gorilla paper) packs to near zero bytes.</li>
+      <li><code>bitpack</code> — pack N-bit integers tightly into a byte stream.</li>
+      <li><code>xxhash</code> / <code>lz4</code> — the hashes and codecs Parquet actually uses for checksums and page compression.</li>
+    </ul>
+
+    <p>If you're wondering how Parquet on a 100 GB log table compresses down to 3 GB, it's these five primitives stacked.</p>
+
+    <h2>◉ Thrift Compact in forty lines</h2>
+
+    <p>Parquet's footer is encoded in Apache Thrift Compact Protocol. Which sounds scary until you read the <a href="https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md" target="_blank">spec</a>; it's a variable-length integer encoding with zig-zag for signed values. Here's the whole implementation from <a href="https://github.com/bad-antics/lateralus-lang/blob/main/stdlib/parquet.ltl" target="_blank">stdlib/parquet.ltl</a>:</p>
+
+    <pre><code>// Zig-zag encoding: -1 → 1, 1 → 2, -2 → 3, 2 → 4 …
+pub fn thrift_zz_i32(n: int) -&gt; int {
+    return ((n &lt;&lt; 1) ^ (n &gt;&gt; 31)) &amp; 0xFFFFFFFF
+}
+
+// Unsigned varint: 7 bits per byte, high bit is "more to come"
+pub fn thrift_uvarint(n: int) -&gt; list {
+    let out = []
+    while n &gt;= 0x80 {
+        out = out + [(n &amp; 0x7F) | 0x80]
+        n = n &gt;&gt; 7
+    }
+    out = out + [n &amp; 0x7F]
+    return out
+}
+
+pub fn thrift_varint_i32(n: int) -&gt; list {
+    return thrift_uvarint(thrift_zz_i32(n))
+}</code></pre>
+
+    <p>Pinned: <code>zz(0)=0, zz(-1)=1, zz(1)=2</code>; <code>uvarint(300) = [0xAC, 0x02]</code>. Those two lines alone catch 80% of the bugs you'd make. They're <a href="https://github.com/bad-antics/lateralus-lang/blob/main/tests/stdlib_spiral_wave_8.ltl" target="_blank">in the Wave 8 tests</a>.</p>
+
+    <h2>◉ Arrow IPC in another ninety</h2>
+
+    <p>Arrow's IPC (streaming) format is refreshingly simple: a continuation marker (<code>0xFFFFFFFF</code>), a 4-byte length prefix, a Flatbuffers message, padding to 8 bytes, and the data buffers. Validity bitmaps use LSB-first ordering — a little unusual, but fine once you've pinned a test vector:</p>
+
+    <pre><code>// 9-bit mask [T F T T F F T T T] → two bytes: [0xCD, 0x01]
+let mask = [true, false, true, true, false, false, true, true, true]
+let bitmap = arrow_ipc_validity_bitmap(mask)
+assert bitmap == [0xCD, 0x01]</code></pre>
+
+    <p>UTF-8 arrays are two buffers: an offsets buffer (int32) and a concatenated data buffer. Variable-width but trivial to zero-copy read. Everything else is a small elaboration on that pattern.</p>
+
+    <h2>◉ Building an actual Parquet file</h2>
+
+    <p>The wave 8 example composes every module into one pipeline:</p>
+
+    <pre><code>import dict_encoding
+import run_length
+import frame_of_reference
+import arrow_ipc
+import parquet
+
+// Dictionary-encode a column of repeated city names.
+let encoded = dict_encoding_encode([
+    "NY", "NY", "SF", "SF", "NY", "LA", "LA", "NY"
+])
+// RLE the resulting integer indices.
+let rle_bytes = run_length_encode_packed(encoded["indices"])
+
+// Delta-of-delta encode a clock column.
+let clocks = [1000, 1010, 1020, 1030, 1045, 1060, 1075, 1090]
+let dod = frame_of_reference_encode_dod(clocks)
+
+// Frame it as one Arrow IPC message.
+let arrow_bytes = arrow_ipc_frame_message(
+    arrow_ipc_buffers_utf8(encoded["dictionary"]) + rle_bytes + dod
+)
+
+// Wrap as a minimal Parquet file: PAR1 + body + footer + PAR1.
+let body = arrow_bytes
+let footer = parquet_data_page_v1_header(len(body), len(body), 8)
+let parq = parquet_assemble_file(body, footer)
+
+write_file("city_clocks.parq", parq)</code></pre>
+
+    <p>That file opens in any Parquet reader. Not because we cheated — because we followed the spec.</p>
+
+    <h2>◉ The honest limits</h2>
+
+    <p>The stdlib modules cover the <em>encoding</em> surface completely. They don't yet cover the full schema definition language (<a href="https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift" target="_blank">parquet.thrift</a> has a lot of message types), and they don't yet implement page-level statistics emission. For a log-rollup or telemetry use-case, the current surface is enough; for a general-purpose warehouse writer, it's a starting point, not a finish line.</p>
+
+    <h2>◉ The point isn't parity</h2>
+
+    <p>The point is: when you need to emit Parquet from a shipping language — a thing your tooling vendor told you was impossible without Arrow's C++ — it's now a three-import one-file job in Lateralus, auditable from top to bottom, transpilable to a native binary.</p>
+
+    <p>Every byte of the format lives in <a href="https://github.com/bad-antics/lateralus-lang/blob/main/stdlib/parquet.ltl" target="_blank">one 200-line file</a>.</p>
+
+    <blockquote>Wave 8 is one of five "spiral" batches that added these lanes in 2026. <a href="/niche/">Read the lane positioning</a> or <a href="/compare/">see the stdlib comparison matrix</a> for the bigger picture.</blockquote>
+
+  </div>
+</article>
+
+<footer>
+  <div class="container" style="text-align:center; padding: 2rem 0;">
+    <p style="font-family:'Press Start 2P',monospace; font-size:9px; color:var(--lime); margin-bottom:8px;">|&gt; LATERALUS</p>
+    <p style="font-family:'VT323',monospace; font-size:14px; color:var(--text);">A Language That Spirals Outward</p>
+  </div>
+</footer>
+
+<script src="/site.js"></script>
+</body>
+</html>

@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aho-Corasick in 180 Lines of Pure Lateralus — Lateralus Blog</title>
+  <meta name="description" content="How we fit the classic multi-pattern search automaton — goto, fail, output — into 180 lines of Lateralus stdlib, and why it beats running regex in a loop.">
+  <meta property="og:title" content="Aho-Corasick in 180 Lines of Pure Lateralus">
+  <meta property="og:description" content="Goto, fail, output. The automaton that powers fgrep, Snort, and every serious multi-keyword filter — in one readable file.">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://lateralus.dev/blog/aho-corasick-pure-lateralus.html">
+  <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+  <link rel="canonical" href="https://lateralus.dev/blog/aho-corasick-pure-lateralus.html">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css?v=20260424">
+  <style>
+    .blog-post { max-width: 820px; margin: 0 auto; padding: 80px 20px 60px; }
+    .blog-post h1 { font-family: 'Press Start 2P', monospace; font-size: clamp(14px, 3vw, 20px); color: var(--electric-yellow); line-height: 1.8; margin-bottom: 16px; }
+    .blog-meta { font-family: 'VT323', monospace; font-size: 18px; color: var(--hot-pink); margin-bottom: 24px; }
+    .blog-meta .tag { font-family: 'Press Start 2P', monospace; font-size: 8px; padding: 4px 10px; border: 1px solid var(--lime); color: var(--lime); margin-left: 8px; }
+    .blog-content { font-family: 'VT323', monospace; font-size: 20px; color: var(--text); line-height: 1.7; }
+    .blog-content h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--cyber-blue); margin: 32px 0 16px; line-height: 1.6; }
+    .blog-content h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--lime); margin: 24px 0 12px; line-height: 1.6; }
+    .blog-content p { margin-bottom: 16px; }
+    .blog-content code { background: var(--bg3); padding: 2px 6px; color: var(--hot-pink); font-size: 18px; }
+    .blog-content pre { background: var(--bg3); border: 2px solid var(--border-light); padding: 16px; overflow-x: auto; margin: 16px 0; }
+    .blog-content pre code { background: none; padding: 0; display: block; font-size: 15px; line-height: 1.5; color: var(--text); }
+    .blog-content ul, .blog-content ol { margin: 16px 0; padding-left: 24px; }
+    .blog-content li { margin-bottom: 8px; }
+    .blog-content a { color: var(--cyber-blue); text-decoration: underline; }
+    .blog-content blockquote { border-left: 3px solid var(--lime); padding-left: 16px; margin: 16px 0; color: var(--text2); font-style: italic; }
+    .blog-back { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; color: var(--lime); text-decoration: none; margin-bottom: 24px; }
+    .blog-back:hover { color: var(--electric-yellow); }
+  </style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/">PLAYGROUND</a>
+      <a href="/blog/" class="active">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="/affiliates/">AFFILIATES</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<article class="blog-post">
+  <a href="/blog/" class="blog-back">← Back to Blog</a>
+  <h1>Aho-Corasick in 180 Lines of Pure Lateralus</h1>
+  <div class="blog-meta">
+    April 24, 2026
+    <span class="tag">search</span><span class="tag">stdlib</span><span class="tag">wave-10</span>
+  </div>
+  <div class="blog-content">
+
+    <p>Every serious multi-keyword filter — <code>fgrep -f patterns.txt</code>, Snort's IDS rules, every spam filter you've ever cursed at — is the same algorithm under the hood. Alfred Aho and Margaret Corasick published it in 1975 as a generalisation of KMP. Given a set of patterns, it builds one automaton that finds every occurrence of every pattern in a single left-to-right scan of the input.</p>
+
+    <p>It's built out of three tables:</p>
+
+    <ul>
+      <li><b>goto</b> — a trie of the patterns. Walk characters; if a child exists, follow it.</li>
+      <li><b>fail</b> — for each node, the longest proper suffix that is also a prefix of some pattern. When goto is stuck, jump here and try again.</li>
+      <li><b>output</b> — at each node, which patterns end here (including those ending at a fail-chain ancestor).</li>
+    </ul>
+
+    <p>The total work is <code>O(|text| + |patterns| + |matches|)</code>, which is the best you can do.</p>
+
+    <h2>◉ The whole algorithm, in three small Lateralus functions</h2>
+
+    <p>Here's the <code>build</code> function from <code>stdlib/aho_corasick.ltl</code>. Nothing fancy, no bitset tricks, just lists and dicts:</p>
+
+    <pre><code>pub fn build(patterns: list) -&gt; dict {
+    let auto = {}
+    auto["goto"]     = []     // list of dict: child-byte -&gt; node-id
+    auto["fail"]     = []     // list of int:  fallback node
+    auto["output"]   = []     // list of list: pattern-ids ending here
+    auto["patterns"] = patterns
+    ac_new_node(auto)         // root = 0
+
+    // Step 1. Insert each pattern as a path in the trie.
+    let pi = 0
+    while pi &lt; len(patterns) {
+        let p = patterns[pi]
+        let node = 0
+        let j = 0
+        while j &lt; len(p) {
+            let c = ord(char_at(p, j))
+            let children = auto["goto"][node]
+            if contains(children, c) {
+                node = children[c]
+            } else {
+                ac_new_node(auto)
+                let new_id = len(auto["goto"]) - 1
+                auto["goto"][node][c] = new_id
+                node = new_id
+            }
+            j = j + 1
+        }
+        auto["output"][node] = auto["output"][node] + [pi]
+        pi = pi + 1
+    }
+
+    // Step 2. BFS from root, computing fail pointers.
+    // ... (elided — 20 lines of BFS)
+    return auto
+}</code></pre>
+
+    <p>And the scan is exactly as small:</p>
+
+    <pre><code>pub fn find_all(auto: dict, text: str) -&gt; list {
+    let hits = []
+    let node = 0
+    let i = 0
+    while i &lt; len(text) {
+        let c = ord(char_at(text, i))
+        // Walk fail-chain until we can proceed.
+        while node &gt; 0 &amp;&amp; (contains(auto["goto"][node], c) == false) {
+            node = auto["fail"][node]
+        }
+        if contains(auto["goto"][node], c) {
+            node = auto["goto"][node][c]
+        }
+        let outs = auto["output"][node]
+        let j = 0
+        while j &lt; len(outs) {
+            hits = hits + [[outs[j], i + 1]]
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return hits
+}</code></pre>
+
+    <p>That's the entire matcher. The source of <a href="https://github.com/bad-antics/lateralus-lang/blob/main/stdlib/aho_corasick.ltl" target="_blank">stdlib/aho_corasick.ltl</a> is 165 lines including comments. Reading it end-to-end is cheaper than reading the Wikipedia article.</p>
+
+    <h2>◉ The canonical "ushers" test</h2>
+
+    <p>Aho &amp; Corasick's 1975 paper gives one example: patterns <code>{he, she, his, hers}</code> in the text <code>"ushers"</code>. The trace hits three patterns:</p>
+
+    <pre><code>let a = aho_corasick_build(["he", "she", "his", "hers"])
+let hits = aho_corasick_find_all(a, "ushers")
+// [[1, 4], [0, 4], [3, 6]]
+//   she^  he^   hers^</code></pre>
+
+    <p>That exact vector is in <a href="https://github.com/bad-antics/lateralus-lang/blob/main/tests/stdlib_spiral_wave_10.ltl" target="_blank">tests/stdlib_spiral_wave_10.ltl</a> and runs green.</p>
+
+    <h2>◉ Why it beats "regex in a loop"</h2>
+
+    <p>The naïve alternative — run <code>N</code> separate regex matches, one per pattern — is <code>O(N × |text|)</code>. Aho-Corasick collapses all N patterns into one pass: <code>O(|text|)</code>.</p>
+
+    <p>For a log filter looking for 50 signature strings in a 100 MB log, that's 50× less work. Not 50% less — 50×. This is why every serious IDS and log shipper ships an Aho-Corasick implementation internally. With Lateralus, you don't have to ship it internally; it's already there.</p>
+
+    <h2>◉ The real use-case: stream filtering</h2>
+
+    <p>Here's a log shipper that drops everything except lines matching any of an alert dictionary, using three stdlib modules together:</p>
+
+    <pre><code>import aho_corasick
+import logfmt
+import prometheus
+
+let alert_words = aho_corasick_build([
+    "error", "panic", "segfault", "denied", "timeout", "killed"
+])
+
+for line in stdin_lines() {
+    let fields = logfmt_parse(line)
+    let msg = fields["msg"]
+    if aho_corasick_contains_any(alert_words, msg) {
+        prometheus_emit_counter("log_alerts_total",
+                                 {"severity": fields["level"]})
+        println(line)
+    }
+}</code></pre>
+
+    <p>Three stdlib modules, no external packages, one <code>lateralus c</code> away from a native binary.</p>
+
+    <h2>◉ Where to from here</h2>
+
+    <ul>
+      <li>Source: <a href="https://github.com/bad-antics/lateralus-lang/blob/main/stdlib/aho_corasick.ltl" target="_blank">stdlib/aho_corasick.ltl</a> (165 lines)</li>
+      <li>Tests: <a href="https://github.com/bad-antics/lateralus-lang/blob/main/tests/stdlib_spiral_wave_10.ltl" target="_blank">tests/stdlib_spiral_wave_10.ltl</a></li>
+      <li>Example: <a href="https://github.com/bad-antics/lateralus-lang/blob/main/examples/spiral_search.ltl" target="_blank">examples/spiral_search.ltl</a></li>
+      <li>Play with it: <a href="/playground/">lateralus.dev/playground</a></li>
+    </ul>
+
+    <blockquote>This is one module out of the Wave 10 "search lane" batch: suffix array, Aho-Corasick, Levenshtein, SimHash, q-gram. Wire them together and you have the guts of a full-text search engine in four stdlib imports.</blockquote>
+
+  </div>
+</article>
+
+<footer>
+  <div class="container" style="text-align:center; padding: 2rem 0;">
+    <p style="font-family:'Press Start 2P',monospace; font-size:9px; color:var(--lime); margin-bottom:8px;">|&gt; LATERALUS</p>
+    <p style="font-family:'VT323',monospace; font-size:14px; color:var(--text);">A Language That Spirals Outward</p>
+  </div>
+</footer>
+
+<script src="/site.js"></script>
+</body>
+</html>

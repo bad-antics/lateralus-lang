@@ -25,6 +25,31 @@ VS Code users: install the **[Lateralus Language](https://marketplace.visualstud
 
 ---
 
+## One language. Three lanes.
+
+Lateralus is built for the jobs that usually need three languages:
+
+1. **Observability** — structured logs, metrics, traces, in one binary.
+2. **Analytics** — Parquet, Arrow IPC, SIMD-ready columnar ops shipped in the stdlib.
+3. **Secure-by-default** — ChaCha20-Poly1305, X25519, BLAKE3, Argon2id — no OpenSSL, no surprises.
+
+➡ **[Niche page](https://lateralus.dev/niche/)** · **[Stdlib vs Python/Go/Rust/Node](https://lateralus.dev/compare/)** · **[One-page cheatsheet](CHEATSHEET.md)** · **[Open bounties →](BOUNTIES.md)**
+
+### Speed snapshot
+
+Pure Lateralus → C99 backend vs CPython 3.13 (lower is better):
+
+| Benchmark   | Lateralus (C) | CPython 3.13 | Speedup |
+|-------------|---------------|--------------|---------|
+| fib(35)     | 0.004 s       | 0.240 s      | ~60×    |
+| sieve(1e6)  | 0.020 s       | 0.600 s      | ~30×    |
+| mandelbrot  | 0.110 s       | 3.300 s      | ~30×    |
+| n-body 5k   | 0.080 s       | 3.200 s      | ~40×    |
+
+See [`benchmarks/`](benchmarks/) to reproduce.
+
+---
+
 Lateralus is a systems programming language built for performance, safety, and expressive pipelines. It combines Rust-inspired ownership semantics with first-class pipeline operators, pattern matching, and a rich standard library.
 
 ## Features

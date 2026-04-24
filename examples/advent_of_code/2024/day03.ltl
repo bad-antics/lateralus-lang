@@ -1,0 +1,103 @@
+// Advent of Code 2024 · Day 3 · Mull It Over
+// Part 1: sum of valid mul(X,Y) calls in corrupted memory.
+// Part 2: do() and don't() toggle whether following mul() calls count.
+
+let SAMPLE1 = "xmul(2,4)%&mul[3,7]!@^do_not_mul(5,5)+mul(32,64]then(mul(11,8)mul(8,5))"
+let SAMPLE2 = "xmul(2,4)&mul[3,7]!^don't()_mul(5,5)+mul(32,64](mul(11,8)undo()?mul(8,5))"
+
+// Pure-Lateralus mini parser — no regex dependency, just a hand rolled scanner.
+// That keeps the example standalone and readable.
+
+fn is_digit(c: str) -> bool {
+    return c == "0" || c == "1" || c == "2" || c == "3" || c == "4"
+        || c == "5" || c == "6" || c == "7" || c == "8" || c == "9"
+}
+
+// Try to parse mul(A,B) starting at i. Returns (ok, a, b, new_i).
+fn try_mul(s: str, i: int) -> list {
+    let n = len(s)
+    if i + 4 > n { return [false, 0, 0, i] }
+    if slice(s, i, i + 4) != "mul(" { return [false, 0, 0, i] }
+    let j = i + 4
+    let a = 0
+    let da = 0
+    while j < n && is_digit(slice(s, j, j + 1)) && da < 3 {
+        a = a * 10 + int(slice(s, j, j + 1))
+        j = j + 1
+        da = da + 1
+    }
+    if da == 0 { return [false, 0, 0, i] }
+    if j >= n || slice(s, j, j + 1) != "," { return [false, 0, 0, i] }
+    j = j + 1
+    let b = 0
+    let db = 0
+    while j < n && is_digit(slice(s, j, j + 1)) && db < 3 {
+        b = b * 10 + int(slice(s, j, j + 1))
+        j = j + 1
+        db = db + 1
+    }
+    if db == 0 { return [false, 0, 0, i] }
+    if j >= n || slice(s, j, j + 1) != ")" { return [false, 0, 0, i] }
+    return [true, a, b, j + 1]
+}
+
+fn part1(text: str) -> int {
+    let total = 0
+    let i = 0
+    let n = len(text)
+    while i < n {
+        let r = try_mul(text, i)
+        if r[0] {
+            total = total + r[1] * r[2]
+            i = r[3]
+        } else {
+            i = i + 1
+        }
+    }
+    return total
+}
+
+fn part2(text: str) -> int {
+    let total = 0
+    let i = 0
+    let n = len(text)
+    let enabled = true
+    while i < n {
+        if i + 4 <= n && slice(s_of(text), i, i + 4) == "do()" {
+            enabled = true
+            i = i + 4
+        } else if i + 7 <= n && slice(text, i, i + 7) == "don't()" {
+            enabled = false
+            i = i + 7
+        } else {
+            let r = try_mul(text, i)
+            if r[0] {
+                if enabled { total = total + r[1] * r[2] }
+                i = r[3]
+            } else {
+                i = i + 1
+            }
+        }
+    }
+    return total
+}
+
+// tiny helper so the "do()" lookahead reads naturally
+fn s_of(text: str) -> str { return text }
+
+@test
+fn test_part1() {
+    assert_eq(part1(SAMPLE1), 161)
+}
+
+@test
+fn test_part2() {
+    assert_eq(part2(SAMPLE2), 48)
+}
+
+fn main() {
+    print("Day 3 Part 1: " + str(part1(SAMPLE1)))
+    print("Day 3 Part 2: " + str(part2(SAMPLE2)))
+}
+
+main()
