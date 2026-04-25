@@ -22,8 +22,9 @@ lateralus test examples/advent_of_code/2024/day01.ltl   # verify answer
 
 ## Status
 
-| Year | Days solved | File                                          |
-|------|-------------|-----------------------------------------------|
-| 2024 | 1, 2, 3     | [`2024/`](2024/)                              |
+| Year | Days solved   | File                                        |
+|------|---------------|---------------------------------------------|
+| 2024 | 1, 2, 3       | [`2024/`](2024/)                            |
+| 2023 | 1, 2, 3, 4, 5 | [`2023/`](2023/)                            |
 
 Want to fill in the rest? See [`BOUNTIES.md`](../../BOUNTIES.md) — AoC-2024 complete set is a $500 bounty.

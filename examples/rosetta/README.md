@@ -17,6 +17,11 @@ reference and as discoverability ("Rosetta Code in X" searches).
 | Roman Numerals (to/from)    | [`roman.ltl`](roman.ltl)                    | table-driven conversion          |
 | Sieve of Eratosthenes       | [`sieve.ltl`](sieve.ltl)                    | list mutation, number theory     |
 | Caesar Cipher               | [`caesar.ltl`](caesar.ltl)                  | char arithmetic                  |
+| 0/1 Knapsack                | [`knapsack.ltl`](knapsack.ltl)              | dynamic programming              |
+| N-Queens                    | [`nqueens.ltl`](nqueens.ltl)                | recursion + backtracking         |
+| Topological Sort            | [`topological_sort.ltl`](topological_sort.ltl) | graphs, Kahn's algorithm     |
+| Huffman Coding              | [`huffman.ltl`](huffman.ltl)                | trees + greedy                   |
+| JSON Mini Parser            | [`json_mini.ltl`](json_mini.ltl)            | recursive-descent parsing        |
 
 ## Verifying
 

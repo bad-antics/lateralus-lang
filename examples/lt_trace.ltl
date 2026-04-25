@@ -1,0 +1,219 @@
+// examples/lt_trace.ltl — "lt-trace": flamegraph-style span analyzer in Lateralus
+// -----------------------------------------------------------------------------
+// Reads OpenTracing-ish span records and produces:
+//   1. A call-tree summary with self-time and total-time
+//   2. A top-N hottest spans table with bar charts
+//   3. A flamegraph.txt-style folded stack output (compatible with
+//      https://github.com/brendangregg/FlameGraph)
+//
+// Why this exists:
+//   - Demonstrates the analytics + observability lanes together
+//   - Shows that you can build a real perf-tool in pure Lateralus
+//   - Output feeds directly into FlameGraph.pl for visualization
+//
+// Run:  lateralus run examples/lt_trace.ltl
+// -----------------------------------------------------------------------------
+
+// Span record format (one per line):
+//   span_id  parent_id  name  duration_us
+// where parent_id "-" means root.
+let SAMPLE = "1  -  GET_/api/users         812
+2  1  authenticate            145
+3  2  jwt_verify               40
+4  2  load_session            100
+5  1  db_query_users          400
+6  5  pg_connect_pool          12
+7  5  pg_execute              350
+8  7  pg_parse                 30
+9  7  pg_plan                  20
+10 7  pg_scan                 290
+11 1  serialize_json          250"
+
+// ---------- parse spans -------------------------------------------------------
+
+fn parse_spans(text: str) -> list {
+    let lines = str_split(text, "\n")
+    let out = []
+    let i = 0
+    while i < len(lines) {
+        let line = str_trim(lines[i])
+        if len(line) == 0 { i = i + 1; continue }
+        // collapse runs of whitespace -> single spaces, then split
+        let toks = []
+        let j = 0
+        let cur = ""
+        while j < len(line) {
+            let c = slice(line, j, j + 1)
+            if c == " " || c == "\t" {
+                if len(cur) > 0 { toks = toks + [cur]; cur = "" }
+            } else {
+                cur = cur + c
+            }
+            j = j + 1
+        }
+        if len(cur) > 0 { toks = toks + [cur] }
+        if len(toks) >= 4 {
+            let id = int(toks[0])
+            let parent = -1
+            if toks[1] != "-" { parent = int(toks[1]) }
+            let name = toks[2]
+            let dur = int(toks[3])
+            // span: [id, parent, name, dur, children_indices]
+            out = out + [[id, parent, name, dur, []]]
+        }
+        i = i + 1
+    }
+    // Wire children
+    let k = 0
+    while k < len(out) {
+        let s = out[k]
+        if s[1] != -1 {
+            // Find parent in array (id-indexed search)
+            let p = 0
+            while p < len(out) {
+                if out[p][0] == s[1] { out[p][4] = out[p][4] + [k]; p = len(out) }
+                else { p = p + 1 }
+            }
+        }
+        k = k + 1
+    }
+    return out
+}
+
+// ---------- self-time = dur - sum(children dur) -------------------------------
+
+fn self_time(spans: list, idx: int) -> int {
+    let s = spans[idx]
+    let kids = s[4]
+    let sum = 0
+    let i = 0
+    while i < len(kids) { sum = sum + spans[kids[i]][3]; i = i + 1 }
+    let st = s[3] - sum
+    if st < 0 { st = 0 }
+    return st
+}
+
+// ---------- pretty call-tree printer ------------------------------------------
+
+fn print_tree(spans: list, idx: int, depth: int) {
+    let s = spans[idx]
+    let indent = ""
+    let i = 0
+    while i < depth { indent = indent + "  "; i = i + 1 }
+    let st = self_time(spans, idx)
+    print(indent + "└─ " + s[2] + "  total=" + str(s[3]) + "µs  self=" + str(st) + "µs")
+    let kids = s[4]
+    let k = 0
+    while k < len(kids) {
+        print_tree(spans, kids[k], depth + 1)
+        k = k + 1
+    }
+}
+
+// ---------- top-N self-time table ---------------------------------------------
+
+fn pad(s: str, width: int) -> str {
+    let out = s
+    while len(out) < width { out = out + " " }
+    return out
+}
+
+fn bar(count: int, max_count: int, width: int) -> str {
+    if max_count <= 0 { return "" }
+    let n = (count * width) / max_count
+    let out = ""
+    let i = 0
+    while i < n { out = out + "█"; i = i + 1 }
+    return out
+}
+
+fn top_self_time(spans: list, n: int) {
+    // Build pairs (name, self_time) and sort.
+    let names = []
+    let selfs = []
+    let i = 0
+    while i < len(spans) {
+        names = names + [spans[i][2]]
+        selfs = selfs + [self_time(spans, i)]
+        i = i + 1
+    }
+    // selection sort desc on self time
+    let a = 0
+    let total = len(names)
+    while a < total {
+        let best = a
+        let b = a + 1
+        while b < total {
+            if selfs[b] > selfs[best] { best = b }
+            b = b + 1
+        }
+        if best != a {
+            let tn = names[a]; names[a] = names[best]; names[best] = tn
+            let ts = selfs[a]; selfs[a] = selfs[best]; selfs[best] = ts
+        }
+        a = a + 1
+    }
+    print("")
+    print("== Top " + str(n) + " by self-time ==")
+    let max_v = 0
+    if total > 0 { max_v = selfs[0] }
+    let k = 0
+    while k < n && k < total {
+        print("  " + pad(names[k], 24) + pad(str(selfs[k]) + "µs", 10) + " " + bar(selfs[k], max_v, 30))
+        k = k + 1
+    }
+}
+
+// ---------- folded-stack output (FlameGraph format) ---------------------------
+
+fn build_stack(spans: list, idx: int) -> str {
+    // Walk parent chain to root, build "root;...;leaf" string.
+    let s = spans[idx]
+    if s[1] == -1 { return s[2] }
+    // find parent index
+    let p = 0
+    while p < len(spans) {
+        if spans[p][0] == s[1] {
+            return build_stack(spans, p) + ";" + s[2]
+        }
+        p = p + 1
+    }
+    return s[2]
+}
+
+fn print_folded(spans: list) {
+    print("")
+    print("== Folded stacks (pipe to flamegraph.pl) ==")
+    let i = 0
+    while i < len(spans) {
+        let st = self_time(spans, i)
+        if st > 0 {
+            print(build_stack(spans, i) + " " + str(st))
+        }
+        i = i + 1
+    }
+}
+
+// ---------- main --------------------------------------------------------------
+
+fn main() {
+    let spans = parse_spans(SAMPLE)
+    print("lt-trace  —  parsed " + str(len(spans)) + " spans")
+
+    print("")
+    print("== Call tree ==")
+    // Print all roots
+    let i = 0
+    while i < len(spans) {
+        if spans[i][1] == -1 { print_tree(spans, i, 0) }
+        i = i + 1
+    }
+
+    top_self_time(spans, 5)
+    print_folded(spans)
+
+    print("")
+    print("Done. Pipe folded output to https://github.com/brendangregg/FlameGraph")
+}
+
+main()

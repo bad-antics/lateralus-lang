@@ -1,0 +1,208 @@
+// Rosetta Code · JSON Mini Parser · Lateralus
+// Recursive-descent parser for a JSON subset:
+//   null, true, false, numbers (int+float), strings (no \u escapes), arrays, objects.
+// Returns a Lateralus list/value tree.
+
+// Module state: [src, pos]. List elements are mutable across functions,
+// avoiding the `let mut` global-promotion gap in the current codegen.
+let STATE = ["", 0]
+
+fn peek() -> str {
+    let src = STATE[0]
+    let pos = STATE[1]
+    if pos >= len(src) { return "" }
+    return slice(src, pos, pos + 1)
+}
+
+fn advance() -> str {
+    let c = peek()
+    STATE[1] = STATE[1] + 1
+    return c
+}
+
+fn skip_ws() {
+    while STATE[1] < len(STATE[0]) {
+        let c = peek()
+        if c == " " || c == "\n" || c == "\t" || c == "\r" { STATE[1] = STATE[1] + 1 }
+        else { return }
+    }
+}
+
+fn match_lit(lit: str) -> bool {
+    let src = STATE[0]
+    let pos = STATE[1]
+    if pos + len(lit) > len(src) { return false }
+    if slice(src, pos, pos + len(lit)) == lit {
+        STATE[1] = pos + len(lit)
+        return true
+    }
+    return false
+}
+
+fn parse_string() -> str {
+    advance()  // consume opening "
+    let out = ""
+    while STATE[1] < len(STATE[0]) {
+        let c = advance()
+        if c == "\"" { return out }
+        if c == "\\" {
+            let e = advance()
+            if e == "n" {
+                out = out + "\n"
+            } else if e == "t" {
+                out = out + "\t"
+            } else if e == "r" {
+                out = out + "\r"
+            } else {
+                out = out + e
+            }
+        } else {
+            out = out + c
+        }
+    }
+    return out
+}
+
+fn is_digit(c: str) -> bool {
+    return c == "0" || c == "1" || c == "2" || c == "3" || c == "4"
+        || c == "5" || c == "6" || c == "7" || c == "8" || c == "9"
+}
+
+fn parse_number() -> str {
+    let start = STATE[1]
+    if peek() == "-" { STATE[1] = STATE[1] + 1 }
+    while STATE[1] < len(STATE[0]) && is_digit(peek()) { STATE[1] = STATE[1] + 1 }
+    let is_float = false
+    if peek() == "." {
+        is_float = true
+        STATE[1] = STATE[1] + 1
+        while STATE[1] < len(STATE[0]) && is_digit(peek()) { STATE[1] = STATE[1] + 1 }
+    }
+    let raw = slice(STATE[0], start, STATE[1])
+    // We tag numbers as {"__num": raw, "float": bool} so callers can pick.
+    // For demo simplicity we return the raw string; the test below converts.
+    return raw
+}
+
+// (parse_value is defined below; mutual recursion works via late binding)
+
+fn parse_array() -> list {
+    advance()  // consume opening bracket
+    skip_ws()
+    let arr = []
+    if peek() == "]" { advance(); return ["array", arr] }
+    while true {
+        skip_ws()
+        let v = parse_value()
+        arr = arr + [v]
+        skip_ws()
+        let c = peek()
+        if c == "," {
+            advance()
+        } else if c == "]" {
+            advance()
+            return ["array", arr]
+        } else {
+            return ["array", arr]
+        }
+    }
+    return ["array", arr]
+}
+
+fn parse_object() -> list {
+    advance()  // consume opening brace
+    skip_ws()
+    let obj = []
+    if peek() == "}" { advance(); return ["object", obj] }
+    while true {
+        skip_ws()
+        if peek() != "\"" { return ["object", obj] }
+        let key = parse_string()
+        skip_ws()
+        if peek() == ":" { advance() }
+        skip_ws()
+        let v = parse_value()
+        obj = obj + [[key, v]]
+        skip_ws()
+        let c = peek()
+        if c == "," {
+            advance()
+        } else if c == "}" {
+            advance()
+            return ["object", obj]
+        } else {
+            return ["object", obj]
+        }
+    }
+    return ["object", obj]
+}
+
+// Char constants — built via chr() because bare "{" string literals trip
+// the f-string-style codegen path (`{` interpreted as template marker).
+let CH_QUOTE  = chr(34)   // "
+let CH_LBRACE = chr(123)  // {
+let CH_LBRACK = chr(91)   // [
+let CH_MINUS  = chr(45)   // -
+
+fn parse_value() -> list {
+    skip_ws()
+    let c = peek()
+    if c == CH_QUOTE  { return ["string", parse_string()] }
+    if c == CH_LBRACE { return parse_object() }
+    if c == CH_LBRACK { return parse_array() }
+    if c == CH_MINUS || is_digit(c) { return ["number", parse_number()] }
+    if match_lit("true")  { return ["bool", "true"] }
+    if match_lit("false") { return ["bool", "false"] }
+    if match_lit("null")  { return ["null", ""] }
+    return ["error", c]
+}
+
+fn parse_json(text: str) -> list {
+    STATE[0] = text
+    STATE[1] = 0
+    return parse_value()
+}
+
+fn show(v: list) -> str {
+    let kind = v[0]
+    let body = v[1]
+    if kind == "string" { return "\"" + body + "\"" }
+    if kind == "null" { return "null" }
+    if kind == "number" || kind == "bool" { return body }
+    if kind == "array" {
+        let s = CH_LBRACK
+        let i = 0
+        while i < len(body) {
+            if i > 0 { s = s + ", " }
+            s = s + show(body[i])
+            i = i + 1
+        }
+        return s + "]"
+    }
+    if kind == "object" {
+        let s = CH_LBRACE
+        let i = 0
+        while i < len(body) {
+            if i > 0 { s = s + ", " }
+            s = s + "\"" + body[i][0] + "\": " + show(body[i][1])
+            i = i + 1
+        }
+        return s + "}"
+    }
+    return "?"
+}
+
+fn main() {
+    // Build source piecewise so the JSON braces don't appear bare in literals.
+    let src = CH_LBRACE
+        + "\"name\":\"Lateralus\","
+        + "\"version\":1.06,"
+        + "\"features\":" + CH_LBRACK + "\"crypto\",\"parquet\",true],"
+        + "\"flags\":" + CH_LBRACE + "\"safe\":true,\"unsafe\":false,\"debug\":null}"
+        + "}"
+    let tree = parse_json(src)
+    print("input : " + src)
+    print("parsed: " + show(tree))
+}
+
+main()

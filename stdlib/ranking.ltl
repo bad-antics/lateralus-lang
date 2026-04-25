@@ -1,0 +1,292 @@
+// ===================================================================
+// stdlib/ranking.ltl  —  Spiral Wave 11
+// Information-retrieval primitives: term frequency, inverse document
+// frequency, BM25 ranking, TF-IDF vectors, and cosine similarity over
+// sparse term vectors.
+//
+// Pure Lateralus, no external indexes.  Designed to drop into any
+// "rank these N documents against this query" workload.
+// ===================================================================
+
+// ---- tokenization --------------------------------------------------
+
+fn ascii_lower(c: str) -> str {
+    let n = int(c)  // single-char int via implicit ord-like? Won't work generically.
+    // Fallback: explicit table for A-Z.
+    if c == "A" { return "a" } if c == "B" { return "b" } if c == "C" { return "c" }
+    if c == "D" { return "d" } if c == "E" { return "e" } if c == "F" { return "f" }
+    if c == "G" { return "g" } if c == "H" { return "h" } if c == "I" { return "i" }
+    if c == "J" { return "j" } if c == "K" { return "k" } if c == "L" { return "l" }
+    if c == "M" { return "m" } if c == "N" { return "n" } if c == "O" { return "o" }
+    if c == "P" { return "p" } if c == "Q" { return "q" } if c == "R" { return "r" }
+    if c == "S" { return "s" } if c == "T" { return "t" } if c == "U" { return "u" }
+    if c == "V" { return "v" } if c == "W" { return "w" } if c == "X" { return "x" }
+    if c == "Y" { return "y" } if c == "Z" { return "z" }
+    return c
+}
+
+fn is_word_char(c: str) -> bool {
+    if c == "0" || c == "1" || c == "2" || c == "3" || c == "4" { return true }
+    if c == "5" || c == "6" || c == "7" || c == "8" || c == "9" { return true }
+    if c == "a" || c == "b" || c == "c" || c == "d" || c == "e" { return true }
+    if c == "f" || c == "g" || c == "h" || c == "i" || c == "j" { return true }
+    if c == "k" || c == "l" || c == "m" || c == "n" || c == "o" { return true }
+    if c == "p" || c == "q" || c == "r" || c == "s" || c == "t" { return true }
+    if c == "u" || c == "v" || c == "w" || c == "x" || c == "y" { return true }
+    if c == "z" || c == "_" { return true }
+    return false
+}
+
+/// Simple ASCII-lowercase + alnum-token split.  Returns a list of word strings.
+pub fn tokenize(text: str) -> list {
+    let out = []
+    let cur = ""
+    let i = 0
+    while i < len(text) {
+        let c = ascii_lower(slice(text, i, i + 1))
+        if is_word_char(c) {
+            cur = cur + c
+        } else {
+            if len(cur) > 0 { out = out + [cur]; cur = "" }
+        }
+        i = i + 1
+    }
+    if len(cur) > 0 { out = out + [cur] }
+    return out
+}
+
+// ---- term frequency tables ----------------------------------------
+
+/// Term-frequency table for a token list.  Returns parallel
+/// [terms, counts] lists.  Lookup helpers below.
+pub fn term_freq(tokens: list) -> list {
+    let terms = []
+    let counts = []
+    let i = 0
+    while i < len(tokens) {
+        let t = tokens[i]
+        let found = -1
+        let j = 0
+        while j < len(terms) {
+            if terms[j] == t { found = j; j = len(terms) } else { j = j + 1 }
+        }
+        if found >= 0 { counts[found] = counts[found] + 1 }
+        else          { terms = terms + [t]; counts = counts + [1] }
+        i = i + 1
+    }
+    return [terms, counts]
+}
+
+pub fn tf_get(tf: list, term: str) -> int {
+    let terms = tf[0]
+    let counts = tf[1]
+    let i = 0
+    while i < len(terms) {
+        if terms[i] == term { return counts[i] }
+        i = i + 1
+    }
+    return 0
+}
+
+// ---- corpus statistics --------------------------------------------
+
+/// Build a compact corpus index from a list of raw documents.
+/// Returns dict-shaped list:
+///   [docs_tf,            // list of term_freq results
+///    doc_lens,           // list of int token counts
+///    avgdl,              // float average doc length
+///    df,                 // [terms, doc_count_with_term]
+///    n_docs]             // int
+pub fn build_index(docs_text: list) -> list {
+    let docs_tf = []
+    let doc_lens = []
+    let i = 0
+    let total_len = 0
+    while i < len(docs_text) {
+        let toks = tokenize(docs_text[i])
+        let tf = term_freq(toks)
+        docs_tf = docs_tf + [tf]
+        doc_lens = doc_lens + [len(toks)]
+        total_len = total_len + len(toks)
+        i = i + 1
+    }
+    let n = len(docs_tf)
+    let avgdl = 0.0
+    if n > 0 { avgdl = (total_len * 1.0) / (n * 1.0) }
+
+    // document frequency: for each term, how many docs contain it
+    let df_terms = []
+    let df_counts = []
+    let d = 0
+    while d < n {
+        let terms = docs_tf[d][0]
+        let k = 0
+        while k < len(terms) {
+            let t = terms[k]
+            let f = -1
+            let m = 0
+            while m < len(df_terms) {
+                if df_terms[m] == t { f = m; m = len(df_terms) } else { m = m + 1 }
+            }
+            if f >= 0 { df_counts[f] = df_counts[f] + 1 }
+            else      { df_terms = df_terms + [t]; df_counts = df_counts + [1] }
+            k = k + 1
+        }
+        d = d + 1
+    }
+    return [docs_tf, doc_lens, avgdl, [df_terms, df_counts], n]
+}
+
+pub fn df_get(df: list, term: str) -> int {
+    let terms = df[0]
+    let counts = df[1]
+    let i = 0
+    while i < len(terms) {
+        if terms[i] == term { return counts[i] }
+        i = i + 1
+    }
+    return 0
+}
+
+// ---- IDF and BM25 -------------------------------------------------
+
+fn ln_approx(x: float) -> float {
+    // Series approximation good enough for IR scoring (x in (0, large]).
+    // Use ln(x) = 2 * atanh((x-1)/(x+1)) via Taylor of atanh.
+    if x <= 0.0 { return -1.0e18 }
+    let y = (x - 1.0) / (x + 1.0)
+    let y2 = y * y
+    let s = y
+    let term = y
+    let i = 1
+    while i < 12 {
+        term = term * y2
+        s = s + term / ((2 * i + 1) * 1.0)
+        i = i + 1
+    }
+    return 2.0 * s
+}
+
+/// BM25 IDF with floor at 0: ln((N - df + 0.5)/(df + 0.5) + 1).
+pub fn idf_bm25(df: int, n: int) -> float {
+    let num = (n - df) * 1.0 + 0.5
+    let den = df * 1.0 + 0.5
+    return ln_approx(num / den + 1.0)
+}
+
+/// Score a single (query_term, doc_index) pair under BM25.
+pub fn bm25_term_score(idx: list, doc_i: int, term: str, k1: float, b: float) -> float {
+    let docs_tf = idx[0]
+    let doc_lens = idx[1]
+    let avgdl = idx[2]
+    let df = idx[3]
+    let n = idx[4]
+    let tf = tf_get(docs_tf[doc_i], term)
+    if tf == 0 { return 0.0 }
+    let idf = idf_bm25(df_get(df, term), n)
+    let dl = doc_lens[doc_i] * 1.0
+    let norm = 1.0 - b + b * (dl / avgdl)
+    let tf_f = tf * 1.0
+    return idf * (tf_f * (k1 + 1.0)) / (tf_f + k1 * norm)
+}
+
+/// Score a query (list of terms) against doc_i using standard BM25 (k1=1.5, b=0.75).
+pub fn bm25_score(idx: list, doc_i: int, query_tokens: list) -> float {
+    let total = 0.0
+    let i = 0
+    while i < len(query_tokens) {
+        total = total + bm25_term_score(idx, doc_i, query_tokens[i], 1.5, 0.75)
+        i = i + 1
+    }
+    return total
+}
+
+/// Rank all docs by BM25; returns list of [doc_index, score] sorted desc.
+pub fn rank_bm25(idx: list, query: str) -> list {
+    let qtoks = tokenize(query)
+    let n = idx[4]
+    let scored = []
+    let i = 0
+    while i < n {
+        scored = scored + [[i, bm25_score(idx, i, qtoks)]]
+        i = i + 1
+    }
+    // selection sort desc on score
+    let a = 0
+    while a < len(scored) {
+        let best = a
+        let b = a + 1
+        while b < len(scored) {
+            if scored[b][1] > scored[best][1] { best = b }
+            b = b + 1
+        }
+        if best != a {
+            let tmp = scored[a]; scored[a] = scored[best]; scored[best] = tmp
+        }
+        a = a + 1
+    }
+    return scored
+}
+
+// ---- TF-IDF vectors and cosine similarity --------------------------
+
+/// Build TF-IDF vector for a tf table given the corpus df.
+/// Returns parallel [terms, weights].
+pub fn tfidf_vector(tf: list, df: list, n: int) -> list {
+    let terms = tf[0]
+    let counts = tf[1]
+    let weights = []
+    let i = 0
+    while i < len(terms) {
+        let idf = idf_bm25(df_get(df, terms[i]), n)
+        weights = weights + [counts[i] * 1.0 * idf]
+        i = i + 1
+    }
+    return [terms, weights]
+}
+
+fn sqrt_approx(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let r = x
+    let i = 0
+    while i < 20 {
+        r = 0.5 * (r + x / r)
+        i = i + 1
+    }
+    return r
+}
+
+/// Cosine similarity between two sparse [terms, weights] vectors.
+pub fn cosine_similarity(a: list, b: list) -> float {
+    let at = a[0]; let aw = a[1]
+    let bt = b[0]; let bw = b[1]
+    let dot = 0.0
+    let na = 0.0
+    let nb = 0.0
+    let i = 0
+    while i < len(at) {
+        let w = aw[i]
+        na = na + w * w
+        // find term in b
+        let j = 0
+        let found = false
+        while j < len(bt) {
+            if bt[j] == at[i] {
+                dot = dot + w * bw[j]
+                found = true
+                j = len(bt)
+            } else {
+                j = j + 1
+            }
+        }
+        i = i + 1
+    }
+    let k = 0
+    while k < len(bt) {
+        nb = nb + bw[k] * bw[k]
+        k = k + 1
+    }
+    let denom = sqrt_approx(na) * sqrt_approx(nb)
+    if denom == 0.0 { return 0.0 }
+    return dot / denom
+}

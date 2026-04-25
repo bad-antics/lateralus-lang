@@ -1,0 +1,191 @@
+// Advent of Code 2023 · Day 5 · If You Give A Seed A Fertilizer
+// Part 1: minimum "location" across mapping layers for each seed.
+// Part 2: seeds come in (start, length) pairs; we pipe RANGES through each layer.
+
+let SAMPLE = "seeds: 79 14 55 13
+
+seed-to-soil map:
+50 98 2
+52 50 48
+
+soil-to-fertilizer map:
+0 15 37
+37 52 2
+39 0 15
+
+fertilizer-to-water map:
+49 53 8
+0 11 42
+42 0 7
+57 7 4
+
+water-to-light map:
+88 18 7
+18 25 70
+
+light-to-temperature map:
+45 77 23
+81 45 19
+68 64 13
+
+temperature-to-humidity map:
+0 69 1
+1 0 69
+
+humidity-to-location map:
+60 56 37
+56 93 4"
+
+// A "map" is a list of [dst, src, len] triples.
+// parse_input -> [seeds, [map1, map2, ...]]
+fn parse_input(text: str) -> list {
+    let lines = str_split(text, "\n")
+    let seeds = []
+    let maps = []
+    let current = []
+    let i = 0
+    while i < len(lines) {
+        let line = str_trim(lines[i])
+        if len(line) == 0 {
+            if len(current) > 0 { maps = maps + [current]; current = [] }
+        } else if len(seeds) == 0 && len(line) >= 6 && slice(line, 0, 6) == "seeds:" {
+            let rest = slice(line, 6, len(line))
+            let toks = str_split(str_trim(rest), " ")
+            let j = 0
+            while j < len(toks) {
+                let t = str_trim(toks[j])
+                if len(t) > 0 { seeds = seeds + [int(t)] }
+                j = j + 1
+            }
+        } else if is_digit(slice(line, 0, 1)) {
+            let toks = str_split(line, " ")
+            let nums = []
+            let k = 0
+            while k < len(toks) {
+                let t = str_trim(toks[k])
+                if len(t) > 0 { nums = nums + [int(t)] }
+                k = k + 1
+            }
+            current = current + [nums]
+        }
+        // skip "xxx-to-yyy map:" header lines
+        i = i + 1
+    }
+    if len(current) > 0 { maps = maps + [current] }
+    return [seeds, maps]
+}
+
+fn is_digit(c: str) -> bool {
+    return c == "0" || c == "1" || c == "2" || c == "3" || c == "4"
+        || c == "5" || c == "6" || c == "7" || c == "8" || c == "9"
+}
+
+fn apply_map(m: list, v: int) -> int {
+    let i = 0
+    while i < len(m) {
+        let r = m[i]
+        let dst = r[0]
+        let src = r[1]
+        let ln = r[2]
+        if v >= src && v < src + ln { return dst + (v - src) }
+        i = i + 1
+    }
+    return v
+}
+
+fn part1(text: str) -> int {
+    let parsed = parse_input(text)
+    let seeds = parsed[0]
+    let maps = parsed[1]
+    let best = -1
+    let i = 0
+    while i < len(seeds) {
+        let v = seeds[i]
+        let m = 0
+        while m < len(maps) { v = apply_map(maps[m], v); m = m + 1 }
+        if best < 0 || v < best { best = v }
+        i = i + 1
+    }
+    return best
+}
+
+// For part 2 we propagate intervals [start, end) through each layer.
+// Each map entry slices overlapping pieces, shifts them, and leaves the
+// non-overlapping remainder for other entries (or passes through unchanged).
+fn apply_map_ranges(m: list, ranges: list) -> list {
+    let out = []
+    let pending = ranges
+    let i = 0
+    while i < len(m) {
+        let r = m[i]
+        let dst = r[0]
+        let src = r[1]
+        let ln = r[2]
+        let src_end = src + ln
+        let next_pending = []
+        let j = 0
+        while j < len(pending) {
+            let iv = pending[j]
+            let s = iv[0]
+            let e = iv[1]
+            // overlap [max(s,src), min(e, src_end))
+            let a = s
+            if src > a { a = src }
+            let b = e
+            if src_end < b { b = src_end }
+            if a < b {
+                out = out + [[a - src + dst, b - src + dst]]
+                if s < a { next_pending = next_pending + [[s, a]] }
+                if b < e { next_pending = next_pending + [[b, e]] }
+            } else {
+                next_pending = next_pending + [iv]
+            }
+            j = j + 1
+        }
+        pending = next_pending
+        i = i + 1
+    }
+    // Anything still pending maps identically.
+    let k = 0
+    while k < len(pending) { out = out + [pending[k]]; k = k + 1 }
+    return out
+}
+
+fn part2(text: str) -> int {
+    let parsed = parse_input(text)
+    let seeds = parsed[0]
+    let maps = parsed[1]
+    let ranges = []
+    let i = 0
+    while i + 1 < len(seeds) {
+        let s = seeds[i]
+        let l = seeds[i + 1]
+        ranges = ranges + [[s, s + l]]
+        i = i + 2
+    }
+    let m = 0
+    while m < len(maps) {
+        ranges = apply_map_ranges(maps[m], ranges)
+        m = m + 1
+    }
+    let best = -1
+    let k = 0
+    while k < len(ranges) {
+        if best < 0 || ranges[k][0] < best { best = ranges[k][0] }
+        k = k + 1
+    }
+    return best
+}
+
+@test
+fn test_part1() { assert_eq(part1(SAMPLE), 35) }
+
+@test
+fn test_part2() { assert_eq(part2(SAMPLE), 46) }
+
+fn main() {
+    print("Day 5 Part 1: " + str(part1(SAMPLE)))
+    print("Day 5 Part 2: " + str(part2(SAMPLE)))
+}
+
+main()
