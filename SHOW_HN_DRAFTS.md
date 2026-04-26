@@ -1,15 +1,19 @@
 # Show HN Drafts — Ready to Post
 
-## Post 1: Lateralus Language (v3.1.0 — refreshed 2026-04-21)
+## Post 1: Lateralus Language (v3.2.0 — refreshed 2026-04-26)
 
-**Title:** Show HN: Lateralus – A pipeline-native language compiling to C99, JS, WASM, and Python
+**Title:** Show HN: Lateralus – Pipeline-native language with multi-target codegen and its own OS
+
+_(Backup title if first reads as too broad: "Show HN: Lateralus – I built a programming language and an OS that runs natively in it")_
 
 **URL:** https://lateralus.dev
 
 **Text (for text post option):**
-I've spent the last couple of years building Lateralus, a statically-typed language where data pipelines are first-class syntax. The core bet: most real code is sequential transforms over data, so the language should make that the natural shape — not a library bolted onto OOP.
+I built a pipeline-native programming language and a bare-metal operating system that runs in it. The language has been in public development for 3+ years; it's now at v3.2.0, statically typed, and ships a working compiler with four backends.
 
-Where it is today (v3.1.0, April 2026):
+The core bet: most real code is sequential transforms over data, so the language should make that the natural shape — not a library bolted onto OOP.
+
+Where it is today (v3.2.0, April 2026):
 - Pipeline operators: `data |> filter(pred) |> map(f) |> reduce(+, 0)`
 - Algebraic data types, pattern matching, Hindley–Milner inference
 - Four compilation targets: C99, JavaScript, WebAssembly, Python (reference)
@@ -19,9 +23,14 @@ Where it is today (v3.1.0, April 2026):
 - Bare-metal companion OS written in Lateralus (LateralusOS, in-tree)
 - 58 canonical research papers on the theory (linked below)
 
-Install:
-- `pip install lateralus-lang` (PyPI, v3.1.0)
-- VS Code extension: `lateralus.lateralus-lang` (Marketplace)
+Install (all five registries, all up to date as of v3.2.0):
+- `pip install lateralus-lang` — PyPI
+- `code --install-extension lateralus.lateralus-lang` — VS Code Marketplace
+- Same ID on **Open VSX** for VSCodium / Cursor / Gitpod / code-server users
+- `docker run --rm -v "$PWD:/src" -w /src ghcr.io/bad-antics/lateralus-lang:3.2.0 run hello.ltl` — container
+- `npm install lateralus-grammar` — TextMate grammar (for tooling integrators)
+
+Launch FAQ (please skim before commenting; I tried to anticipate your question): https://github.com/bad-antics/lateralus-lang/blob/main/docs/hn-launch-faq.md
 
 Reproducible cross-language benchmarks (5 iters + 2 warmup, same machine, Python 3.13 / Node 20 / gcc -O2):
 
