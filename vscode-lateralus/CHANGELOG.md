@@ -2,6 +2,25 @@
 
 All notable changes to the Lateralus Language extension will be documented in this file.
 
+## [3.2.0] — 2026-04-26
+
+### Added
+- 25 new builtin function highlights covering Wave 11 stdlib and idioms:
+  `chr`, `ord`, `panic`, `dbg`, `read_file`, `write_file`, `args`,
+  `now_ms`, `time_ns`, `parse_int`, `parse_float`, `to_str`,
+  `int_to_str`, `fmt_float`, `str_split`, `str_trim`, `slice`,
+  `ascii_lower`, `is_digit`, `starts_with`, `ends_with`, `replace`,
+  `find`, `exit`, `env`.
+- `defer` control-flow keyword highlighting.
+- Snippets file `lateralus-idioms.json` (10 templates) is now bundled
+  by default — list-cell mutation, recursive-descent parser scaffold,
+  AoC day scaffold, BM25 quickstart, etc.
+
+### Changed
+- Version aligned with Lateralus language core v3.2 (Wave 11 ranking
+  stdlib, `lt-trace` profiler, `@law` 10-pillar verification pipeline,
+  AoC 2023 + 5 new Rosetta tasks).
+
 ## [3.1.0] — 2026-04-21
 
 ### Changed

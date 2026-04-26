@@ -5,6 +5,24 @@ here. The grammar is versioned independently of the main compiler
 (`bad-antics/lateralus-lang`) so that editors and Linguist can pin a
 stable revision.
 
+## 1.1.0 — 2026-04-26
+
+### Added
+- 25 builtin function highlights for Wave 11 stdlib (`chr`, `ord`, `panic`,
+  `dbg`, `read_file`, `write_file`, `args`, `now_ms`, `time_ns`,
+  `parse_int`, `parse_float`, `to_str`, `int_to_str`, `fmt_float`,
+  `str_split`, `str_trim`, `slice`, `ascii_lower`, `is_digit`,
+  `starts_with`, `ends_with`, `replace`, `find`, `exit`, `env`).
+- `defer` control-flow keyword highlighting.
+
+### Synced from
+`bad-antics/lateralus-lang/vscode-lateralus/syntaxes/lateralus.tmLanguage.json`
+at the tag of the `v3.2.0` compiler release (Wave 11 ranking stdlib,
+`lt-trace`, `@law` 10-pillar pipeline).
+
+### Stability
+`scopeName` remains `source.ltl`. No backwards-incompatible changes.
+
 ## 1.0.0 — 2026-04-22
 
 Initial public release, extracted from
