@@ -32,7 +32,7 @@ from .parser import ParseError, parse
 from .repl import REPL, start_repl
 from .vm import VM, Bytecode, VMError, assemble
 
-__version__ = "3.1.0"
+__version__ = "3.2.0"
 __author__  = "bad-antics"
 
 __all__ = [
