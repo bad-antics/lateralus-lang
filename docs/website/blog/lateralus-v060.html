@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lateralus v0.6.0: The Capability Release — Lateralus Blog</title>
+  <meta name="description" content="Lateralus v0.6.0: the capability release. First-class capability attributes, effect polymorphism, a new borrow checker, and 12% compile-time reductions.">
+  <meta property="og:title" content="Lateralus v0.6.0: The Capability Release — Lateralus Blog">
+  <meta property="og:description" content="Lateralus v0.6.0: The Capability Release">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://lateralus.dev/blog/lateralus-v060.html">
+  <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+  <link rel="canonical" href="https://lateralus.dev/blog/lateralus-v060.html">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css?v=20260408">
+  <style>
+    .blog-post { max-width: 800px; margin: 0 auto; padding: 80px 20px 60px; }
+    .blog-post h1 { font-family: 'Press Start 2P', monospace; font-size: clamp(14px, 3vw, 20px); color: var(--electric-yellow); line-height: 1.8; margin-bottom: 16px; }
+    .blog-meta { font-family: 'VT323', monospace; font-size: 18px; color: var(--hot-pink); margin-bottom: 24px; }
+    .blog-meta .tags { display: inline-flex; gap: 8px; margin-left: 16px; }
+    .blog-meta .tag { font-family: 'Press Start 2P', monospace; font-size: 8px; padding: 4px 10px; border: 1px solid var(--lime); color: var(--lime); }
+    .blog-content { font-family: 'VT323', monospace; font-size: 20px; color: var(--text); line-height: 1.7; }
+    .blog-content h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--cyber-blue); margin: 32px 0 16px; line-height: 1.6; }
+    .blog-content h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--lime); margin: 24px 0 12px; line-height: 1.6; }
+    .blog-content p { margin-bottom: 16px; }
+    .blog-content code { background: var(--bg3); padding: 2px 6px; color: var(--hot-pink); font-size: 18px; }
+    .blog-content pre { background: var(--bg3); border: 2px solid var(--border-light); padding: 16px; overflow-x: auto; margin: 16px 0; }
+    .blog-content pre code { background: none; padding: 0; display: block; font-size: 16px; line-height: 1.5; color: var(--text); }
+    .blog-content ul, .blog-content ol { margin: 16px 0; padding-left: 24px; }
+    .blog-content li { margin-bottom: 8px; }
+    .blog-content a { color: var(--cyber-blue); text-decoration: underline; }
+    .blog-content a:hover { color: var(--lime); }
+    .blog-content blockquote { border-left: 3px solid var(--lime); padding-left: 16px; margin: 16px 0; color: var(--text2); font-style: italic; }
+    .blog-back { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; color: var(--lime); text-decoration: none; margin-bottom: 24px; }
+    .blog-back:hover { color: var(--electric-yellow); }
+    /* Mobile responsive */
+    @media (max-width: 768px) {
+      .blog-header h1 { font-size: 14px; line-height: 1.5; }
+      .blog-header .meta { font-size: 11px; }
+      .blog-content { font-size: 16px; }
+      .blog-content code { font-size: 14px; }
+      .blog-content pre { padding: 12px; }
+      .blog-content pre code { font-size: 13px; }
+      .blog-back { font-size: 8px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/">PLAYGROUND</a>
+      <a href="/blog/" class="active">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="/affiliates/">AFFILIATES</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<article class="blog-post">
+  <a href="/blog/" class="blog-back">← Back to Blog</a>
+  <h1>Lateralus v0.6.0: The Capability Release</h1>
+  <div class="blog-meta">
+    April 23, 2026
+    <span class="tags"><span class="tag">language</span><span class="tag">v0.6.0</span><span class="tag">release</span><span class="tag">capabilities</span></span>
+  </div>
+  <div class="blog-content">
+
+    <p>Today we ship <strong>Lateralus v0.6.0</strong> — the Capability Release. This is the first release where the capability model, the effect system, and the borrow checker actually compose as a single coherent story. A function that declares <code>#[caps(net, io)]</code> and uses an effect handler can no longer "accidentally" touch the filesystem, even through a third-party library. The compiler rejects it; the runtime enforces it; on LateralusOS v1.2, the kernel rejects the syscall on top of that.</p>
+
+    <h2>◉ First-class Capability Attributes</h2>
+    <p>Capabilities are no longer a documentation convention. <code>#[caps(io, net)]</code> is checked by the compiler, propagated through call graphs, and emitted into the binary. Calling a function whose declared capabilities are not a subset of the caller's is a hard compile error.</p>
+    <pre><code>#[caps(net)]
+fn fetch(url: str) -> Result&lt;Response&gt; { ... }
+
+#[caps(io)]
+fn save(path: str, data: bytes) -> Result&lt;()&gt; { ... }
+
+// ✘ compile error: save() requires `io` which fetch_only doesn't have
+#[caps(net)]
+fn fetch_only(url: str) -> Result&lt;()&gt; {
+    let body = fetch(url)?
+    save("/tmp/cache", body)
+}</code></pre>
+
+    <h2>◉ Effect Polymorphism</h2>
+    <p>Functions can now be polymorphic over effects the same way they are polymorphic over types. The signature <code>fn run&lt;E&gt;() performs E</code> means "runs whatever effects the caller passes through." This lets library code stay effect-free at the boundary while still composing with user-defined effects like <code>Async</code>, <code>Retry</code>, or <code>Log</code>.</p>
+
+    <h2>◉ New Borrow Checker</h2>
+    <p>We rewrote the borrow checker on top of the polonius algorithm and shipped it as the default. The old checker was ~8 kLOC and rejected a long tail of valid programs; the new one is ~3 kLOC, closer to the formal specification, and accepts roughly 120 previously-rejected programs from the Lateralus test suite.</p>
+
+    <h2>◉ 12% Faster Compiles</h2>
+    <p>Parallel parsing, incremental borrow-check caching, and a new IR-level dead-code pass bring average compile times down 12% across our benchmark suite. Cold builds of the standard library went from 8.4s to 7.3s on a Ryzen 5950X.</p>
+
+    <h2>◉ What's Next</h2>
+    <p>v0.7 is the <em>distribution</em> release — we're finishing the mesh-based package manager, a signed module registry, and the self-hosting milestone for the compiler frontend. Stay tuned.</p>
+
+    <p><a href="/download/">Download Lateralus SDK v0.6.0</a> or read the <a href="/papers/pdf/lateralus-060-release-notes.pdf">full release notes paper</a>.</p>
+
+  </div>
+</article>
+
+<footer>
+  <div class="container" style="text-align:center; padding: 2rem 0;">
+    <p style="font-family:'Press Start 2P',monospace; font-size:9px; color:var(--lime); margin-bottom:8px;">|&gt; LATERALUS</p>
+    <p style="font-family:'VT323',monospace; font-size:14px; color:var(--text);">A Language That Spirals Outward</p>
+  </div>
+</footer>
+
+<script src="/site.js"></script>
+</body>
+</html>

@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LateralusOS v1.2: SMP, Capabilities, Installer — Lateralus Blog</title>
+  <meta name="description" content="LateralusOS v1.2 ships symmetric multiprocessing, capability-enforced syscalls, a graphical installer, Wi-Fi, USB, audio, and ext4 read-only.">
+  <meta property="og:title" content="LateralusOS v1.2: SMP, Capabilities, Installer — Lateralus Blog">
+  <meta property="og:description" content="LateralusOS v1.2: SMP, Capabilities, Installer">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://lateralus.dev/blog/lateralus-os-v12.html">
+  <meta property="og:image" content="https://lateralus.dev/social-card.svg">
+  <link rel="canonical" href="https://lateralus.dev/blog/lateralus-os-v12.html">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css?v=20260408">
+  <style>
+    .blog-post { max-width: 800px; margin: 0 auto; padding: 80px 20px 60px; }
+    .blog-post h1 { font-family: 'Press Start 2P', monospace; font-size: clamp(14px, 3vw, 20px); color: var(--electric-yellow); line-height: 1.8; margin-bottom: 16px; }
+    .blog-meta { font-family: 'VT323', monospace; font-size: 18px; color: var(--hot-pink); margin-bottom: 24px; }
+    .blog-meta .tags { display: inline-flex; gap: 8px; margin-left: 16px; }
+    .blog-meta .tag { font-family: 'Press Start 2P', monospace; font-size: 8px; padding: 4px 10px; border: 1px solid var(--lime); color: var(--lime); }
+    .blog-content { font-family: 'VT323', monospace; font-size: 20px; color: var(--text); line-height: 1.7; }
+    .blog-content h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--cyber-blue); margin: 32px 0 16px; line-height: 1.6; }
+    .blog-content h3 { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--lime); margin: 24px 0 12px; line-height: 1.6; }
+    .blog-content p { margin-bottom: 16px; }
+    .blog-content code { background: var(--bg3); padding: 2px 6px; color: var(--hot-pink); font-size: 18px; }
+    .blog-content pre { background: var(--bg3); border: 2px solid var(--border-light); padding: 16px; overflow-x: auto; margin: 16px 0; }
+    .blog-content pre code { background: none; padding: 0; display: block; font-size: 16px; line-height: 1.5; color: var(--text); }
+    .blog-content ul, .blog-content ol { margin: 16px 0; padding-left: 24px; }
+    .blog-content li { margin-bottom: 8px; }
+    .blog-content a { color: var(--cyber-blue); text-decoration: underline; }
+    .blog-content a:hover { color: var(--lime); }
+    .blog-content blockquote { border-left: 3px solid var(--lime); padding-left: 16px; margin: 16px 0; color: var(--text2); font-style: italic; }
+    .blog-back { display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 9px; color: var(--lime); text-decoration: none; margin-bottom: 24px; }
+    .blog-back:hover { color: var(--electric-yellow); }
+    /* Mobile responsive */
+    @media (max-width: 768px) {
+      .blog-header h1 { font-size: 14px; line-height: 1.5; }
+      .blog-header .meta { font-size: 11px; }
+      .blog-content { font-size: 16px; }
+      .blog-content code { font-size: 14px; }
+      .blog-content pre { padding: 12px; }
+      .blog-content pre code { font-size: 13px; }
+      .blog-back { font-size: 8px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="topbar-logo"><span class="pipe">|&gt;</span> LATERALUS</a>
+    <button class="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="topbar-links">
+      <a href="/">HOME</a>
+      <a href="/playground/">PLAYGROUND</a>
+      <a href="/blog/" class="active">BLOG</a>
+      <a href="/os/">OS</a>
+      <a href="/hho/">HHO</a>
+      <a href="/download/">DOWNLOAD</a>
+      <a href="/pentester/">PENTESTER</a>
+      <a href="/papers/">PAPERS</a>
+      <a href="/affiliates/">AFFILIATES</a>
+      <a href="https://github.com/bad-antics/lateralus-lang" target="_blank" rel="noopener noreferrer">GITHUB</a>
+    </div>
+  </div>
+</nav>
+
+<article class="blog-post">
+  <a href="/blog/" class="blog-back">← Back to Blog</a>
+  <h1>LateralusOS v1.2: SMP, Capabilities, Installer</h1>
+  <div class="blog-meta">
+    April 23, 2026
+    <span class="tags"><span class="tag">lateralus-os</span><span class="tag">v1.2</span><span class="tag">release</span><span class="tag">kernel</span></span>
+  </div>
+  <div class="blog-content">
+
+    <p>LateralusOS v1.2 is out. This is the release where LateralusOS stops being a research toy you boot in QEMU for a demo and starts being something you can actually install to hardware and use.</p>
+
+    <h2>◉ SMP Scheduler</h2>
+    <p>The scheduler now supports up to 64 cores. Per-CPU run queues, work-stealing between cores, IPI-driven preemption, and the whole thing is coordinated over Lateralus channels — the same channels user-space uses for IPC. One abstraction, all the way down.</p>
+
+    <h2>◉ Capability-Enforced Syscalls</h2>
+    <p>Every syscall entry now checks the calling process's capability set before it dispatches. A process without <code>net</code> capability cannot call <code>socket()</code>, even if a bug in a library tries to. This is enforced at the syscall trampoline — before any driver code runs, before any validation, before anything.</p>
+    <p>Paired with Lateralus v0.6.0's compile-time capability checking, you get defense in depth: the compiler rejects the call, the linker rejects the binary without the manifest, and the kernel rejects the syscall. An attacker who bypasses the first two still has to bypass the third.</p>
+
+    <h2>◉ Graphical Installer</h2>
+    <p>Boot the live ISO, click through partition setup, pick an edition, install. Written in the same GUI toolkit as the desktop — no separate installer stack to maintain. Ships with every edition, including Embedded (where the installer itself is ~180 KB).</p>
+
+    <h2>◉ Real Hardware Support</h2>
+    <p>Wi-Fi (802.11 a/b/g/n with WPA2/WPA3), USB 2.0 mass storage and HID, Intel HDA audio with WAV/FLAC playback, ext4 read-only driver for dual-boot recovery, six virtual terminals, and a signed boot chain. LateralusOS v1.2 runs on a ThinkPad X230, a Framework 13, and three different NUCs in our lab.</p>
+
+    <h2>◉ Editions</h2>
+    <ul>
+      <li><strong>Research</strong> — 62 MB ISO (was 48 MB in v1.1)</li>
+      <li><strong>Workstation</strong> — 48 MB ISO</li>
+      <li><strong>Industrial</strong> — 32 MB ISO</li>
+      <li><strong>Embedded</strong> — 12 MB ISO</li>
+    </ul>
+
+    <p><a href="/download/">Download the v1.2 ISOs</a>, or read the <a href="/papers/pdf/lateralus-os-v12-architecture.pdf">v1.2 architecture paper</a>.</p>
+
+  </div>
+</article>
+
+<footer>
+  <div class="container" style="text-align:center; padding: 2rem 0;">
+    <p style="font-family:'Press Start 2P',monospace; font-size:9px; color:var(--lime); margin-bottom:8px;">|&gt; LATERALUS</p>
+    <p style="font-family:'VT323',monospace; font-size:14px; color:var(--text);">A Language That Spirals Outward</p>
+  </div>
+</footer>
+
+<script src="/site.js"></script>
+</body>
+</html>
