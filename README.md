@@ -13,15 +13,18 @@
 
 ## Install
 
-```bash
-# From PyPI (recommended)
-pip install lateralus-lang
+| Platform / registry | Command |
+|---|---|
+| **PyPI** (canonical) | `pip install lateralus-lang` |
+| **npm** (Node shim)  | `npm install -g lateralus-cli lateralus-lsp` |
+| **Homebrew** (macOS / Linuxbrew) | `brew tap bad-antics/lateralus && brew install lateralus-lang` |
+| **Docker / GHCR**    | `docker run --rm -v "$PWD:/src" -w /src ghcr.io/bad-antics/lateralus-lang:latest` |
+| **One-liner**        | `curl -fsSL https://lateralus.dev/install.sh \| sh` |
+| **VS Code**          | [marketplace.visualstudio.com/items?itemName=lateralus.lateralus-lang](https://marketplace.visualstudio.com/items?itemName=lateralus.lateralus-lang) |
+| **Open VSX** (VSCodium / Cursor) | [open-vsx.org/extension/lateralus/lateralus-lang](https://open-vsx.org/extension/lateralus/lateralus-lang) |
+| **Bootable ISO**     | [GitHub release v3.2.0](https://github.com/bad-antics/lateralus-lang/releases/tag/v3.2.0) → `lateralus-os.iso` |
 
-# One-liner from lateralus.dev
-curl -fsSL https://lateralus.dev/install.sh | sh
-```
-
-VS Code users: install the **[Lateralus Language](https://marketplace.visualstudio.com/items?itemName=lateralus.lateralus-lang)** extension for full IDE support.
+Distro packaging manifests (Arch AUR, Snap, Flatpak) live in [packaging/](packaging/README.md).
 
 ---
 
