@@ -1,0 +1,46 @@
+name: citation-validate
+
+on:
+  push:
+    paths:
+      - 'CITATION.cff'
+      - '.zenodo.json'
+      - '.github/workflows/citation-validate.yml'
+  pull_request:
+    paths:
+      - 'CITATION.cff'
+      - '.zenodo.json'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate CITATION.cff
+        uses: citation-file-format/cffconvert-github-action@2.0.0
+        with:
+          args: '--validate'
+
+      - name: Validate .zenodo.json (parses as JSON, has required keys)
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          d = json.load(open('.zenodo.json'))
+          required = {'title', 'description', 'creators', 'license',
+                      'upload_type', 'access_right', 'keywords'}
+          missing = required - d.keys()
+          if missing:
+              print(f"::error::.zenodo.json missing required keys: {sorted(missing)}")
+              sys.exit(1)
+          if not isinstance(d['creators'], list) or not d['creators']:
+              print("::error::.zenodo.json creators must be a non-empty list")
+              sys.exit(1)
+          for c in d['creators']:
+              if 'name' not in c:
+                  print(f"::error::creator missing 'name': {c}")
+                  sys.exit(1)
+          print(f"OK: {d['title']!r}")
+          print(f"    {len(d['keywords'])} keywords, "
+                f"{len(d.get('related_identifiers', []))} related identifiers")
+          PY

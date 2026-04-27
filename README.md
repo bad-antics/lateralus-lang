@@ -129,6 +129,29 @@ make test
 - Grammar: docs/grammar.ebnf
 - Blog: docs/blog/
 
+## Citation
+
+If you use Lateralus in research, teaching, or production, please cite it.
+GitHub auto-renders a "Cite this repository" button from [CITATION.cff](CITATION.cff),
+and every tagged release is archived to Zenodo with a permanent DOI via [.zenodo.json](.zenodo.json).
+
+```bibtex
+@software{lateralus_lang_2026,
+  author    = {{bad-antics}},
+  title     = {Lateralus: A Pipeline-Native Programming Language},
+  year      = {2026},
+  version   = {3.2.1},
+  url       = {https://lateralus.dev},
+  publisher = {Zenodo},
+  note      = {Per-release DOIs minted via Zenodo GitHub integration}
+}
+```
+
+The latest-version Zenodo DOI always resolves to the most recent archived release;
+each tag also receives its own per-version DOI for reproducibility. Standalone
+papers under `docs/website/papers/pdf/` can be deposited as independent Zenodo
+records via [tools/zenodo_deposit.py](tools/zenodo_deposit.py).
+
 ## License
 
 MIT — see LICENSE for details.
