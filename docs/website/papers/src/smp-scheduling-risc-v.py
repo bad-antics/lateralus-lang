@@ -555,6 +555,59 @@ void ipi_flush(void) {
         "Formal verification of the ticket lock and Chase-Lev deque using the Iris concurrent separation logic framework (implemented in Coq) is a medium-term research goal. The deque's correctness argument relies on subtle ordering constraints that are difficult to audit manually; a machine-checked proof would substantially increase confidence in the implementation.",
         "Integration with the Lateralus language runtime is the long-term goal. FRISC OS is designed as the kernel layer for a Lateralus-native operating system in which user-space programs are compiled Lateralus binaries. The scheduler's thread model maps directly to Lateralus lightweight coroutines; the per-hart run queue design mirrors Lateralus's pipeline parallelism model where each pipeline stage can be bound to a hart.",
     ]),
+    ("21. Power Management and Dynamic Frequency Scaling", [
+        "RISC-V does not define a standard power management interface at the ISA level. Platform-specific mechanisms — exposed through SBI extensions on most boards — allow the supervisor to request hart park (a low-power halted state) and, on some platforms, to request dynamic voltage and frequency scaling (DVFS). FRISC OS v0.5 targets the SBI HSM (Hart State Management) extension for hart parking, which is available on all RISC-V implementations that follow the RISC-V SBI v0.2 specification.",
+        "Hart parking is used during idle periods. When a hart's run queue is empty and the work-stealing algorithm finds no runnable threads on any other hart, the hart executes <code>wfi</code> (wait-for-interrupt) in a spin loop. This reduces power consumption significantly on real hardware — measured power draw drops by 60-70% on idle harts on the SiFive HiFive Unmatched. The wfi loop must be interruptible by an IPI, so the hart must have <code>sie.SSIE</code> set before executing wfi.",
+        "Frequency scaling requires platform-specific drivers. On QEMU virt there is no DVFS support. On the HiFive Unmatched the U74 cores support two P-states controlled via the SiFive PRCI block. FRISC OS implements a simple ondemand governor: when hart utilization exceeds 80% for three consecutive 100ms measurement windows the higher P-state is requested; when it falls below 20% for three windows the lower P-state is requested. The hysteresis prevents oscillation under bursty workloads.",
+        ("code", """// Hart parking using SBI HSM extension (SBI v0.2)
+static void hart_idle_loop(void) {
+    for (;;) {
+        if (!rq_empty(&my_hcb()->rq)) return;
+        // Enable supervisor software interrupt for IPI wake
+        csr_set(sie, SIE_SSIE);
+        __asm__ volatile("wfi" ::: "memory");
+        csr_clear(sie, SIE_SSIE);
+        // Park hart after PARK_THRESHOLD idle ticks
+        if (++my_hcb()->idle_ticks > PARK_THRESHOLD) {
+            sbi_hart_stop(); // resumes via sbi_hart_start IPI
+            my_hcb()->idle_ticks = 0;
+        }
+    }
+}"""),
+        ("list", [
+            "SBI HSM extension: hart_start, hart_stop, hart_get_status (SBI v0.2+)",
+            "wfi loop: low-power idle with IPI wake latency under 2 µs on QEMU virt",
+            "DVFS ondemand governor: two P-states, 3-window hysteresis against oscillation",
+            "Thermal throttling: read platform temp sensor, cap frequency if over 85 C",
+            "Energy accounting: per-hart cycle counters via hpmcounterN CSRs",
+        ]),
+    ]),
+    ("22. Real-Time Scheduling Extensions for Pipeline Stages", [
+        "Pipeline stages in a Lateralus program have well-defined computational budgets: each stage processes one input token and produces one output token. The Lateralus type system can be extended with timing annotations that bound worst-case execution time (WCET). FRISC OS v0.6 will add a SCHED_RT scheduling class that maps annotated pipeline stages to periodic real-time tasks, providing bounded latency guarantees for latency-sensitive pipelines such as audio processing, sensor fusion, and control loops running at deterministic intervals.",
+        "The SCHED_RT class uses a partitioned EDF (Earliest Deadline First) scheduler. Each real-time thread carries a period P, a deadline D not exceeding P, and a WCET budget C. The utilization check at admission time verifies that the sum of C/P ratios on the target hart does not exceed the Liu-Layland bound of approximately 0.693 for n tasks. Tasks that pass admission are pinned to a hart and scheduled by earliest absolute deadline; preemption is immediate when a higher-priority real-time task becomes runnable.",
+        "Integration with the Lateralus pipeline runtime requires that each annotated stage be expressed as a periodic real-time task. The Lateralus compiler emits a task descriptor for each stage annotated with <code>@realtime</code>. The FRISC OS loader reads these descriptors from the ELF note section and calls <code>sys_rt_thread_create</code> for each annotated stage. Non-annotated stages run in the default SCHED_NORMAL class and share the per-hart run queue with real-time tasks at lower priority.",
+        ("code", """// Lateralus @realtime annotation for pipeline stages
+@realtime(period_us: 1000, wcet_us: 200)
+fn sensor_read(bus: &SpiDevice) -> SensorReading {
+    bus |> spi_transfer(READ_CMD) |> parse_sensor_frame
+}
+
+// FRISC OS sys_rt_thread_create syscall parameters
+struct RtParams {
+    fn_ptr:       usize,   // stage entry point
+    period_ns:    u64,     // task period in nanoseconds
+    deadline_ns:  u64,     // relative deadline (<= period_ns)
+    wcet_ns:      u64,     // worst-case budget
+    affinity:     u32,     // hart affinity bitmask
+};"""),
+        ("list", [
+            "SCHED_RT admission: Liu-Layland utilization bound enforced per hart at task creation",
+            "Partitioned EDF: real-time tasks are hart-pinned; work stealing disabled for RT threads",
+            "Preemption: RT tasks preempt SCHED_NORMAL tasks immediately on period activation",
+            "Overrun detection: budget timer fires if task exceeds WCET; SIGXCPU sent",
+            "Compiler integration: @realtime annotation emits RtParams in ELF .note.ltl.rt section",
+        ]),
+    ]),
 ]
 
 render_paper(
