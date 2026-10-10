@@ -130,7 +130,7 @@ def deposit(args: argparse.Namespace) -> int:
         print(f"error: upload failed ({code})", file=sys.stderr)
         return 5
 
-    print(f"==> writing metadata")
+    print("==> writing metadata")
     code, _ = _http("PUT", f"{base}/api/deposit/depositions/{dep_id}", token,
                     data=json.dumps({"metadata": metadata}).encode("utf-8"),
                     ctype="application/json")
@@ -139,7 +139,7 @@ def deposit(args: argparse.Namespace) -> int:
         return 6
 
     if args.publish:
-        print(f"==> publishing (this mints the DOI and is irreversible)")
+        print("==> publishing (this mints the DOI and is irreversible)")
         code, pub = _http("POST", f"{base}/api/deposit/depositions/{dep_id}/actions/publish",
                           token, data=b"")
         if code >= 300:
@@ -150,9 +150,9 @@ def deposit(args: argparse.Namespace) -> int:
         print(f"    DOI: {doi}")
         print(f"    URL: {url}")
     else:
-        print(f"==> deposition left in DRAFT state")
+        print("==> deposition left in DRAFT state")
         print(f"    review at: {base}/deposit/{dep_id}")
-        print(f"    add --publish to mint the DOI")
+        print("    add --publish to mint the DOI")
 
     return 0
 
