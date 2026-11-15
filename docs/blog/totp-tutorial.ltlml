@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Implementing Two-Factor Authentication with Lateralus stdlib/totp</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "Implementing Two-Factor Authentication with stdlib/totp"
+author: benny1232123
+date: 2026-11-16
+abstract: A practical walkthrough for building Google Authenticator-compatible two-factor authentication in Lateralus using RFC 6238 TOTP, complete with provisioning URIs, drift tolerance, and pinned test vectors.
+---
+
+# Introduction
+
+Two-factor authentication (2FA) is a cornerstone of modern application security. While dedicated identity providers frequently handle authentication for large-scale enterprise stacks, services running on resource-constrained devices, local nodes, or minimal self-hosted setups benefit greatly from having an in-process, zero-dependency authenticator.
+
+Lateralus ships an out-of-the-box TOTP module in its standard library (`stdlib/totp.ltl`). It implements both **RFC 6238 (TOTP)** and **RFC 4226 (HOTP)**, fully compatible with mobile authenticator apps such as Google Authenticator, 1Password, and Aegis.
+
+In this guide, we will step through:
+1. Generating cryptographically sound 160-bit shared secrets.
+2. Constructing valid `otpauth://` provisioning URIs for QR code enrollment.
+3. Generating current rolling one-time passcodes.
+4. Verifying user input securely with clock-drift tolerance.
+5. Verifying accuracy against official RFC test vectors.
+
+---
+
+# Architecture: From Counter to Time Window
+
+Under the hood, TOTP is simply HOTP where the monotonic event counter is replaced with a discrete time-step counter derived from the Unix epoch:
+
+$$Counter = \lfloor \frac{T_{now} - T_0}{T_{step}} \rfloor$$
+
+In the default configuration, $T_0 = 0$ (the Unix epoch) and $T_{step} = 30$ seconds. Every 30 seconds, the counter advances by 1, producing a fresh 6-digit or 8-digit decimal token.
+
+The core generation pipeline operates as follows:
+1. Serialize the 64-bit integer counter into an 8-byte big-endian byte array.
+2. Compute `HMAC-SHA1(secret, counter_bytes)`.
+3. Perform dynamic truncation: take the low 4 bits of the HMAC digest's final byte to determine the offset $O \in [0, 15]$.
+4. Extract 4 bytes starting at offset $O$, mask off the most significant bit, and compute modulo $10^{digits}$.
+5. Left-pad the result with leading zeros.
+
+---
+
+# Step-by-Step Implementation
+
+### 1. Generating a Secure Secret
+
+When enrolling a user into two-factor authentication, we must generate a cryptographically secure random secret. RFC 6238 recommends at least 160 bits (20 bytes):
+
+```lateralus
+import totp
+
+// Generate a fresh 160-bit (20-byte) secret
+let secret = totp.random_secret()
+print("Generated secret byte length: " + str(len(secret)))
+```
+
+### 2. Provisioning Authenticator Apps (QR Code URI)
+
+Mobile authenticators configure accounts via standard `otpauth://` URIs, which are typically encoded into a QR code for the user to scan. 
+
+Lateralus provides `totp.otpauth_uri()` to construct this URI, handling Base32 encoding and URL parameter encoding automatically:
+
+```lateralus
+import totp
+
+let secret = totp.random_secret()
+let uri = totp.otpauth_uri(
+    "alice@example.com", // Account identifier
+    secret,              // 20-byte secret list
+    "AcmeCloud",         // Issuer display name
+    6,                   // Number of digits (default: 6)
+    30,                  // Time step in seconds (default: 30)
+    "SHA1"               // Algorithm (default: "SHA1")
+)
+
+print(uri)
+// Output:
+// otpauth://totp/AcmeCloud:alice%40example.com?secret=...&issuer=AcmeCloud&algorithm=SHA1&digits=6&period=30
+```
+
+### 3. Generating Current Passcodes
+
+To generate the current one-time password on the server or in a CLI utility, invoke `totp.totp()`:
+
+```lateralus
+import totp
+
+let secret = totp.random_secret()
+
+// Generate current 6-digit passcode (pass -1 for current time)
+let current_code = totp.totp(secret, -1, 30, 6, "sha1")
+print("Current 2FA Token: " + current_code)
+```
+
+Passing `-1` as the `at` parameter instructs the runtime to query the current system clock via `time.unix_now()`. You can also supply an explicit Unix timestamp for deterministic testing or dry runs.
+
+### 4. Verifying User Codes with Clock-Drift Tolerance
+
+Mobile device clocks can easily drift by a few seconds, or users may press submit just as a 30-second window expires. Rejecting valid codes due to a 1-second boundary crossing leads to user frustration.
+
+The `totp.verify()` function takes a `drift` parameter:
+- `drift = 0`: Only accepts the code valid for the exact current 30-second step.
+- `drift = 1`: Accepts codes from the previous step ($t - 30s$), the current step, or the next step ($t + 30s$), providing a graceful 90-second window.
+
+Furthermore, verification uses constant-time string comparison (`crypto.ct_eq`) internally to prevent timing side-channel attacks:
+
+```lateralus
+import totp
+
+let secret = [49, 50, 51, 52, 53, 54, 55, 56, 57, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 48]
+let user_input = "287082"
+let now = 59
+
+// Verify with +/- 1 window tolerance
+let is_valid = totp.verify(secret, user_input, now, 30, 6, 1, "sha1")
+if is_valid {
+    print("Authentication successful!")
+} else {
+    print("Invalid passcode or expired window.")
+}
+```
+
+---
+
+# Pinned Reference Test Vectors
+
+To verify the mathematical accuracy of `stdlib/totp.ltl`, the following table reflects the official test vectors specified in RFC 6238 Appendix B, using the 20-byte ASCII secret `"12345678901234567890"`:
+
+| Unix Timestamp ($T$) | UTC Time | Counter (hex) | Expected 8-Digit TOTP | Expected 6-Digit TOTP |
+|---|---|---|---|---|
+| `59` | 1970-01-01 00:00:59 | `0x0000000000000001` | `94287082` | `287082` |
+| `1111111109` | 2005-03-18 01:58:29 | `0x00000000023523EC` | `07081804` | `081804` |
+| `1111111111` | 2005-03-18 01:58:31 | `0x00000000023523ED` | `14050471` | `050471` |
+| `1234567890` | 2009-02-13 23:31:30 | `0x000000000273EF07` | `89005924` | `005924` |
+| `2000000000` | 2033-05-18 03:33:20 | `0x0000000003F940AA` | `69279037` | `279037` |
+
+Running `tests/test_stdlib_totp.py` asserts all test vectors and verifies that the module compiles without warnings across the Python, JavaScript, and C backend targets.
+
+---
+
+# Summary
+
+Lateralus provides a comprehensive, secure, and self-contained 2FA implementation in `stdlib/totp.ltl`:
+- **RFC Compliance**: Full support for RFC 6238 (TOTP) and RFC 4226 (HOTP).
+- **Authenticator Compatibility**: Instant QR setup via `otpauth_uri()`.
+- **Timing Defense**: Constant-time verification prevents side-channel leakage.
+- **Resilience**: Configurable clock-skew tolerance prevents false authentication failures.
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>
