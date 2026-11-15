@@ -1,0 +1,1518 @@
+// ===================================================================
+// apps/lt_logs.ltl  —  lt-logs: a log shipper in one file
+// -------------------------------------------------------------------
+// Reads log lines on stdin (logfmt, JSON, or RFC 5424 syslog — mixed
+// freely, detected per line), keeps the ones that match a small filter
+// expression, batches them into 1-minute rollups, and writes each
+// rollup as an LZ4-compressed JSON-lines file or a Parquet file,
+// optionally sealed with ChaCha20-Poly1305.
+//
+//   lateralus run apps/lt_logs.ltl [options] < app.log
+//
+// Every format and primitive comes from the stdlib:
+//   logfmt        logfmt lines               stdlib/logfmt.ltl
+//   regex         syslog header, `~` filter  stdlib/regex.ltl
+//   aho_corasick  `has(...)` filter          stdlib/aho_corasick.ltl
+//   lz4           compressed JSON lines      stdlib/lz4.ltl
+//   parquet       Parquet framing + Thrift   stdlib/parquet.ltl
+//   chacha20      AEAD keystream             stdlib/chacha20.ltl
+//   poly1305      AEAD tag                   stdlib/poly1305.ltl
+// JSON lines are read and written with the json_parse / json_encode
+// builtins (as stdlib/jwt.ltl and stdlib/http.ltl do).
+//
+// Run `lateralus run apps/lt_logs.ltl --help` for the options and the
+// filter language, and `... selftest` for the built-in checks.
+// ===================================================================
+
+import logfmt
+import regex
+import aho_corasick
+import lz4
+import parquet
+import chacha20
+import poly1305
+
+let VERSION = "0.1.0"
+
+let USAGE = "lt-logs " + VERSION + " - filter, roll up, and ship log lines
+
+usage:
+  lateralus run apps/lt_logs.ltl [options] < input.log
+  lateralus run apps/lt_logs.ltl cat [--key KEY] FILE
+  lateralus run apps/lt_logs.ltl decrypt --key KEY FILE > plain
+  lateralus run apps/lt_logs.ltl selftest
+
+options:
+  --filter EXPR     keep only lines matching EXPR (repeatable; all must match)
+  --format F        rollup format: jsonl (LZ4-compressed JSON lines, default)
+                    or parquet
+  --out DIR         directory for rollup files (default: .); '-' writes plain
+                    JSON lines to stdout instead of files
+  --key KEY         seal each rollup with ChaCha20-Poly1305; KEY is 64 hex
+                    chars, or @PATH to read it from a file
+  --input F         auto (default; detected per line), logfmt, json, syslog
+  --window SECS     rollup width in seconds (default 60)
+  --grace SECS      wait this long past a window's end for late lines before
+                    closing it (default 5)
+
+filter expressions:
+  level=error                field equals value
+  status!=200                field differs from value
+  msg~\"time(d)?out\"          regex search in a field
+  ~\"^GET /api\"               regex search in the whole raw line
+  has(panic, \"out of memory\") line contains any of the words (Aho-Corasick)
+  msg has(oom, killed)       ... same, within one field
+  a and b, a or b, not a, ( ... )
+
+  Fields: level (lowercased; err -> error, warning -> warn), msg, format, ts,
+  plus every key of the parsed line (syslog adds
+  host, app, procid, msgid, facility and SD params as sdid.name).  Values
+  with spaces or ()=!~, need double quotes.
+
+output:
+  One file per closed window, named lt-logs-<window start>-<seq>.<ext>
+  (.jsonl.lz4 or .parquet, + .enc when sealed), and one JSON summary line
+  per file on stdout.  Sealed file layout: \"LTLE\" 0x01 | nonce(12) |
+  ciphertext | tag(16), with the first 5 bytes as associated data."
+
+// ===================================================================
+// Small helpers
+// ===================================================================
+
+// Growable list: {items, n}.  Appending writes into spare capacity
+// instead of `xs = xs + [x]` (which copies the whole list every time).
+fn vec_new() -> map {
+    let v = {}
+    v["items"] = [0, 0, 0, 0, 0, 0, 0, 0]
+    v["n"] = 0
+    return v
+}
+
+fn vec_push(v: map, x) {
+    let n = v["n"]
+    if n == len(v["items"]) {
+        v["items"] = v["items"] + v["items"]
+    }
+    let items = v["items"]
+    items[n] = x
+    v["n"] = n + 1
+}
+
+fn vec_extend(v: map, xs: list) {
+    let i = 0
+    while i < len(xs) {
+        vec_push(v, xs[i])
+        i = i + 1
+    }
+}
+
+fn vec_list(v: map) -> list {
+    return slice(v["items"], 0, v["n"])
+}
+
+fn zeros(n: int) -> list {
+    if n <= 0 { return [] }
+    let z = [0]
+    while len(z) < n { z = z + z }
+    return slice(z, 0, n)
+}
+
+fn le32(v: int) -> list {
+    return [v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, (v >> 24) & 0xff]
+}
+
+fn le64(v: int) -> list {
+    return le32(v & 0xFFFFFFFF) + le32((v >> 32) & 0xFFFFFFFF)
+}
+
+fn read_le32(b: list, i: int) -> int {
+    return b[i] | (b[i + 1] << 8) | (b[i + 2] << 16) | (b[i + 3] << 24)
+}
+
+let HEX_DIGITS = "0123456789abcdef"
+
+// Hex string → byte list, or nil if it is not valid hex.
+fn hex_to_bytes(s: str) -> list {
+    let h = str_lower(s)
+    if len(h) % 2 != 0 { return nil }
+    let out = []
+    let i = 0
+    while i < len(h) {
+        let hi = index_of(HEX_DIGITS, char_at(h, i))
+        let lo = index_of(HEX_DIGITS, char_at(h, i + 1))
+        if hi < 0 || lo < 0 { return nil }
+        out = out + [hi * 16 + lo]
+        i = i + 2
+    }
+    return out
+}
+
+fn bytes_to_hex(b: list) -> str {
+    let out = ""
+    let i = 0
+    while i < len(b) {
+        out = out + char_at(HEX_DIGITS, b[i] >> 4) + char_at(HEX_DIGITS, b[i] & 15)
+        i = i + 1
+    }
+    return out
+}
+
+// A field value as text: strings as-is, anything else as its JSON
+// (json_encode of a string is the only encoding that starts with a quote).
+fn value_text(v) -> str {
+    if v == nil { return "" }
+    let j = json_encode(v)
+    if str_starts_with(j, "\"") { return v }
+    return j
+}
+
+fn die(msg: str) {
+    eprintln("lt-logs: " + msg)
+    process_exit(2)
+}
+
+// ===================================================================
+// Time — RFC 3339 / epoch numbers  ↔  Unix milliseconds (UTC)
+// ===================================================================
+
+// Days since 1970-01-01 for a proleptic Gregorian date (H. Hinnant).
+fn days_from_civil(y: int, m: int, d: int) -> int {
+    if m <= 2 { y = y - 1 }
+    let era = idiv(y, 400)
+    let yoe = y - era * 400
+    let mp = m - 3
+    if m <= 2 { mp = m + 9 }
+    let doy = idiv(153 * mp + 2, 5) + d - 1
+    let doe = yoe * 365 + idiv(yoe, 4) - idiv(yoe, 100) + doy
+    return era * 146097 + doe - 719468
+}
+
+// Inverse of days_from_civil → [y, m, d].
+fn civil_from_days(z: int) -> list {
+    z = z + 719468
+    let era = idiv(z, 146097)
+    let doe = z - era * 146097
+    let yoe = idiv(doe - idiv(doe, 1460) + idiv(doe, 36524) - idiv(doe, 146096), 365)
+    let doy = doe - (365 * yoe + idiv(yoe, 4) - idiv(yoe, 100))
+    let mp = idiv(5 * doy + 2, 153)
+    let d = doy - idiv(153 * mp + 2, 5) + 1
+    let m = mp + 3
+    if mp >= 10 { m = mp - 9 }
+    let y = yoe + era * 400
+    if m <= 2 { y = y + 1 }
+    return [y, m, d]
+}
+
+let RFC3339_RE = "^(\\d{{4})-(\\d{{2})-(\\d{{2})[Tt ](\\d{{2}):(\\d{{2}):(\\d{{2})(\\.\\d+)?([Zz]|[+-]\\d{{2}:?\\d{{2})?$"
+let NUMBER_RE = "^-?\\d+(\\.\\d+)?$"
+
+// RFC 3339 timestamp → Unix ms, or -1.  A missing offset means UTC.
+fn parse_rfc3339(s: str) -> int {
+    let g = regex.groups(RFC3339_RE, s)
+    if len(g) == 0 { return -1 }
+    let days = days_from_civil(to_int(g[0]), to_int(g[1]), to_int(g[2]))
+    let secs = days * 86400 + to_int(g[3]) * 3600 + to_int(g[4]) * 60 + to_int(g[5])
+    let ms = secs * 1000
+    if g[6] != nil {
+        // ".123456" → first three digits, right-padded
+        let frac = slice(g[6] + "000", 1, 4)
+        ms = ms + to_int(frac)
+    }
+    let off = g[7]
+    if off != nil && off != "Z" && off != "z" {
+        let digits = str_replace(slice(off, 1, len(off)), ":", "")
+        let off_min = to_int(slice(digits, 0, 2)) * 60 + to_int(slice(digits, 2, 4))
+        if char_at(off, 0) == "+" { ms = ms - off_min * 60000 }
+        else                       { ms = ms + off_min * 60000 }
+    }
+    return ms
+}
+
+// Any timestamp value → Unix ms, or -1.  Numbers are epoch seconds,
+// or epoch milliseconds when they are too large to be seconds.
+fn parse_timestamp(v) -> int {
+    let t = value_text(v)
+    if regex.is_match(NUMBER_RE, t) {
+        let f = to_float(t)
+        if f > 100000000000.0 { return to_int(f) }
+        return to_int(f * 1000.0)
+    }
+    return parse_rfc3339(t)
+}
+
+fn two(n: int) -> str { return pad_left(str(n), 2, "0") }
+
+// Unix ms → "2026-11-15T12:34:56.789Z"
+fn format_iso_ms(ms: int) -> str {
+    let days = idiv(ms, 86400000)
+    let rem = ms - days * 86400000
+    let ymd = civil_from_days(days)
+    let s = idiv(rem, 1000)
+    return pad_left(str(ymd[0]), 4, "0") + "-" + two(ymd[1]) + "-" + two(ymd[2])
+         + "T" + two(idiv(s, 3600)) + ":" + two(idiv(s, 60) % 60) + ":" + two(s % 60)
+         + "." + pad_left(str(rem % 1000), 3, "0") + "Z"
+}
+
+// Unix ms → "20261115T123456Z" (for file names)
+fn format_compact(ms: int) -> str {
+    let iso = format_iso_ms(ms)
+    let out = ""
+    let i = 0
+    while i < 19 {
+        let c = char_at(iso, i)
+        if c != "-" && c != ":" { out = out + c }
+        i = i + 1
+    }
+    return out + "Z"
+}
+
+// ===================================================================
+// Parsing — one line → record
+// -------------------------------------------------------------------
+// record = { ts (Unix ms), level, msg, format, fields (map), raw }
+// ===================================================================
+
+let TS_KEYS    = ["ts", "time", "timestamp", "@timestamp"]
+let LEVEL_KEYS = ["level", "lvl", "severity"]
+let MSG_KEYS   = ["msg", "message"]
+
+// Syslog severities 0-7, spelled the way application logs usually
+// spell them (see normalize_level), so level=error matches both.
+let SYSLOG_SEVERITY = ["emerg", "alert", "crit", "error", "warn", "notice", "info", "debug"]
+let SYSLOG_FACILITY = ["kern", "user", "mail", "daemon", "auth", "syslog", "lpr", "news",
+                       "uucp", "cron", "authpriv", "ftp", "ntp", "audit", "alert", "clock",
+                       "local0", "local1", "local2", "local3", "local4", "local5", "local6",
+                       "local7"]
+
+let SYSLOG_RE = "^<(\\d{{1,3})>(\\d{{1,2}) (\\S+) (\\S+) (\\S+) (\\S+) (\\S+) (.*)$"
+
+// Lowercase, and fold the two common spellings: err → error,
+// warning → warn.
+fn normalize_level(v: str) -> str {
+    let l = str_lower(str_trim(v))
+    if l == "err" { return "error" }
+    if l == "warning" { return "warn" }
+    return l
+}
+
+fn new_record(raw: str, fmt: str) -> map {
+    let r = {}
+    r["ts"] = -1
+    r["level"] = ""
+    r["msg"] = ""
+    r["format"] = fmt
+    r["fields"] = {}
+    r["raw"] = raw
+    return r
+}
+
+// Pull ts / level / msg out of a flat key→value map into the record;
+// everything else stays in record.fields.
+fn absorb_fields(r: map, kv: map) {
+    let fields = {}
+    let ks = keys(kv)
+    let i = 0
+    while i < len(ks) {
+        let k = ks[i]
+        let v = kv[k]
+        let lk = str_lower(k)
+        if contains(TS_KEYS, lk) && r["ts"] < 0 {
+            r["ts"] = parse_timestamp(v)
+            if r["ts"] < 0 { fields[k] = v }
+        } else if contains(LEVEL_KEYS, lk) && r["level"] == "" {
+            r["level"] = normalize_level(value_text(v))
+        } else if contains(MSG_KEYS, lk) && r["msg"] == "" {
+            r["msg"] = value_text(v)
+        } else {
+            fields[k] = v
+        }
+        i = i + 1
+    }
+    r["fields"] = fields
+}
+
+fn parse_json_line(line: str) -> map {
+    let v = nil
+    try {
+        v = json_parse(line)
+    } recover * (e) {
+        return nil
+    }
+    // only objects are log records
+    if !str_starts_with(json_encode(v), "{{") { return nil }
+    let r = new_record(line, "json")
+    absorb_fields(r, v)
+    return r
+}
+
+fn parse_logfmt_line(line: str) -> map {
+    if index_of(line, "=") < 0 { return nil }
+    let pairs = logfmt.parse(line)
+    if len(pairs) == 0 { return nil }
+    let kv = {}
+    let i = 0
+    while i < len(pairs) {
+        kv[pairs[i][0]] = pairs[i][1]
+        i = i + 1
+    }
+    let r = new_record(line, "logfmt")
+    absorb_fields(r, kv)
+    return r
+}
+
+// RFC 5424 STRUCTURED-DATA: "-" or one or more [id name="value" ...].
+// Adds "id.name" → value to fields; returns the index just past it,
+// or -1 if malformed.
+fn parse_structured_data(s: str, fields: map) -> int {
+    let n = len(s)
+    if n > 0 && char_at(s, 0) == "-" { return 1 }
+    let i = 0
+    if n == 0 || char_at(s, 0) != "[" { return -1 }
+    while i < n && char_at(s, i) == "[" {
+        i = i + 1
+        let id_start = i
+        while i < n && char_at(s, i) != " " && char_at(s, i) != "]" { i = i + 1 }
+        let sd_id = slice(s, id_start, i)
+        while i < n && char_at(s, i) != "]" {
+            while i < n && char_at(s, i) == " " { i = i + 1 }
+            let name_start = i
+            while i < n && char_at(s, i) != "=" { i = i + 1 }
+            let name = slice(s, name_start, i)
+            // expect ="
+            if i + 1 >= n || char_at(s, i + 1) != "\"" { return -1 }
+            i = i + 2
+            let val = ""
+            let scanning = true
+            while scanning {
+                if i >= n { return -1 }
+                let c = char_at(s, i)
+                if c == "\\" && i + 1 < n {
+                    let nx = char_at(s, i + 1)
+                    // only \" \\ \] are escapes; otherwise keep the backslash
+                    if nx == "\"" || nx == "\\" || nx == "]" { val = val + nx }
+                    else                                     { val = val + c + nx }
+                    i = i + 2
+                } else if c == "\"" {
+                    scanning = false
+                    i = i + 1
+                } else {
+                    val = val + c
+                    i = i + 1
+                }
+            }
+            fields[sd_id + "." + name] = val
+        }
+        if i >= n { return -1 }
+        i = i + 1   // ]
+    }
+    return i
+}
+
+fn nil_dash(s: str) -> str {
+    if s == "-" { return "" }
+    return s
+}
+
+fn parse_syslog_line(line: str) -> map {
+    if !str_starts_with(line, "<") { return nil }
+    let g = regex.groups(SYSLOG_RE, line)
+    if len(g) == 0 { return nil }
+    let pri = to_int(g[0])
+    if pri > 191 { return nil }
+    let r = new_record(line, "syslog")
+    let fields = {}
+    let fac = idiv(pri, 8)
+    fields["facility"] = SYSLOG_FACILITY[fac]
+    r["level"] = SYSLOG_SEVERITY[pri % 8]
+    if g[2] != "-" { r["ts"] = parse_rfc3339(g[2]) }
+    if g[3] != "-" { fields["host"] = g[3] }
+    if g[4] != "-" { fields["app"] = g[4] }
+    if g[5] != "-" { fields["procid"] = g[5] }
+    if g[6] != "-" { fields["msgid"] = g[6] }
+    let rest = g[7]
+    let end = parse_structured_data(rest, fields)
+    if end < 0 { return nil }
+    let msg = slice(rest, end, len(rest))
+    if str_starts_with(msg, " ") { msg = slice(msg, 1, len(msg)) }
+    // RFC 5424 §6.4: a UTF-8 MSG may start with a BOM
+    if str_starts_with(msg, chr(0xFEFF)) { msg = slice(msg, 1, len(msg)) }
+    r["msg"] = msg
+    r["fields"] = fields
+    return r
+}
+
+// Parse with the requested input format ("auto" sniffs per line).
+// Lines that don't parse become format "raw" with msg = the line.
+fn parse_line(line: str, input_fmt: str) -> map {
+    let r = nil
+    let t = str_trim(line)
+    if input_fmt == "json" || (input_fmt == "auto" && str_starts_with(t, "{{")) {
+        r = parse_json_line(t)
+    } else if input_fmt == "syslog" || (input_fmt == "auto" && str_starts_with(t, "<")) {
+        r = parse_syslog_line(t)
+    }
+    if r == nil && (input_fmt == "logfmt" || input_fmt == "auto") {
+        r = parse_logfmt_line(t)
+    }
+    if r == nil {
+        r = new_record(line, "raw")
+        r["msg"] = t
+    }
+    return r
+}
+
+// ===================================================================
+// Filter language
+// -------------------------------------------------------------------
+//   expr  := and ( "or" and )*
+//   and   := unary ( "and" unary )*
+//   unary := "not" unary | "(" expr ")" | atom
+//   atom  := FIELD "=" VAL | FIELD "!=" VAL | FIELD "~" VAL
+//          | "~" VAL | FIELD "has" "(" VAL ("," VAL)* ")"
+//          | "has" "(" VAL ("," VAL)* ")"
+// Nodes are maps with an "op" key.  `~` patterns are checked when the
+// filter is compiled; `has` word lists become one Aho-Corasick automaton.
+// ===================================================================
+
+fn is_punct(c: str) -> bool {
+    return c == "(" || c == ")" || c == "," || c == "=" || c == "!" || c == "~"
+}
+
+// Tokens: [kind, text] with kind in word, str, punct.
+fn tokenize_filter(src: str, st: map) -> list {
+    let toks = []
+    let n = len(src)
+    let i = 0
+    while i < n {
+        let c = char_at(src, i)
+        if c == " " || c == "\t" {
+            i = i + 1
+        } else if c == "!" {
+            if i + 1 < n && char_at(src, i + 1) == "=" {
+                toks = toks + [["punct", "!="]]
+                i = i + 2
+            } else {
+                st["err"] = "unexpected '!' (did you mean '!=' or 'not'?)"
+                return []
+            }
+        } else if is_punct(c) {
+            toks = toks + [["punct", c]]
+            i = i + 1
+        } else if c == "\"" {
+            let val = ""
+            i = i + 1
+            let closed = false
+            while i < n && !closed {
+                let ch = char_at(src, i)
+                if ch == "\\" && i + 1 < n {
+                    val = val + char_at(src, i + 1)
+                    i = i + 2
+                } else if ch == "\"" {
+                    closed = true
+                    i = i + 1
+                } else {
+                    val = val + ch
+                    i = i + 1
+                }
+            }
+            if !closed {
+                st["err"] = "unterminated string"
+                return []
+            }
+            toks = toks + [["str", val]]
+        } else {
+            let start = i
+            while i < n && char_at(src, i) != " " && char_at(src, i) != "\t"
+                  && char_at(src, i) != "\"" && !is_punct(char_at(src, i)) {
+                i = i + 1
+            }
+            toks = toks + [["word", slice(src, start, i)]]
+        }
+    }
+    return toks
+}
+
+fn peek_tok(st: map) -> list {
+    if st["i"] < len(st["toks"]) { return st["toks"][st["i"]] }
+    return ["eof", ""]
+}
+
+fn next_tok(st: map) -> list {
+    let t = peek_tok(st)
+    st["i"] = st["i"] + 1
+    return t
+}
+
+fn is_kw(t: list, kw: str) -> bool {
+    return t[0] == "word" && str_lower(t[1]) == kw
+}
+
+fn is_p(t: list, p: str) -> bool {
+    return t[0] == "punct" && t[1] == p
+}
+
+fn expect_value(st: map, what: str) -> str {
+    let t = next_tok(st)
+    if t[0] == "word" || t[0] == "str" { return t[1] }
+    if st["err"] == "" {
+        if t[0] == "eof" { st["err"] = "expected " + what + " at end of filter" }
+        else             { st["err"] = "expected " + what + " but found '" + t[1] + "'" }
+    }
+    return ""
+}
+
+fn regex_node(st: map, field: str, pattern: str) -> map {
+    try {
+        regex.is_match(pattern, "")
+    } recover * (e) {
+        if st["err"] == "" { st["err"] = "bad regex \"" + pattern + "\": " + str(e) }
+    }
+    let node = {}
+    node["op"] = "re"
+    node["field"] = field
+    node["pattern"] = pattern
+    return node
+}
+
+fn has_node(st: map, field: str) -> map {
+    let node = {}
+    node["op"] = "has"
+    node["field"] = field
+    if !is_p(next_tok(st), "(") {
+        if st["err"] == "" { st["err"] = "expected '(' after has" }
+        return node
+    }
+    let words = [expect_value(st, "a word")]
+    while is_p(peek_tok(st), ",") {
+        next_tok(st)
+        words = words + [expect_value(st, "a word")]
+    }
+    if !is_p(next_tok(st), ")") && st["err"] == "" {
+        st["err"] = "expected ')' to close has(...)"
+    }
+    let i = 0
+    while i < len(words) {
+        if words[i] == "" && st["err"] == "" { st["err"] = "has(...) words must not be empty" }
+        i = i + 1
+    }
+    node["words"] = words
+    node["auto"] = aho_corasick.build(words)
+    return node
+}
+
+fn parse_atom(st: map) -> map {
+    let t = peek_tok(st)
+    if is_p(t, "~") {
+        next_tok(st)
+        return regex_node(st, "", expect_value(st, "a regex after '~'"))
+    }
+    if is_kw(t, "has") && is_p(st["toks"][min(st["i"] + 1, len(st["toks"]) - 1)], "(") {
+        next_tok(st)
+        return has_node(st, "")
+    }
+    if t[0] != "word" && t[0] != "str" {
+        if st["err"] == "" {
+            if t[0] == "eof" { st["err"] = "unexpected end of filter" }
+            else             { st["err"] = "unexpected '" + t[1] + "'" }
+        }
+        next_tok(st)
+        return nil
+    }
+    let field = next_tok(st)[1]
+    let op = next_tok(st)
+    let node = {}
+    node["field"] = field
+    if is_p(op, "=") {
+        node["op"] = "eq"
+        node["value"] = expect_value(st, "a value after '='")
+    } else if is_p(op, "!=") {
+        node["op"] = "ne"
+        node["value"] = expect_value(st, "a value after '!='")
+    } else if is_p(op, "~") {
+        return regex_node(st, field, expect_value(st, "a regex after '~'"))
+    } else if is_kw(op, "has") {
+        return has_node(st, field)
+    } else if st["err"] == "" {
+        st["err"] = "expected =, !=, ~ or has after '" + field + "'"
+    }
+    return node
+}
+
+fn parse_unary(st: map) -> map {
+    let t = peek_tok(st)
+    if is_kw(t, "not") {
+        next_tok(st)
+        let node = {}
+        node["op"] = "not"
+        node["a"] = parse_unary(st)
+        return node
+    }
+    if is_p(t, "(") {
+        next_tok(st)
+        let inner = parse_or(st)
+        if !is_p(next_tok(st), ")") && st["err"] == "" { st["err"] = "expected ')'" }
+        return inner
+    }
+    return parse_atom(st)
+}
+
+fn parse_and(st: map) -> map {
+    let left = parse_unary(st)
+    while is_kw(peek_tok(st), "and") && st["err"] == "" {
+        next_tok(st)
+        let node = {}
+        node["op"] = "and"
+        node["a"] = left
+        node["b"] = parse_unary(st)
+        left = node
+    }
+    return left
+}
+
+fn parse_or(st: map) -> map {
+    let left = parse_and(st)
+    while is_kw(peek_tok(st), "or") && st["err"] == "" {
+        next_tok(st)
+        let node = {}
+        node["op"] = "or"
+        node["a"] = left
+        node["b"] = parse_and(st)
+        left = node
+    }
+    return left
+}
+
+// Compile a filter expression → {"ok": true, "node": ...} or
+// {"ok": false, "error": "..."}.
+fn compile_filter(src: str) -> map {
+    let st = {}
+    st["err"] = ""
+    st["i"] = 0
+    st["toks"] = tokenize_filter(src, st)
+    let res = {}
+    if st["err"] == "" {
+        if len(st["toks"]) == 0 { st["err"] = "empty filter" }
+        else {
+            let node = parse_or(st)
+            if st["err"] == "" && st["i"] < len(st["toks"]) {
+                st["err"] = "unexpected '" + peek_tok(st)[1] + "'"
+            }
+            res["node"] = node
+        }
+    }
+    res["ok"] = st["err"] == ""
+    res["error"] = st["err"]
+    return res
+}
+
+fn field_value(r: map, field: str) -> str {
+    if field == "" { return r["raw"] }
+    if field == "level" { return r["level"] }
+    if field == "msg" || field == "message" { return r["msg"] }
+    if field == "format" { return r["format"] }
+    if field == "ts" {
+        if r["ts"] < 0 { return "" }
+        return format_iso_ms(r["ts"])
+    }
+    let f = r["fields"]
+    if contains(f, field) { return value_text(f[field]) }
+    return ""
+}
+
+fn eval_filter(node: map, r: map) -> bool {
+    let op = node["op"]
+    if op == "and" { return eval_filter(node["a"], r) && eval_filter(node["b"], r) }
+    if op == "or"  { return eval_filter(node["a"], r) || eval_filter(node["b"], r) }
+    if op == "not" { return !eval_filter(node["a"], r) }
+    if op == "eq"  { return field_value(r, node["field"]) == node["value"] }
+    if op == "ne"  { return field_value(r, node["field"]) != node["value"] }
+    if op == "re"  { return regex.is_match(node["pattern"], field_value(r, node["field"])) }
+    if op == "has" { return aho_corasick.contains_any(node["auto"], field_value(r, node["field"])) }
+    return false
+}
+
+fn eval_all(filters: list, r: map) -> bool {
+    let i = 0
+    while i < len(filters) {
+        if !eval_filter(filters[i], r) { return false }
+        i = i + 1
+    }
+    return true
+}
+
+// ===================================================================
+// Output encodings
+// ===================================================================
+
+// The JSON object written for one record.
+fn record_json(r: map) -> str {
+    let o = {}
+    o["ts"] = format_iso_ms(r["ts"])
+    o["level"] = r["level"]
+    o["msg"] = r["msg"]
+    o["format"] = r["format"]
+    o["fields"] = r["fields"]
+    return json_encode(o)
+}
+
+// -- LZ4 frame (lz4 CLI / python-lz4 compatible) ---------------------
+// Header: magic 184D2204 | FLG 0x60 (v01, independent blocks, no
+// checksums) | BD 0x40 (64 KB blocks) | HC = (XXH32(FLG‖BD) >> 8) & 0xFF
+// = 0x82.  Each block: le32 size (top bit set = stored uncompressed)
+// then data; a zero size ends the frame.
+
+let LZ4F_HEADER = [0x04, 0x22, 0x4D, 0x18, 0x60, 0x40, 0x82]
+let LZ4F_BLOCK = 65536
+
+fn lz4_frame(data: list) -> list {
+    let out = vec_new()
+    vec_extend(out, LZ4F_HEADER)
+    let n = len(data)
+    let i = 0
+    while i < n {
+        let end = min(i + LZ4F_BLOCK, n)
+        let chunk = slice(data, i, end)
+        let c = lz4.compress(chunk)
+        if len(c) < len(chunk) {
+            vec_extend(out, le32(len(c)))
+            vec_extend(out, c)
+        } else {
+            vec_extend(out, le32(len(chunk) | 0x80000000))
+            vec_extend(out, chunk)
+        }
+        i = end
+    }
+    vec_extend(out, le32(0))
+    return vec_list(out)
+}
+
+// Decode a frame written by lz4_frame (or any frame without block
+// checksums / dictionary).  Returns nil if it is not an LZ4 frame.
+fn lz4_unframe(b: list) -> list {
+    if len(b) < 7 || read_le32(b, 0) != 0x184D2204 { return nil }
+    let flg = b[4]
+    let i = 6
+    if (flg & 0x08) != 0 { i = i + 8 }   // content size
+    if (flg & 0x01) != 0 { return nil }  // dictionary id: unsupported
+    i = i + 1                            // header checksum
+    let out = vec_new()
+    while i + 4 <= len(b) {
+        let size = read_le32(b, i)
+        i = i + 4
+        if size == 0 { return vec_list(out) }
+        let stored = (size & 0x80000000) != 0
+        size = size & 0x7FFFFFFF
+        let block = slice(b, i, i + size)
+        if stored { vec_extend(out, block) }
+        else      { vec_extend(out, lz4.decompress(block)) }
+        i = i + size
+        if (flg & 0x10) != 0 { i = i + 4 }   // block checksum
+    }
+    return nil
+}
+
+// -- Parquet ---------------------------------------------------------
+// One rollup = one Parquet file with a single row group and one PLAIN,
+// uncompressed data page per column; all columns REQUIRED.
+//   ts      INT64       TIMESTAMP_MILLIS
+//   level   BYTE_ARRAY  UTF8
+//   msg     BYTE_ARRAY  UTF8
+//   format  BYTE_ARRAY  UTF8
+//   fields  BYTE_ARRAY  UTF8   (the fields map as JSON)
+// FileMetaData / PageHeader are Thrift compact protocol, written with
+// the varint/binary primitives from stdlib/parquet.ltl.
+
+let TC_I32    = 5
+let TC_I64    = 6
+let TC_BINARY = 8
+let TC_LIST   = 9
+let TC_STRUCT = 12
+
+let CONVERTED_UTF8 = 0
+let CONVERTED_TIMESTAMP_MILLIS = 9
+
+// Thrift compact struct writer: {"b": bytes, "last": last field id}.
+fn tw_new() -> map {
+    let w = {}
+    w["b"] = []
+    w["last"] = 0
+    return w
+}
+
+fn tw_field(w: map, id: int, ttype: int) {
+    let delta = id - w["last"]
+    if delta > 0 && delta <= 15 {
+        w["b"] = w["b"] + [(delta << 4) | ttype]
+    } else {
+        w["b"] = w["b"] + [ttype] + parquet.thrift_varint_i32(id)
+    }
+    w["last"] = id
+}
+
+fn tw_i32(w: map, id: int, v: int) {
+    tw_field(w, id, TC_I32)
+    w["b"] = w["b"] + parquet.thrift_varint_i32(v)
+}
+
+fn tw_i64(w: map, id: int, v: int) {
+    tw_field(w, id, TC_I64)
+    w["b"] = w["b"] + parquet.thrift_varint_i64(v)
+}
+
+fn tw_string(w: map, id: int, s: str) {
+    tw_field(w, id, TC_BINARY)
+    w["b"] = w["b"] + parquet.thrift_string(s)
+}
+
+fn tw_struct(w: map, id: int, encoded: list) {
+    tw_field(w, id, TC_STRUCT)
+    w["b"] = w["b"] + encoded
+}
+
+fn tc_list_header(size: int, elem_type: int) -> list {
+    if size < 15 { return [(size << 4) | elem_type] }
+    return [0xF0 | elem_type] + parquet.thrift_uvarint(size)
+}
+
+// `encoded` is the already-encoded elements, concatenated.
+fn tw_list(w: map, id: int, elem_type: int, size: int, encoded: list) {
+    tw_field(w, id, TC_LIST)
+    w["b"] = w["b"] + tc_list_header(size, elem_type) + encoded
+}
+
+fn tw_end(w: map) -> list { return w["b"] + [0] }
+
+fn parquet_schema_leaf(name: str, ptype: int, converted: int) -> list {
+    let w = tw_new()
+    tw_i32(w, 1, ptype)            // type
+    tw_i32(w, 3, 0)                // repetition_type = REQUIRED
+    tw_string(w, 4, name)          // name
+    tw_i32(w, 6, converted)        // converted_type
+    return tw_end(w)
+}
+
+// PLAIN encoding of one column's values.
+fn parquet_plain(values: list, ptype: int) -> list {
+    let out = vec_new()
+    let i = 0
+    while i < len(values) {
+        if ptype == parquet.type_int64() {
+            vec_extend(out, le64(values[i]))
+        } else {
+            let b = bytes_of(values[i])
+            vec_extend(out, le32(len(b)))
+            vec_extend(out, b)
+        }
+        i = i + 1
+    }
+    return vec_list(out)
+}
+
+fn parquet_page_header(num_values: int, size: int) -> list {
+    let dph = tw_new()
+    tw_i32(dph, 1, num_values)
+    tw_i32(dph, 2, parquet.enc_plain())
+    tw_i32(dph, 3, parquet.enc_rle())    // definition levels (none: REQUIRED)
+    tw_i32(dph, 4, parquet.enc_rle())    // repetition levels (none)
+    let w = tw_new()
+    tw_i32(w, 1, 0)                      // PageType DATA_PAGE
+    tw_i32(w, 2, size)                   // uncompressed_page_size
+    tw_i32(w, 3, size)                   // compressed_page_size
+    tw_struct(w, 5, tw_end(dph))         // data_page_header
+    return tw_end(w)
+}
+
+fn parquet_rollup(records: list) -> list {
+    let names = ["ts", "level", "msg", "format", "fields"]
+    let ptypes = [parquet.type_int64(), parquet.type_byte_array(), parquet.type_byte_array(),
+                  parquet.type_byte_array(), parquet.type_byte_array()]
+    let converted = [CONVERTED_TIMESTAMP_MILLIS, CONVERTED_UTF8, CONVERTED_UTF8,
+                     CONVERTED_UTF8, CONVERTED_UTF8]
+    let nrows = len(records)
+    let body = vec_new()
+    let chunks = []
+    let total = 0
+    let c = 0
+    while c < len(names) {
+        let vals = []
+        let i = 0
+        while i < nrows {
+            let r = records[i]
+            if c == 0 { vals = vals + [r["ts"]] }
+            else if c == 4 { vals = vals + [json_encode(r["fields"])] }
+            else { vals = vals + [r[names[c]]] }
+            i = i + 1
+        }
+        let data = parquet_plain(vals, ptypes[c])
+        let ph = parquet_page_header(nrows, len(data))
+        let offset = 4 + body["n"]          // 4 = leading "PAR1"
+        vec_extend(body, ph)
+        vec_extend(body, data)
+        let chunk_size = len(ph) + len(data)
+        total = total + chunk_size
+
+        let md = tw_new()
+        tw_i32(md, 1, ptypes[c])
+        tw_list(md, 2, TC_I32, 2, parquet.thrift_varint_i32(parquet.enc_plain())
+                                 + parquet.thrift_varint_i32(parquet.enc_rle()))
+        tw_list(md, 3, TC_BINARY, 1, parquet.thrift_string(names[c]))
+        tw_i32(md, 4, parquet.comp_uncompressed())
+        tw_i64(md, 5, nrows)
+        tw_i64(md, 6, chunk_size)
+        tw_i64(md, 7, chunk_size)
+        tw_i64(md, 9, offset)               // data_page_offset
+        let cc = tw_new()
+        tw_i64(cc, 2, offset)               // file_offset
+        tw_struct(cc, 3, tw_end(md))
+        chunks = chunks + tw_end(cc)
+        c = c + 1
+    }
+
+    let rg = tw_new()
+    tw_list(rg, 1, TC_STRUCT, len(names), chunks)
+    tw_i64(rg, 2, total)
+    tw_i64(rg, 3, nrows)
+
+    let root = tw_new()
+    tw_string(root, 4, "schema")
+    tw_i32(root, 5, len(names))
+    let schema = tw_end(root)
+    let k = 0
+    while k < len(names) {
+        schema = schema + parquet_schema_leaf(names[k], ptypes[k], converted[k])
+        k = k + 1
+    }
+
+    let fm = tw_new()
+    tw_i32(fm, 1, 1)                                   // version
+    tw_list(fm, 2, TC_STRUCT, len(names) + 1, schema)  // schema
+    tw_i64(fm, 3, nrows)                               // num_rows
+    tw_list(fm, 4, TC_STRUCT, 1, tw_end(rg))           // row_groups
+    tw_string(fm, 6, "lt-logs " + VERSION + " (Lateralus)")
+    return parquet.assemble_file(vec_list(body), tw_end(fm))
+}
+
+// -- ChaCha20-Poly1305 AEAD (RFC 8439 §2.8) --------------------------
+
+fn pad16(n: int) -> list { return zeros((16 - n % 16) % 16) }
+
+fn aead_tag(key: list, nonce: list, aad: list, ct: list) -> list {
+    let otk = slice(chacha20.block(key, nonce, 0), 0, 32)
+    let mac_data = aad + pad16(len(aad)) + ct + pad16(len(ct))
+                 + le64(len(aad)) + le64(len(ct))
+    return poly1305.mac(otk, mac_data)
+}
+
+// → ciphertext ‖ 16-byte tag
+fn aead_seal(key: list, nonce: list, aad: list, pt: list) -> list {
+    let ct = chacha20.xor(key, nonce, 1, pt)
+    return ct + aead_tag(key, nonce, aad, ct)
+}
+
+// → plaintext, or nil if the tag does not verify
+fn aead_open(key: list, nonce: list, aad: list, sealed: list) -> list {
+    if len(sealed) < 16 { return nil }
+    let ct = slice(sealed, 0, len(sealed) - 16)
+    let tag = slice(sealed, len(sealed) - 16, len(sealed))
+    if !poly1305.verify(aead_tag(key, nonce, aad, ct), tag) { return nil }
+    return chacha20.xor(key, nonce, 1, ct)
+}
+
+let SEAL_MAGIC = [0x4C, 0x54, 0x4C, 0x45, 0x01]   // "LTLE" v1
+
+fn seal_file(key: list, payload: list) -> list {
+    let nonce = bytes_of(random_bytes(12))
+    return SEAL_MAGIC + nonce + aead_seal(key, nonce, SEAL_MAGIC, payload)
+}
+
+fn open_file(key: list, b: list) -> list {
+    if len(b) < 5 + 12 + 16 || slice(b, 0, 5) != SEAL_MAGIC { return nil }
+    return aead_open(key, slice(b, 5, 17), SEAL_MAGIC, slice(b, 17, len(b)))
+}
+
+// ===================================================================
+// Rollups
+// ===================================================================
+
+fn new_shipper(cfg: map) -> map {
+    let s = {}
+    s["cfg"] = cfg
+    s["windows"] = {}      // window start ms → vec of records
+    s["watermark"] = -1    // newest record timestamp seen
+    s["seq"] = 0
+    s["lines"] = 0
+    s["matched"] = 0
+    s["rollups"] = 0
+    return s
+}
+
+fn window_start(ts: int, width_ms: int) -> int {
+    return ts - (ts % width_ms)
+}
+
+fn emit_rollup(s: map, start: int, records: list) {
+    let cfg = s["cfg"]
+    let width = cfg["window_ms"]
+    let levels = {}
+    let i = 0
+    while i < len(records) {
+        let lv = records[i]["level"]
+        if lv == "" { lv = "none" }
+        if contains(levels, lv) { levels[lv] = levels[lv] + 1 }
+        else                    { levels[lv] = 1 }
+        i = i + 1
+    }
+    let summary = {}
+    summary["window_start"] = format_iso_ms(start)
+    summary["window_end"] = format_iso_ms(start + width)
+    summary["records"] = len(records)
+    summary["levels"] = levels
+
+    if cfg["out"] == "-" {
+        let j = 0
+        while j < len(records) {
+            stdout_write(record_json(records[j]) + "\n")
+            j = j + 1
+        }
+        eprintln(json_encode(summary))
+        s["rollups"] = s["rollups"] + 1
+        return
+    }
+
+    let payload = []
+    let ext = ""
+    if cfg["format"] == "parquet" {
+        payload = parquet_rollup(records)
+        ext = ".parquet"
+    } else {
+        let lines = vec_new()
+        let j = 0
+        while j < len(records) {
+            vec_push(lines, record_json(records[j]))
+            j = j + 1
+        }
+        payload = lz4_frame(bytes_of(join(vec_list(lines), "\n") + "\n"))
+        ext = ".jsonl.lz4"
+    }
+    if cfg["key"] != nil {
+        payload = seal_file(cfg["key"], payload)
+        ext = ext + ".enc"
+    }
+    s["seq"] = s["seq"] + 1
+    let name = "lt-logs-" + format_compact(start) + "-" + pad_left(str(s["seq"]), 4, "0") + ext
+    let path = name
+    if cfg["out"] != "." { path = cfg["out"] + "/" + name }
+    try {
+        write_bytes(path, payload)
+    } recover * (e) {
+        die("cannot write " + path + ": " + str(e))
+    }
+    summary["format"] = cfg["format"]
+    summary["encrypted"] = cfg["key"] != nil
+    summary["file"] = path
+    summary["bytes"] = len(payload)
+    stdout_write(json_encode(summary) + "\n")
+    s["rollups"] = s["rollups"] + 1
+}
+
+// Close every window whose end + grace is at or before `upto`
+// (all of them when upto < 0), oldest first.
+fn flush_windows(s: map, upto: int) {
+    let cfg = s["cfg"]
+    let ws = s["windows"]
+    let starts = sort(keys(ws))
+    let i = 0
+    while i < len(starts) {
+        let st = starts[i]
+        if upto < 0 || st + cfg["window_ms"] + cfg["grace_ms"] <= upto {
+            emit_rollup(s, st, vec_list(ws[st]))
+            map_del(ws, st)
+        }
+        i = i + 1
+    }
+}
+
+fn ship_record(s: map, r: map) {
+    let cfg = s["cfg"]
+    s["matched"] = s["matched"] + 1
+    let st = window_start(r["ts"], cfg["window_ms"])
+    let ws = s["windows"]
+    if !contains(ws, st) { ws[st] = vec_new() }
+    vec_push(ws[st], r)
+    if r["ts"] > s["watermark"] {
+        s["watermark"] = r["ts"]
+        flush_windows(s, s["watermark"])
+    }
+}
+
+fn run_shipper(cfg: map) {
+    let s = new_shipper(cfg)
+    let going = true
+    while going {
+        let line = stdin_read_line()
+        if line == nil {
+            going = false
+        } else if len(str_trim(line)) > 0 {
+            s["lines"] = s["lines"] + 1
+            let r = parse_line(line, cfg["input"])
+            // no usable timestamp → time of arrival
+            if r["ts"] < 0 { r["ts"] = to_int(unix_time() * 1000.0) }
+            if eval_all(cfg["filters"], r) { ship_record(s, r) }
+        }
+    }
+    flush_windows(s, -1)
+    eprintln("lt-logs: " + str(s["lines"]) + " lines read, " + str(s["matched"])
+             + " matched, " + str(s["rollups"]) + " rollups written")
+}
+
+// ===================================================================
+// Command line
+// ===================================================================
+
+fn load_key(spec: str) -> list {
+    let text = spec
+    if str_starts_with(spec, "@") {
+        text = str_of_bytes(read_bytes(slice(spec, 1, len(spec))))
+    }
+    let key = hex_to_bytes(str_trim(text))
+    if key == nil || len(key) != 32 { die("--key must be 64 hex characters (32 bytes)") }
+    return key
+}
+
+fn need_arg(argv: list, i: int, flag: str) -> str {
+    if i + 1 >= len(argv) { die(flag + " needs a value") }
+    return argv[i + 1]
+}
+
+fn parse_seconds(v: str, flag: str) -> int {
+    if !regex.is_match("^\\d+$", v) { die(flag + " must be a whole number of seconds") }
+    return to_int(v)
+}
+
+fn parse_cli(argv: list) -> map {
+    let cfg = {}
+    cfg["filters"] = []
+    cfg["format"] = "jsonl"
+    cfg["out"] = "."
+    cfg["key"] = nil
+    cfg["input"] = "auto"
+    cfg["window_ms"] = 60000
+    cfg["grace_ms"] = 5000
+    let i = 0
+    while i < len(argv) {
+        let a = argv[i]
+        if a == "--filter" {
+            let f = compile_filter(need_arg(argv, i, a))
+            if !f["ok"] { die("bad --filter: " + f["error"]) }
+            cfg["filters"] = cfg["filters"] + [f["node"]]
+        } else if a == "--format" {
+            cfg["format"] = need_arg(argv, i, a)
+            if cfg["format"] != "jsonl" && cfg["format"] != "parquet" {
+                die("--format must be jsonl or parquet")
+            }
+        } else if a == "--out" {
+            cfg["out"] = need_arg(argv, i, a)
+        } else if a == "--key" {
+            cfg["key"] = load_key(need_arg(argv, i, a))
+        } else if a == "--input" {
+            cfg["input"] = need_arg(argv, i, a)
+            if !contains(["auto", "logfmt", "json", "syslog"], cfg["input"]) {
+                die("--input must be auto, logfmt, json or syslog")
+            }
+        } else if a == "--window" {
+            cfg["window_ms"] = parse_seconds(need_arg(argv, i, a), a) * 1000
+            if cfg["window_ms"] == 0 { die("--window must be at least 1") }
+        } else if a == "--grace" {
+            cfg["grace_ms"] = parse_seconds(need_arg(argv, i, a), a) * 1000
+        } else {
+            die("unknown option " + a + " (try --help)")
+        }
+        i = i + 2
+    }
+    if cfg["out"] == "-" && (cfg["format"] != "jsonl" || cfg["key"] != nil) {
+        die("--out - writes plain JSON lines; it cannot be combined with --format parquet or --key")
+    }
+    return cfg
+}
+
+// cat / decrypt: [--key KEY] FILE
+fn parse_file_cmd(argv: list, key_required: bool) -> map {
+    let o = {}
+    o["key"] = nil
+    o["file"] = ""
+    let i = 0
+    while i < len(argv) {
+        if argv[i] == "--key" {
+            o["key"] = load_key(need_arg(argv, i, "--key"))
+            i = i + 2
+        } else {
+            o["file"] = argv[i]
+            i = i + 1
+        }
+    }
+    if o["file"] == "" { die("missing FILE") }
+    if key_required && o["key"] == nil { die("decrypt needs --key") }
+    return o
+}
+
+fn unseal_or_die(key: list, b: list) -> list {
+    let pt = open_file(key, b)
+    if pt == nil { die("cannot decrypt: wrong key, or the file is damaged or not sealed") }
+    return pt
+}
+
+fn cmd_decrypt(argv: list) {
+    let o = parse_file_cmd(argv, true)
+    stdout_write_bytes(unseal_or_die(o["key"], read_bytes(o["file"])))
+}
+
+// Print a .jsonl.lz4 rollup (sealed or not) as plain JSON lines.
+fn cmd_cat(argv: list) {
+    let o = parse_file_cmd(argv, false)
+    let b = read_bytes(o["file"])
+    if len(b) >= 5 && slice(b, 0, 5) == SEAL_MAGIC {
+        if o["key"] == nil { die("file is sealed; pass --key") }
+        b = unseal_or_die(o["key"], b)
+    }
+    let plain = lz4_unframe(b)
+    if plain == nil { die("not an LZ4 JSON-lines rollup (Parquet rollups: use any Parquet reader)") }
+    stdout_write(str_of_bytes(plain))
+}
+
+// ===================================================================
+// selftest — `lateralus run apps/lt_logs.ltl selftest`
+// ===================================================================
+
+// (a map, because assigning a global from inside a function does not
+// reach the global in the Python backend)
+let TALLY = {}
+TALLY["pass"] = 0
+TALLY["fail"] = 0
+
+fn check(name: str, cond: bool) {
+    if cond {
+        TALLY["pass"] = TALLY["pass"] + 1
+        print("  ok  " + name)
+    } else {
+        TALLY["fail"] = TALLY["fail"] + 1
+        print("  FAIL " + name)
+    }
+}
+
+fn test_time() {
+    print("-- time --")
+    check("epoch day 0", days_from_civil(1970, 1, 1) == 0)
+    check("2000-03-01", days_from_civil(2000, 3, 1) == 11017)
+    check("civil roundtrip leap day", civil_from_days(days_from_civil(2024, 2, 29)) == [2024, 2, 29])
+    check("rfc3339 Z", parse_rfc3339("2026-11-15T12:34:56Z") == 1794746096000)
+    check("rfc3339 millis", parse_rfc3339("2026-11-15T12:34:56.789Z") == 1794746096789)
+    check("rfc3339 micros truncated", parse_rfc3339("2026-11-15T12:34:56.789999Z") == 1794746096789)
+    check("rfc3339 +02:00", parse_rfc3339("2026-11-15T14:34:56+02:00") == 1794746096000)
+    check("rfc3339 -0530", parse_rfc3339("2026-11-15T07:04:56-0530") == 1794746096000)
+    check("rfc3339 no offset = UTC", parse_rfc3339("2026-11-15 12:34:56") == 1794746096000)
+    check("rfc3339 garbage", parse_rfc3339("yesterday") == -1)
+    check("epoch seconds", parse_timestamp(1794746096) == 1794746096000)
+    check("epoch seconds string", parse_timestamp("1794746096.5") == 1794746096500)
+    check("epoch millis", parse_timestamp(1794746096789) == 1794746096789)
+    check("format iso", format_iso_ms(1794746096789) == "2026-11-15T12:34:56.789Z")
+    check("format compact", format_compact(1794746096789) == "20261115T123456Z")
+    check("window start", window_start(1794746096789, 60000) == 1794746040000)
+}
+
+fn test_parsers() {
+    print("-- parsers --")
+    let a = parse_line("ts=2026-11-15T12:34:56Z level=ERROR msg=\"db timeout\" retry=3", "auto")
+    check("logfmt format", a["format"] == "logfmt")
+    check("logfmt ts", a["ts"] == 1794746096000)
+    check("logfmt level lowercased", a["level"] == "error")
+    check("logfmt msg", a["msg"] == "db timeout")
+    check("logfmt extra field", a["fields"]["retry"] == "3")
+
+    let j = parse_line("{{\"time\":1794746096,\"severity\":\"warn\",\"message\":\"slow\",\"ms\":812,\"ok\":false}", "auto")
+    check("json format", j["format"] == "json")
+    check("json epoch ts", j["ts"] == 1794746096000)
+    check("json level", j["level"] == "warn")
+    check("json msg", j["msg"] == "slow")
+    check("json number field", field_value(j, "ms") == "812")
+    check("json bool field", field_value(j, "ok") == "false")
+
+    // RFC 5424 §6.5 example 3
+    let s = parse_line("<165>1 2003-10-11T22:14:15.003Z mymachine.example.com evntslog - ID47 [exampleSDID@32473 iut=\"3\" eventSource=\"Application\" eventID=\"1011\"] An application event log entry...", "auto")
+    check("syslog format", s["format"] == "syslog")
+    check("syslog severity", s["level"] == "notice")
+    check("syslog facility", s["fields"]["facility"] == "local4")
+    check("syslog ts", s["ts"] == parse_rfc3339("2003-10-11T22:14:15.003Z"))
+    check("syslog host", s["fields"]["host"] == "mymachine.example.com")
+    check("syslog app", s["fields"]["app"] == "evntslog")
+    check("syslog no procid", !contains(s["fields"], "procid"))
+    check("syslog sd param", s["fields"]["exampleSDID@32473.eventSource"] == "Application")
+    check("syslog msg", s["msg"] == "An application event log entry...")
+
+    let s2 = parse_line("<34>1 2026-11-15T12:00:00Z host su - ID47 [a@1 k=\"x\\\"y\\]z\"][b@2 n=\"1\"] 'su root' failed", "auto")
+    check("syslog escaped sd value", s2["fields"]["a@1.k"] == "x\"y]z")
+    check("syslog second sd element", s2["fields"]["b@2.n"] == "1")
+    check("syslog crit", s2["level"] == "crit")
+    check("syslog err -> error", parse_line("<11>1 - - - - - - x", "auto")["level"] == "error")
+    check("level warning -> warn", parse_line("level=WARNING msg=x", "auto")["level"] == "warn")
+
+    let s3 = parse_line("<13>1 - - - - - -", "auto")
+    check("syslog all nil", s3["format"] == "syslog" && s3["ts"] == -1 && s3["msg"] == "")
+
+    let raw = parse_line("just some text", "auto")
+    check("raw fallback", raw["format"] == "raw" && raw["msg"] == "just some text")
+    let bad = parse_line("{{not json", "auto")
+    check("broken json is raw", bad["format"] == "raw")
+    let forced = parse_line("a=1", "json")
+    check("forced json on logfmt is raw", forced["format"] == "raw")
+}
+
+fn matches(expr: str, line: str) -> bool {
+    let f = compile_filter(expr)
+    if !f["ok"] {
+        print("    (filter error: " + f["error"] + ")")
+        return false
+    }
+    return eval_filter(f["node"], parse_line(line, "auto"))
+}
+
+fn filter_error(expr: str) -> bool {
+    return !compile_filter(expr)["ok"]
+}
+
+fn test_filters() {
+    print("-- filters --")
+    let l = "level=error msg=\"upstream timed out\" path=/api/users status=504"
+    check("eq", matches("level=error", l))
+    check("eq miss", !matches("level=info", l))
+    check("ne", matches("status!=200", l))
+    check("field regex", matches("msg~\"time(d)? ?out\"", l))
+    check("raw regex", matches("~\"^level=\"", l))
+    check("has", matches("has(panic, \"timed out\")", l))
+    check("has miss", !matches("has(panic, oom)", l))
+    check("field has", matches("path has(users)", l) && !matches("msg has(users)", l))
+    check("and/or precedence", matches("level=info and status=200 or status=504", l))
+    check("parens", !matches("level=info and (status=200 or status=504)", l))
+    check("not", matches("not level=info", l))
+    check("missing field is empty", matches("user=\"\"", l))
+    check("quoted value with space", matches("msg=\"upstream timed out\"", l))
+    check("syslog field", matches("app=su and level=crit",
+          "<34>1 2026-11-15T12:00:00Z host su - - - failed"))
+    check("err: empty", filter_error(""))
+    check("err: dangling and", filter_error("level=error and"))
+    check("err: bad op", filter_error("level error"))
+    check("err: unclosed paren", filter_error("(level=error"))
+    check("err: bad regex", filter_error("msg~\"(\""))
+    check("err: unterminated string", filter_error("msg=\"abc"))
+    check("err: bare bang", filter_error("!level=x"))
+}
+
+fn test_lz4_frame() {
+    print("-- lz4 frame --")
+    let text = ""
+    let i = 0
+    while i < 2000 {
+        text = text + "{{\"ts\":\"2026-11-15T12:00:00.000Z\",\"n\":" + str(i) + "}\n"
+        i = i + 1
+    }
+    let data = bytes_of(text)
+    let f = lz4_frame(data)
+    check("frame magic", slice(f, 0, 4) == [0x04, 0x22, 0x4D, 0x18])
+    check("frame smaller than input", len(f) < len(data))
+    check("frame roundtrip (multi-block)", lz4_unframe(f) == data)
+    check("empty frame roundtrip", lz4_unframe(lz4_frame([])) == [])
+    check("incompressible block stored", lz4_unframe(lz4_frame([1, 2, 3])) == [1, 2, 3])
+    check("not a frame", lz4_unframe([1, 2, 3, 4, 5, 6, 7, 8]) == nil)
+}
+
+fn test_aead() {
+    print("-- chacha20-poly1305 (RFC 8439 2.8.2) --")
+    let key = []
+    let i = 0
+    while i < 32 { key = key + [0x80 + i]; i = i + 1 }
+    let nonce = [0x07, 0x00, 0x00, 0x00, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47]
+    let aad = [0x50, 0x51, 0x52, 0x53, 0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7]
+    let pt = bytes_of("Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.")
+    let sealed = aead_seal(key, nonce, aad, pt)
+    let ct = slice(sealed, 0, len(pt))
+    let tag = slice(sealed, len(pt), len(sealed))
+    check("ciphertext prefix", bytes_to_hex(slice(ct, 0, 16)) == "d31a8d34648e60db7b86afbc53ef7ec2")
+    check("ciphertext suffix", bytes_to_hex(slice(ct, len(ct) - 2, len(ct))) == "6116")
+    check("tag", bytes_to_hex(tag) == "1ae10b594f09e26a7e902ecbd0600691")
+    check("open", aead_open(key, nonce, aad, sealed) == pt)
+    let bad = slice(sealed, 0, len(sealed))
+    bad[3] = bad[3] ^ 1
+    check("tampered ciphertext rejected", aead_open(key, nonce, aad, bad) == nil)
+    check("wrong aad rejected", aead_open(key, nonce, [1], sealed) == nil)
+    let f = seal_file(key, [1, 2, 3])
+    check("sealed file layout", len(f) == 5 + 12 + 3 + 16 && slice(f, 0, 4) == bytes_of("LTLE"))
+    check("sealed file opens", open_file(key, f) == [1, 2, 3])
+    let other = slice(key, 0, 32)
+    other[0] = 0
+    check("wrong key rejected", open_file(other, f) == nil)
+}
+
+fn test_parquet() {
+    print("-- parquet --")
+    let r = parse_line("ts=2026-11-15T12:34:56Z level=info msg=hi", "auto")
+    let b = parquet_rollup([r, r])
+    check("magic head", slice(b, 0, 4) == parquet.magic())
+    let fp = parquet.parse_footer_pointer(b)
+    check("footer pointer", fp != nil && fp["footer_offset"] > 4)
+    check("plain int64", parquet_plain([1794746096000], parquet.type_int64()) == le64(1794746096000))
+    check("plain byte_array", parquet_plain(["hi"], parquet.type_byte_array()) == [2, 0, 0, 0, 104, 105])
+    check("thrift list header short", tc_list_header(3, TC_STRUCT) == [0x3C])
+    check("thrift list header long", tc_list_header(20, TC_I32) == [0xF5, 20])
+}
+
+// Window flushing writes files, so it is covered end to end by
+// tests/test_lt_logs.py; these are the pieces underneath it.
+fn test_helpers() {
+    print("-- helpers --")
+    let base = 1794746040000
+    check("window start on boundary", window_start(base, 60000) == base)
+    check("window start inside", window_start(base + 59999, 60000) == base)
+    check("next window", window_start(base + 60000, 60000) == base + 60000)
+    let v = vec_new()
+    let i = 0
+    while i < 100 { vec_push(v, i); i = i + 1 }
+    check("vec grows", v["n"] == 100 && vec_list(v)[99] == 99)
+    check("hex roundtrip", bytes_to_hex(hex_to_bytes("00ff10Ab")) == "00ff10ab")
+    check("hex rejects junk", hex_to_bytes("zz") == nil && hex_to_bytes("abc") == nil)
+}
+
+fn selftest() {
+    print("=== lt-logs selftest ===")
+    test_time()
+    test_parsers()
+    test_filters()
+    test_lz4_frame()
+    test_aead()
+    test_parquet()
+    test_helpers()
+    print("")
+    print("pass=" + str(TALLY["pass"]) + " fail=" + str(TALLY["fail"]))
+    if TALLY["fail"] > 0 { process_exit(1) }
+}
+
+fn main() {
+    let argv = args()
+    if len(argv) > 0 && (argv[0] == "--help" || argv[0] == "-h" || argv[0] == "help") {
+        print(USAGE)
+        return nil
+    }
+    if len(argv) > 0 && argv[0] == "selftest" {
+        selftest()
+        return nil
+    }
+    if len(argv) > 0 && argv[0] == "decrypt" {
+        cmd_decrypt(slice(argv, 1, len(argv)))
+        return nil
+    }
+    if len(argv) > 0 && argv[0] == "cat" {
+        cmd_cat(slice(argv, 1, len(argv)))
+        return nil
+    }
+    run_shipper(parse_cli(argv))
+}
+
+main()
