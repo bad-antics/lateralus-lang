@@ -17,8 +17,10 @@ from lateralus_lang.codegen.wasm import (
     WasmModule,
     WasmType,
     compile_to_wasm,
+    compile_to_wasm_bytes,
     expression_to_wat,
     f64_const,
+    generate_js_host_shim,
     global_get,
     i32_const,
     i64_const,
@@ -327,3 +329,146 @@ class TestWasmIntegration:
         assert "i64.store" in wat
         assert "i64.load" in wat
         assert "(memory" in wat
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Binary Encoding, Host Shims, CLI & Playground Tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _parse_wasm_sections(wasm_bytes: bytes) -> list[int]:
+    """Decode top-level WebAssembly section IDs and validate framing."""
+    assert wasm_bytes[:8] == b"\x00asm\x01\x00\x00\x00"
+    pos = 8
+    section_ids: list[int] = []
+    while pos < len(wasm_bytes):
+        sec_id = wasm_bytes[pos]
+        pos += 1
+        size = 0
+        shift = 0
+        while True:
+            byte = wasm_bytes[pos]
+            pos += 1
+            size |= (byte & 0x7F) << shift
+            if not (byte & 0x80):
+                break
+            shift += 7
+        assert pos + size <= len(wasm_bytes)
+        pos += size
+        section_ids.append(sec_id)
+    assert pos == len(wasm_bytes)
+    assert section_ids == sorted(section_ids)
+    return section_ids
+
+
+class TestWasmBinaryAndHostShims:
+    """Test binary .wasm serialization, host call imports, and JS shims."""
+
+    def test_println_and_http_get_imports(self):
+        src = '''
+fn main() {
+    let body = http_get("https://example.com")
+    println("resp={body}")
+}
+'''
+        mod = compile_to_wasm(src)
+        wat = mod.to_wat()
+        assert '(import "env" "println"' in wat
+        assert '(import "env" "http_get"' in wat
+        assert '(export "ltl_alloc")' in wat
+        assert '(export "memory")' in wat
+        assert "(data (i32.const" in wat
+
+    def test_http_dot_get_alias(self):
+        src = '''
+fn main() {
+    let body = http.get("https://lateralus.dev/api/health")
+    println(body)
+}
+'''
+        wat = compile_to_wasm(src).to_wat()
+        assert '(import "env" "http_get"' in wat
+        assert '(import "env" "println"' in wat
+
+    def test_to_wasm_bytes_valid_sections(self):
+        src = '''
+fn add(a: int, b: int) -> int {
+    return a + b
+}
+
+fn main() {
+    let sum = add(20, 22)
+    let resp = http_get("https://example.com")
+    if sum > 40 {
+        println("sum={sum}, resp={resp}")
+    } else {
+        println("small")
+    }
+    for i in 0..2 {
+        println(i)
+    }
+}
+'''
+        wasm_bytes = compile_to_wasm_bytes(src)
+        sections = _parse_wasm_sections(wasm_bytes)
+        assert sections == [1, 2, 3, 5, 6, 7, 10, 11]
+
+    def test_manual_module_conditional_and_loop_to_wasm_bytes(self):
+        mod = WasmModule("ctrl")
+        fn_cond = mod.add_function("abs_val", [("x", "i64")], "i64", exported=True)
+        fn_cond.emit(local_get("x"), i64_const(0), "i64.lt_s", "if (result i64)",
+                     i64_const(0), local_get("x"), "i64.sub", "else", local_get("x"), "end")
+
+        fn_loop = mod.add_function("count_to_ten", [], "i64", exported=True)
+        fn_loop.add_local("i", "i64")
+        fn_loop.emit(
+            i64_const(0), local_set("i"),
+            "(block $exit", "  (loop $loop",
+            f"    {local_get('i')}", f"    {i64_const(10)}", "    i64.ge_s", "    br_if $exit",
+            f"    {local_get('i')}", f"    {i64_const(1)}", "    i64.add", f"    {local_set('i')}",
+            "    br $loop", "  )", ")", local_get("i"),
+        )
+        wasm_bytes = mod.to_wasm_bytes()
+        sections = _parse_wasm_sections(wasm_bytes)
+        assert 1 in sections and 3 in sections and 7 in sections and 10 in sections
+
+    def test_generate_js_host_shim(self):
+        shim = generate_js_host_shim()
+        assert "createLateralusHostShim" in shim
+        assert "runLateralusWasm" in shim
+        assert "WebAssembly.instantiate" in shim
+        assert "println" in shim
+        assert "http_get" in shim
+        assert "ltl_println_i64" in shim
+
+
+class TestWasmCliAndPlayground:
+    """Test CLI wasm flags and offline WebAssembly playground."""
+
+    def test_cli_wasm_bin_and_shim(self, tmp_path):
+        from lateralus_lang.__main__ import main
+
+        ltl_file = tmp_path / "prog.ltl"
+        ltl_file.write_text('fn main() {\n    println("hi wasm")\n}\n', encoding="utf-8")
+        wasm_out = tmp_path / "prog.wasm"
+        shim_out = tmp_path / "prog.runtime.js"
+
+        rc = main(["wasm", str(ltl_file), "-o", str(wasm_out), "--shim", str(shim_out)])
+        assert rc == 0
+        raw = wasm_out.read_bytes()
+        _parse_wasm_sections(raw)
+        shim_text = shim_out.read_text(encoding="utf-8")
+        assert "createLateralusHostShim" in shim_text
+        assert "http_get" in shim_text
+
+    def test_playground_uses_in_browser_wasm_offline(self):
+        root = pathlib.Path(__file__).resolve().parent.parent
+        html = (root / "docs" / "website" / "playground" / "index.html").read_text(encoding="utf-8")
+        assert "/api/run" not in html
+        assert "compileLateralusToWasm" in html
+        assert "createLateralusHostShim" in html
+        assert "WebAssembly.instantiate" in html
+        assert "http_get" in html
+        assert "println" in html
+
+        headers = (root / "docs" / "website" / "_headers").read_text(encoding="utf-8")
+        assert "'wasm-unsafe-eval'" in headers
