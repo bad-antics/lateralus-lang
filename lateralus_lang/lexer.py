@@ -381,11 +381,12 @@ class Lexer:
             return
 
         # Numbers
-        if ch.isdigit() or (ch == "-" and self._peek().isdigit()
-                            and not self._tokens
-                            or ch == "0" and self._peek() in "xXbB"):
-            self._read_number(line, col)
-            return
+        # A leading '-' is deliberately NOT folded into the numeric literal.
+        # Letting '-' fall through to the operator table emits MINUS and leaves
+        # unary negation to the parser, which keeps "-42", "- 42" and "(-42)"
+        # tokenizing consistently. (Previously a leading '-' routed into
+        # _read_number, which consumed no characters at the minus and then
+        # called int(""), raising ValueError.)
         if ch.isdigit():
             self._read_number(line, col)
             return

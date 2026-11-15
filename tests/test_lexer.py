@@ -65,6 +65,44 @@ class TestLiterals:
         assert ts[0].value == 1000000
 
 
+class TestNegativeInteger:
+    """Regression: a leading '-' must not be folded into the numeric literal.
+
+    Previously `_scan_one` routed a leading '-' followed by a digit into
+    `_read_number`, which consumed nothing at the minus and then called
+    `int("")`, raising `ValueError: invalid literal for int() with base 10: ''`.
+    """
+
+    def test_leading_negative_integer(self):
+        ts = tokens("-42")
+        assert [t.kind for t in ts] == [TK.MINUS, TK.INT]
+        assert ts[1].value == 42
+
+    def test_leading_negative_integer_matches_spaced_form(self):
+        assert kinds("-42") == kinds("- 42")
+
+    def test_leading_negative_integer_matches_parenthesized_form(self):
+        assert kinds("-42") == [TK.MINUS, TK.INT]
+        assert kinds("(-42)") == [TK.LPAREN, TK.MINUS, TK.INT, TK.RPAREN]
+
+    def test_binary_subtraction_unchanged(self):
+        assert kinds("1-42") == [TK.INT, TK.MINUS, TK.INT]
+
+    def test_negative_hex_does_not_crash(self):
+        ts = tokens("-0x1F")
+        assert [t.kind for t in ts] == [TK.MINUS, TK.INT]
+        assert ts[1].value == 31
+
+    def test_assignment_to_negative_value(self):
+        assert kinds("x=-5") == [TK.IDENT, TK.ASSIGN, TK.MINUS, TK.INT]
+
+    def test_positive_literals_still_fold(self):
+        assert tokens("42")[0].value == 42
+        assert tokens("0xFF")[0].value == 255
+        assert tokens("0b1010")[0].value == 10
+        assert abs(tokens("3.14")[0].value - 3.14) < 1e-9
+
+
 class TestKeywords:
     def test_fn(self):
         assert kinds("fn")[0] == TK.KW_FN
