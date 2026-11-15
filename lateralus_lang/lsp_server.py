@@ -26,6 +26,12 @@ try:
 except Exception:          # pragma: no cover – graceful degradation
     _HAS_COMPILER = False
 
+# --- Stdlib surface (hover on stdlib functions) -----------------------
+try:
+    from .stdlib_index import lookup_stdlib_hover
+except Exception:          # pragma: no cover – graceful degradation
+    lookup_stdlib_hover = None
+
 log = logging.getLogger("lateralus-lsp")
 
 
@@ -440,6 +446,17 @@ def get_hover(doc: TextDocument, line: int, character: int) -> Optional[dict]:
                 "value": keyword_docs[word],
             },
         }
+
+    # Check the standard library: signature + first docstring line.
+    if lookup_stdlib_hover is not None:
+        stdlib_markdown = lookup_stdlib_hover(word, context=doc.text)
+        if stdlib_markdown is not None:
+            return {
+                "contents": {
+                    "kind": "markdown",
+                    "value": stdlib_markdown,
+                },
+            }
 
     return None
 
