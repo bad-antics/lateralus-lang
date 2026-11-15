@@ -1,0 +1,130 @@
+// lt_logs.ltl - Lateralus Log Shipper CLI Bounty implementation
+// Reads log lines from stdin, filters, rolls up into 1-minute windows, and emits.
+
+import io
+import log
+import regex
+import aho_corasick
+import codec
+import crypto
+
+struct LogShipperConfig {
+    format: string,
+    filter_expr: string,
+    output_mode: string,
+    encryption_key: string
+}
+
+struct RollupWindow {
+    window_start: int,
+    count: int,
+    bytes_total: int,
+    lines: list[string]
+}
+
+fn parse_log_line(line: string) -> map[string]string {
+    let trimmed = line.trim()
+    if trimmed.starts_with("{") {
+        return codec.json_parse(trimmed)
+    } else if trimmed.contains("<") && trimmed.contains(">") {
+        return log.parse_syslog_rfc5424(trimmed)
+    } else {
+        return log.parse_logfmt(trimmed)
+    }
+}
+
+fn evaluate_filter(fields: map[string]string, expr: string) -> bool {
+    if expr == "" {
+        return true
+    }
+    if expr.contains("~") {
+        let parts = expr.split("~")
+        let field_name = parts[0].trim()
+        let pattern = parts[1].trim()
+        let val = fields.get(field_name, "")
+        return regex.is_match(pattern, val)
+    } else if expr.contains("=") {
+        let parts = expr.split("=")
+        let field_name = parts[0].trim()
+        let expected = parts[1].trim()
+        let val = fields.get(field_name, "")
+        return val == expected
+    }
+    return true
+}
+
+fn main() {
+    let args = io.args()
+    let config = LogShipperConfig {
+        format: "auto",
+        filter_expr: "",
+        output_mode: "jsonl",
+        encryption_key: ""
+    }
+
+    let i = 0
+    while i < args.len() {
+        let arg = args[i]
+        if arg == "--filter" && i + 1 < args.len() {
+            config.filter_expr = args[i + 1]
+            i = i + 2
+        } else if arg == "--output" && i + 1 < args.len() {
+            config.output_mode = args[i + 1]
+            i = i + 2
+        } else if arg == "--key" && i + 1 < args.len() {
+            config.encryption_key = args[i + 1]
+            i = i + 2
+        } else {
+            i = i + 1
+        }
+    }
+
+    println("Starting lt-logs-shipper... mode=" + config.output_mode)
+
+    let current_window_start = io.now_epoch_seconds() / 60
+    let window_count = 0
+    let window_bytes = 0
+    let window_lines: list[string] = []
+
+    while true {
+        let line = io.read_line()
+        if line == nil {
+            break
+        }
+
+        let parsed = parse_log_line(line)
+        if evaluate_filter(parsed, config.filter_expr) {
+            window_count = window_count + 1
+            window_bytes = window_bytes + line.len()
+            window_lines.push(line)
+        }
+
+        let now_window = io.now_epoch_seconds() / 60
+        if now_window > current_window_start {
+            let rollup = RollupWindow {
+                window_start: current_window_start * 60,
+                count: window_count,
+                bytes_total: window_bytes,
+                lines: window_lines
+            }
+
+            let payload = ""
+            if config.output_mode == "parquet" {
+                payload = codec.to_parquet(rollup)
+            } else {
+                payload = codec.compress_gzip(codec.json_stringify(rollup))
+            }
+
+            if config.encryption_key != "" {
+                payload = crypto.chacha20_poly1305_encrypt(payload, config.encryption_key)
+            }
+
+            io.println(payload)
+
+            current_window_start = now_window
+            window_count = 0
+            window_bytes = 0
+            window_lines = []
+        }
+    }
+}
