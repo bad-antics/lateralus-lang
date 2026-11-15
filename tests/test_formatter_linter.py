@@ -142,6 +142,12 @@ class TestFormatter:
         result = self.fmt.format(source)
         assert result == 'println("A\tB")\n'
 
+    def test_import_sorting_idempotent(self):
+        for separator in ("", "\n", "\n\n", "\n\n\n"):
+            source = 'import "zebra"\nimport "alpha"\n' + separator + 'let x = 42\n'
+            once = self.fmt.format(source)
+            assert self.fmt.format(once) == once
+
 
 class TestLinter:
     def setup_method(self):

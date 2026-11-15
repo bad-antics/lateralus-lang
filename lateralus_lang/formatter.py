@@ -260,7 +260,11 @@ class LateralusFormatter:
         import_lines.sort()
 
         if import_lines:
-            return import_lines + [""] + other_lines
+            # Reuse one separator instead of accumulating blanks on every pass.
+            first_content = 0
+            while first_content < len(other_lines) and other_lines[first_content] == "":
+                first_content += 1
+            return import_lines + [""] + other_lines[first_content:]
         return other_lines
 
     def _normalize_trailing_commas(self, lines: list[str]) -> list[str]:
