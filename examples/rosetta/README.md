@@ -22,6 +22,26 @@ reference and as discoverability ("Rosetta Code in X" searches).
 | Topological Sort            | [`topological_sort.ltl`](topological_sort.ltl) | graphs, Kahn's algorithm     |
 | Huffman Coding              | [`huffman.ltl`](huffman.ltl)                | trees + greedy                   |
 | JSON Mini Parser            | [`json_mini.ltl`](json_mini.ltl)            | recursive-descent parsing        |
+| MD4 Hash                    | [`md4.ltl`](md4.ltl)                        | cryptographic hash               |
+| MD5 Hash                    | [`md5.ltl`](md5.ltl)                        | cryptographic hash               |
+| SHA-1 Hash                  | [`sha1.ltl`](sha1.ltl)                      | cryptographic hash               |
+| SHA-256 Hash                | [`sha256.ltl`](sha256.ltl)                    | cryptographic hash               |
+| CRC-32                      | [`crc32.ltl`](crc32.ltl)                    | checksum                         |
+| Damm Algorithm              | [`damm.ltl`](damm.ltl)                      | check digit algorithm            |
+| Base64 Decode               | [`base64_decode.ltl`](base64_decode.ltl)    | codec                            |
+| URL Encoding                | [`url_encode.ltl`](url_encode.ltl)          | codec                            |
+| URL Decoding                | [`url_decode.ltl`](url_decode.ltl)          | codec                            |
+| UTF-8 Encode & Decode       | [`utf8.ltl`](utf8.ltl)                      | character encoding               |
+| Variable-Length Quantity    | [`vlq.ltl`](vlq.ltl)                        | variable-length packing          |
+| LZW Compression             | [`lzw.ltl`](lzw.ltl)                        | compression                      |
+| Burrows-Wheeler Transform   | [`bwt.ltl`](bwt.ltl)                        | block sorting transform          |
+| Move-to-Front               | [`mtf.ltl`](mtf.ltl)                        | transform                        |
+| Vigenère Cipher             | [`vigenere.ltl`](vigenere.ltl)              | classical cipher                 |
+| CSV to HTML                 | [`csv_to_html.ltl`](csv_to_html.ltl)        | data format translation          |
+| Tokenize with Escaping      | [`tokenize_escape.ltl`](tokenize_escape.ltl)| string parsing                   |
+| Balanced Brackets           | [`balanced_brackets.ltl`](balanced_brackets.ltl)| syntax validation            |
+| Longest Common Substring    | [`lcs_string.ltl`](lcs_string.ltl)          | string search                    |
+| Longest Common Subsequence  | [`lcs_sequence.ltl`](lcs_sequence.ltl)      | sequence search                  |
 
 ## Verifying
 
