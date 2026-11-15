@@ -86,6 +86,7 @@ class CompileResult:
     c_src:       Optional[str]        = None
     js_src:      Optional[str]        = None
     wasm_src:    Optional[str]        = None
+    wasm_bytes:  Optional[bytes]      = None
     llvm_src:    Optional[str]        = None
     x86_src:     Optional[str]        = None
     ir_module:   Optional[IRModule]   = None
@@ -261,13 +262,14 @@ class Compiler:
                 from .codegen.wasm import compile_to_wasm
                 wasm_mod = compile_to_wasm(source)
                 wasm_src = wasm_mod.to_wat()
+                wasm_bytes = wasm_mod.to_wasm_bytes()
             except Exception as exc:
                 reporter.add_exception(exc, Severity.FATAL)
                 return self._failed(reporter, filename, target, t0, ir_module=ir_module)
             elapsed = (time.monotonic() - t0) * 1000
             return CompileResult(ok=True, target=target, source_file=filename,
-                                 wasm_src=wasm_src, ir_module=ir_module,
-                                 elapsed_ms=elapsed,
+                                 wasm_src=wasm_src, wasm_bytes=wasm_bytes,
+                                 ir_module=ir_module, elapsed_ms=elapsed,
                                  errors=[], warnings=reporter.all())
 
         if target == Target.LLVM:
