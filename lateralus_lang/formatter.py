@@ -263,16 +263,54 @@ class LateralusFormatter:
 
     def _normalize_trailing_commas(self, lines: list[str]) -> list[str]:
         """Ensure trailing commas on multi-line struct/enum/list definitions."""
+        # 只在可确定是声明或列表字面量时插入逗号，避免改坏语句块与索引。
+        from .lexer import Lexer, LexError, TK
+
+        eligible_closers = set()
+        try:
+            tokens = Lexer("\n".join(lines)).tokenize()
+            stack = []
+            declaration_pending = False
+            previous = None
+            for token in tokens:
+                if token.kind in (TK.KW_STRUCT, TK.KW_ENUM) and previous != TK.AT:
+                    declaration_pending = True
+                elif token.kind == TK.LBRACE:
+                    stack.append((TK.RBRACE, declaration_pending))
+                    declaration_pending = False
+                elif token.kind == TK.LBRACKET:
+                    # 仅在明确的表达式起始位置视为列表，避免把字面量索引当列表。
+                    is_list = previous in (None, TK.ASSIGN, TK.COMMA, TK.COLON,
+                                           TK.LPAREN, TK.LBRACKET, TK.KW_RETURN)
+                    stack.append((TK.RBRACKET, is_list))
+                elif token.kind == TK.LPAREN:
+                    # 单值括号若加逗号会变成元组，保守地不改所有圆括号。
+                    stack.append((TK.RPAREN, False))
+                elif token.kind == TK.KW_FOR and stack and stack[-1][0] == TK.RBRACKET:
+                    # 当前方括号层是推导式，语法不允许尾逗号。
+                    stack[-1] = (TK.RBRACKET, False)
+                elif token.kind in (TK.RBRACE, TK.RBRACKET, TK.RPAREN):
+                    if stack and stack[-1][0] == token.kind:
+                        _, eligible = stack.pop()
+                        if eligible:
+                            eligible_closers.add(token.line)
+                if token.kind != TK.EOF:
+                    previous = token.kind
+        except LexError:
+            # 不完整或无法识别的源码不能安全判断上下文，保留原标点。
+            eligible_closers.clear()
+
         result = []
         for i, line in enumerate(lines):
             stripped = line.strip()
 
-            # If the next line is a closing bracket/brace, add trailing comma
+            # 下一行的闭合符必须已识别为逗号分隔的数据结构。
             if i + 1 < len(lines):
                 next_stripped = lines[i + 1].strip()
-                if next_stripped in ("}", "]", ")"):
+                if next_stripped in ("}", "]") and i + 2 in eligible_closers:
                     # Current line is last item — ensure trailing comma
-                    if stripped and not stripped.endswith(",") and not stripped.endswith("{") \
+                    if stripped and not any(mark in stripped for mark in ("//", "/*", "*/", "#")) \
+                            and not stripped.endswith(",") and not stripped.endswith("{") \
                             and not stripped.endswith("(") and not stripped.endswith("[") \
                             and not stripped.startswith("//") and not stripped.startswith("}") \
                             and not stripped.startswith(")") and not stripped.startswith("]"):
