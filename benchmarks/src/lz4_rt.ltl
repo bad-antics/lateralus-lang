@@ -1,0 +1,41 @@
+// LZ4 compress + decompress round-trip of 4 MB of deterministic text.
+// Input: word-text (seed 12345), 4,194,304 bytes.
+// Output: "<compressed_len> <xxhash64(compressed)> <xxhash64(decompressed)>"
+// Expected output: 2165510 11572300857478106302 2001074385271547492
+// (decompressed hash == original hash proves the round-trip.)
+import xxhash
+import lz4
+
+let WORDS = ["the", "quick", "brown", "fox", "jumps", "over", "lazy", "dog", "lateralus", "bench", "hash", "sort", "stream", "codec", "crypto", "search", "pattern", "text", "data", "node", "leaf", "tree", "graph", "queue", "stack", "buffer", "cache", "index", "token", "parse", "lexer", "parser", "codegen", "python", "node", "rust", "go", "fast", "slow", "small", "large", "green", "blue", "red", "river", "stone", "cloud", "storm", "flame", "ember", "frost", "iron", "gold", "sand", "wave", "spiral", "light", "dark", "zero", "prime", "delta"]
+
+fn text_chunk(n: int, seed: int) -> list {
+    let out = [0] * n
+    let st = seed
+    let wp = 0
+    while wp < n {
+        st = (1103515245 * st + 12345) % 2147483648
+        let w = WORDS[(st >> 16) % len(WORDS)]
+        let wb = bytes_of(w)
+        let k = 0
+        while k < len(wb) && wp < n {
+            out[wp] = wb[k]
+            wp = wp + 1
+            k = k + 1
+        }
+        if wp < n {
+            out[wp] = 32
+            wp = wp + 1
+        }
+    }
+    return out
+}
+
+fn main() {
+    let data = text_chunk(4194304, 12345)
+    let comp = lz4.compress(data)
+    let dec = lz4.decompress(comp)
+    let line = str(len(comp)) + " " + str(xxhash.hash64(comp, 0)) + " " + str(xxhash.hash64(dec, 0))
+    println(line)
+}
+
+main()
