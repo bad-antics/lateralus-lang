@@ -269,6 +269,10 @@ class LateralusFormatter:
         eligible_closers = set()
         try:
             tokens = Lexer("\n".join(lines)).tokenize()
+        except (LexError, ValueError, IndexError):
+            # 词法器对不完整输入也可能抛出内建异常；跳过尾逗号修改，保留现有标点。
+            tokens = []
+        if tokens:
             stack = []
             declaration_pending = False
             previous = None
@@ -296,10 +300,6 @@ class LateralusFormatter:
                             eligible_closers.add(token.line)
                 if token.kind != TK.EOF:
                     previous = token.kind
-        except LexError:
-            # 不完整或无法识别的源码不能安全判断上下文，保留原标点。
-            eligible_closers.clear()
-
         result = []
         for i, line in enumerate(lines):
             stripped = line.strip()
