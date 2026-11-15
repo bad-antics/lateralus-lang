@@ -218,6 +218,14 @@ class Parser:
             raise ParseError(msg or f"expected {kind.name}", self._cur())
         return self._advance()
 
+    def _expect_fn_name(self) -> str:
+        """Name after ``fn``.  ``match`` is only a keyword in statement and
+        expression position, so ``fn match(...)`` (stdlib/regex.ltl) is an
+        ordinary function name here."""
+        if self._check(TK.KW_MATCH):
+            return self._advance().value
+        return self._expect(TK.IDENT, "expected function name").value
+
     def _span(self, tok: Token) -> SourceSpan:
         return SourceSpan(tok.file, tok.line, tok.col)
 
@@ -377,7 +385,7 @@ class Parser:
         is_pub   = bool(self._match(TK.KW_PUB))
         is_async = bool(self._match(TK.KW_ASYNC))
         self._expect(TK.KW_FN, "expected 'fn'")
-        name = self._expect(TK.IDENT, "expected function name").value
+        name = self._expect_fn_name()
         generics = self._parse_generic_params()
         self._expect(TK.LPAREN)
         params = self._parse_params()
@@ -1487,7 +1495,7 @@ class Parser:
         is_pub   = bool(self._match(TK.KW_PUB))
         is_async = bool(self._match(TK.KW_ASYNC))
         self._expect(TK.KW_FN, "expected 'fn'")
-        name = self._expect(TK.IDENT, "expected function name").value
+        name = self._expect_fn_name()
         generics = self._parse_generic_params()
         self._expect(TK.LPAREN)
         params = self._parse_params()
@@ -1791,7 +1799,7 @@ class Parser:
         is_pub = False
         self._expect(TK.KW_CONST)
         self._expect(TK.KW_FN, "expected 'fn' after 'const'")
-        name = self._expect(TK.IDENT, "expected function name").value
+        name = self._expect_fn_name()
         generics = self._parse_generic_params()
         self._expect(TK.LPAREN)
         params = self._parse_params()

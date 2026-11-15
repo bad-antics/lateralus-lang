@@ -139,10 +139,14 @@ class Compiler:
             return self._compile_asm(source, filename)
         return self._compile_ltl(source, filename, target)
 
-    def run_file(self, path: str, target: Target = Target.PYTHON) -> CompileResult:
+    def run_file(self, path: str, target: Target = Target.PYTHON,
+                 args: Optional[List[str]] = None,
+                 timeout: Optional[float] = 60) -> CompileResult:
+        """Compile and run *path*.  *args* become the program's argv (the
+        `args()` builtin); *timeout* is in seconds, None for no limit."""
         result = self.compile_file(path, target)
         if result.ok and target == Target.PYTHON:
-            result = self._run_python(result)
+            result = self._run_python(result, args=args, timeout=timeout)
         elif result.ok and target in (Target.BYTECODE, Target.ASSEMBLE):
             result = self._run_bytecode(result)
         return result
@@ -334,7 +338,9 @@ class Compiler:
 
     # -- Python execution (transpile → exec) -----------------------------------
 
-    def _run_python(self, result: CompileResult) -> CompileResult:
+    def _run_python(self, result: CompileResult,
+                    args: Optional[List[str]] = None,
+                    timeout: Optional[float] = 60) -> CompileResult:
         """Transpile to Python source and exec it in-process."""
         import subprocess as _sp
         import sys as _sys
@@ -355,8 +361,8 @@ class Compiler:
             tmp_path = f.name
         try:
             proc = _sp.run(
-                [_sys.executable, tmp_path],
-                timeout=60,
+                [_sys.executable, tmp_path, *(args or [])],
+                timeout=timeout,
             )
             result.exit_code = proc.returncode
             if proc.returncode != 0:
@@ -365,7 +371,7 @@ class Compiler:
             result.ok = False
             result.errors.append(ErrorContext(
                 severity=Severity.ERROR, code="TimeoutError",
-                message="Script execution timed out (60s)",
+                message=f"Script execution timed out ({timeout}s)",
                 file=result.source_file,
             ))
         except Exception as exc:

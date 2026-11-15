@@ -154,6 +154,45 @@ _PY_BUILTINS = {"int", "float", "str", "bool", "len", "print", "input",
                 "open", "sorted", "reversed", "any", "all"}
 
 
+def _stdlib_dirs() -> list:
+    """Where stdlib/*.ltl lives: the source checkout, then the wheel's
+    data-files location (pyproject: share/lateralus/stdlib)."""
+    import sys
+    from pathlib import Path
+    return [Path(__file__).resolve().parents[2] / "stdlib",
+            Path(sys.prefix) / "share" / "lateralus" / "stdlib"]
+
+
+_STDLIB_PY_CACHE: dict = {}
+_STDLIB_IN_PROGRESS: set = set()
+
+
+def _stdlib_module_python(name: str) -> Optional[str]:
+    """Transpiled Python for stdlib/<name>.ltl, or None when there is no such
+    module or it does not compile (the caller then keeps the plain Python
+    import, which is what `import <name>` did before)."""
+    if not name.isidentifier() or name in _STDLIB_IN_PROGRESS:
+        return None
+    if name in _STDLIB_PY_CACHE:
+        return _STDLIB_PY_CACHE[name]
+    path = next((d / f"{name}.ltl" for d in _stdlib_dirs()
+                 if (d / f"{name}.ltl").is_file()), None)
+    src = None
+    if path is not None:
+        from ..compiler import Compiler, Target
+        _STDLIB_IN_PROGRESS.add(name)
+        try:
+            res = Compiler().compile_file(str(path), Target.PYTHON)
+            if res.ok and res.python_src:
+                src = res.python_src
+        except Exception:
+            src = None
+        finally:
+            _STDLIB_IN_PROGRESS.discard(name)
+    _STDLIB_PY_CACHE[name] = src
+    return src
+
+
 class PythonTranspiler(ASTVisitor):
 
     def __init__(self, use_match_stmt: bool = True):
@@ -708,6 +747,57 @@ class PythonTranspiler(ASTVisitor):
         self._w += "def constant_time_compare(a, b): return _hmac.compare_digest(a, b)"
         self._w += "def hex_encode(data): return data.hex() if isinstance(data, bytes) else data.encode().hex()"
         self._w += "def hex_decode(s): return bytes.fromhex(s)"
+        # ── builtins the .ltl stdlib modules call (char_at, bytes_of, …) ─────
+        self._w += "def char_at(s, i): return s[i]"
+        self._w += "def bytes_of(s): return list(s.encode('utf-8')) if isinstance(s, str) else list(s)"
+        self._w += "def str_of_bytes(b): return bytes(b).decode('utf-8', errors='replace')"
+        self._w += "def index_of(s, sub):"
+        self._w += "    if isinstance(s, str): return s.find(sub)"
+        self._w += "    return s.index(sub) if sub in s else -1"
+        self._w += "import re as _re_mod"
+        self._w += "def _ltl_re_result(m):"
+        self._w += "    if m is None: return {'matched': False, 'groups': [], 'named_groups': {}, 'start': -1, 'end': -1}"
+        self._w += "    return {'matched': True, 'groups': list(m.groups()), 'named_groups': m.groupdict(),"
+        self._w += "            'start': m.start(), 'end': m.end()}"
+        self._w += "def regex_match(p, t): return _ltl_re_result(_re_mod.search(p, t))"
+        self._w += "def regex_match_all(p, t): return [_ltl_re_result(m) for m in _re_mod.finditer(p, t)]"
+        self._w += "def regex_replace(p, t, r): return _re_mod.sub(p, r, t, count=1)"
+        self._w += "def regex_replace_all(p, t, r): return _re_mod.sub(p, r, t)"
+        self._w += "def regex_split(p, t): return _re_mod.split(p, t)"
+        self._w += "import json as _json_mod"
+        self._w += "def json_parse(s): return _json_mod.loads(s)"
+        self._w += "def json_encode(v): return _json_mod.dumps(v, separators=(',', ':'), ensure_ascii=False)"
+        self._w += "json_stringify = json_encode"
+        # ── process I/O: argv, line-at-a-time stdin, raw bytes out ───────────
+        self._w += "def args(): return list(_sys.argv[1:])"
+        # stdin/stdout text is UTF-8 whatever the console code page is, and
+        # undecodable input bytes become U+FFFD instead of raising.
+        self._w += "def stdin_read_line():"
+        self._w += "    _l = _sys.stdin.buffer.readline()"
+        self._w += "    if not _l: return None"
+        self._w += "    _l = _l.decode('utf-8', errors='replace')"
+        self._w += "    if _l.endswith('\\n'): _l = _l[:-1]"
+        self._w += "    return _l[:-1] if _l.endswith('\\r') else _l"
+        self._w += "def stdout_write_bytes(b): _sys.stdout.flush(); _sys.stdout.buffer.write(bytes(b)); _sys.stdout.buffer.flush()"
+        self._w += "def stdout_write(s): stdout_write_bytes(s.encode('utf-8'))"
+        self._w += "def eprintln(*a):"
+        self._w += "    _sys.stderr.flush()"
+        self._w += "    _sys.stderr.buffer.write((' '.join(str(x) for x in a) + '\\n').encode('utf-8'))"
+        self._w += "    _sys.stderr.buffer.flush()"
+        self._w += "def read_bytes(path):"
+        self._w += "    with open(path, 'rb') as _f: return list(_f.read())"
+        self._w += "def write_bytes(path, b):"
+        self._w += "    with open(path, 'wb') as _f: _f.write(bytes(b))"
+        self._w += "def process_exit(code): _sys.exit(code)"
+        self._w += "def unix_time(): return _time.time()"
+        # Loader for `import <name>` of a stdlib/<name>.ltl module (see
+        # visit_ImportStmt): the module's transpiled Python is embedded in the
+        # output and executed into its own namespace.
+        self._w += "import types as _types_mod"
+        self._w += "def _ltl_load_module(name, src):"
+        self._w += "    _m = _types_mod.ModuleType(name)"
+        self._w += "    exec(compile(src, '<stdlib/' + name + '.ltl>', 'exec'), _m.__dict__)"
+        self._w += "    return _m"
         self._w += "try:"
         self._w += "    from cryptography.fernet import Fernet as _Fernet"
         self._w += "    def fernet_keygen(): return _Fernet.generate_key().decode()"
@@ -899,6 +989,13 @@ class PythonTranspiler(ASTVisitor):
         # For from-imports of stdlib, emit a comment — symbols already in preamble
         if any(node.path.startswith(p) for p in ("stdlib.",)):
             self._w += f"# stdlib '{node.path}' resolved via preamble shims"
+            return
+        # A Lateralus stdlib module (stdlib/<name>.ltl): embed its transpiled
+        # source so `import logfmt` → `logfmt.parse(...)` works and the
+        # output stays a single self-contained file.
+        mod_src = _stdlib_module_python(node.path)
+        if mod_src is not None:
+            self._w += f"{alias} = _ltl_load_module({node.path!r}, {mod_src!r})"
             return
         py_path = node.path.replace(".", ".")
         self._w += f"import {py_path} as {alias}"

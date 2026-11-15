@@ -26,7 +26,8 @@ def main(argv=None) -> int:
     # run
     run_p = sub.add_parser("run",  help="Execute a .ltl file")
     run_p.add_argument("file")
-    run_p.add_argument("args", nargs="*", help="Script arguments")
+    run_p.add_argument("args", nargs=argparse.REMAINDER,
+                       help="Arguments passed to the script (everything after the file)")
     run_p.add_argument("--ipc", action="store_true",
                        help="JSON IPC mode: read params from stdin, write result to stdout")
 
@@ -306,7 +307,10 @@ def main(argv=None) -> int:
                     params = _json.loads(raw)
                 except Exception:
                     params = {}
-        result = c.run_file(ns.file)
+        # Command-line runs get the script's arguments and no time limit
+        # (a filter reading stdin may legitimately run for hours).
+        result = c.run_file(ns.file, args=ns.args,
+                            timeout=60 if ipc else None)
         if ipc:
             import json as _json
             out = {
