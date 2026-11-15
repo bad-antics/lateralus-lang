@@ -1,0 +1,94 @@
+// Rosetta Code · Balanced brackets · Lateralus
+// https://rosettacode.org/wiki/Balanced_brackets
+//
+// Generate strings of N opening and N closing brackets in random order and
+// decide whether each is balanced. A seeded LCG keeps the "random" samples
+// reproducible, and every verdict is cross-checked against a second,
+// independent algorithm (repeatedly deleting "[]" pairs).
+
+// Module-level RNG state lives in a list so functions can update it.
+let RNG = [20240611]
+
+fn next_rand(bound: int) -> int {
+    // Numerical Recipes LCG constants.
+    RNG[0] = (RNG[0] * 1664525 + 1013904223) & 0xFFFFFFFF
+    return (RNG[0] >> 16) % bound
+}
+
+fn generate(n: int) -> str {
+    let chars = []
+    let i = 0
+    while i < n {
+        chars = chars + ["[", "]"]
+        i = i + 1
+    }
+    // Fisher-Yates shuffle.
+    let k = len(chars) - 1
+    while k > 0 {
+        let j = next_rand(k + 1)
+        let tmp = chars[k]
+        chars[k] = chars[j]
+        chars[j] = tmp
+        k = k - 1
+    }
+    return str_join(chars, "")
+}
+
+fn is_balanced(s: str) -> bool {
+    let depth = 0
+    let i = 0
+    while i < len(s) {
+        let c = slice(s, i, i + 1)
+        if c == "[" { depth = depth + 1 }
+        else if c == "]" {
+            depth = depth - 1
+            if depth < 0 { return false }   // closed before it was opened
+        }
+        i = i + 1
+    }
+    return depth == 0
+}
+
+fn is_balanced_by_reduction(s: str) -> bool {
+    let cur = s
+    let prev = ""
+    while cur != prev {
+        prev = cur
+        cur = str_replace(cur, "[]", "")
+    }
+    return len(cur) == 0
+}
+
+fn main() {
+    // Hand-picked cases from the task description.
+    let fixed = [
+        ["", true], ["[]", true], ["][", false], ["[][]", true],
+        ["][][", false], ["[[][]]", true], ["[]][[]", false]
+    ]
+    let i = 0
+    while i < len(fixed) {
+        let s = fixed[i][0]
+        let ok = is_balanced(s)
+        print(pad_right("\"" + s + "\"", 12) + " " + pad_right(str(ok), 6) + "(expected " + str(fixed[i][1]) + ")")
+        assert_eq(ok, fixed[i][1])
+        i = i + 1
+    }
+
+    // Reproducible random samples for N = 0..9.
+    print("")
+    let balanced = 0
+    let n = 0
+    while n < 10 {
+        let s = generate(n)
+        let ok = is_balanced(s)
+        assert_eq(ok, is_balanced_by_reduction(s))
+        if ok { balanced = balanced + 1 }
+        let verdict = "NOT OK"
+        if ok { verdict = "OK" }
+        print(pad_right(s, 22) + verdict)
+        n = n + 1
+    }
+    print("balanced: " + str(balanced) + " of 10")
+}
+
+main()

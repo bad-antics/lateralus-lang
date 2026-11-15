@@ -1,0 +1,124 @@
+// Rosetta Code · UTF-8 encode and decode · Lateralus
+// https://rosettacode.org/wiki/UTF-8_encode_and_decode
+//
+// Convert a code point to its 1-4 byte UTF-8 sequence and back, with
+// validation of continuation bytes, overlong forms and the surrogate range.
+
+let HEX = "0123456789ABCDEF"
+
+fn utf8_encode(cp: int) -> list {
+    if cp < 0 || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF) {
+        throw DomainError("not a Unicode scalar value: " + str(cp))
+    }
+    if cp < 0x80 { return [cp] }
+    if cp < 0x800 { return [0xC0 | (cp >> 6), 0x80 | (cp & 0x3F)] }
+    if cp < 0x10000 {
+        return [0xE0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F)]
+    }
+    return [0xF0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3F),
+            0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F)]
+}
+
+fn utf8_decode(bytes: list) -> int {
+    let b0 = bytes[0]
+    let n = 0
+    let cp = 0
+    let min = 0
+    if b0 < 0x80      { return b0 }
+    else if b0 < 0xC0 { throw DomainError("unexpected continuation byte") }
+    else if b0 < 0xE0 { n = 2; cp = b0 & 0x1F; min = 0x80 }
+    else if b0 < 0xF0 { n = 3; cp = b0 & 0x0F; min = 0x800 }
+    else if b0 < 0xF8 { n = 4; cp = b0 & 0x07; min = 0x10000 }
+    else              { throw DomainError("invalid lead byte") }
+    if len(bytes) != n { throw DomainError("wrong sequence length") }
+    let i = 1
+    while i < n {
+        if (bytes[i] & 0xC0) != 0x80 { throw DomainError("bad continuation byte") }
+        cp = (cp << 6) | (bytes[i] & 0x3F)
+        i = i + 1
+    }
+    if cp < min { throw DomainError("overlong encoding") }
+    return cp
+}
+
+fn hex2(b: int) -> str {
+    return slice(HEX, b >> 4, (b >> 4) + 1) + slice(HEX, b & 15, (b & 15) + 1)
+}
+
+fn show_bytes(bytes: list) -> str {
+    let parts = []
+    let i = 0
+    while i < len(bytes) {
+        parts = parts + [hex2(bytes[i])]
+        i = i + 1
+    }
+    return str_join(parts, " ")
+}
+
+fn main() {
+    // Table from the Rosetta task: name, code point, expected bytes.
+    let cases = [
+        ["LATIN CAPITAL LETTER A", 0x41, [0x41]],
+        ["LATIN SMALL LETTER O WITH DIAERESIS", 0xF6, [0xC3, 0xB6]],
+        ["CYRILLIC CAPITAL LETTER ZHE", 0x416, [0xD0, 0x96]],
+        ["EURO SIGN", 0x20AC, [0xE2, 0x82, 0xAC]],
+        ["MUSICAL SYMBOL G CLEF", 0x1D11E, [0xF0, 0x9D, 0x84, 0x9E]]
+    ]
+    print(pad_right("Name", 38) + pad_right("Code point", 12) + "UTF-8")
+    let i = 0
+    while i < len(cases) {
+        let cp = cases[i][1]
+        let enc = utf8_encode(cp)
+        let dec = utf8_decode(enc)
+        print(pad_right(cases[i][0], 38) + pad_right("U+" + pad_left(str_upper(slice(hex(cp), 2, len(hex(cp)))), 4, "0"), 12) + show_bytes(enc))
+        assert_eq(enc, cases[i][2])
+        assert_eq(dec, cp)
+        i = i + 1
+    }
+
+    // Boundaries between sequence lengths round-trip cleanly.
+    let edges = [0x7F, 0x80, 0x7FF, 0x800, 0xFFFF, 0x10000, 0x10FFFF]
+    i = 0
+    while i < len(edges) {
+        assert_eq(utf8_decode(utf8_encode(edges[i])), edges[i])
+        i = i + 1
+    }
+    print("boundary round trips: " + str(len(edges)) + " ok")
+
+    // Malformed input is rejected rather than silently mis-decoded.
+    let bad = [
+        [0x80],                    // lone continuation byte
+        [0xC0, 0x80],              // overlong encoding of U+0000
+        [0xE2, 0x28, 0xA1],        // second byte is not a continuation
+        [0xE2, 0x82],              // truncated 3-byte sequence
+        [0xF8, 0x88, 0x80, 0x80]   // 5-byte lead, outside UTF-8
+    ]
+    i = 0
+    while i < len(bad) {
+        assert_true(decode_rejects(bad[i]))
+        i = i + 1
+    }
+    assert_true(encode_rejects(0xD800))
+    assert_true(encode_rejects(0x110000))
+    print("malformed inputs rejected: " + str(len(bad) + 2) + " ok")
+}
+
+fn decode_rejects(bytes: list) -> bool {
+    try {
+        utf8_decode(bytes)
+    } recover DomainError(e) {
+        return true
+    }
+    return false
+}
+
+fn encode_rejects(cp: int) -> bool {
+    try {
+        utf8_encode(cp)
+    } recover DomainError(e) {
+        return true
+    }
+    return false
+}
+
+main()

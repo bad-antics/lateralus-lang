@@ -1,0 +1,91 @@
+// Rosetta Code · CSV to HTML translation · Lateralus
+// https://rosettacode.org/wiki/CSV_to_HTML_translation
+//
+// Turn a simple comma-separated table into an HTML <table>, escaping the
+// characters that are special in HTML so the "<angry>" markup in the
+// sample text shows up as text instead of being parsed. The extra-credit
+// mode renders the first row as a <thead> of <th> cells.
+
+let CSV_TEXT = "Character,Speech
+The multitude,The messiah! Show us the messiah!
+Brians mother,<angry>Now you listen here! He's not the messiah; he's a very naughty boy! Now go away!</angry>
+The multitude,Who are you?
+Brians mother,I'm his mother; that's who!
+The multitude,Behold his mother! Behold his mother!"
+
+fn html_escape(s: str) -> str {
+    // & must be replaced first so we don't double-escape the others.
+    let out = str_replace(s, "&", "&amp;")
+    out = str_replace(out, "<", "&lt;")
+    out = str_replace(out, ">", "&gt;")
+    out = str_replace(out, "\"", "&quot;")
+    return out
+}
+
+fn csv_rows(text: str) -> list {
+    let rows = []
+    let lines = str_split(text, "\n")
+    let i = 0
+    while i < len(lines) {
+        let line = str_trim(lines[i])
+        if len(line) > 0 { rows = rows + [str_split(line, ",")] }
+        i = i + 1
+    }
+    return rows
+}
+
+fn row_html(cells: list, tag: str) -> str {
+    let out = "    <tr>"
+    let i = 0
+    while i < len(cells) {
+        out = out + "<" + tag + ">" + html_escape(cells[i]) + "</" + tag + ">"
+        i = i + 1
+    }
+    return out + "</tr>\n"
+}
+
+fn csv_to_html(text: str, header: bool) -> str {
+    let rows = csv_rows(text)
+    let out = "<table>\n"
+    let start = 0
+    if header && len(rows) > 0 {
+        out = out + "  <thead>\n" + row_html(rows[0], "th") + "  </thead>\n"
+        start = 1
+    }
+    out = out + "  <tbody>\n"
+    let i = start
+    while i < len(rows) {
+        out = out + row_html(rows[i], "td")
+        i = i + 1
+    }
+    return out + "  </tbody>\n</table>"
+}
+
+fn main() {
+    let html = csv_to_html(CSV_TEXT, true)
+    print(html)
+
+    let expected = "<table>
+  <thead>
+    <tr><th>Character</th><th>Speech</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>The multitude</td><td>The messiah! Show us the messiah!</td></tr>
+    <tr><td>Brians mother</td><td>&lt;angry&gt;Now you listen here! He's not the messiah; he's a very naughty boy! Now go away!&lt;/angry&gt;</td></tr>
+    <tr><td>The multitude</td><td>Who are you?</td></tr>
+    <tr><td>Brians mother</td><td>I'm his mother; that's who!</td></tr>
+    <tr><td>The multitude</td><td>Behold his mother! Behold his mother!</td></tr>
+  </tbody>
+</table>"
+    assert_eq(html, expected)
+
+    // Basic mode: every row, header included, is a plain <td> row.
+    let plain = csv_to_html(CSV_TEXT, false)
+    assert_true(str_contains(plain, "<tr><td>Character</td><td>Speech</td></tr>"))
+    assert_true(!str_contains(plain, "<th>"))
+
+    // Escaping is applied exactly once.
+    assert_eq(html_escape("a & <b> \"c\""), "a &amp; &lt;b&gt; &quot;c&quot;")
+}
+
+main()
