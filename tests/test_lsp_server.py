@@ -124,6 +124,20 @@ class TestHover:
         assert hover is not None
         assert "print" in hover["contents"]["value"].lower()
 
+    def test_stdlib_hover_signature_and_doc(self):
+        doc = TextDocument("file:///test.ltl", "lateralus", 1, "hex_encode(data)")
+        hover = get_hover(doc, 0, 3)
+        assert hover is not None
+        assert "fn hex_encode(bytes: list) -> str" in hover["contents"]["value"]
+        assert "Encode a list of bytes as a hex string." in hover["contents"]["value"]
+        assert 'hex_encode([0, 255, 128])' not in hover["contents"]["value"]
+
+    def test_stdlib_hover_without_docstring(self):
+        doc = TextDocument("file:///test.ltl", "lateralus", 1, "bubble_sort(items)")
+        hover = get_hover(doc, 0, 3)
+        assert hover is not None
+        assert "fn bubble_sort(arr: list) -> list" in hover["contents"]["value"]
+
     def test_unknown_hover(self):
         doc = TextDocument("file:///test.ltl", "lateralus", 1, "xyz123")
         hover = get_hover(doc, 0, 3)
