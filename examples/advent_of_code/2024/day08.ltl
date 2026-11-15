@@ -1,0 +1,103 @@
+// Advent of Code 2024 · Day 8 · Resonant Collinearity
+// Part 1: each pair of same-frequency antennas makes antinodes one gap beyond each end.
+// Part 2: antinodes fall on every grid point in line with the pair, antennas included.
+
+let SAMPLE = "............
+........0...
+.....0......
+.......0....
+....0.......
+......A.....
+............
+............
+........A...
+.........A..
+............
+............"
+
+// Returns [height, width, antennas], where antennas maps a frequency
+// character to its list of [row, col] positions.
+fn parse(text: str) -> list {
+    let rows = []
+    for line in str_split(text, "\n") {
+        let row = str_trim(line)
+        if len(row) > 0 { rows.append(row) }
+    }
+    let antennas = {}
+    for r in range(0, len(rows)) {
+        for c in range(0, len(rows[r])) {
+            let ch = rows[r][c]
+            if ch == "." { continue }
+            if !contains(antennas, ch) { antennas[ch] = [] }
+            antennas[ch].append([r, c])
+        }
+    }
+    return [len(rows), len(rows[0]), antennas]
+}
+
+fn in_bounds(r: int, c: int, h: int, w: int) -> bool {
+    return r >= 0 && r < h && c >= 0 && c < w
+}
+
+// Every ordered pair (a, b) of same-frequency antennas contributes antinodes
+// on b's side; the reversed pair (b, a) handles a's side.
+fn count_antinodes(text: str, harmonics: bool) -> int {
+    let p = parse(text)
+    let h = p[0]
+    let w = p[1]
+    let spots = set()
+    for freq in keys(p[2]) {
+        let towers = p[2][freq]
+        for a in towers {
+            for b in towers {
+                if a == b { continue }
+                let dr = b[0] - a[0]
+                let dc = b[1] - a[1]
+                if harmonics {
+                    // reduce the step so no in-line grid point is skipped
+                    let g = gcd(abs(dr), abs(dc))
+                    dr = idiv(dr, g)
+                    dc = idiv(dc, g)
+                    // the opposite ordering (b, a) covers the other direction
+                    let r = b[0]
+                    let c = b[1]
+                    while in_bounds(r, c, h, w) {
+                        spots.add(r * w + c)
+                        r = r - dr
+                        c = c - dc
+                    }
+                } else {
+                    let r = b[0] + dr
+                    let c = b[1] + dc
+                    if in_bounds(r, c, h, w) { spots.add(r * w + c) }
+                }
+            }
+        }
+    }
+    return len(spots)
+}
+
+fn part1(text: str) -> int {
+    return count_antinodes(text, false)
+}
+
+fn part2(text: str) -> int {
+    return count_antinodes(text, true)
+}
+
+@test
+fn test_sample_part1() {
+    assert_eq(part1(SAMPLE), 14)
+}
+
+@test
+fn test_sample_part2() {
+    assert_eq(part2(SAMPLE), 34)
+}
+
+fn main() {
+    print("Day 8 Part 1: " + str(part1(SAMPLE)))
+    print("Day 8 Part 2: " + str(part2(SAMPLE)))
+}
+
+main()

@@ -1,0 +1,188 @@
+// Advent of Code 2024 · Day 16 · Reindeer Maze
+// Part 1: cheapest S -> E route, where a step costs 1 and a 90° turn costs 1000.
+// Part 2: count the tiles that lie on at least one of the cheapest routes.
+
+let SAMPLE = "###############
+#.......#....E#
+#.#.###.#.###.#
+#.....#.#...#.#
+#.###.#####.#.#
+#.#.#.......#.#
+#.#.#####.###.#
+#...........#.#
+###.#.#####.#.#
+#...#.....#.#.#
+#.#.#.###.#.#.#
+#.....#...#.#.#
+#.###.#.#.#.#.#
+#S..#.....#...#
+###############"
+
+let SAMPLE2 = "#################
+#...#...#...#..E#
+#.#.#.#.#.#.#.#.#
+#.#.#.#...#...#.#
+#.#.#.#.###.#.#.#
+#...#.#.#.....#.#
+#.#.#.#.#.#####.#
+#.#...#.#.#.....#
+#.#.#####.#.###.#
+#.#.#.......#...#
+#.#.###.#####.###
+#.#.#...#.....#.#
+#.#.#.#####.###.#
+#.#.#.........#.#
+#.#.#.#########.#
+#S#.............#
+#################"
+
+let INF = 1 << 60
+
+// Directions in clockwise order: east, south, west, north.
+// Turning left/right is (d + 3) % 4 / (d + 1) % 4.
+let DR = [0, 1, 0, -1]
+let DC = [1, 0, -1, 0]
+
+// ---- a tiny binary min-heap of ints -------------------------------------
+
+fn heap_push(h: list, x: int) {
+    h.append(x)
+    let i = len(h) - 1
+    while i > 0 {
+        let p = (i - 1) >> 1
+        if h[p] <= x { break }
+        h[i] = h[p]
+        i = p
+    }
+    h[i] = x
+}
+
+fn heap_pop(h: list) -> int {
+    let top = h[0]
+    let tail = h.pop()
+    let n = len(h)
+    if n > 0 {
+        // sift the old tail down from the root
+        let i = 0
+        while true {
+            let m = 2 * i + 1
+            if m >= n { break }
+            if m + 1 < n && h[m + 1] < h[m] { m = m + 1 }
+            if h[m] >= tail { break }
+            h[i] = h[m]
+            i = m
+        }
+        h[i] = tail
+    }
+    return top
+}
+
+// ---- maze ---------------------------------------------------------------
+
+// Returns [rows, start_cell, end_cell]; a cell is r * width + c.
+fn parse(text: str) -> list {
+    let rows = []
+    for line in str_split(str_trim(text), "\n") {
+        let row = str_trim(line)
+        if len(row) > 0 { rows.append(row) }
+    }
+    let w = len(rows[0])
+    let start = 0
+    let end = 0
+    for r in range(0, len(rows)) {
+        for c in range(0, w) {
+            if rows[r][c] == "S" { start = r * w + c }
+            if rows[r][c] == "E" { end = r * w + c }
+        }
+    }
+    return [rows, start, end]
+}
+
+// Dijkstra over states (cell, facing), encoded as cell * 4 + dir.
+// sign = 1 searches forwards from `starts`; sign = -1 walks moves in
+// reverse, so dist[s] becomes the cheapest cost from s to any start.
+// Heap entries pack (cost, state) into one int: cost * nstates + state.
+fn dijkstra(rows: list, starts: list, sign: int) -> list {
+    let w = len(rows[0])
+    let nstates = len(rows) * w * 4
+    let dist = [INF] * nstates
+    let heap = []
+    for s in starts {
+        dist[s] = 0
+        heap_push(heap, s)
+    }
+    while len(heap) > 0 {
+        let item = heap_pop(heap)
+        let d = idiv(item, nstates)
+        let s = item - d * nstates
+        if d > dist[s] { continue }
+        let dir = s & 3
+        let cell = s >> 2
+        let r = idiv(cell, w) + sign * DR[dir]
+        let c = imod(cell, w) + sign * DC[dir]
+        let nexts = [s - dir + ((dir + 1) & 3), s - dir + ((dir + 3) & 3)]
+        let costs = [d + 1000, d + 1000]
+        if rows[r][c] != "#" {
+            nexts.append((r * w + c) * 4 + dir)
+            costs.append(d + 1)
+        }
+        for k in range(0, len(nexts)) {
+            let ns = nexts[k]
+            let nd = costs[k]
+            if nd < dist[ns] {
+                dist[ns] = nd
+                heap_push(heap, nd * nstates + ns)
+            }
+        }
+    }
+    return dist
+}
+
+fn part1(text: str) -> int {
+    let p = parse(text)
+    let dist = dijkstra(p[0], [p[1] * 4], 1)
+    let e = p[2] * 4
+    return min([dist[e], dist[e + 1], dist[e + 2], dist[e + 3]])
+}
+
+// A tile is on a best path iff some state there has
+// cost(start -> state) + cost(state -> end) == best.
+fn part2(text: str) -> int {
+    let p = parse(text)
+    let rows = p[0]
+    let e = p[2] * 4
+    let fwd = dijkstra(rows, [p[1] * 4], 1)
+    let bwd = dijkstra(rows, [e, e + 1, e + 2, e + 3], -1)
+    let best = min([fwd[e], fwd[e + 1], fwd[e + 2], fwd[e + 3]])
+    let count = 0
+    let ncells = idiv(len(fwd), 4)
+    for cell in range(0, ncells) {
+        for dir in range(0, 4) {
+            let s = cell * 4 + dir
+            if fwd[s] + bwd[s] == best {
+                count = count + 1
+                break
+            }
+        }
+    }
+    return count
+}
+
+@test
+fn test_part1() {
+    assert_eq(part1(SAMPLE), 7036)
+    assert_eq(part1(SAMPLE2), 11048)
+}
+
+@test
+fn test_part2() {
+    assert_eq(part2(SAMPLE), 45)
+    assert_eq(part2(SAMPLE2), 64)
+}
+
+fn main() {
+    print("Day 16 Part 1: " + str(part1(SAMPLE)))
+    print("Day 16 Part 2: " + str(part2(SAMPLE)))
+}
+
+main()

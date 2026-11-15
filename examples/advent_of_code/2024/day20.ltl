@@ -1,0 +1,139 @@
+// Advent of Code 2024 · Day 20 · Race Condition
+// Part 1: count cheats (walk through walls for up to 2 ps) saving >= threshold ps.
+// Part 2: same, but a cheat may last up to 20 ps.
+
+let SAMPLE = "###############
+#...#...#.....#
+#.#.#.#.#.###.#
+#S#...#.#.#...#
+#######.#.#.###
+#######.#.#...#
+#######.#.###.#
+###..E#...#...#
+###.#######.###
+#...###...#...#
+#.#####.#.###.#
+#.#...#.#.#...#
+#.#.#.#.#.#.###
+#...#...#...###
+###############"
+
+// The real puzzle counts cheats saving at least 100 ps; the sample's
+// cheats are much smaller, so the tests use other thresholds.
+let REAL_THRESHOLD = 100
+
+// The grid is padded by PAD wall cells on every side so that any jump of
+// up to PAD steps stays inside the flat array (no bounds checks needed).
+let PAD = 20
+
+// Distance from S along the track for every cell of the padded grid
+// (-1 for walls). Returns [dist, padded_width, track_cells_in_order].
+fn track(text: str) -> list {
+    let rows = []
+    for line in str_split(str_trim(text), "\n") {
+        let row = str_trim(line)
+        if len(row) > 0 { rows.append(row) }
+    }
+    let w = len(rows[0]) + 2 * PAD
+    let h = len(rows) + 2 * PAD
+    let is_track = [false] * (w * h)
+    let start = 0
+    for r in range(0, len(rows)) {
+        for c in range(0, len(rows[r])) {
+            let ch = rows[r][c]
+            let cell = (r + PAD) * w + (c + PAD)
+            if ch != "#" { is_track[cell] = true }
+            if ch == "S" { start = cell }
+        }
+    }
+    // BFS from the start; on a single-lane track this just walks the lane.
+    let dist = [-1] * (w * h)
+    dist[start] = 0
+    let order = [start]
+    let steps = [1, -1, w, -w]
+    let head = 0
+    while head < len(order) {
+        let cur = order[head]
+        head = head + 1
+        for s in steps {
+            let nxt = cur + s
+            if is_track[nxt] && dist[nxt] < 0 {
+                dist[nxt] = dist[cur] + 1
+                order.append(nxt)
+            }
+        }
+    }
+    return [dist, w, order]
+}
+
+// A cheat jumps from track cell p to track cell q with Manhattan distance
+// d <= max_cheat; it saves dist[q] - dist[p] - d picoseconds.
+// We enumerate the diamond of offsets once, then scan it from every cell.
+fn count_cheats(text: str, max_cheat: int, threshold: int) -> int {
+    let t = track(text)
+    let dist = t[0]
+    let w = t[1]
+    let deltas = []
+    let costs = []
+    for dr in range(-max_cheat, max_cheat + 1) {
+        let span = max_cheat - abs(dr)
+        for dc in range(-span, span + 1) {
+            let d = abs(dr) + abs(dc)
+            if d >= 2 {
+                deltas.append(dr * w + dc)
+                costs.append(d)
+            }
+        }
+    }
+    let m = len(deltas)
+    let count = 0
+    for p in t[2] {
+        let need = dist[p] + threshold
+        for k in range(0, m) {
+            // walls are -1, so they never pass this test
+            if dist[p + deltas[k]] - costs[k] >= need { count = count + 1 }
+        }
+    }
+    return count
+}
+
+fn part1(text: str, threshold: int) -> int {
+    return count_cheats(text, 2, threshold)
+}
+
+fn part2(text: str, threshold: int) -> int {
+    return count_cheats(text, 20, threshold)
+}
+
+@test
+fn test_track_length() {
+    let t = track(SAMPLE)
+    assert_eq(len(t[2]) - 1, 84)
+}
+
+@test
+fn test_part1() {
+    assert_eq(part1(SAMPLE, 1), 44)
+    assert_eq(part1(SAMPLE, 10), 10)
+    assert_eq(part1(SAMPLE, 20), 5)
+    assert_eq(part1(SAMPLE, 64), 1)
+    assert_eq(part1(SAMPLE, 65), 0)
+}
+
+@test
+fn test_part2() {
+    assert_eq(part2(SAMPLE, 50), 285)
+    assert_eq(part2(SAMPLE, 70), 41)
+    assert_eq(part2(SAMPLE, 74), 7)
+    assert_eq(part2(SAMPLE, 76), 3)
+    assert_eq(part2(SAMPLE, 77), 0)
+}
+
+fn main() {
+    // For a real puzzle input use part1(input, REAL_THRESHOLD) and
+    // part2(input, REAL_THRESHOLD).
+    print("Day 20 Part 1: " + str(part1(SAMPLE, 1)))
+    print("Day 20 Part 2: " + str(part2(SAMPLE, 50)))
+}
+
+main()

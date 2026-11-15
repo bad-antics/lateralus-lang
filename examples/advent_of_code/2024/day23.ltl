@@ -1,0 +1,130 @@
+// Advent of Code 2024 · Day 23 · LAN Party
+// Part 1: count triangles of connected computers where some name starts with "t".
+// Part 2: find the largest clique (Bron–Kerbosch); password = sorted names joined by ",".
+
+let SAMPLE = "kh-tc
+qp-kh
+de-cg
+ka-co
+yn-aq
+qp-ub
+cg-tb
+vc-aq
+tb-ka
+wh-tc
+yn-cg
+kh-ub
+ta-co
+de-co
+tc-td
+tb-wq
+wh-td
+ta-ka
+td-qp
+aq-cg
+wq-ub
+ub-vc
+de-ta
+wq-aq
+wq-vc
+wh-yn
+ka-de
+kh-ta
+co-tc
+wh-qp
+tb-vc
+td-yn"
+
+// name -> set of directly connected names
+fn parse(text: str) -> map {
+    let adj = {}
+    for line in str_split(text, "\n") {
+        let t = str_trim(line)
+        if len(t) == 0 { continue }
+        let ends = str_split(t, "-")
+        let a = ends[0]
+        let b = ends[1]
+        if !contains(adj, a) { adj[a] = set() }
+        if !contains(adj, b) { adj[b] = set() }
+        adj[a].add(b)
+        adj[b].add(a)
+    }
+    return adj
+}
+
+fn has_t(name: str) -> bool {
+    return str_starts_with(name, "t")
+}
+
+// Enumerate each triangle once by requiring a < b < c.
+fn count_triangles(adj: map, only_t: bool) -> int {
+    let count = 0
+    for a in keys(adj) {
+        for b in adj[a] {
+            if b <= a { continue }
+            for c in adj[a] & adj[b] {
+                if c <= b { continue }
+                if !only_t || has_t(a) || has_t(b) || has_t(c) { count = count + 1 }
+            }
+        }
+    }
+    return count
+}
+
+fn part1(text: str) -> int {
+    return count_triangles(parse(text), true)
+}
+
+// Bron–Kerbosch with pivoting. r = current clique, p = candidates that could
+// extend it, x = already-explored vertices. best[0] holds the largest clique.
+fn bron_kerbosch(r: list, p: set, x: set, adj: map, best: list) {
+    if len(p) == 0 && len(x) == 0 {
+        if len(r) > len(best[0]) { best[0] = r }
+        return
+    }
+    // pivot on the vertex with the most neighbours in p; those neighbours
+    // will be reached through some other branch, so skip them here
+    let pivot = ""
+    let most = -1
+    for u in p | x {
+        let n = len(p & adj[u])
+        if n > most {
+            most = n
+            pivot = u
+        }
+    }
+    for v in sorted(p - adj[pivot]) {
+        bron_kerbosch(r + [v], p & adj[v], x & adj[v], adj, best)
+        p.remove(v)
+        x.add(v)
+    }
+}
+
+fn part2(text: str) -> str {
+    let adj = parse(text)
+    let best = [[]]
+    bron_kerbosch([], set(keys(adj)), set(), adj, best)
+    return str_join(sorted(best[0]), ",")
+}
+
+@test
+fn test_all_triangles() {
+    assert_eq(count_triangles(parse(SAMPLE), false), 12)
+}
+
+@test
+fn test_sample_part1() {
+    assert_eq(part1(SAMPLE), 7)
+}
+
+@test
+fn test_sample_part2() {
+    assert_eq(part2(SAMPLE), "co,de,ka,ta")
+}
+
+fn main() {
+    print("Day 23 Part 1: " + str(part1(SAMPLE)))
+    print("Day 23 Part 2: " + part2(SAMPLE))
+}
+
+main()
