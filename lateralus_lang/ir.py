@@ -999,7 +999,7 @@ class SemanticAnalyzer(ASTVisitor):
     def visit_PipelineAssign(self, node) -> None:
         val = node.value.accept(self)
         target = node.target.accept(self)
-        self._emit(IROp.STORE, dest=target, src1=val, span=node.span)
+        self._emit(IROp.COPY, dest=target, src1=val, span=node.span)
 
     def visit_SpreadExpr(self, node) -> str:
         val = node.value.accept(self)
