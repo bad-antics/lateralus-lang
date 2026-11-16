@@ -597,3 +597,42 @@ class TestStdlibBitset:
         assert "fn intersection(" in src
         assert "fn difference(" in src
         assert "fn is_subset(" in src
+
+
+class TestStdlibCSV:
+    """Tests for stdlib/csv.ltl RFC 4180 parsing and multiline support."""
+
+    def _load_csv_module(self):
+        namespace = {"__name__": "csv_test_runtime"}
+        for mod in ("strings", "csv"):
+            p = ROOT / "stdlib" / f"{mod}.ltl"
+            res = Compiler().compile_source(p.read_text(encoding="utf-8"), filename=str(p), target=Target.PYTHON)
+            assert res.ok, f"Failed to compile {mod}: {[e.message for e in res.errors]}"
+            exec(res.python_src, namespace)
+        return namespace
+
+    def test_csv_multiline_crlf(self):
+        ns = self._load_csv_module()
+        text = '"a\r\nb",c\r\n'
+        rows = ns["parse"](text, ",")
+        assert rows == [["a\r\nb", "c"]]
+
+    def test_csv_multiline_lf(self):
+        ns = self._load_csv_module()
+        text = '"a\nb",c\n'
+        rows = ns["parse"](text, ",")
+        assert rows == [["a\nb", "c"]]
+
+    def test_csv_escaped_quotes(self):
+        ns = self._load_csv_module()
+        text = '"a""b",c\n'
+        rows = ns["parse"](text, ",")
+        assert rows == [["a\"b", "c"]]
+
+    def test_csv_roundtrip_generate(self):
+        ns = self._load_csv_module()
+        rows = [["a\r\nb", 'c"d', "e,f"], ["1", "2\n3", "4"]]
+        encoded = ns["generate"](rows, ",")
+        decoded = ns["parse"](encoded, ",")
+        assert decoded == rows
+
