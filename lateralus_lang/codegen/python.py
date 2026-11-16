@@ -900,8 +900,81 @@ class PythonTranspiler(ASTVisitor):
         if any(node.path.startswith(p) for p in ("stdlib.",)):
             self._w += f"# stdlib '{node.path}' resolved via preamble shims"
             return
+        # A plain `import <name>` in the emitted Python never loads
+        # stdlib/<name>.ltl, so every stdlib module whose name is not also an
+        # installed Python package raised ModuleNotFoundError. Resolve against
+        # the .ltl source first; fall back to the Python import only if there
+        # is no such module.
+        if self._emit_stdlib_import(node.path, alias, _stack=()):
+            return
         py_path = node.path.replace(".", ".")
         self._w += f"import {py_path} as {alias}"
+
+    # ── stdlib import resolution ──────────────────────────────────────────────
+    _stdlib_cache: dict = {}
+
+    @staticmethod
+    def _stdlib_dir():
+        import pathlib as _p
+        return _p.Path(__file__).resolve().parent.parent.parent / "stdlib"
+
+    @staticmethod
+    def _strip_preamble(text: str) -> str:
+        """Keep only top-level declarations, dropping the generated preamble."""
+        lines = text.split("\n")
+        for i, ln in enumerate(lines):
+            if ln.startswith(("def ", "class ", "_LTL_", "@")):
+                return "\n".join(lines[i:]).rstrip()
+        return ""
+
+    def _emit_stdlib_import(self, path: str, alias: str, _stack: tuple) -> bool:
+        """Inline stdlib/<name>.ltl (and its stdlib deps) into this module.
+
+        Returns True when the module was found and inlined.
+        """
+        name = path.split(".", 1)[1] if path.startswith("stdlib.") else path
+        if not name or "/" in name or not name.replace("_", "").isalnum():
+            return False
+        mod_file = self._stdlib_dir() / f"{name}.ltl"
+        if not mod_file.is_file():
+            return False
+        if name in _stack:          # circular import guard
+            return True
+
+        key = str(mod_file)
+        if key not in PythonTranspiler._stdlib_cache:
+            try:
+                from ..parser import parse as _parse
+                src = mod_file.read_text(encoding="utf-8")
+                prog = _parse(src, str(mod_file))
+            except Exception:
+                PythonTranspiler._stdlib_cache[key] = ""
+                return False
+            sub = PythonTranspiler(use_match_stmt=self._use_match)
+            body = self._strip_preamble(sub.transpile(prog))
+            PythonTranspiler._stdlib_cache[key] = body
+
+        body = PythonTranspiler._stdlib_cache[key]
+        if not body:
+            return False
+
+        # Pull in whatever this module imports from the stdlib, so a module
+        # that calls another one (hkdf -> crypto) still resolves.
+        try:
+            from ..parser import parse as _parse2
+            deps = [s.path for s in _parse2(
+                mod_file.read_text(encoding="utf-8"), str(mod_file)
+            ).body if isinstance(s, ImportStmt)]
+        except Exception:
+            deps = []
+        for dep in deps:
+            self._emit_stdlib_import(dep, dep, _stack=_stack + (name,))
+
+        self._w += f"# inlined stdlib module '{path}' from stdlib/{name}.ltl"
+        for ln in body.split("\n"):
+            self._w += ln
+        self._w += ""
+        return True
 
     # ── declarations ──────────────────────────────────────────────────────────
 
