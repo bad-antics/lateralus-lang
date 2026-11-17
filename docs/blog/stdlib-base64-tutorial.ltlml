@@ -1,0 +1,78 @@
+// ===================================================================
+// docs/blog/stdlib-base64-tutorial.ltlml
+// Tutorial: Encoding Binary Data with stdlib/base64.ltl
+// ===================================================================
+
+# Tutorial: RFC 4648 Base64 Encoding in Lateralus
+
+Welcome to the standard library tutorial for `stdlib/base64.ltl`. This guide covers the module's RFC 4648 codec: standard encoding and decoding, URL-safe variants for web contexts, validity checking, and encoded-length arithmetic for buffer sizing.
+
+## 1. Overview of the Module
+
+The `stdlib/base64.ltl` module provides seven functions:
+
+- `encode(data)`: Standard base64 encoding using the `A-Za-z0-9+/` alphabet with `=` padding.
+- `decode(encoded)`: Reconstructs the original string from a padded base64 input.
+- `encode_url(data)`: URL-safe encoding (`+` -> `-`, `/` -> `_`) per RFC 4648 section 5.
+- `decode_url(encoded)`: URL-safe decoding; translates back before delegating to `decode`.
+- `is_valid(s)`: Rejects strings whose length is not a multiple of 4 or containing out-of-alphabet characters.
+- `encoded_length(n)`: Padded output length for `n` input bytes.
+- `decoded_length(encoded)`: Exact decoded byte count, accounting for `=` padding.
+
+## 2. Runnable Example
+
+```lateralus
+from base64 import encode, decode, encode_url, is_valid
+
+fn main() -> void {
+    let token = encode("session:user:42")
+    println("Token: ", token)                    // c2Vzc2lvbjp1c2VyOjQy
+
+    let safe = encode_url("a+b/c?")
+    println("URL safe: ", safe)                  // YStiL2M_ (note trailing _)
+
+    let original = decode(token)
+    println("Round trip: ", original)            // session:user:42
+
+    println("valid: ", is_valid(token))          // true
+    println("valid: ", is_valid("not-b64"))      // false
+}
+```
+
+The canonical example lives at `examples/tutorials/base64_roundtrip.ltl`.
+
+## 3. Test Vectors and Verification
+
+The following vectors were produced by compiling `stdlib/base64.ltl` through the Python target and executing the generated code against RFC 4648 references:
+
+1. `encode("hello") == "aGVsbG8="`
+2. `encode("hi") == "aGk="`
+3. `encode("h") == "aA=="`
+4. `encode("") == ""`
+5. `encode("a+b/c?") == "YStiL2M/"`
+6. `encode_url("a+b/c?") == "YStiL2M_"`
+7. `encode_url("hi") == "aGk="`
+8. `is_valid("aGVsbG8=") == true`
+9. `is_valid("abc") == false` (length not a multiple of 4)
+10. `is_valid("!!!!") == false` (out-of-alphabet characters)
+11. `is_valid("") == true` (empty input is well-formed)
+12. `decoded_length("aGVsbG8=") == 5`
+13. `decoded_length("aGk=") == 2`
+14. `decoded_length("aA==") == 1`
+
+## 4. Backend Notes and Limitations
+
+Execution against the Python emission target surfaced two gaps worth documenting:
+
+1. `char_code` is not bound by the Python-target prelude; modules that call it (including this one) need a compatibility shim binding it to `ord()` when the module is compiled standalone. The WASM and native backends provide it directly.
+2. The `/` operator emits Python float division rather than integer division. `decode` and `encoded_length` therefore produce float-typed intermediates: `chr()` rejects a float argument inside `decode`, and `encoded_length` returns values such as `2.666` where integer truncation semantics would yield `4`. Callers on the Python backend should wrap results in `int()` or route through a backend with integer division. `encode`, `encode_url`, `is_valid`, and `decoded_length` are unaffected. Both gaps are tracked upstream in issue #136.
+
+## 5. Encoding Padding, Explained
+
+Base64 packs 3 bytes into 4 sextet characters. When the input length is not a multiple of 3, the final quartet is padded with `=`:
+
+- 1 trailing byte -> 2 real characters + `==` (`"h"` -> `"aA=="`)
+- 2 trailing bytes -> 3 real characters + `=` (`"hi"` -> `"aGk="`)
+- 3 trailing bytes -> 4 real characters, no padding (`"hey"` -> `"aGV5"`)
+
+`encoded_length` and `decoded_length` exist precisely so callers never have to reason about this by hand when sizing buffers.
