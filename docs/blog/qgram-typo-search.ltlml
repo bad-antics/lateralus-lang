@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Suggesting “planet” for “plnet” with qgram</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "Suggesting planet for plnet with qgram"
+author: Babbaragga
+date: 2026-11-17
+abstract: Use overlapping character pairs to suggest a catalogue entry after a missing keystroke.
+---
+
+A reader types `plnet` into a catalogue containing `plane`, `brick`, `planet` and `plum`. All but `brick` share the prefix `pl`. The ending gives us another clue. The `qgram` module lets us use both clues in a short suggestion function.
+
+## Count the shared pairs
+
+Call `qgrams("plnet", 2)` to slide a two-character window across the word. The module pads each end with the character `chr(1)`, so the first and last letters get their own pairs. Writing that character as `·` on paper, the two words give us
+
+```text
+plnet    ·p  pl  ln  ne  et  t·
+planet   ·p  pl  la  an  ne  et  t·
+```
+
+Deleting the `a` replaces `la` and `an` with `ln`. Five distinct pairs survive. The two words contain eight distinct pairs between them, so their Jaccard similarity is exactly 5/8, or 0.625. On the same query, `plane` scores 3/9 and `plum` scores 2/9. A cutoff of 0.5 keeps just `planet`.
+
+## Filter a small catalogue
+
+```lateralus
+fn suggestions(typed: str, words: list, cutoff: float) -> list {
+    let hits = []
+    for word in words {
+        if jaccard(typed, word, 2) >= cutoff {
+            hits = hits + [word]
+        }
+    }
+    return hits
+}
+```
+
+The function returns matches in catalogue order. Raising the cutoff to 0.75 would hide the intended match here. Choose a cutoff against the misspellings your own catalogue needs to catch.
+
+## Run the example and its pinned vector
+
+From the repository root, use Python 3.10 or newer. The commands combine the shipped module and the example in a temporary directory so the compiler sees their functions in one source file.
+
+```sh
+demo_dir=$(mktemp -d)
+cat stdlib/qgram.ltl examples/qgram_typo_search.ltl > "$demo_dir/search.ltl"
+PYTHONPATH="$PWD" python3 -m lateralus_lang run "$demo_dir/search.ltl"
+```
+
+The example checks the exact padded pairs, the 0.625 score, the single match at 0.5 and the empty result at 0.75 before printing one line.
+
+```text
+planet
+```
+
+Try a transposition by changing the query in the final call to `plnaet`. Predict which adjacent pairs it loses, then run it again. Leave the pinned vector unchanged so the original case keeps checking the module. [Runnable example](../../examples/qgram_typo_search.ltl) · [qgram source](../../stdlib/qgram.ltl)
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>
