@@ -1,0 +1,57 @@
+// Run with: python3 scripts/run_aho_corasick_tutorial.py
+// The runner prepends the actual stdlib module; these are its public functions.
+
+fn has_hit(hits: list, pid: int, position: int) -> bool {
+    for hit in hits {
+        if hit[0] == pid && hit[1] == position { return true }
+    }
+    return false
+}
+
+// Reuse one automaton across independent log lines. Offsets reset for each line.
+let patterns = ["error", "timeout", "out"]
+let matcher = build(patterns)
+let lines = ["info: ready", "error: timeout", "timeout then error"]
+for line in lines {
+    let hits = find_all_starts(matcher, line)
+    for hit in hits {
+        let start = hit[1]
+        let pattern = patterns[hit[0]]
+        let end = start + len(pattern)
+        print(pattern + " [" + str(start) + "," + str(end) + "): " + line)
+    }
+}
+
+// Pinned vectors: compare membership and count, not tie ordering.
+let cases = [
+    [["error", "timeout", "out"], "error: timeout", [[0, 0, 5], [1, 7, 14], [2, 11, 14]]],
+    [["he", "she", "his", "hers"], "ushers", [[1, 1, 4], [0, 2, 4], [3, 2, 6]]],
+    [["aba", "ba"], "ababa", [[0, 0, 3], [1, 1, 3], [0, 2, 5], [1, 3, 5]]],
+    [["warning", "error"], "all clear", []],
+    [["error"], "", []],
+    [[], "error", []],
+    [["error"], "ERROR", []]
+]
+let checks = 0
+for vector in cases {
+    let auto = build(vector[0])
+    let text = vector[1]
+    let expected = vector[2]
+    let starts = find_all_starts(auto, text)
+    let ends = find_all(auto, text)
+    assert_eq(len(starts), len(expected), "start count: " + text)
+    assert_eq(len(ends), len(expected), "end count: " + text)
+    assert_eq(contains_any(auto, text), len(expected) > 0, "boolean: " + text)
+    checks = checks + 3
+    for hit in expected {
+        assert_true(has_hit(starts, hit[0], hit[1]), "start: " + text)
+        assert_true(has_hit(ends, hit[0], hit[2]), "end: " + text)
+        assert_eq(slice(text, hit[1], hit[2]), vector[0][hit[0]], "substring: " + text)
+        checks = checks + 3
+    }
+}
+// Scanning another line must start at the root, with fresh offsets.
+assert_eq(contains_any(matcher, "info: ready"), false)
+assert_true(has_hit(find_all_starts(matcher, "timeout then error"), 0, 13))
+checks = checks + 2
+print("PASS: " + str(checks) + " assertions across 7 vectors and matcher reuse")
