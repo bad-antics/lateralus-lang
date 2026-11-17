@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>High-Speed Stream Encryption with Lateralus stdlib/chacha20</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "High-Speed Stream Encryption with stdlib/chacha20"
+author: benny1232123
+date: 2026-11-16
+abstract: An end-to-end tutorial on using Lateralus stdlib/chacha20 for high-throughput, constant-time stream encryption conforming to RFC 8439, complete with state setup, quarter-round dynamics, and verified test vectors.
+---
+
+# Introduction
+
+In distributed systems, secure tunnels, and modern protocol design (such as TLS 1.3, WireGuard, and age encryption), symmetric stream ciphers play a vital role in protecting network traffic and files at rest. While AES-GCM remains ubiquitous on hardware with dedicated AES instructions, software-driven embedded systems, microcontrollers, and edge nodes benefit substantially from **ChaCha20**.
+
+ChaCha20, developed by Daniel J. Bernstein and standardized in **RFC 8439**, is an elegant, software-friendly cipher designed to prevent timing cache-collision side channels.
+
+Lateralus includes a standard library implementation in `stdlib/chacha20.ltl`. In this walkthrough, we will cover:
+1. The 512-bit ChaCha20 state matrix structure.
+2. Generating 64-byte keystream blocks.
+3. Encrypting and decrypting arbitrary-length byte buffers.
+4. Validating outputs against pinned RFC 8439 reference test vectors.
+
+---
+
+# Architecture: The 4x4 State Matrix
+
+The core primitive of ChaCha20 operates on a $4 \times 4$ matrix of 32-bit little-endian unsigned integers (a total of 64 bytes / 512 bits):
+
+| Column 0 | Column 1 | Column 2 | Column 3 |
+|---|---|---|---|
+| Constant `0x61707865` | Constant `0x3320646e` | Constant `0x79622d32` | Constant `0x6b206574` |
+| Key Word 0 | Key Word 1 | Key Word 2 | Key Word 3 |
+| Key Word 4 | Key Word 5 | Key Word 6 | Key Word 7 |
+| Block Counter | Nonce Word 0 | Nonce Word 1 | Nonce Word 2 |
+
+- **Constants (Words 0–3)**: The four ASCII constants corresponding to the 16-byte phrase `"expand 32-byte k"`.
+- **Key (Words 4–11)**: An 8-word (256-bit / 32-byte) symmetric key.
+- **Counter (Word 12)**: A 32-bit block sequence number starting from an initial counter (typically 1 for AEAD payloads).
+- **Nonce (Words 13–15)**: A 96-bit (12-byte) number-used-once ensuring identical keys never generate duplicate keystreams.
+
+### The 20 Rounds
+
+Each block undergoes 20 rounds of quarter-round transformations:
+- **10 Column Rounds**: transforming columns `(0, 4, 8, 12)`, `(1, 5, 9, 13)`, `(2, 6, 10, 14)`, `(3, 7, 11, 15)`.
+- **10 Diagonal Rounds**: transforming diagonals `(0, 5, 10, 15)`, `(1, 6, 11, 12)`, `(2, 7, 8, 13)`, `(3, 4, 9, 14)`.
+
+After 20 rounds, the resulting working matrix is added word-by-word back to the initial state matrix, and serialized in little-endian order to produce a 64-byte keystream block.
+
+---
+
+# Practical Usage
+
+### 1. Generating Keystream Blocks
+
+If you need raw pseudo-random blocks (e.g., for key derivation or testing), call `chacha20.block()`:
+
+```lateralus
+import chacha20
+
+// 32-byte key (list of 32 ints in 0..255)
+let key = [
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+    0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+    0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f
+]
+
+// 12-byte nonce (RFC 8439 96-bit standard)
+let nonce = [0x00, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x4a, 0x00, 0x00, 0x00, 0x00]
+let counter = 1
+
+let stream = chacha20.block(key, nonce, counter)
+print("Keystream block length: " + str(len(stream))) // 64
+```
+
+### 2. Stream Encryption and Decryption
+
+Because stream ciphers apply bitwise XOR between the keystream and the data, encryption and decryption are symmetric operations. The function `chacha20.xor()` handles multi-block streaming, chunking data into 64-byte windows and incrementing the block counter automatically:
+
+```lateralus
+import chacha20
+
+let key = [
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+    0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+    0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f
+]
+let nonce = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4a, 0x00, 0x00, 0x00, 0x00]
+let initial_counter = 1
+
+let plaintext = [72, 101, 108, 108, 111, 44, 32, 87, 111, 114, 108, 100, 33] // "Hello, World!"
+
+// Encrypt
+let ciphertext = chacha20.xor(key, nonce, initial_counter, plaintext)
+
+// Decrypt using identical parameters
+let decrypted = chacha20.xor(key, nonce, initial_counter, ciphertext)
+
+// Assert lossless roundtrip
+assert decrypted == plaintext
+```
+
+---
+
+# Verification: RFC 8439 Pinned Test Vectors
+
+To ensure strict standard conformance, `tests/test_stdlib_chacha20.py` asserts against the authoritative RFC 8439 vectors:
+
+### 1. Section 2.3.2 (Block Function Keystream)
+Using the sequential 32-byte key (`0x00..0x1f`), nonce `00:00:00:09:00:00:00:4a:00:00:00:00`, and counter `1`:
+- **First 16 bytes**: `10 f1 e7 e4 d1 3b 59 15 50 0f dd 1f a3 20 71 c4`
+- **Final 16 bytes**: `b5 12 9c d1 de 16 4e b9 cb d0 83 e8 a2 50 3c 4e`
+
+### 2. Section 2.4.2 (114-Byte Sunscreen Vector)
+With initial counter `1` and nonce `00:00:00:00:00:00:00:4a:00:00:00:00`:
+- **Plaintext**: `"Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it."`
+- **Ciphertext Header**: `6e 2e 35 9a 25 68 f9 80 41 ba 07 28 dd 0d 69 81 ...`
+- **Ciphertext Tail**: `... b4 0b 8e ed f2 78 5e 42 87 4d`
+
+Run the test suite across compilers with:
+```bash
+pytest tests/test_stdlib_chacha20.py
+```
+
+All test cases verify bit-for-bit parity across Python, JavaScript, and native C compiler backends.
+
+---
+
+# Summary
+
+Lateralus `stdlib/chacha20.ltl` offers:
+- **Clean RFC 8439 Conformance**: Bit-exact compliance with standard vectors.
+- **Constant-Time Design**: No secret-dependent memory indexing, mitigating cache-timing leaks.
+- **Zero Dependencies**: Pure Lateralus code that compiles seamlessly to C, JavaScript, and Python.
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>
