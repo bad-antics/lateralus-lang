@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Universally Unique Identifiers in Lateralus with stdlib/uuid</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "Working with Universally Unique Identifiers in Lateralus: stdlib/uuid"
+author: zongsm-cmyk
+date: 2026-11-16
+abstract: A practical walkthrough for generating, validating, and compacting RFC 4122 UUIDs in Lateralus using stdlib/uuid, including namespace resolution and pinned test vectors.
+---
+
+# Introduction
+
+In distributed architectures, microservices, and event-driven data pipelines, generating globally unique, collision-resistant identifiers without centralized coordination is an essential operational requirement. RFC 4122 defines Universally Unique Identifiers (UUIDs) as 128-bit values structured into a standardized 36-character hyphenated hexadecimal format (`8-4-4-4-12`).
+
+Lateralus ships with native standard library support via `stdlib.uuid`, providing fast UUID v4 generation, nil identifier instantiation, format validation, version extraction, and compact (32-hex) string conversion.
+
+In this tutorial, we explore how to utilize `stdlib.uuid` effectively in production systems, complete with runnable patterns and test vectors.
+
+---
+
+## 1. Importing the Module and Generating Identifiers
+
+To start working with UUIDs, import the `stdlib.uuid` module into your Lateralus script:
+
+```lateralus
+import stdlib.uuid as uuid
+
+fn main() {
+    // Generate a random UUID v4
+    let id = uuid.uuid4()
+    print("Generated UUID v4: " + id)
+
+    // Generate a nil UUID (all zeros)
+    let nil = uuid.nil_uuid()
+    print("Nil UUID: " + nil)
+}
+```
+
+The `uuid4()` function delegates to the platform's high-entropy random number generator (`__builtin_uuid4()`), returning a canonical string in the form:
+`xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx` (where `y` is one of `8`, `9`, `a`, or `b`).
+
+---
+
+## 2. Validation and Version Extraction
+
+When ingesting identifiers across API boundaries or message queues, validating the syntactic structure before database insertion avoids schema corruption and index bloat.
+
+`stdlib.uuid` provides two key introspection functions:
+- `is_valid(s: str) -> bool`: Verifies length (36 characters) and hyphen placement.
+- `version(s: str) -> int`: Extracts the sub-version number (1 through 5), returning `0` for invalid or nil UUIDs.
+
+```lateralus
+import stdlib.uuid as uuid
+
+fn process_incoming_request(trace_id: str) {
+    if !uuid.is_valid(trace_id) {
+        print("Error: Invalid trace identifier format")
+        return
+    }
+
+    let ver = uuid.version(trace_id)
+    print("Valid UUID version " + str(ver) + " accepted")
+}
+```
+
+---
+
+## 3. Storage Optimization: Compact vs. Expanded Representation
+
+While the hyphenated 36-character format is the human-readable default, columnar storage engines and high-throughput caches often prefer the compact 32-character hexadecimal format to reduce byte overhead:
+
+```lateralus
+import stdlib.uuid as uuid
+
+fn storage_transform() {
+    let standard = "550e8400-e29b-41d4-a716-446655440000"
+
+    // Convert to compact 32-character hex representation
+    let compact_id = uuid.compact(standard)
+    // => "550e8400e29b41d4a716446655440000"
+    print("Compact: " + compact_id)
+
+    // Expand back to standard 36-character format
+    let expanded = uuid.expand(compact_id)
+    // => "550e8400-e29b-41d4-a716-446655440000"
+    print("Expanded: " + expanded)
+
+    assert uuid.equals(standard, expanded)
+}
+```
+
+---
+
+## 4. Well-Known RFC 4122 Namespace Identifiers
+
+For deterministic name-based hashing (such as UUID v3 or v5), RFC 4122 defines standard namespace identifiers. Lateralus exposes these as public constants:
+
+- `uuid.NAMESPACE_DNS`: `"6ba7b810-9dad-11d1-80b4-00c04fd430c8"`
+- `uuid.NAMESPACE_URL`: `"6ba7b811-9dad-11d1-80b4-00c04fd430c8"`
+- `uuid.NAMESPACE_OID`: `"6ba7b812-9dad-11d1-80b4-00c04fd430c8"`
+- `uuid.NAMESPACE_X500`: `"6ba7b814-9dad-11d1-80b4-00c04fd430c8"`
+
+---
+
+## 5. Pinned RFC 4122 Test Vectors
+
+The following canonical vectors verify conformance across compiler targets:
+
+| Description | Canonical Identifier | Version |
+| :--- | :--- | :--- |
+| **Nil UUID** | `00000000-0000-0000-0000-000000000000` | `0` |
+| **DNS Namespace** | `6ba7b810-9dad-11d1-80b4-00c04fd430c8` | `1` |
+| **URL Namespace** | `6ba7b811-9dad-11d1-80b4-00c04fd430c8` | `1` |
+| **Random v4 Example** | `550e8400-e29b-41d4-a716-446655440000` | `4` |
+
+All test cases are codified in `tests/test_stdlib_uuid.py` and execute cleanly under Python, JavaScript, and C compilation targets.
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>
