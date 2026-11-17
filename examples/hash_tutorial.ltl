@@ -1,0 +1,72 @@
+// Run with: python scripts/run_hash_tutorial.py
+// The runner prepends the actual stdlib/hash.ltl source.
+
+// Compatibility shims: the Python backend does not yet provide the
+// xor and char_code helpers that stdlib/hash.ltl calls. Both are
+// defined here, in the combined source, so the module itself runs
+// exactly as published. xor is the bitwise ^ operator; char_code is
+// the ord builtin under the name the module expects.
+fn xor(a: int, b: int) -> int {
+    return a ^ b
+}
+
+fn char_code(c: str) -> int {
+    return ord(c)
+}
+
+fn main() {
+    // FNV-1a 32-bit: published reference values (isthe.com/chongo FNV).
+    assert_eq(fnv1a_32(""), 2166136261)
+    assert_eq(fnv1a_32("a"), 3826002220)
+    assert_eq(fnv1a_32("foobar"), 3214735720)
+    assert_eq(fnv1a_32("hello"), 1335831723)
+
+    // FNV-1a 64-bit: only the empty string is pinned. The module never
+    // masks the accumulator to 64 bits, so longer inputs overflow the
+    // published values; see the tutorial's "Known deviations" section.
+    assert_eq(fnv1a_64(""), 14695981039346656037)
+
+    // DJB2: published values (Dan Bernstein's hash, 5381 seed).
+    assert_eq(djb2(""), 5381)
+    assert_eq(djb2("a"), 177670)
+    assert_eq(djb2("hello"), 261238937)
+
+    // SDBM: published values (sdbm database engine hash).
+    assert_eq(sdbm(""), 0)
+    assert_eq(sdbm("a"), 97)
+    assert_eq(sdbm("abc"), 807794786)
+    assert_eq(sdbm("hello"), 684824882)
+
+    // checksum8: plain byte sum modulo 256.
+    assert_eq(checksum8(""), 0)
+    assert_eq(checksum8("abc"), 38)
+
+    // Fletcher-16: "abcde" is the worked example from the Fletcher
+    // checksum literature (sum2 << 8 | sum1 = 0xC8F0 = 51440).
+    assert_eq(fletcher16("abcde"), 51440)
+    assert_eq(fletcher16("abcdefgh"), 1575)
+
+    // Adler-32: "Wikipedia" is the worked example in RFC 1950
+    // (0x11E60398 = 300286872); the empty string hashes to 1.
+    assert_eq(adler32(""), 1)
+    assert_eq(adler32("Wikipedia"), 300286872)
+    assert_eq(adler32("hello"), 103547413)
+
+    // bucket: fnv1a_32 modulo the table size.
+    assert_eq(bucket("hello", 16), 11)
+    assert_eq(bucket("world", 16), 3)
+
+    print("21 pinned checks passed")
+
+    // Worked example: shard cache keys across 8 buckets.
+    let keys = ["alpha", "beta", "gamma"]
+    let i = 0
+    print("Sharding 3 keys across 8 buckets:")
+    while i < len(keys) {
+        let key = keys[i]
+        print(key + " -> bucket " + str(bucket(key, 8)))
+        i = i + 1
+    }
+}
+
+main()
