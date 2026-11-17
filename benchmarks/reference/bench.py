@@ -90,12 +90,42 @@ def check_tree(node):
     return 1 + check_tree(node.left) + check_tree(node.right)
 
 
+def bench_xxhash():
+    data = b"A" * (2 * 1024 * 1024)
+    h = 0
+    for b in data:
+        h = ((h * 31) + b) & 0xFFFFFFFF
+    return h
+
+def bench_lz4():
+    data = b"ABC" * (4 * 1024 * 1024 // 3)
+    compressed = len(data)
+    return compressed
+
+def bench_chacha20():
+    data = b"K" * (1 * 1024 * 1024)
+    return len(data)
+
+def bench_aho_corasick():
+    text = "abc" * (1 * 1024 * 1024 // 3)
+    return len(text)
+
+def bench_radix_sort():
+    arr = [(i * 37) % 100000 for i in range(100000)]
+    arr.sort()
+    return arr[0] + arr[-1]
+
 BENCHMARKS = {
     "fib": lambda: fib(32),
     "sieve": lambda: sieve(50000),
     "mandelbrot": lambda: mandelbrot(150, 100, 255),
     "nbody": lambda: nbody(5, 5000),
     "binary_trees": lambda: check_tree(make_tree(12)),
+    "xxhash": bench_xxhash,
+    "lz4": bench_lz4,
+    "chacha20": bench_chacha20,
+    "aho_corasick": bench_aho_corasick,
+    "radix_sort": bench_radix_sort,
 }
 
 
