@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>A tested priority queue with stdlib.heap</title><link rel="stylesheet" href="../ltlml.css"></head>
+<body>
+<div id="ltlml-render" class="ltlml-document"></div>
+<script id="ltlml-source" type="text/ltlml">
+---
+title: "A tested priority queue with stdlib.heap"
+date: 2026-11-17
+abstract: Build a numeric priority queue, keep duplicate priorities, and verify an exact output vector on the Python backend.
+---
+
+## Start with a concrete queue
+
+Suppose smaller numbers represent more urgent jobs. A min heap exposes the smallest value at its root. Its internal list is not sorted; use `peek` for the next value and `pop` to remove it.
+
+The complete runnable example is `examples/heap_priority_queue.ltl`:
+
+```lateralus
+import heap
+let pending = heap.from_list([9, 1, 4, 1, 7])
+let first = heap.pop(pending)
+println(first[0])
+println(heap.heap_sort(first[1]))
+println(heap.heap_sort([-3, 0, -3, 2]))
+println(heap.pop([]))
+```
+
+`pop` returns a two element list: the removed value and the remaining heap. Preserve the second element for subsequent operations. Empty heaps return `[nil, []]`; check `is_empty` before treating the first element as a real priority. Duplicate priorities remain distinct entries. This module stores numeric priorities; it does not associate a job payload with a priority or promise stable ordering between equal priorities.
+
+## Run the pinned vector
+
+From the repository root, using Python 3.10 or later:
+
+```sh
+python3 tools/verify_heap_tutorial.py
+```
+
+The verifier transpiles the actual `stdlib/heap.ltl` module into a temporary directory, exposes that module to the Python backend, and executes the actual Lateralus example. It also checks deterministic queue cases against Python's sorted results. No package install, network, credentials, or paid service is required.
+
+Expected example output:
+
+```text
+1
+[1, 4, 7, 9]
+[-3, -3, 0, 2]
+[None, []]
+```
+
+`None` is how this backend prints Lateralus `nil`. The vector covers removing the minimum, retaining a duplicate, negative values and the empty queue.
+
+## Choose the right operation
+
+`from_list` builds a heap from priorities. `push` returns the updated heap, so retain its result. `peek` inspects the minimum. `pop` returns the minimum and remaining heap. `n_smallest` returns a sorted prefix. `heap_sort` drains a constructed heap into a sorted list. Some combined operations mutate their input list; do not assume persistent immutable snapshots or use an internal heap list as an independently sorted result.
+
+The sift algorithm follows a logarithmic path, but this implementation copies lists during push and pop. End to end operations therefore include linear copying costs. Benchmark a real workload before treating it as a performance improvement over a sorted list.
+
+## Why integer parent indices matter
+
+A node at index `i` has parent index `floor((i - 1) / 2)` for positive `i`. The Python backend emits ordinary division as floating point. Without the accompanying integer conversion in `_parent`, a queue containing multiple values raises a list index TypeError. The regression verifier exercises the source after transpilation so an accidentally reverted fix fails on real queue operations. These results verify the Python backend only; they make no claim about C, JavaScript or WASM execution.
+</script>
+<script src="../ltlml.js"></script>
+</body></html>
