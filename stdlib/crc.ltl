@@ -1,89 +1,132 @@
-// ═══════════════════════════════════════════════════════════
-// LATERALUS Crc Module
-// 
-// This module provides an implementation of cyclic redundancy checks (CRCs) for various algorithms.
-// 
-// The provided functions allow users to easily compute CRC values using different polynomial and size options.
+// ===================================================================
+// stdlib/crc.ltl — Cyclic redundancy checks
+// -------------------------------------------------------------------
+// Bitwise CRC implementations. The reflected (LSB-first) variants are
+// the ones used on the wire by PNG, ZIP, gzip, Ethernet and most
+// serial protocols.
+//
+// Every value here is checked against the published catalogue of CRC
+// parameters and against the standard check value, which is the CRC
+// of the ASCII string "123456789":
+//
+//   crc32(123456789)        = 0xCBF43926
+//   crc16_arc(123456789)    = 0xBB3D
+//   crc16_ccitt(123456789)  = 0x29B1
+//   crc8(123456789)         = 0xF4
+// ===================================================================
 
-module Crc {
+// -- CRC-32 (reflected, poly 0xEDB88320, init 0xFFFFFFFF, xorout 0xFFFFFFFF)
+// The one used by PNG, ZIP, gzip and the Ethernet FCS.
 
-  // ──────────────────────────────────────────────────────────────
-  // Struct definition for CRC data type
-  //
-  // The CRC data type is used by all functions in this module.
-  // It represents the input byte stream being processed.
-  struct ByteStream {
-    bytes: list[uint8]
-  }
-
-  // ──────────────────────────────────────────────────────────────
-  // Struct definition for CRC result type
-  //
-  // The CRC result type is used by most functions in this module.
-  // It represents the computed CRC value as a uint32.
-  struct CrcResult {
-    value: uint32
-  }
-
-  // ──────────────────────────────────────────────────────────────
-  // Function to initialize a new CRC instance with the given polynomial
-  //
-  // @param p Polynomial to use for CRC computation
-  // @param size Size of the CRC
-  fn init(p: uint8, size: int) -> CrcResult {
-    let crc = struct {
-      value: uint32
-      p: uint8
-      size: int
-    };
-    crc.value = 0;
-    crc.p = p;
-    crc.size = size;
-    return crc;
-  }
-
-  // ──────────────────────────────────────────────────────────────
-  // Function to compute the CRC value for the given byte stream
-  //
-  // @param bs Input byte stream being processed
-  // @return CRC value as a uint32
-  fn compute(bs: ByteStream) -> CrcResult {
-    let crc = init(0x07, 8);
-    for b in bs.bytes {
-      crc.value = crc.value ^ b;
-      for i in range(crc.size - 1, 0, -1) {
-        if crc.value & (1 << i) != 0 {
-          crc.value = crc.value >> 1;
-          crc.value = crc.value ^ crc.p;
+pub fn crc32(data: list) -> u32 {
+    let crc = 0xFFFFFFFF
+    for b in data {
+        crc = crc ^ (b & 0xFF)
+        let i = 0
+        while i < 8 {
+            if crc & 1 != 0 {
+                crc = (crc >> 1) ^ 0xEDB88320
+            } else {
+                crc = crc >> 1
+            }
+            i = i + 1
         }
-      }
     }
-    return crc;
-  }
+    return (crc ^ 0xFFFFFFFF) & 0xFFFFFFFF
+}
 
-  // ──────────────────────────────────────────────────────────────
-  // Function to generate a lookup table for the given polynomial and size
-  //
-  // @param p Polynomial to use for CRC computation
-  // @param size Size of the CRC
-  // @return Lookup table as a map of uint32 keys to uint16 values
-  fn lookupTable(p: uint8, size: int) -> map[uint32, uint16] {
-    let lut = {};
-    for i in range(size) {
-      let value = struct {
-        high: uint16
-        low: uint16
-      };
-      value.high = (i shr 2) + 1;
-      value.low = i shr 1;
-      lut[(p << i)] = value;
+// -- CRC-16/ARC (reflected, poly 0xA001, init 0x0000, xorout 0x0000)
+// Used by ARC and LHA.
+
+pub fn crc16_arc(data: list) -> u16 {
+    let crc = 0x0000
+    for b in data {
+        crc = crc ^ (b & 0xFF)
+        let i = 0
+        while i < 8 {
+            if crc & 1 != 0 {
+                crc = (crc >> 1) ^ 0xA001
+            } else {
+                crc = crc >> 1
+            }
+            i = i + 1
+        }
     }
-    return lut;
-  }
+    return crc & 0xFFFF
+}
 
-  // ──────────────────────────────────────────────────────────────
-  // Function to compute the CRC-8 value using the given byte stream and polynomial
-  //
-  // @param bs Input byte stream being processed
-  // @param poly Polynomial to use for CRC-8 computation
-  //
+// -- CRC-16/CCITT-FALSE (MSB-first, poly 0x1021, init 0xFFFF)
+// Used by X.25, Bluetooth HCI and many radio protocols.
+
+pub fn crc16_ccitt(data: list) -> u16 {
+    let crc = 0xFFFF
+    for b in data {
+        crc = crc ^ ((b & 0xFF) << 8)
+        let i = 0
+        while i < 8 {
+            if crc & 0x8000 != 0 {
+                crc = ((crc << 1) ^ 0x1021) & 0xFFFF
+            } else {
+                crc = (crc << 1) & 0xFFFF
+            }
+            i = i + 1
+        }
+    }
+    return crc & 0xFFFF
+}
+
+// -- CRC-8 (poly 0x07, init 0x00, no reflection)
+// Used by SMBus and many sensor buses.
+
+pub fn crc8(data: list) -> u8 {
+    let crc = 0x00
+    for b in data {
+        crc = crc ^ (b & 0xFF)
+        let i = 0
+        while i < 8 {
+            if crc & 0x80 != 0 {
+                crc = ((crc << 1) ^ 0x07) & 0xFF
+            } else {
+                crc = (crc << 1) & 0xFF
+            }
+            i = i + 1
+        }
+    }
+    return crc & 0xFF
+}
+
+/// Standard check value self-test for every routine in this module.
+/// The check input is the ASCII string "123456789".
+pub fn self_test() -> bool {
+    let check = [0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39]
+    if crc32(check) != 0xCBF43926 {
+        return false
+    }
+    if crc16_arc(check) != 0xBB3D {
+        return false
+    }
+    if crc16_ccitt(check) != 0x29B1 {
+        return false
+    }
+    if crc8(check) != 0xF4 {
+        return false
+    }
+    return true
+}
+
+/// Width in bits of a named variant.
+pub fn width_of(name: str) -> int {
+    if name == "crc32" {
+        return 32
+    }
+    if name == "crc16_arc" {
+        return 16
+    }
+    if name == "crc16_ccitt" {
+        return 16
+    }
+    if name == "crc8" {
+        return 8
+    }
+    return 0
+}
