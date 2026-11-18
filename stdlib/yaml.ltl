@@ -159,3 +159,103 @@ pub fn scalarize(raw: str) -> any {
     }
     return raw
 }
+
+// -- Emit / Serialization ------------------------------------------
+
+pub fn dump(val: any) -> str {
+    return emit_val(val, 0)
+}
+
+pub fn stringify(val: any) -> str {
+    return dump(val)
+}
+
+pub fn emit_yaml(val: any) -> str {
+    return dump(val)
+}
+
+pub fn make_indent(level: int) -> str {
+    let s = ""
+    let i = 0
+    while i < level {
+        s = s + "  "
+        i = i + 1
+    }
+    return s
+}
+
+pub fn emit_val(v: any, level: int) -> str {
+    let t = typeof(v)
+    if t == "null" {
+        return "null\n"
+    }
+    if t == "bool" {
+        if v { return "true\n" } else { return "false\n" }
+    }
+    if t == "int" or t == "float" {
+        return str(v) + "\n"
+    }
+    if t == "str" {
+        return emit_str(v) + "\n"
+    }
+    if t == "list" {
+        if len(v) == 0 {
+            return "[]\n"
+        }
+        let out = ""
+        let ind = make_indent(level)
+        for item in v {
+            let it = typeof(item)
+            if it == "map" {
+                out = out + ind + "-\n" + emit_val(item, level + 1)
+            } else {
+                if it == "list" {
+                    out = out + ind + "-\n" + emit_val(item, level + 1)
+                } else {
+                    out = out + ind + "- " + emit_val(item, 0)
+                }
+            }
+        }
+        return out
+    }
+    if t == "map" {
+        let ks = keys(v)
+        if len(ks) == 0 {
+            return chr(123) + chr(125) + "\n"
+        }
+        let out = ""
+        let ind = make_indent(level)
+        for k in ks {
+            let child = v[k]
+            let ct = typeof(child)
+            let key_str = str(k)
+            if ct == "map" {
+                out = out + ind + key_str + ":\n" + emit_val(child, level + 1)
+            } else {
+                if ct == "list" {
+                    out = out + ind + key_str + ":\n" + emit_val(child, level + 1)
+                } else {
+                    out = out + ind + key_str + ": " + emit_val(child, 0)
+                }
+            }
+        }
+        return out
+    }
+    return str(v) + "\n"
+}
+
+pub fn emit_str(s: str) -> str {
+    if contains(s, ":") or contains(s, "#") {
+        return "\"" + s + "\""
+    }
+    if len(s) > 0 {
+        let c0 = char_at(s, 0)
+        if c0 == "-" or c0 == "[" or ord(c0) == 123 {
+            return "\"" + s + "\""
+        }
+    }
+    if s == "true" or s == "false" or s == "null" or s == "~" {
+        return "\"" + s + "\""
+    }
+    return s
+}
