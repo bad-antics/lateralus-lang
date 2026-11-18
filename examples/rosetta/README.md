@@ -22,6 +22,7 @@ reference and as discoverability ("Rosetta Code in X" searches).
 | Topological Sort            | [`topological_sort.ltl`](topological_sort.ltl) | graphs, Kahn's algorithm     |
 | Huffman Coding              | [`huffman.ltl`](huffman.ltl)                | trees + greedy                   |
 | JSON Mini Parser            | [`json_mini.ltl`](json_mini.ltl)            | recursive-descent parsing        |
+| Miller-Rabin Primality      | [`miller_rabin.ltl`](miller_rabin.ltl)      | modular exponentiation, primality |
 
 ## Verifying
 
