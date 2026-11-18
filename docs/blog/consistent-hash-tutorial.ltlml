@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Consistent Hashing with stdlib.consistent_hash</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+# Consistent Hashing with stdlib.consistent_hash
+
+@meta {
+  title: "Consistent Hashing with stdlib.consistent_hash"
+  date: "2026-11-18"
+  author: "nmorestd"
+  tags: ["stdlib", "consistent-hashing", "distributed-systems", "tutorial"]
+  reading_time: "5 min"
+}
+
+@heading level=1 {
+  Consistent Hashing with `stdlib.consistent_hash`
+}
+
+@paragraph {
+  Naive modulo sharding (`hash(key) % N`) breaks down whenever a cache or storage node joins or leaves: almost every key remaps at once. `stdlib/consistent_hash.ltl` implements a classic 32-bit FNV-1a hash ring with configurable virtual nodes so adding or removing a shard moves only roughly `1/N` of keys.
+}
+
+@heading level=2 {
+  Core API
+}
+
+- `new_ring(vnodes_per_node: int) -> map` — creates an empty ring with `vnodes_per_node` replicas per physical node.
+- `add_node(r: map, name: str)` — hashes `(name, 0..vnodes-1)` onto the 32-bit ring in sorted order.
+- `remove_node(r: map, name: str)` — removes all virtual points belonging to `name`.
+- `lookup(r: map, key: str) -> str` — binary-searches clockwise for the primary owner of `key`.
+- `lookup_n(r: map, key: str, n: int) -> list` — returns `n` distinct replica owners clockwise from `key`.
+
+@heading level=2 {
+  Runnable Example &amp; Pinned Test Vectors
+}
+
+```lateralus
+// See examples/consistent_hash_demo.ltl
+import hash
+import consistent_hash
+
+fn main() {
+    let ring = new_ring(32)
+    add_node(ring, "cache-eu-1")
+    add_node(ring, "cache-us-1")
+    add_node(ring, "cache-ap-1")
+
+    let owner = lookup(ring, "session:42")
+    let replicas = lookup_n(ring, "session:42", 2)
+    println("ring_size=" + str(ring_size(ring)))
+    println("primary=" + owner)
+    println("replicas=" + str(len(replicas)))
+}
+```
+
+@heading level=2 {
+  Pinned Determinism &amp; Rebalance Invariants
+}
+
+1. **Ring size**: 3 nodes with `vnodes_per_node = 32` produces `ring_size(ring) == 96` and `node_count(ring) == 3`.
+2. **Stable lookup**: repeated `lookup(ring, "session:42")` always returns the exact same owner.
+3. **Distinct replicas**: `lookup_n(ring, "session:42", 2)` returns 2 distinct node names (`replicas[0] != replicas[1]`).
+4. **Minimal key movement**: adding `"cache-eu-2"` relocates only a bounded fraction of keys rather than reshuffling the entire keyspace.
+
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>
