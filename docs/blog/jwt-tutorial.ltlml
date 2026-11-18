@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RFC 7519 JSON Web Tokens with stdlib.jwt</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+# RFC 7519 JSON Web Tokens with stdlib.jwt
+
+@meta {
+  title: "RFC 7519 JSON Web Tokens with stdlib.jwt"
+  date: "2026-11-19"
+  author: "nmorestd"
+  tags: ["stdlib", "jwt", "auth", "security", "rfc7519", "tutorial"]
+  reading_time: "6 min"
+}
+
+@heading level=1 {
+  RFC 7519 JSON Web Tokens with `stdlib.jwt`
+}
+
+@paragraph {
+  Stateless service authentication relies on tamper-proof authorization tokens. `stdlib/jwt.ltl` implements compact RFC 7519 tokens with constant-time HMAC signature verification (HS256, HS384, HS512), URL-safe Base64 encoding without padding, and strict claims validation (`exp`, `nbf`, `iss`, `aud`, with configurable clock leeway).
+}
+
+@heading level=2 {
+  Core API
+}
+
+- `issue(sub: str, key: list, ttl_s: int, extra: map, alg: str) -> str` — issues a compact signed JWT with automatically populated `sub`, `iat`, `nbf`, and `exp = now + ttl_s` claims.
+- `sign_hmac(claims: map, key: list, alg: str) -> str` — lower-level builder: stringifies header (`{"typ":"JWT","alg":alg}`) and claims, computes HMAC, and returns `header.payload.signature`.
+- `verify_hmac(token: str, key: list, alg: str, opts: map) -> list` — verifies the signature using constant-time comparison (`crypto_ct_eq`) and evaluates registered claims against `opts` (`leeway_s`, `audience`, `issuer`). Returns `[true, claims]` on success or `[false, error_code]` on failure.
+- `peek(token: str) -> map` — unverified diagnostic decoder that unpacks `header` and `claims` objects for logging and inspection without cryptographic verification.
+
+@heading level=2 {
+  Runnable Example &amp; Pinned Invariants
+}
+
+```lateralus
+// See examples/jwt_demo.ltl
+import base64
+import crypto
+import json
+import strings
+import time
+import jwt
+
+fn main() {
+    let secret_key = bytes_of("production-grade-hmac-shared-secret-key-32b")
+
+    // 1. Issue a token with 3600s TTL and custom metadata
+    let extra = {}
+    extra["aud"] = "api://internal-service"
+    extra["iss"] = "auth.lateralus.org"
+    extra["role"] = "service-worker"
+
+    let token = issue("worker-42", secret_key, 3600, extra, "HS256")
+    println("issued_token=" + token)
+
+    // 2. Successful verification with audience and issuer enforcement
+    let opts = {}
+    opts["audience"] = "api://internal-service"
+    opts["issuer"] = "auth.lateralus.org"
+    opts["leeway_s"] = 5
+
+    let verified = verify_hmac(token, secret_key, "HS256", opts)
+    assert(verified[0] == true)
+    let claims = verified[1]
+    assert(claims["sub"] == "worker-42")
+    assert(claims["role"] == "service-worker")
+}
+```
+
+@heading level=2 {
+  Security Boundaries &amp; Verification
+}
+
+1. **Tampering Protection**: modifying any payload character or header byte changes the expected HMAC and causes `verify_hmac` to return `[false, "bad_signature"]`.
+2. **Expired Claims**: tokens evaluated past `exp + leeway_s` are rejected with `[false, "expired"]`.
+3. **Audience &amp; Issuer Pinning**: mismatched `aud` or `iss` claims fail closed with `wrong_audience` or `wrong_issuer` before untrusted payload claims are acted upon.
+4. **Timing Attack Resistance**: signature verification uses `crypto_ct_eq` rather than string equality to eliminate side-channel timing leaks.
+
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>
