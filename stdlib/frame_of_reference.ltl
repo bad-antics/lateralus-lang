@@ -73,10 +73,12 @@ pub fn decode(enc: map) -> list {
 
 // -- Delta-of-delta (Gorilla style) --------------------------------
 
-/// For time-series timestamps.  Returns {first, second_delta, dods}.
+/// For time-series timestamps. Empty columns and equal pairs also carry a
+/// count because their deltas would otherwise look like a singleton's.
 pub fn encode_dod(xs: list) -> map {
     let m = {}
     if len(xs) == 0 {
+        m["count"] = 0
         m["first"] = 0; m["second_delta"] = 0; m["dods"] = []
         return m
     }
@@ -87,6 +89,7 @@ pub fn encode_dod(xs: list) -> map {
     m["first"] = xs[0]
     let prev_d = xs[1] - xs[0]
     m["second_delta"] = prev_d
+    if len(xs) == 2 && prev_d == 0 { m["count"] = 2 }
     let dods = []
     let i = 2
     while i < len(xs) {
@@ -101,8 +104,11 @@ pub fn encode_dod(xs: list) -> map {
 
 pub fn decode_dod(enc: map) -> list {
     let out = [enc["first"]]
-    if len(enc["dods"]) == 0 && enc["second_delta"] == 0 && len(out) == 1 {
-        // single-element column
+    if len(enc["dods"]) == 0 && enc["second_delta"] == 0 {
+        // The original decoder read unmarked frames of this shape as singletons.
+        if !contains(enc, "count") { return out }
+        if enc["count"] == 2 { return [enc["first"], enc["first"]] }
+        if enc["count"] == 0 { return [] }
         return out
     }
     let prev_d = enc["second_delta"]
