@@ -192,6 +192,53 @@ class TestAggregation:
 # ---------------------------------------------------------------------------
 
 class TestDistinct:
+    def test_distinct_string_columns(self):
+        result = Query().from_(USERS).select("dept").distinct().execute()
+        assert result == [{"dept": "eng"}, {"dept": "sales"}, {"dept": "mgmt"}]
+
+    def test_distinct_projection_precedes_pagination(self):
+        result = (Query().from_(USERS).select("dept").distinct()
+                  .order_by("dept").offset(1).limit(2).execute())
+        assert result == [{"dept": "mgmt"}, {"dept": "sales"}]
+
+    def test_lql_distinct_projection(self):
+        result = lql("SELECT DISTINCT dept FROM users LIMIT 2", {"users": USERS})
+        assert result == [{"dept": "eng"}, {"dept": "sales"}]
+
+    def test_distinct_nested_unhashable_values(self):
+        rows = [
+            {"id": 1, "profile": {"tags": ["a"]}},
+            {"id": 2, "profile": {"tags": ["a"]}},
+            {"id": 3, "profile": {"tags": ["b"]}},
+        ]
+        result = Query().from_(rows).select("profile.tags").distinct().execute()
+        assert result == [{"profile.tags": ["a"]}, {"profile.tags": ["b"]}]
+
+    def test_distinct_multiple_columns(self):
+        rows = [
+            {"id": 1, "dept": "eng", "active": True},
+            {"id": 2, "dept": "eng", "active": True},
+            {"id": 3, "dept": "eng", "active": False},
+        ]
+        result = Query().from_(rows).select("dept", "active").distinct().execute()
+        assert result == [
+            {"dept": "eng", "active": True},
+            {"dept": "eng", "active": False},
+        ]
+
+    def test_distinct_all_columns(self):
+        rows = [{"id": 1}, {"id": 1}, {"id": 2}]
+        assert Query().from_(rows).distinct().execute() == [{"id": 1}, {"id": 2}]
+
+    def test_distinct_retains_unselected_sort_fields(self):
+        rows = [
+            {"name": "Alice", "rank": 2},
+            {"name": "Alice", "rank": 3},
+            {"name": "Bob", "rank": 1},
+        ]
+        result = Query().from_(rows).select("name").distinct().order_by("rank").execute()
+        assert result == [{"name": "Bob"}, {"name": "Alice"}]
+
     def test_distinct_values(self):
         result = (Query()
                   .from_(USERS)

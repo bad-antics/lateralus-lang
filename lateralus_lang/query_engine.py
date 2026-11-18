@@ -288,7 +288,9 @@ class Query:
             seen: list = []
             unique = []
             for r in rows:
-                if isinstance(r, dict):
+                if self._columns and not callable_columns:
+                    key = tuple(sorted(_project(r, self._columns).items()))
+                elif isinstance(r, dict):
                     key = tuple(sorted(r.items()))
                 else:
                     key = r
