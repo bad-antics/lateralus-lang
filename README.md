@@ -123,6 +123,7 @@ make test
 
 ## Documentation
 
+- Getting Started (10-Minute Tutorial): docs/tutorials/getting-started.md
 - Language Spec: docs/language-spec.ltlml
 - Tutorial: docs/tutorial.ltlml
 - Cookbook: docs/cookbook.ltlml
