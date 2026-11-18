@@ -1,0 +1,57 @@
+// Runnable demo and pinned test vectors for stdlib/merkle.ltl
+// Run: lateralus run examples/merkle_demo.ltl
+
+import hash
+import merkle
+
+fn main() {
+    let transactions = [
+        "tx:alice->bob:10",
+        "tx:bob->carol:4",
+        "tx:carol->dave:2",
+        "tx:dave->eve:1"
+    ]
+
+    // 1. Build Merkle tree
+    let tree = build_default(transactions)
+    assert(len(tree["leaves"]) == 4)
+    assert(len(tree["levels"]) == 3)
+    let root = tree["root"]
+    assert(len(root) == 16)
+
+    // 2. Generate and verify inclusion proofs for every leaf
+    let i = 0
+    while i < len(transactions) {
+        let p = proof(tree, i)
+        assert(len(p) == 2)
+        assert(verify_default(root, transactions[i], p))
+        i = i + 1
+    }
+
+    // 3. Reject tampered leaf data and forged proofs
+    let p0 = proof(tree, 0)
+    assert(not verify_default(root, "tx:alice->bob:999", p0))
+    assert(not verify_default(root, transactions[1], p0))
+
+    // 4. Tree diffing between revisions
+    let updated_txs = [
+        "tx:alice->bob:10",
+        "tx:bob->carol:99",
+        "tx:carol->dave:2",
+        "tx:dave->eve:1"
+    ]
+    let updated_tree = build_default(updated_txs)
+    let diffs = diff_leaves(tree, updated_tree)
+    assert(len(diffs) == 1)
+    assert(diffs[0] == 1)
+
+    // 5. Odd leaf count handling (RFC 6962 duplicate right sibling)
+    let odd_txs = ["tx1", "tx2", "tx3"]
+    let odd_tree = build_default(odd_txs)
+    let p_odd = proof(odd_tree, 2)
+    assert(verify_default(odd_tree["root"], "tx3", p_odd))
+
+    println("merkle_demo ok: root=" + root + " verified_leaves=4 diff_detected=1 odd_verified=true")
+}
+
+main()
