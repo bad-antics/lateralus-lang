@@ -463,6 +463,29 @@ class TestStdlibUUID:
         assert "NAMESPACE_DNS" in src
         assert "NAMESPACE_URL" in src
 
+    def test_uuid_is_valid_hex_validation(self):
+        path = ROOT / "stdlib" / "uuid.ltl"
+        ns = {"__name__": "uuid_runtime"}
+        r = Compiler().compile_source(path.read_text(encoding="utf-8"), target=Target.PYTHON, filename="uuid.ltl")
+        assert r.ok
+        exec(r.python_src, ns)
+
+        is_valid = ns["is_valid"]
+        # Valid UUIDs
+        assert is_valid("550e8400-e29b-41d4-a716-446655440000") is True
+        assert is_valid("00000000-0000-0000-0000-000000000000") is True
+        assert is_valid("6BA7B810-9DAD-11D1-80B4-00C04FD430C8") is True
+
+        # Non-hex characters (e.g. 'z', 'g', whitespace) must be rejected
+        assert is_valid("zzzzzzzz-zzzz-4zzz-8zzz-zzzzzzzzzzzz") is False
+        assert is_valid("550e8400-e29b-41d4-a716-44665544000g") is False
+        assert is_valid("550e8400-e29b-41d4-a716-44665544000 ") is False
+
+        # Malformed length or hyphen placement
+        assert is_valid("") is False
+        assert is_valid("550e8400-e29b-41d4-a716-44665544000") is False
+        assert is_valid("550e8400_e29b_41d4_a716_446655440000") is False
+
 
 class TestStdlibHash:
     """Tests for stdlib/hash.ltl."""
