@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Merkle Trees and Inclusion Proofs with stdlib.merkle</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+# Merkle Trees and Inclusion Proofs with stdlib.merkle
+
+@meta {
+  title: "Merkle Trees and Inclusion Proofs with stdlib.merkle"
+  date: "2026-11-18"
+  author: "deamybro"
+  tags: ["stdlib", "merkle-tree", "cryptography", "distributed-systems", "tutorial"]
+  reading_time: "5 min"
+}
+
+@heading level=1 {
+  Merkle Trees and Inclusion Proofs with `stdlib.merkle`
+}
+
+@paragraph {
+  In distributed ledger architectures, cross-replica state sync, and certificate transparency logs (RFC 6962), validating the presence and integrity of individual records without transferring the full dataset is essential. `stdlib/merkle.ltl` provides a parameterised binary Merkle tree engine equipped with domain-separated hashing, logarithmic audit proofs, tamper rejection, and leaf reconciliation.
+}
+
+@heading level=2 {
+  Core Architecture and RFC 6962 Domain Separation
+}
+
+@paragraph {
+  To protect against length extension and second-preimage attacks where an internal node might masquerade as a leaf hash, `stdlib/merkle.ltl` prefixes raw leaf inputs with `L:` and parent node concatenations with `N:`. By default, it delegates to `hash.ltl`'s 64-bit FNV-1a rendered as a 16-character hex string for deterministic execution without requiring native cryptography extensions, while accepting any custom `hasher` (such as SHA-256) for production deployments.
+}
+
+@heading level=2 {
+  Core API
+}
+
+- `build(items: list, hasher) -> map` — builds a Merkle tree over `items`, returning `levels`, `leaves`, and `root`.
+- `build_default(items: list) -> map` — convenience constructor using `default_hash` (FNV-1a 64-bit hex).
+- `proof(tree: map, index: int) -> list` — constructs a logarithmic audit path `[[sibling_hash, is_right_sibling], ...]` for the leaf at `index`.
+- `verify(root: str, leaf_data: str, path: list, hasher) -> bool` — verifies an inclusion audit path against a declared root hash.
+- `verify_default(root: str, leaf_data: str, path: list) -> bool` — convenience verification using `default_hash`.
+- `diff_leaves(a: map, b: map) -> list` — identifies all leaf indices differing between two trees for rapid cross-replica delta reconciliation.
+
+@heading level=2 {
+  Runnable Example &amp; Pinned Test Vectors
+}
+
+```lateralus
+// See examples/merkle_demo.ltl
+import hash
+import merkle
+
+fn main() {
+    let transactions = [
+        "tx:alice->bob:10",
+        "tx:bob->carol:4",
+        "tx:carol->dave:2",
+        "tx:dave->eve:1"
+    ]
+
+    // Build the Merkle tree
+    let tree = build_default(transactions)
+    let root = tree["root"]
+
+    // Generate an audit proof for tx:bob->carol:4 (index 1)
+    let p = proof(tree, 1)
+
+    // Verify valid leaf inclusion
+    let valid = verify_default(root, "tx:bob->carol:4", p)
+    println("verified=" + str(valid))
+
+    // Reject forged data
+    let invalid = verify_default(root, "tx:bob->carol:99", p)
+    println("tamper_rejected=" + str(not invalid))
+}
+```
+
+@heading level=2 {
+  Pinned Invariants &amp; Security Guarantees
+}
+
+1. **Logarithmic Proof Size**: A tree containing $N$ leaves produces audit paths of length $\lceil \log_2 N \rceil$, allowing verification in $O(\log N)$ time and bandwidth.
+2. **Deterministic Root Stability**: Building identical datasets yields byte-identical roots across all Lateralus runtime targets.
+3. **Strict Tamper Resistance**: Altering any single bit in a leaf payload or proof step causes `verify` to return `false`.
+4. **Odd Leaf Duplication**: Odd leaves on any level are duplicated to preserve complete binary balance per RFC 6962.
+5. **Fast Delta Reconciliation**: `diff_leaves(a, b)` highlights mutated positions in $O(N)$ linear scans without transmitting the unmutated bulk dataset.
+
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>
