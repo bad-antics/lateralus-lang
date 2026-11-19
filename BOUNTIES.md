@@ -130,7 +130,10 @@ demonstrates the WASM backend actually works end to end.
   on wall time)
 - **$10** — open a high-signal bug report with a minimal reproducer
 
-Drop them in `BOUNTIES-LOG.md` when claimed; we'll review and pay weekly.
+Claim these the same way as the larger bounties: open an issue titled
+`[bounty] <name>` before you start, so the topic shows up as taken in a
+search of the issue tracker. We review micro-bounty submissions weekly;
+payment timing is the same for every bounty (rule 5 below).
 
 ---
 
@@ -142,6 +145,7 @@ Drop them in `BOUNTIES-LOG.md` when claimed; we'll review and pay weekly.
    (see `tests/stdlib_spiral_wave_*.ltl` for the bar).
 4. We have the right to refuse a submission, but not without a
    written reason on the PR. First-submitted-first-reviewed.
-5. Payment is in 14 days of merge.
+5. Payment is sent within 14 days of merge. This applies to every
+   bounty, including the recurring micro-bounties.
 
 Questions: open an issue or email `bounties@lateralus.dev`.
