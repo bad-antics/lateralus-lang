@@ -106,6 +106,8 @@ def flatten(arr: list) -> list:
 
 
 def chunk(arr: list, size: int) -> list:
+    if size <= 0:
+        raise ValueError("chunk size must be a positive integer")
     return [arr[i:i + size] for i in range(0, len(arr), size)]
 
 
