@@ -124,6 +124,26 @@ class TestMatrix:
         with pytest.raises(ValueError, match="singular"):
             m.inverse()
 
+    def test_det_and_inverse_scaled_matrix(self):
+        for k in (49, 50):
+            s = 2.0 ** -k
+            m = Matrix.identity(3) * s
+            assert m.det() == pytest.approx(s ** 3, rel=1e-10)
+            inv = m.inverse()
+            for i in range(3):
+                assert inv[i][i] == pytest.approx(2.0 ** k, rel=1e-10)
+            product = m @ inv
+            for i in range(3):
+                for j in range(3):
+                    expected = 1.0 if i == j else 0.0
+                    assert product[i][j] == pytest.approx(expected, abs=1e-10)
+
+    def test_singular_matrix_scale_invariant(self):
+        m = Matrix([[1, 2, 3], [4, 5, 6], [7, 8, 9]]) * (2.0 ** -50)
+        assert m.det() == pytest.approx(0.0, abs=1e-30)
+        with pytest.raises(ValueError, match="singular"):
+            m.inverse()
+
     def test_shape_mismatch(self):
         a = Matrix([[1, 2]])
         b = Matrix([[1], [2], [3]])
