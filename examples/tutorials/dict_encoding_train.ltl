@@ -1,0 +1,133 @@
+// ===================================================================
+// examples/tutorials/dict_encoding_train.ltl
+// -------------------------------------------------------------------
+// Runnable companion to the stdlib.dict_encoding tutorial.
+//
+// Six train departures share a handful of repeated platform labels.
+// Dictionary encoding replaces the label column with:
+//   - dictionary: unique labels in first-seen order
+//   - indices:    an int per row pointing back into the dictionary
+//
+// The implementation below is inlined so the example runs with the
+// current toolchain (run mode does not yet inline stdlib modules).
+// It is byte-for-byte the logic in stdlib/dict_encoding.ltl.
+//
+// Run:   ltlc run examples/tutorials/dict_encoding_train.ltl
+// Tests: see the @test vectors at the bottom (pinned, self-verifying).
+// ===================================================================
+
+// Turn a column of labels into {dictionary, indices}.
+fn encode(values: list) -> map {
+    let dict = []
+    let dict_idx = {}
+    let indices = []
+    let i = 0
+    while i < len(values) {
+        let v = values[i]
+        let k = str(v)
+        let idx = -1
+        if contains(dict_idx, k) {
+            idx = dict_idx[k]
+        } else {
+            idx = len(dict)
+            dict = dict + [v]
+            dict_idx[k] = idx
+        }
+        indices = indices + [idx]
+        i = i + 1
+    }
+    let m = {}
+    m["dictionary"] = dict
+    m["indices"]    = indices
+    return m
+}
+
+// Rebuild the original label column from an encoding.
+fn decode(enc: map) -> list {
+    let dict = enc["dictionary"]
+    let idx  = enc["indices"]
+    let out = []
+    let i = 0
+    while i < len(idx) {
+        out = out + [dict[idx[i]]]
+        i = i + 1
+    }
+    return out
+}
+
+// ceil(log2(cardinality)) — bits per index once the dictionary is shared.
+fn index_bit_width(enc: map) -> int {
+    let n = len(enc["dictionary"])
+    if n <= 1 { return 1 }
+    let bits = 0
+    let v = n - 1
+    while v > 0 { v = v >> 1; bits = bits + 1 }
+    return bits
+}
+
+fn cardinality(enc: map) -> int {
+    return len(enc["dictionary"])
+}
+
+// -------------------------------------------------------------------
+// The worked example: six departures, repeated platform labels.
+// -------------------------------------------------------------------
+fn main() {
+    let departures = [
+        "Platform_A", "Platform_B", "Platform_A",
+        "Platform_C", "Platform_B", "Platform_A"
+    ]
+    let enc = encode(departures)
+    println("departures : " + str(departures))
+    println("dictionary : " + str(enc["dictionary"]))
+    println("indices    : " + str(enc["indices"]))
+    println("decoded    : " + str(decode(enc)))
+    println("cardinality: " + str(cardinality(enc)))
+    println("bits/value : " + str(index_bit_width(enc)))
+}
+main()
+
+// ===================================================================
+// Pinned test vectors (self-verifying via the @test runner).
+// Five cases: repeated labels, one-entry column, empty column,
+// the 4-entry/2-bit boundary, and the 5-entry/3-bit boundary.
+// ===================================================================
+
+@test
+fn test_repeated_labels() {
+    let enc = encode(["north", "south", "north", "east", "south", "north"])
+    assert_eq(enc["dictionary"], ["north", "south", "east"])
+    assert_eq(enc["indices"], [0, 1, 0, 2, 1, 0])
+    assert_eq(decode(enc), ["north", "south", "north", "east", "south", "north"])
+}
+
+@test
+fn test_one_entry_column() {
+    let enc = encode(["only", "only", "only"])
+    assert_eq(enc["dictionary"], ["only"])
+    assert_eq(enc["indices"], [0, 0, 0])
+    assert_eq(index_bit_width(enc), 1)
+}
+
+@test
+fn test_empty_column() {
+    let enc = encode([])
+    assert_eq(enc["dictionary"], [])
+    assert_eq(enc["indices"], [])
+    assert_eq(cardinality(enc), 0)
+    assert_eq(index_bit_width(enc), 1)
+}
+
+@test
+fn test_four_entries_two_bits() {
+    let enc = encode(["a", "b", "c", "d"])
+    assert_eq(cardinality(enc), 4)
+    assert_eq(index_bit_width(enc), 2)
+}
+
+@test
+fn test_five_entries_three_bits() {
+    let enc = encode(["a", "b", "c", "d", "e"])
+    assert_eq(cardinality(enc), 5)
+    assert_eq(index_bit_width(enc), 3)
+}
