@@ -466,6 +466,28 @@ class TestPipelineTranspiler:
         assert "negate" in r.python_src
         assert "double" in r.python_src
 
+    def test_optional_pipeline_preserves_falsy_results(self):
+        src = """
+fn ret_zero(x: int) -> int { return 0 }
+fn ret_false(x: int) -> bool { return false }
+fn ret_empty_str(x: int) -> str { return "" }
+fn ret_empty_list(x: int) { return [] }
+let r0 = 5 |? ret_zero
+let rf = 5 |? ret_false
+let rs = 5 |? ret_empty_str
+let rl = 5 |? ret_empty_list
+let rn = None |? ret_zero
+"""
+        r = check(src)
+        assert r.ok
+        loc = {}
+        exec(r.python_src, {}, loc)
+        assert loc["r0"] == 0
+        assert loc["rf"] is False
+        assert loc["rs"] == ""
+        assert loc["rl"] == []
+        assert loc["rn"] is None
+
 
 class TestInterpolatedStrTranspiler:
     def test_interp_str_becomes_fstring(self):
