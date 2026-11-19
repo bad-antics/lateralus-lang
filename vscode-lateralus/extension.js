@@ -61,6 +61,42 @@ function findLateralusModule() {
 }
 
 /**
+ * Run the active Lateralus file with `lateralus_lang run` and stream its
+ * stdout/stderr into the OUTPUT pane. The interpreter is invoked as a
+ * Python module so it works from a source checkout as well as an install.
+ */
+function runActiveFile() {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || !isLateralusDocument(editor.document)) {
+        vscode.window.showInformationMessage("Lateralus: open a .ltl file to run.");
+        return;
+    }
+    const doc = editor.document;
+    if (doc.isDirty) {
+        vscode.window.showInformationMessage("Lateralus: save the file before running.");
+        return;
+    }
+    const pythonPath = findPython();
+    const modulePath = findLateralusModule();
+    const args = ["-m", "lateralus_lang", "run", doc.fileName];
+    const options = {};
+    if (modulePath) {
+        options.cwd = modulePath;
+        options.env = {
+            ...process.env,
+            PYTHONPATH: modulePath + (process.env.PYTHONPATH ? ":" + process.env.PYTHONPATH : ""),
+        };
+    }
+    outputChannel.show(true);
+    outputChannel.appendLine(`\n$ ${pythonPath} ${args.join(" ")}`);
+    const proc = spawn(pythonPath, args, options);
+    proc.stdout.on("data", (chunk) => outputChannel.append(chunk.toString()));
+    proc.stderr.on("data", (chunk) => outputChannel.append(chunk.toString()));
+    proc.on("error", (err) => outputChannel.appendLine(`[lateralus] run failed: ${err.message}`));
+    proc.on("close", (code) => outputChannel.appendLine(`[lateralus] exited with code ${code}`));
+}
+
+/**
  * Start the LSP server process.
  */
 function startServer() {
@@ -1095,6 +1131,9 @@ function activate(context) {
         }),
         vscode.commands.registerCommand("lateralus.showOutput", () => {
             outputChannel.show();
+        }),
+        vscode.commands.registerCommand("lateralus.runFile", () => {
+            runActiveFile();
         }),
         vscode.commands.registerCommand("lateralus.formatDocument", () => {
             vscode.commands.executeCommand("editor.action.formatDocument");
