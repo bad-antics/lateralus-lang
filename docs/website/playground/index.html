@@ -444,6 +444,13 @@
         <option value="effects">Effect System</option>
         <option value="decorators">Decorators</option>
         <option value="comptime">Compile-Time Eval</option>
+        <option value="">── Spiral Wave Gallery ──</option>
+        <option value="wave5-streaming">Wave 5 · Streaming &amp; Messaging</option>
+        <option value="wave6-telemetry">Wave 6 · Telemetry &amp; Logging</option>
+        <option value="wave7-speedway">Wave 7 · Performance Primitives</option>
+        <option value="wave8-columnar">Wave 8 · Columnar &amp; Analytics</option>
+        <option value="wave9-aead">Wave 9 · AEAD &amp; Crypto</option>
+        <option value="wave10-search">Wave 10 · Search Lane</option>
     </select>
     <button class="btn btn-run" id="runBtn"><span class="icon">&#9654;</span> Run</button>
     <button class="btn" id="formatBtn">&#9095; Format</button>
@@ -1779,6 +1786,42 @@ fn main() {
 }`,
 };
 
+// -- Spiral Wave Gallery --------------------------------------
+// Each entry is a full, self-contained examples/spiral_*.ltl source from the
+// repo. Sources are fetched so the gallery always matches the canonical files
+// ("one entry per Spiral Wave, waves 5-10"). Multiple URL fallbacks keep it
+// working on the static docs site and on a local checkout alike.
+const SPIRAL_GALLERY = {
+    'wave5-streaming': 'spiral_event_bus.ltl',
+    'wave6-telemetry': 'spiral_telemetry.ltl',
+    'wave7-speedway':  'spiral_speedway.ltl',
+    'wave8-columnar':  'spiral_columnar.ltl',
+    'wave9-aead':      'spiral_handshake.ltl',
+    'wave10-search':   'spiral_search.ltl'
+};
+
+async function loadGallerySource(name) {
+    var file = SPIRAL_GALLERY[name];
+    if (!file) return false;
+    var candidates = [
+        '/examples/' + file,
+        '../../examples/' + file,
+        'https://raw.githubusercontent.com/bad-antics/lateralus-lang/main/examples/' + file
+    ];
+    for (var i = 0; i < candidates.length; i++) {
+        try {
+            var resp = await fetch(candidates[i]);
+            if (resp.ok) {
+                var src = await resp.text();
+                if (src && src.indexOf('fn main') !== -1) {
+                    return src;
+                }
+            }
+        } catch (e) { /* try next location */ }
+    }
+    return false;
+}
+
 // -- Interpreter / Simulator ----------------------------------
 
 function simulateRun(code) {
@@ -2205,8 +2248,23 @@ async function runCode() {
     }
 }
 
-function loadExample(name) {
-    if (!name || !EXAMPLES[name]) return;
+async function loadExample(name) {
+    if (!name) return;
+    if (SPIRAL_GALLERY[name]) {
+        output.innerHTML = '<span class="info">Loading ' + escHtml(SPIRAL_GALLERY[name]) + '...</span>';
+        var src = await loadGallerySource(name);
+        if (src) {
+            editor.value = src;
+            updateLineNumbers();
+            updateStatus();
+            output.innerHTML = '<span class="info">' + escHtml(SPIRAL_GALLERY[name]) +
+                ' loaded -- press <span class="accent">&#9654; Run</span> to execute.</span>';
+        } else {
+            output.innerHTML = '<span class="warn">Could not load gallery source. Check your connection and retry.</span>';
+        }
+        return;
+    }
+    if (!EXAMPLES[name]) return;
     editor.value = EXAMPLES[name];
     updateLineNumbers();
     updateStatus();
