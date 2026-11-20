@@ -127,6 +127,10 @@ class CMode(Enum):
     FREESTANDING = auto()  # Bare-metal / kernel (no libc, no runtime)
 
 
+# Name of the function synthesized to hold top-level statements.
+_TOPLEVEL_FN = "ltl_toplevel"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Code writer
 # ─────────────────────────────────────────────────────────────────────────────
@@ -569,6 +573,8 @@ class CTranspiler(ASTVisitor):
         self._local_types: Dict[str, str] = {}    # name → C type for current fn
         self._fn_return_types: Dict[str, str] = {}  # fn name → C return type
         self._list_elem_types: Dict[str, str] = {}  # name → elem C type (typed C arrays)
+        self._has_toplevel = False           # synthesized ltl_toplevel() emitted?
+        self._toplevel_calls: Set[str] = set()  # fns called by top-level statements
 
     # ── helpers ───────────────────────────────────────────────────────────
 
@@ -629,16 +635,20 @@ class CTranspiler(ASTVisitor):
         w.line()
 
         # Third pass: emit everything else
+        toplevel: List[ExprStmt] = []
         for node in ast.body:
             if isinstance(node, StructDecl):
                 continue  # already emitted
             if isinstance(node, ExprStmt):
                 # Bare expression statements at file scope are invalid C
-                # (e.g. top-level function calls). Skip them — main() handles entry.
-                w.comment("top-level expr (skipped in C — handled by main)")
+                # (e.g. top-level function calls), so collect them and emit
+                # them into a synthesized entry body below.
+                toplevel.append(node)
                 continue
             self._visit(node)
             w.line()
+
+        self._emit_toplevel(toplevel)
 
         # main() wrapper
         if self.mode == CMode.HOSTED:
@@ -1729,15 +1739,47 @@ class CTranspiler(ASTVisitor):
 
     # ── main / kernel entry ───────────────────────────────────────────────
 
+    def _emit_toplevel(self, stmts: List[ExprStmt]):
+        """Emit top-level expression statements into a synthesized function.
+
+        Bare expressions are not valid at C file scope, so a script written
+        without `fn main()` would otherwise have its whole body discarded.
+        They are gathered into `ltl_toplevel()`, which the entry point calls
+        in source order — mirroring the Python backend.
+        """
+        self._toplevel_calls = {
+            s.expr.callee.name for s in stmts
+            if isinstance(s.expr, CallExpr) and isinstance(s.expr.callee, Ident)
+        }
+        self._has_toplevel = bool(stmts)
+        if not stmts:
+            return
+        w = self._w
+        w.comment("═══ Top-Level Statements ═══")
+        w.block_open(f"static void {_TOPLEVEL_FN}(void)")
+        self._in_fn = True
+        for stmt in stmts:
+            self._visit(stmt)
+        self._in_fn = False
+        w.block_close()
+        w.line()
+
+    def _has_entry_fn(self, name: str) -> bool:
+        """True if the script declares `fn <name>()` and never calls it at
+        top level (an explicit call is emitted by ltl_toplevel() instead)."""
+        return (self._mangle(name) in self._functions
+                and name not in self._toplevel_calls)
+
     def _emit_main_wrapper(self):
         w = self._w
         w.line()
         w.comment("═══ Entry Point ═══")
         w.block_open("int main(int argc, char *argv[])")
-        if "main" in self._functions or "ltl_main" in [
-                self._mangle("main")]:
-            w.line("ltl_main();")
-        else:
+        if self._has_toplevel:
+            w.line(f"{_TOPLEVEL_FN}();")
+        if self._has_entry_fn("main"):
+            w.line(f'{self._mangle("main")}();')
+        elif not self._has_toplevel:
             w.comment("No main() found — nothing to run")
         w.line("return 0;")
         w.block_close()
@@ -1750,11 +1792,13 @@ class CTranspiler(ASTVisitor):
         w.comment("Clear BSS")
         w.line("ltl_heap_reset();")
         w.line()
-        if "kernel_main" in self._functions:
+        if self._has_toplevel:
+            w.line(f"{_TOPLEVEL_FN}();")
+        if self._has_entry_fn("kernel_main"):
             w.line("kernel_main();")
-        elif "main" in self._functions or "ltl_main" in self._functions:
-            w.line("ltl_main();")
-        else:
+        elif self._has_entry_fn("main"):
+            w.line(f'{self._mangle("main")}();')
+        elif not self._has_toplevel:
             w.line('println("LateralusOS — No kernel_main() found");')
         w.line()
         w.comment("Halt CPU")

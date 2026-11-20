@@ -349,6 +349,75 @@ fn main() {
 
 
 # ===============================================================================
+# Entry Point Tests
+# ===============================================================================
+
+class TestEntryPoint:
+    """The entry-point wrapper must only call a function the translation unit
+    actually defines, and top-level statements must not be discarded (#245)."""
+
+    def test_no_entry_point_emits_stub(self):
+        """Without fn main() the wrapper is a stub, not a call to ltl_main()."""
+        c_src = check_c("fn helper() -> int { return 0 }")
+        assert "No main() found" in c_src
+        assert "ltl_main();" not in c_src
+
+    def test_toplevel_statements_are_emitted(self):
+        """Top-level statements land in a synthesized entry body that the
+        wrapper calls — they must not be silently discarded."""
+        c_src = check_c("""
+println(1 + 1)
+println("hello")
+""")
+        assert "static void ltl_toplevel(void)" in c_src
+        assert "ltl_toplevel();" in c_src
+        assert "hello" in c_src
+        # Defined before the call site, so the call is always declared.
+        assert (c_src.index("static void ltl_toplevel(void)")
+                < c_src.index("ltl_toplevel();"))
+        # No dangling reference to an undefined entry function.
+        assert "ltl_main" not in c_src
+
+    def test_main_auto_invoked_when_not_called(self):
+        c_src = check_c("""
+fn main() {
+    println(1)
+}
+""")
+        assert c_src.count("ltl_main();") == 1
+        assert "ltl_toplevel" not in c_src
+
+    def test_main_called_once_when_explicitly_invoked(self):
+        """`fn main()` plus a top-level `main()` call runs main exactly once."""
+        c_src = check_c("""
+fn main() {
+    println(1)
+}
+main()
+""")
+        assert c_src.count("ltl_main();") == 1
+        assert "ltl_toplevel();" in c_src
+
+    def test_every_called_entry_fn_is_defined(self):
+        """Any entry function the wrapper calls has a definition in the file."""
+        sources = [
+            "",
+            "fn helper() { }",
+            'println("x")',
+            "fn main() { }",
+            "fn main() { }\nmain()",
+            "fn kernel_main() { }",
+        ]
+        for src in sources:
+            for freestanding in (False, True):
+                c_src = check_c(src, freestanding=freestanding)
+                for fn in ("ltl_main", "ltl_toplevel"):
+                    if f"{fn}();" in c_src:
+                        assert f"{fn}(void) {{" in c_src, (
+                            f"{fn} called but never defined for {src!r}")
+
+
+# ===============================================================================
 # Name Mangling Tests
 # ===============================================================================
 
