@@ -1,0 +1,51 @@
+// Runnable demo and pinned test vectors for stdlib/consistent_hash.ltl
+// Run: lateralus run examples/consistent_hash_demo.ltl
+
+import hash
+import consistent_hash
+
+fn main() {
+    let ring = new_ring(32)
+    add_node(ring, "cache-eu-1")
+    add_node(ring, "cache-us-1")
+    add_node(ring, "cache-ap-1")
+
+    // Pinned structural invariants
+    assert(node_count(ring) == 3)
+    assert(ring_size(ring) == 96)
+
+    // Lookup stability and distinct replica selection
+    let primary = lookup(ring, "session:42")
+    assert(primary == lookup(ring, "session:42"))
+
+    let replicas = lookup_n(ring, "session:42", 2)
+    assert(len(replicas) == 2)
+    assert(replicas[0] == primary)
+    assert(replicas[0] != replicas[1])
+
+    // Adding a 4th node preserves majority of existing assignments
+    let before = []
+    let i = 0
+    while i < 100 {
+        before = before + [lookup(ring, "k-" + str(i))]
+        i = i + 1
+    }
+
+    add_node(ring, "cache-eu-2")
+    assert(node_count(ring) == 4)
+    assert(ring_size(ring) == 128)
+
+    let moved = 0
+    i = 0
+    while i < 100 {
+        if lookup(ring, "k-" + str(i)) != before[i] {
+            moved = moved + 1
+        }
+        i = i + 1
+    }
+    assert(moved < 50)
+
+    println("consistent_hash_demo ok: primary=" + primary + " moved=" + str(moved) + "/100")
+}
+
+main()
