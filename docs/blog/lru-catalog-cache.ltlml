@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cache repeated catalog lookups with stdlib/lru</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: Cache repeated catalog lookups with stdlib/lru
+author: carlitasanchez092-create (with Codex assistance)
+date: 2026-11-16
+abstract: A runnable two-entry catalog cache demonstrates recency, eviction, and the difference between testing membership and reading an entry.
+---
+
+# Cache repeated catalog lookups with stdlib/lru
+
+A catalog lookup may be expensive even when its result is small. Keep a few
+recent results near the caller, and repeated reads can avoid that work. This
+tutorial uses an in-memory catalog as a deterministic stand-in for the slow
+lookup; it makes no HTTP requests and measures no speedup.
+
+An LRU cache evicts the **least recently used** entry when a new key needs a
+full cache. Reading a key makes it recent. Merely checking whether a key exists
+does not. That distinction is what we will test in `stdlib/lru.ltl`.
+
+## Run the complete example
+
+From a source checkout, create an environment and install the compiler:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e .
+python scripts/run_lru_tutorial.py
+```
+
+The example is [examples/lru_catalog.ltl](../../examples/lru_catalog.ltl).
+The runner joins the **unchanged** `stdlib/lru.ltl` with that example in a
+temporary file and invokes the real `lateralus run` CLI on the Python backend.
+This source assembly is explicit: on the tested baseline
+`cdcec06253ad0079fd694775f333bbb3da90623f`, a plain `import lru` does not load
+the `.ltl` module. The runner neither supplies substitute cache functions nor
+modifies the library. Calls such as `new(2)` are unqualified because the module
+and example are compiled together. C, JavaScript and WASM are not validated here.
+
+## A two-entry cache, five requests
+
+The catalog contains Coffee, Rice and Beans. The request sequence is pinned:
+
+```lateralus
+let requests = ["coffee", "rice", "coffee", "beans", "rice"]
+let cache = new(2)
+```
+
+For each request, `get` returns a two-item list: the cache and the value. We
+keep the returned cache, then load and insert a value only on a miss:
+
+```lateralus
+let result = get(cache, key)
+cache = result[0]
+let value = result[1]
+if value == nil {
+    value = catalog[key]
+    cache = put(cache, key, value)
+    loads = loads + 1
+    println("MISS " + key + " -> " + value)
+} else {
+    println("HIT " + key + " -> " + value)
+}
+```
+
+These are excerpts from the complete example; `key`, `catalog` and `loads`
+are established there. `get` updates the hit/miss counters itself. `put`
+inserts the loaded value without counting a second access.
+
+The catalog deliberately has no `nil` values and every request is a known key.
+For a real loader, decide separately how to represent a missing product and
+whether to cache failures. A stored `nil` and a miss both return `nil`, so the
+simple condition above is not a general membership test. Use `has(cache, key)`
+when storing `nil` is meaningful.
+
+## Follow the eviction
+
+`all_keys` lists entries from least to most recently used:
+
+| Request | Result | Order after the request |
+| --- | --- | --- |
+| coffee | miss, load Coffee | coffee |
+| rice | miss, load Rice | coffee, rice |
+| coffee | hit | rice, coffee |
+| beans | miss, evict rice | coffee, beans |
+| rice | miss, evict coffee | beans, rice |
+
+Coffee's second read is why Rice is evicted first. A FIFO cache would not
+refresh Coffee on that read and would make a different eviction decision.
+
+The exact expected stdout is pinned in `examples/lru_catalog.expected.txt`:
+
+```text
+MISS coffee -> Coffee
+MISS rice -> Rice
+HIT coffee -> Coffee
+MISS beans -> Beans
+MISS rice -> Rice
+oldest=beans
+newest=rice
+hits=1
+misses=4
+catalog_loads=4
+```
+
+The runner compares stdout byte-for-byte and exits nonzero on a mismatch or
+failed child process. Four loads for five requests illustrates reuse, rather
+than proving a performance improvement on a real catalog.
+
+## Membership, updates and maintenance
+
+- `has(cache, key)` leaves recency and hit counters unchanged. Use `get` when
+  the operation is a read that should keep an entry warm.
+- `put` on an existing key replaces its value and makes it most recent without
+  increasing the size. It does not increment the hit counter.
+- `resize(cache, positive_capacity)` evicts oldest entries when shrinking.
+- `clear(cache)` removes entries and resets hits/misses, retaining capacity.
+- Keep capacity a positive integer. In this implementation `new(0)` does
+  **not** disable storage: `put` only evicts when capacity is positive, so
+  entries can accumulate. Negative capacities are not a supported input here.
+- Treat returned maps and lists as mutable state. Do not retain `all_keys`
+  as an immutable snapshot or share one cache between concurrent writers
+  without coordination. This module provides no synchronization or expiry.
+
+The implementation scans key/order lists and rebuilds data on eviction. Do
+not assume constant-time operations from the name LRU; use it for small
+bounded caches and measure your actual workload before scaling up.
+
+## Verify the behavior
+
+```bash
+python -m pip install pytest
+python -m pytest tests/test_lru_tutorial.py -q
+```
+
+The tests execute the current module through the real compiler. They check
+the complete example against its pinned output, read-driven eviction,
+membership without a recency change, replacement without growth, a miss
+without reordering, stored `nil`, shrinking/clearing, and zero-capacity
+behavior. No external services or paid API calls are involved.
+
+This tutorial and its example are MIT-licensed contributions prepared with
+Codex assistance. The upstream module's implementation is unchanged.
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>
