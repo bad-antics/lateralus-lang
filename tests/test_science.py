@@ -15,6 +15,7 @@ from lateralus_lang.science import (
     Dimension,
     Quantity,
     binomial_pmf,
+    chi_squared_pdf,
     convolve,
     euler_step,
     exponential_pdf,
@@ -256,6 +257,31 @@ class TestDistributions:
     def test_binomial_sum_to_one(self):
         total = sum(binomial_pmf(k, 10, 0.3) for k in range(11))
         assert abs(total - 1.0) < 1e-10
+
+    def test_chi_squared_pdf(self):
+        # k=2 reduces to an exponential with mean 2
+        assert abs(chi_squared_pdf(2.0, 2) - math.exp(-1) / 2) < 1e-15
+        assert chi_squared_pdf(0.0, 3) == 0.0
+        assert chi_squared_pdf(-1.0, 3) == 0.0
+
+    def test_chi_squared_pdf_large_k_no_overflow(self):
+        # At the mode (x = k - 2) the density is O(1/sqrt(k)); the intermediate
+        # factors must not overflow (gamma(k/2) does so for k >= 344).
+        expected = {
+            100: 0.028447456653125969,
+            200: 0.020030735965664705,
+            400: 0.014134214138366241,
+            1000: 0.008928063487744038,
+        }
+        for k, want in expected.items():
+            got = chi_squared_pdf(float(k - 2), k)
+            assert abs(got - want) / want < 1e-11
+
+    def test_chi_squared_pdf_underflows_to_zero(self):
+        # Densities below the smallest subnormal return 0.0 rather than raising
+        assert chi_squared_pdf(1.0, 344) == 0.0
+        assert chi_squared_pdf(1e6, 200) == 0.0
+        assert chi_squared_pdf(10000.0, 300) == 0.0
 
 
 class TestInterpolation:
