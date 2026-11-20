@@ -164,6 +164,14 @@ class TestVector:
 # -------------------------------------------------------------------------
 
 class TestInterval:
+    def test_reversed_endpoints_preserve_both_bounds(self):
+        interval = Interval(5, 2)
+        assert (interval.lo, interval.hi) == (2, 5)
+
+    def test_reversed_divisor_still_contains_zero(self):
+        with pytest.raises(ZeroDivisionError, match="contains zero"):
+            Interval.exact(1) / Interval(1, -1)
+
     def test_add(self):
         a = Interval(1, 2)
         b = Interval(3, 4)
