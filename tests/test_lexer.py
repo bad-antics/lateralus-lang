@@ -133,3 +133,27 @@ class TestErrors:
         # @ and ? are now valid tokens in v1.1; use backtick which is never valid
         with pytest.raises(LexError):
             lex("`")
+
+def test_unterminated_string_is_rejected():
+    """Issue #45: an unterminated string at EOF was accepted as valid source."""
+    for source in ('let text = "unfinished', 'let text = r"unfinished'):
+        with pytest.raises(LexError):
+            lex(source, "broken.ltl")
+
+
+def test_trailing_backslash_is_a_lex_error_not_an_index_error():
+    """Issue #45: a trailing backslash raised IndexError instead of LexError."""
+    with pytest.raises(LexError):
+        lex('let text = "trailing\\', "broken.ltl")
+
+
+def test_unterminated_string_names_the_problem():
+    with pytest.raises(LexError) as caught:
+        lex('let text = "unfinished', "broken.ltl")
+    assert "Unterminated string" in str(caught.value)
+
+
+def test_terminated_strings_still_compile():
+    for source in ('let text = "finished"', 'let text = r"raw"',
+                   'let text = ""'):
+        lex(source, "broken.ltl")
