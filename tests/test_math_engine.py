@@ -189,6 +189,13 @@ class TestInterval:
         with pytest.raises(ZeroDivisionError):
             a / b
 
+    def test_reversed_endpoints_are_normalized(self):
+        a = Interval(1, -1)
+        assert (a.lo, a.hi) == (-1, 1)
+        assert a.contains(0)
+        with pytest.raises(ZeroDivisionError):
+            Interval.exact(1) / a
+
     def test_pm(self):
         a = Interval.pm(10.0, 0.5)
         assert a.lo == 9.5
