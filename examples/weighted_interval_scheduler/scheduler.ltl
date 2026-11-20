@@ -1,0 +1,175 @@
+// Weighted interval scheduling on the hosted native target.
+extern fn getchar() -> i32
+
+struct Job {
+    start: int,
+    finish: int,
+    payout: int,
+}
+
+fn is_space(ch: int) -> bool {
+    return ch == 32 or (ch >= 9 and ch <= 13)
+}
+
+fn is_digit(ch: int) -> bool {
+    return ch >= 48 and ch <= 57
+}
+
+fn next_nonspace() -> int {
+    let mut ch: int = getchar()
+    while is_space(ch) {
+        ch = getchar()
+    }
+    return ch
+}
+
+fn invalid_input() -> void {
+    io.eprintln("Invalid input: expected a count and that many start finish payout triples")
+    sys.exit(2)
+}
+
+fn read_integer() -> int {
+    let mut ch = next_nonspace()
+    let negative = ch == 45
+    let has_sign: bool = negative or ch == 43
+    if has_sign {
+        ch = getchar()
+    }
+    if is_digit(ch) == false {
+        invalid_input()
+    }
+    let mut limit = 2147483647
+    if negative {
+        limit = limit + 1
+    }
+    let mut number = 0
+    while is_digit(ch) {
+        number = number * 10 + (ch - 48)
+        if number > limit {
+            invalid_input()
+        }
+        ch = getchar()
+    }
+    let bad_separator: bool = ch >= 0 and !is_space(ch)
+    if bad_separator {
+        invalid_input()
+    }
+    if negative {
+        return -number
+    }
+    return number
+}
+
+fn finish_at(jobs: Ptr<Job>, index: int) -> int {
+    let entry: Job = deref(jobs + index)
+    return entry.finish
+}
+
+// Merge the finish-sorted halves [begin, middle) and [middle, end).
+fn sort_by_finish(jobs: Ptr<Job>, scratch: Ptr<Job>, begin: int, end: int) -> void {
+    if end - begin < 2 {
+        return
+    }
+    let middle = begin + (end - begin) / 2
+    sort_by_finish(jobs, scratch, begin, middle)
+    sort_by_finish(jobs, scratch, middle, end)
+    let mut left = begin
+    let mut right = middle
+    let mut i = begin
+    while i < end {
+        let take_left: bool = right == end or (left < middle and finish_at(jobs, left) <= finish_at(jobs, right))
+        if take_left {
+            deref(scratch + i) = deref(jobs + left)
+            left = left + 1
+        } else {
+            deref(scratch + i) = deref(jobs + right)
+            right = right + 1
+        }
+        i = i + 1
+    }
+    i = begin
+    while i < end {
+        deref(jobs + i) = deref(scratch + i)
+        i = i + 1
+    }
+}
+
+fn maximum_payout(jobs: Ptr<Job>, count: int) -> int {
+    if count == 0 {
+        return 0
+    }
+    let scratch: Ptr<Job> = mem.alloc(count * sizeof(deref(jobs)))
+    if scratch == 0 {
+        io.eprintln("Unable to allocate sort buffer")
+        sys.exit(1)
+    }
+    sort_by_finish(jobs, scratch, 0, count)
+    mem.free(scratch)
+    let mut best: Ptr<int> = 0
+    best = mem.alloc((count + 1) * sizeof(deref(best)))
+    if best == 0 {
+        io.eprintln("Unable to allocate payout buffer")
+        sys.exit(1)
+    }
+    deref(best) = 0
+    let mut i = 0
+    while i < count {
+        let job: Job = deref(jobs + i)
+        // Find the number of earlier jobs that finish by this job's start.
+        let mut low = 0
+        let mut high = i
+        while low < high {
+            let mid = low + (high - low) / 2
+            if finish_at(jobs, mid) <= job.start {
+                low = mid + 1
+            } else {
+                high = mid
+            }
+        }
+        let take: int = deref(best + low) + job.payout
+        let skip: int = deref(best + i)
+        // best[i + 1] is the optimum among the first i + 1 jobs in finish order.
+        if take > skip {
+            deref(best + i + 1) = take
+        } else {
+            deref(best + i + 1) = skip
+        }
+        i = i + 1
+    }
+    let total: int = deref(best + count)
+    mem.free(best)
+    return total
+}
+
+fn main() -> void {
+    let count = read_integer()
+    let count_out_of_range: bool = count < 0 or count > 1000000
+    if count_out_of_range {
+        invalid_input()
+    }
+    let mut jobs: Ptr<Job> = 0
+    if count > 0 {
+        jobs = mem.alloc(count * sizeof(deref(jobs)))
+        if jobs == 0 {
+            io.eprintln("Unable to allocate jobs")
+            sys.exit(1)
+        }
+    }
+    let mut i = 0
+    while i < count {
+        let start = read_integer()
+        let finish = read_integer()
+        let payout = read_integer()
+        if finish <= start {
+            invalid_input()
+        }
+        deref(jobs + i) = Job { start: start, finish: finish, payout: payout }
+        i = i + 1
+    }
+    if next_nonspace() >= 0 {
+        invalid_input()
+    }
+    let optimum = maximum_payout(jobs, count)
+    mem.free(jobs)
+    println(optimum)
+}
