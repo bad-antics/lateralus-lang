@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dictionary encoding for platform identifiers</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: Dictionary encoding for platform identifiers
+author: MarkDonish
+---
+
+# Dictionary encoding for platform identifiers
+
+A train operator records the platform for each departure. Six consecutive rows contain the labels `["East", "West", "East", "North", "West", "East"]`. Lateralus’s `stdlib/dict_encoding.ltl` can store those rows as a dictionary and a sequence of indices. This makes the repeated values visible while preserving the order of departures. [Module source](https://github.com/bad-antics/lateralus-lang/blob/4cb9147d4cd565a3d0fc22a190ed18f14077412f/stdlib/dict_encoding.ltl)
+
+Read the rows from left to right. East gets index 0, West gets index 1, and the second East reuses 0. North first appears in row four and gets index 2. The resulting dictionary is `["East", "West", "North"]`. Its indices are `[0, 1, 0, 2, 1, 0]`. To recover row four, look up the fourth index, 2, and read dictionary entry 2, North. Index assignments depend on the order in which labels first appear.
+
+## Try it with the standard library
+
+Append the example below to a copy of `stdlib/dict_encoding.ltl`, then save the combined file as `platforms.ltl`. From that directory, run `lateralus py platforms.ltl`, then `python3 platforms.py`. The first command uses the project's compiler to generate Python. The second prints the five values described below. [Module declarations](https://github.com/bad-antics/lateralus-lang/blob/4cb9147d4cd565a3d0fc22a190ed18f14077412f/stdlib/dict_encoding.ltl) · [Project CLI](https://github.com/bad-antics/lateralus-lang)
+
+```text
+fn demo_platforms() {
+    let labels = ["East", "West", "East", "North", "West", "East"]
+    let column = encode(labels)
+    let restored = decode(column)
+    print(column["dictionary"][0])
+    print(column["indices"][3])
+    print(restored[3])
+    print(cardinality(column))
+    print(index_bit_width(column))
+}
+
+demo_platforms()
+```
+
+The five expected output values, in order, are `East`, `2`, `North`, `3`, and `2`. A dictionary with three entries needs two bits to represent any one index. The module returns integer indices in a list. A two-bit width is a property of the values, and the function does not pack the list into a byte stream. The implementation compares the string forms of input values, so this example uses one type throughout. [Width calculation and key lookup](https://github.com/bad-antics/lateralus-lang/blob/4cb9147d4cd565a3d0fc22a190ed18f14077412f/stdlib/dict_encoding.ltl)
+
+## Fixed test vectors
+
+| Input labels | Dictionary | Indices | Cardinality | Width |
+|---|---|---|---:|---:|
+| `["East","West","East","North","West","East"]` | `["East","West","North"]` | `[0,1,0,2,1,0]` | 3 | 2 |
+| `["West","East","West"]` | `["West","East"]` | `[0,1,0]` | 2 | 1 |
+| `["East","East"]` | `["East"]` | `[0,0]` | 1 | 1 |
+| `[]` | `[]` | `[]` | 0 | 1 |
+| `["A","B","C","D","E","A"]` | `["A","B","C","D","E"]` | `[0,1,2,3,4,0]` | 5 | 3 |
+
+For the last row, four entries would fit in two bits. The fifth introduces index 4, which needs three bits. The module reports a minimum width of one even for the empty column. The upstream test suite includes a round trip with repeated strings and a one-entry dictionary. [Upstream Wave 8 tests](https://github.com/bad-antics/lateralus-lang/blob/4cb9147d4cd565a3d0fc22a190ed18f14077412f/tests/stdlib_spiral_wave_8.ltl#L43)
+
+To check the table, append the following sample to a fresh copy of the module and compile it the same way. For each input it prints the dictionary, indices, decoded labels, cardinality, and index width, in that order. All 25 results matched the table in the Python output from compiler 3.2.0.
+
+```text
+fn verify_labels(labels) {
+    let column = encode(labels)
+    print(column["dictionary"])
+    print(column["indices"])
+    print(decode(column))
+    print(cardinality(column))
+    print(index_bit_width(column))
+}
+
+verify_labels(["East", "West", "East", "North", "West", "East"])
+verify_labels(["West", "East", "West"])
+verify_labels(["East", "East"])
+verify_labels([])
+verify_labels(["A", "B", "C", "D", "E", "A"])
+```
+
+## When a platform number arrives as both text and an integer
+
+Suppose two ticket feeds identify the same platform using `7` and `"7"`. The encoder looks up each value using `str(v)`. Both inputs produce the same lookup key, so the first value determines the type that comes back for every row with that key. These three calls to `decode(encode(labels))` were checked with the same compiler and Python output. [Encoder source](https://github.com/bad-antics/lateralus-lang/blob/4cb9147d4cd565a3d0fc22a190ed18f14077412f/stdlib/dict_encoding.ltl)
+
+| Input | Dictionary | Decoded output |
+|---|---|---|
+| `[7, "7", 7]` | `[7]` | `[7, 7, 7]` |
+| `["7", 7, "7"]` | `["7"]` | `["7", "7", "7"]` |
+| `["07", "7", "07"]` | `["07", "7"]` | `["07", "7", "07"]` |
+
+Run the same round trips by appending this to the module.
+
+```text
+fn inspect_platform_types() {
+    print(decode(encode([7, "7", 7])))
+    print(decode(encode(["7", 7, "7"])))
+    print(decode(encode(["07", "7", "07"])))
+}
+
+inspect_platform_types()
+```
+
+For a platform identifier, read both feeds as text before encoding. That preserves leading zeroes when the source provides them. If downstream users need the original data types too, keep a separate type column before combining the feeds.
+
+OpenAI Codex drafted this tutorial for MarkDonish and ran the examples and test vectors described above.
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>
