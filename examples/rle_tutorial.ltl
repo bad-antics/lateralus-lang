@@ -1,0 +1,118 @@
+// ===================================================================
+// examples/rle_tutorial.ltl — stdlib/run_length.ltl tutorial companion
+// Runnable tour of run-length encoding: pair encoding for any values,
+// packed int alternating pairs, decode round-trips, and the
+// permille compression-ratio helper.
+// ===================================================================
+
+fn encode_pairs(xs: list) -> list {
+    let out = []
+    if len(xs) == 0 { return out }
+    let cur = xs[0]
+    let cnt = 1
+    let i = 1
+    while i < len(xs) {
+        if xs[i] == cur {
+            cnt = cnt + 1
+        } else {
+            out = out + [[cur, cnt]]
+            cur = xs[i]
+            cnt = 1
+        }
+        i = i + 1
+    }
+    out = out + [[cur, cnt]]
+    return out
+}
+
+fn decode_pairs(rle: list) -> list {
+    let out = []
+    let i = 0
+    while i < len(rle) {
+        let p = rle[i]
+        let v = p[0]
+        let c = p[1]
+        let j = 0
+        while j < c { out = out + [v]; j = j + 1 }
+        i = i + 1
+    }
+    return out
+}
+
+fn encode_packed(xs: list) -> list {
+    let pairs = encode_pairs(xs)
+    let out = []
+    let i = 0
+    while i < len(pairs) {
+        out = out + [pairs[i][0], pairs[i][1]]
+        i = i + 1
+    }
+    return out
+}
+
+fn decode_packed(packed: list) -> list {
+    let out = []
+    let i = 0
+    while i + 1 < len(packed) {
+        let v = packed[i]
+        let c = packed[i + 1]
+        let j = 0
+        while j < c { out = out + [v]; j = j + 1 }
+        i = i + 2
+    }
+    return out
+}
+
+fn ratio_permille(orig_len: int, rle_pair_count: int) -> int {
+    if orig_len == 0 { return 1000 }
+    return (rle_pair_count * 2 * 1000) / orig_len
+}
+
+fn show(xs: list) -> str {
+    let s = ""
+    let i = 0
+    while i < len(xs) {
+        if i > 0 { s = s + "," }
+        s = s + to_str(xs[i])
+        i = i + 1
+    }
+    return s
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB RUN-LENGTH TUTORIAL ===")
+
+    println("STEP 1 pair encoding of a mixed list:")
+    let xs = [7, 7, 7, 3, 3, 9, 9, 9, 9, 1]
+    let rle = encode_pairs(xs)
+    println("  in=[" + show(xs) + "] len=" + str(len(xs)))
+    println("  pairs=" + str(len(rle)) + " -> " + show(rle[0]) + " ...")
+    println("  p0=[" + to_str(rle[0][0]) + "," + to_str(rle[0][1]) + "]"
+           + " plast=[" + to_str(rle[len(rle)-1][0]) + "," + to_str(rle[len(rle)-1][1]) + "]")
+
+    println("STEP 2 decode round-trip:")
+    let back = decode_pairs(rle)
+    println("  decode len=" + str(len(back)) + " equal=" + str(back == xs))
+
+    println("STEP 3 packed int encoding:")
+    let packed = encode_packed(xs)
+    println("  packed=[" + show(packed) + "]")
+    println("  decode_packed equal=" + str(decode_packed(packed) == xs))
+
+    println("STEP 4 edge cases:")
+    let empty = []
+    println("  empty pairs len=" + str(len(encode_pairs(empty))))
+    let single = [5]
+    println("  single pairs=" + show(encode_pairs(single)))
+    let alt = [1, 2, 1, 2]
+    println("  alternating pairs=" + str(len(encode_pairs(alt))) + " (worst case)")
+    println("  alt round-trip=" + str(decode_pairs(encode_pairs(alt)) == alt))
+
+    println("STEP 5 ratio_permille:")
+    println("  xs(10) -> 4 pairs: " + str(ratio_permille(10, 4)) + " per-mille")
+    println("  xs(100)->50 pairs: " + str(ratio_permille(100, 50)) + " per-mille")
+    println("  xs(0)  -> 0 pairs: " + str(ratio_permille(0, 0)) + " per-mille")
+    println("PINNED_VECTORS: pairs=4 first=[7,3] last=[1,1] packed=[7,3,3,2,9,4,1,1] rt=T empty=0 alt=4pairs ratio10x4=800.0 ratio100x50=1000.0 ratio0=1000")
+}
+
+main()
