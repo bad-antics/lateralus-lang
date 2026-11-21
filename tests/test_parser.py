@@ -14,6 +14,7 @@ from lateralus_lang.ast_nodes import (
     IfStmt,
     LetDecl,
     Literal,
+    MapExpr,
     MatchStmt,
     Program,
     TryStmt,
@@ -205,3 +206,27 @@ class TestMatchStmt:
         stmt = p.body[0]
         assert isinstance(stmt, MatchStmt)
         assert len(stmt.arms) == 3
+
+
+class TestMap:
+    def test_map_string_keys(self):
+        p = ast('let m = { "a": 1, "b": 2 }')
+        stmt = p.body[0]
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, MapExpr)
+        assert len(stmt.value.pairs) == 2
+
+    def test_map_ident_keys(self):
+        p = ast('let m = { a: 1, b: 2 }')
+        stmt = p.body[0]
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, MapExpr)
+        assert len(stmt.value.pairs) == 2
+
+    def test_map_int_keys(self):
+        p = ast('let m = { 1: "one", 2: "two" }')
+        stmt = p.body[0]
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, MapExpr)
+        assert len(stmt.value.pairs) == 2
+
