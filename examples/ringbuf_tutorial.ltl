@@ -1,0 +1,54 @@
+// examples/ringbuf_tutorial.ltl - Practical Circular Buffer (Ring Buffer)
+// Demonstrates sliding window telemetry, fixed-size log history, and automatic oldest-item overwrites.
+
+import ringbuf
+
+fn simulate_sensor_stream() -> list {
+    // Keep only the latest 4 sensor readings
+    let history = ringbuf.new(4)
+    
+    let readings = [21.5, 22.0, 22.8, 23.5, 24.1, 25.0]
+    for r in readings {
+        history = ringbuf.push(history, r)
+        println("Pushed reading: " + to_str(r) + " | Buffer count: " + to_str(ringbuf.count(history)))
+    }
+    
+    return history
+}
+
+fn calculate_window_average(history: list) -> float {
+    let items = ringbuf.to_list(history)
+    let total = 0.0
+    for val in items {
+        total = total + val
+    }
+    return total / float(len(items))
+}
+
+fn main() {
+    println("=== Lateralus Ring Buffer (Circular Buffer) ===")
+    
+    // 1. Process incoming stream with capacity 4
+    let buffer = simulate_sensor_stream()
+    
+    // 2. Inspect oldest and newest readings
+    let oldest = ringbuf.peek_front(buffer)
+    let newest = ringbuf.peek_back(buffer)
+    println("Oldest reading in window: " + to_str(oldest)) // 22.8
+    println("Newest reading in window: " + to_str(newest)) // 25.0
+    
+    // 3. Inspect items in chronological order
+    let window_readings = ringbuf.to_list(buffer)
+    println("Current active window (4 items): " + to_str(window_readings))
+    
+    // 4. Calculate metrics on current window
+    let avg = calculate_window_average(buffer)
+    println("Average of active window: " + to_str(avg))
+    
+    // 5. Drain buffer
+    let popped = ringbuf.pop(buffer)
+    let first_out = popped[0]
+    let remaining_buf = popped[1]
+    println("Popped FIFO element: " + to_str(first_out))
+    println("Remaining items: " + to_str(ringbuf.to_list(remaining_buf)))
+}
