@@ -417,20 +417,26 @@ class LtlCfgParser:
                 continue
 
             # Handle multiline triple-quoted strings
+            field_flags = 0
             if '"""' in line and line.count('"""') == 1:
                 buf = [line]
                 while i < len(lines) and '"""' not in lines[i]:
                     buf.append(lines[i])
                     i += 1
                 if i < len(lines):
-                    buf.append(lines[i])
+                    value_tail, delimiter, suffix = lines[i].partition('"""')
                     i += 1
+                    if _strip_comment(suffix).strip():
+                        continue
+                    buf.append(value_tail + delimiter)
+                    field_flags = re.DOTALL
                 line = "\n".join(buf)
 
             # Field assignment: name: type = value  or  name = value
             field_match = re.match(
                 r'^\s*(\w+)\s*(?::\s*(\w+(?:\[[\w\s,]+\])?))?\s*=\s*(.*?)\s*$',
-                line
+                line,
+                flags=field_flags,
             )
             if field_match:
                 name = field_match.group(1)
