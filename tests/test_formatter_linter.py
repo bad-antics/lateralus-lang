@@ -196,3 +196,10 @@ println(y)
         unused_fn = [i for i in result.issues if i.rule == "unused-function"
                      and "test_something" in i.message]
         assert len(unused_fn) == 0
+
+    def test_issue_col_alias(self):
+        result = self.linter.lint("let x = 42;")
+        assert len(result.issues) >= 1
+        issue = result.issues[0]
+        assert issue.col == issue.column
+
