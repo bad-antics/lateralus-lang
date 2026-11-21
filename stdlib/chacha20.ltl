@@ -75,13 +75,21 @@ pub fn block(key: list, nonce: list, counter: int) -> list {
     return out
 }
 
+// n zero bytes, built by doubling.
+fn cc_zeros(n: int) -> list {
+    if n <= 0 { return [] }
+    let z = [0]
+    while len(z) < n { z = z + z }
+    return slice(z, 0, n)
+}
+
 /// Encrypt or decrypt (same op, XOR is its own inverse).
 /// `initial_counter` is per RFC 8439 — typically 1 for AEAD payloads
 /// (block 0 is reserved for Poly1305 key derivation).
 pub fn xor(key: list, nonce: list, initial_counter: int,
             data: list) -> list {
-    let out = []
     let n = len(data)
+    let out = cc_zeros(n)   // filled in place: linear, not O(n^2) appends
     let i = 0
     let counter = initial_counter
     while i < n {
@@ -90,7 +98,7 @@ pub fn xor(key: list, nonce: list, initial_counter: int,
         if n - i < 64 { take = n - i }
         let j = 0
         while j < take {
-            out = out + [data[i + j] ^ ks[j]]
+            out[i + j] = data[i + j] ^ ks[j]
             j = j + 1
         }
         i = i + 64
