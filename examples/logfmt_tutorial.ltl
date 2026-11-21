@@ -1,0 +1,131 @@
+// ===================================================================
+// examples/logfmt_tutorial.ltl — Tutorial for stdlib/logfmt.ltl
+// -------------------------------------------------------------------
+// Self-contained, executable tutorial demonstrating:
+//   1. Logfmt key=value structured log line generation.
+//   2. Automatic quotation of values containing spaces, quotes, or empty strings.
+//   3. Escaping quotation marks inside quoted strings.
+//   4. Round-trip parsing back into key-value pairs.
+//
+// Inlines stdlib/logfmt core for standalone runtime portability.
+// ===================================================================
+
+fn char_at(s: str, i: int) -> str { return slice(s, i, i + 1) }
+
+fn needs_quoting(v: str) -> bool {
+    if len(v) == 0 { return true }
+    let i = 0
+    while i < len(v) {
+        let c = char_at(v, i)
+        if c == " " || c == "=" || c == "\"" { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn escape_quoted(v: str) -> str {
+    let out = ""
+    let i = 0
+    while i < len(v) {
+        let c = char_at(v, i)
+        if c == "\\" || c == "\"" { out = out + "\\" + c }
+        else                      { out = out + c }
+        i = i + 1
+    }
+    return out
+}
+
+fn format_value(v: str) -> str {
+    if needs_quoting(v) {
+        return "\"" + escape_quoted(v) + "\""
+    }
+    return v
+}
+
+fn encode(pairs: list) -> str {
+    let out = ""
+    let i = 0
+    while i < len(pairs) {
+        if i > 0 { out = out + " " }
+        let p = pairs[i]
+        out = out + p[0] + "=" + format_value(p[1])
+        i = i + 1
+    }
+    return out
+}
+
+fn parse(line: str) -> list {
+    let out = []
+    let n = len(line)
+    let i = 0
+    while i < n {
+        while i < n && char_at(line, i) == " " { i = i + 1 }
+        if i >= n { return out }
+        let k_start = i
+        while i < n && char_at(line, i) != "=" && char_at(line, i) != " " {
+            i = i + 1
+        }
+        let k = slice(line, k_start, i)
+        let v = ""
+        if i < n && char_at(line, i) == "=" {
+            i = i + 1
+            if i < n && char_at(line, i) == "\"" {
+                i = i + 1
+                let vb = ""
+                let scanning = true
+                while scanning && i < n {
+                    let c = char_at(line, i)
+                    if c == "\\" && i + 1 < n {
+                        vb = vb + char_at(line, i + 1)
+                        i = i + 2
+                    } else if c == "\"" {
+                        scanning = false
+                        i = i + 1
+                    } else {
+                        vb = vb + c
+                        i = i + 1
+                    }
+                }
+                v = vb
+            } else {
+                let v_start = i
+                while i < n && char_at(line, i) != " " { i = i + 1 }
+                v = slice(line, v_start, i)
+            }
+        }
+        if len(k) > 0 { out = out + [[k, v]] }
+    }
+    return out
+}
+
+fn main() {
+    print("=== LATERALUS STDLIB LOGFMT TUTORIAL ===")
+
+    // 1. Define structured key-value pairs
+    let pairs = [
+        ["level", "info"],
+        ["msg", "hello world"],
+        ["job", "42"],
+        ["empty", ""]
+    ]
+
+    // 2. Encode to logfmt wire format
+    let line = encode(pairs)
+    print("STEP 1: Encoded logfmt line:")
+    print(line)
+
+    // 3. Parse logfmt line back into structured pairs
+    let parsed = parse(line)
+    print("STEP 2: Round-trip parsed key-value pairs (count=" + str(len(parsed)) + "):")
+    let i = 0
+    while i < len(parsed) {
+        let p = parsed[i]
+        print("  " + p[0] + " -> " + p[1])
+        i = i + 1
+    }
+
+    // Pinned output verification
+    print("PINNED_VECTORS: line='" + line + "' pairs_count=" + str(len(parsed)))
+}
+
+main()
