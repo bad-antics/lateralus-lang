@@ -196,3 +196,24 @@ println(y)
         unused_fn = [i for i in result.issues if i.rule == "unused-function"
                      and "test_something" in i.message]
         assert len(unused_fn) == 0
+
+
+class TestLintCliOutput:
+    """Issue #270: the lint CLI must not crash printing LintIssue.column."""
+
+    def test_lint_cli_prints_column(self, tmp_path, capsys):
+        import sys
+        from lateralus_lang.__main__ import main
+
+        f = tmp_path / "sample.ltl"
+        f.write_text("let x = 42;\n")
+        old_argv = sys.argv
+        try:
+            sys.argv = ["lateralus", "lint", str(f)]
+            rc = main()
+        finally:
+            sys.argv = old_argv
+        out = capsys.readouterr().out
+        assert rc == 1
+        assert "unnecessary-semicolon" in out
+        assert ":1:0" in out
