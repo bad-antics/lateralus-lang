@@ -1,0 +1,177 @@
+// ===================================================================
+// examples/statsd_tutorial.ltl — stdlib/statsd.ltl tutorial companion
+// Runnable tour of the StatsD/DogStatsD wire protocol: metric builders
+// (counter/gauge/gauge_delta/timer/histogram/distribution/set) with
+// sample rates and tags, plus parse_line round-trips.
+// Self-contained — module code inlined with documented fixes:
+//   * `index_of`, `split`, `char_at` are not runtime builtins ->
+//     local _index_of/_split helpers + slice()
+// ===================================================================
+
+// index_of/split are not runtime builtins — local helpers added.
+fn _index_of(s: str, ch: str) -> int {
+    let i = 0
+    while i < len(s) {
+        if slice(s, i, i + 1) == ch { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn _split(s: str, sep: str) -> list {
+    let out = []
+    let cur = ""
+    let i = 0
+    while i < len(s) {
+        if slice(s, i, i + len(sep)) == sep {
+            out = out + [cur]
+            cur = ""
+            i = i + len(sep)
+        } else {
+            cur = cur + slice(s, i, i + 1)
+            i = i + 1
+        }
+    }
+    return out + [cur]
+}
+
+fn format_tags(tags: list) -> str {
+    if len(tags) == 0 { return "" }
+    let out = "|#"
+    let i = 0
+    while i < len(tags) {
+        if i > 0 { out = out + "," }
+        let t = tags[i]
+        if t[1] == "" { out = out + t[0] }
+        else          { out = out + t[0] + ":" + t[1] }
+        i = i + 1
+    }
+    return out
+}
+
+fn format_rate(rate: str) -> str {
+    if rate == "" { return "" }
+    return "|@" + rate
+}
+
+// -- Builders ------------------------------------------------------
+
+fn counter(name: str, delta: int, rate: str, tags: list) -> str {
+    return name + ":" + str(delta) + "|c" + format_rate(rate) + format_tags(tags)
+}
+
+fn gauge(name: str, value: str, tags: list) -> str {
+    return name + ":" + value + "|g" + format_tags(tags)
+}
+
+fn gauge_delta(name: str, delta: str, tags: list) -> str {
+    // `delta` must carry its own leading '+' or '-'.
+    return name + ":" + delta + "|g" + format_tags(tags)
+}
+
+fn timer(name: str, ms: str, rate: str, tags: list) -> str {
+    return name + ":" + ms + "|ms" + format_rate(rate) + format_tags(tags)
+}
+
+fn histogram(name: str, value: str, rate: str, tags: list) -> str {
+    return name + ":" + value + "|h" + format_rate(rate) + format_tags(tags)
+}
+
+fn distribution(name: str, value: str, rate: str, tags: list) -> str {
+    return name + ":" + value + "|d" + format_rate(rate) + format_tags(tags)
+}
+
+fn set_metric(name: str, member: str, tags: list) -> str {
+    return name + ":" + member + "|s" + format_tags(tags)
+}
+
+// -- Parser --------------------------------------------------------
+
+fn parse_tags_str(s: str) -> list {
+    let out = []
+    let parts = _split(s, ",")
+    let i = 0
+    while i < len(parts) {
+        let p = parts[i]
+        let c = _index_of(p, ":")
+        if c < 0 { out = out + [[p, ""]] }
+        else     { out = out + [[slice(p, 0, c), slice(p, c + 1, len(p))]] }
+        i = i + 1
+    }
+    return out
+}
+
+/// Parse one line.  Returns {name, value, kind, rate, tags} or nil.
+fn parse_line(line: str) -> map {
+    let colon = _index_of(line, ":")
+    if colon < 0 { return nil }
+    let name = slice(line, 0, colon)
+    let rest = slice(line, colon + 1, len(line))
+    let parts = _split(rest, "|")
+    if len(parts) < 2 { return nil }
+    let m = {}
+    m["name"]  = name
+    m["value"] = parts[0]
+    m["kind"]  = parts[1]
+    m["rate"]  = ""
+    m["tags"]  = []
+    let i = 2
+    while i < len(parts) {
+        let p = parts[i]
+        if len(p) > 1 {
+            let head = slice(p, 0, 1)
+            if head == "@" {
+                m["rate"] = slice(p, 1, len(p))
+            } else if head == "#" {
+                m["tags"] = parse_tags_str(slice(p, 1, len(p)))
+            }
+        }
+        i = i + 1
+    }
+    return m
+}
+
+fn main() {
+    print("=== LATERALUS STDLIB STATSD TUTORIAL ===")
+
+    // -- Step 1: builders -------------------------------------------------------
+    print("STEP 1 builders:")
+    print("  counter=" + counter("http.requests", 5, "0.5", [["env", "prod"], ["region", "us"]]))
+    print("  gauge=" + gauge("cpu.load", "0.75", []))
+    print("  gauge_delta=" + gauge_delta("queue.depth", "+3", [["queue", "jobs"]]))
+    print("  timer=" + timer("db.query", "12.5", "", []))
+    print("  histogram=" + histogram("resp.size", "2048", "1.0", [["ep", "api"]]))
+    print("  distribution=" + distribution("latency", "42", "", []))
+    print("  set=" + set_metric("users.online", "user42", [["dc", "east"]]))
+
+    // -- Step 2: parse_line round-trips -------------------------------------------
+    print("STEP 2 parse:")
+    let line1 = counter("http.requests", 5, "0.5", [["env", "prod"]])
+    let p1 = parse_line(line1)
+    print("  name=" + str(p1["name"]))
+    print("  value=" + str(p1["value"]))
+    print("  kind=" + str(p1["kind"]))
+    print("  rate=" + str(p1["rate"]))
+    print("  tags=" + str(p1["tags"]))
+
+    let line2 = "queue.depth:+3|g|#queue:jobs,dc:east"
+    let p2 = parse_line(line2)
+    print("  p2=" + str(p2["name"]) + " " + str(p2["value"]) + " " + str(p2["kind"]))
+    print("  p2_tags=" + str(p2["tags"]))
+
+    let line3 = "jobs.completed:10|c|@0.1"
+    let p3 = parse_line(line3)
+    print("  p3_rate=" + str(p3["rate"]) + " kind=" + str(p3["kind"]))
+
+    // -- Step 3: edge cases ----------------------------------------------------------
+    print("STEP 3 edges:")
+    print("  notags=" + counter("plain", 1, "", []))
+    print("  bare_tag=" + gauge("m", "1", [["solo", ""]]))
+    print("  bad_line=" + str(parse_line("no_colon_here")))
+    print("  one_field=" + str(parse_line("name:val")))
+
+    print("PINNED_VECTORS: counter_tags gauge_delta timer_ms "
+        + "parse_rt rate_tags badline_nil")
+    print("  OK examples/statsd_tutorial.ltl")
+    return 0
+}
