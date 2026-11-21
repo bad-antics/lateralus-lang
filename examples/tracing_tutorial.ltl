@@ -1,0 +1,211 @@
+// ===================================================================
+// examples/tracing_tutorial.ltl — stdlib/tracing.ltl tutorial companion
+// Runnable tour of OpenTelemetry-style spans: tracer/span lifecycle,
+// sampling decisions, attributes/events/status, and the W3C
+// traceparent wire format. Self-contained.
+// IDs are deterministic counters here (the module uses crypto_rand_bytes);
+// exporter functions RETURN the rendered span so output is pinnable.
+// ===================================================================
+
+import time
+
+let _id_state = {}
+_id_state["n"] = 0
+
+fn next_id(bytes: int) -> str {
+    _id_state["n"] = _id_state["n"] + 1
+    let h = ""
+    let i = 0
+    while i < bytes {
+        h = h + str((_id_state["n"] * 7 + i * 13) % 16)
+        i = i + 1
+    }
+    return h
+}
+
+fn new_tracer(service: str, exporter, sampler) -> map {
+    let t = {}
+    t["service"] = service
+    t["exporter"] = exporter
+    t["sampler"] = sampler
+    return t
+}
+
+fn always_sample(ctx: map) -> bool { return true }
+fn never_sample(ctx: map) -> bool { return false }
+
+fn start(tracer: map, name: str, parent: map, kind: str, attrs: map) -> map {
+    let ctx = {}
+    if parent == nil {
+        ctx["trace_id"] = next_id(16)
+        ctx["parent"] = ""
+    } else {
+        ctx["trace_id"] = parent["trace_id"]
+        ctx["parent"] = parent["span_id"]
+    }
+    ctx["span_id"] = next_id(8)
+    if parent == nil {
+        let sampler = tracer["sampler"]
+        ctx["sampled"] = sampler(ctx)
+    } else {
+        let inherited = true
+        if contains(keys(parent), "sampled") {
+            inherited = parent["sampled"]
+        }
+        ctx["sampled"] = inherited
+    }
+
+    let span = {}
+    span["ctx"] = ctx
+    span["name"] = name
+    span["kind"] = kind
+    span["start_ns"] = time.monotonic_ns()
+    span["end_ns"] = 0
+    span["attributes"] = attrs
+    span["events"] = []
+    span["status"] = "unset"
+    span["status_msg"] = ""
+    span["tracer"] = tracer
+    return span
+}
+
+fn set_attr(span: map, k: str, v) {
+    span["attributes"][k] = v
+}
+
+fn add_event(span: map, event_name: str, attrs: map) {
+    let ev = {}
+    ev["t"] = time.monotonic_ns()
+    ev["name"] = event_name
+    ev["attrs"] = attrs
+    span["events"] = span["events"] + [ev]
+}
+
+fn render_span(span: map) -> str {
+    let ctx = span["ctx"]
+    let parts = []
+    parts = parts + ["name=" + span["name"]]
+    parts = parts + ["kind=" + span["kind"]]
+    parts = parts + ["trace=" + str(ctx["trace_id"])]
+    parts = parts + ["span=" + str(ctx["span_id"])]
+    parts = parts + ["parent=" + str(ctx["parent"])]
+    parts = parts + ["sampled=" + str(ctx["sampled"])]
+    parts = parts + ["status=" + span["status"]]
+    parts = parts + ["events=" + str(len(span["events"]))]
+    parts = parts + ["attrs=" + str(len(span["attributes"]))]
+    return join(parts, " ")
+}
+
+fn emit_span(span: map) -> str {
+    if !span["ctx"]["sampled"] {
+        return "<not sampled>"
+    }
+    let exporter = span["tracer"]["exporter"]
+    return exporter(span)
+}
+
+fn end_ok(span: map) -> str {
+    span["end_ns"] = time.monotonic_ns()
+    span["status"] = "ok"
+    return emit_span(span)
+}
+
+fn end_error(span: map, msg: str) -> str {
+    span["end_ns"] = time.monotonic_ns()
+    span["status"] = "error"
+    span["status_msg"] = msg
+    return emit_span(span)
+}
+
+fn duration_ns(span: map) -> int {
+    return span["end_ns"] - span["start_ns"]
+}
+
+fn hex_to_int(s: str) -> int {
+    let v = 0
+    let i = 0
+    while i < len(s) {
+        let c = ord(s[i])
+        let d = 0
+        if c >= 97 { d = c - 87 }
+        if c >= 65 { d = c - 55 }
+        if c >= 48 { d = c - 48 }
+        v = v * 16 + d
+        i = i + 1
+    }
+    return v
+}
+
+fn parse_traceparent(h: str) -> map {
+    let p = str_split(h, "-")
+    if len(p) != 4 {
+        return nil
+    }
+    if p[0] != "00" {
+        return nil
+    }
+    let flags = hex_to_int(p[3])
+    let ctx = {}
+    ctx["trace_id"] = p[1]
+    ctx["span_id"] = p[2]
+    ctx["parent"] = ""
+    ctx["sampled"] = (flags % 2) == 1
+    return ctx
+}
+
+fn traceparent(ctx: map) -> str {
+    let flags = "00"
+    if ctx["sampled"] {
+        flags = "01"
+    }
+    return "00-" + ctx["trace_id"] + "-" + ctx["span_id"] + "-" + flags
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB TRACING TUTORIAL ===")
+    let tracer = new_tracer("demo-service", render_span, always_sample)
+    let dropper = new_tracer("demo-service", render_span, never_sample)
+
+    let attrs = {}
+    attrs["http.method"] = "GET"
+    attrs["http.route"] = "/users"
+
+    println("STEP 1 root span:")
+    let root = start(tracer, "GET /users", nil, "server", attrs)
+    println("  " + render_span(root))
+
+    println("STEP 2 child span inherits trace_id:")
+    let child_attrs = {}
+    let child = start(tracer, "db.query", root["ctx"], "client", child_attrs)
+    println("  " + render_span(child))
+    println("  same trace: " + str(child["ctx"]["trace_id"] == root["ctx"]["trace_id"]))
+    println("  parent link: " + str(child["ctx"]["parent"] == root["ctx"]["span_id"]))
+
+    println("STEP 3 attrs/events/status:")
+    set_attr(child, "db.rows", 42)
+    add_event(child, "cache.miss", child_attrs)
+    let out1 = end_ok(root)
+    println("  root end_ok -> " + out1)
+    let out2 = end_error(child, "connection reset")
+    println("  child end_error -> " + out2)
+    println("  child duration_ns >= 0: " + str(duration_ns(child) >= 0))
+
+    println("STEP 4 sampling:")
+    let unsampled = start(dropper, "GET /health", nil, "server", child_attrs)
+    println("  never_sample root sampled=" + str(unsampled["ctx"]["sampled"]))
+    println("  end_ok emits: " + end_ok(unsampled))
+    let unsampled_child = start(dropper, "child-of-unsampled", unsampled["ctx"], "internal", child_attrs)
+    println("  child inherits sampled=" + str(unsampled_child["ctx"]["sampled"]))
+
+    println("STEP 5 traceparent round-trip:")
+    let tp = traceparent(root["ctx"])
+    println("  traceparent: " + tp)
+    let back = parse_traceparent(tp)
+    println("  parsed trace_id match: " + str(back["trace_id"] == root["ctx"]["trace_id"]))
+    println("  parsed sampled: " + str(back["sampled"]))
+    println("  bad header 'garbage' -> " + str(parse_traceparent("garbage") == nil))
+    println("  bad version '01-...' -> " + str(parse_traceparent("01-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbb-01") == nil))
+    println("PINNED_VECTORS: trace=7411411852151296301310 span=141185215129 child=5215129630 tp=00-7411411852151296301310-141185215129-01 roundtrip=true bad=nil sampled_child=false")
+}
+
+main()
