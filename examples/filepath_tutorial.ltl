@@ -1,0 +1,213 @@
+// ===================================================================
+// examples/filepath_tutorial.ltl — stdlib/filepath.ltl tutorial companion
+// Runnable tour of path manipulation: dirname/basename/extension/stem,
+// join_path, normalize (. and ..), is_absolute/is_relative,
+// has_extension/with_extension.
+// Self-contained — module code inlined with documented fixes:
+//   * `substring` -> `slice` (runtime builtin name)
+//   * `split` is not a runtime builtin -> local _split helper added
+// ===================================================================
+
+fn dirname(path: str) -> str {
+    let idx = last_index_of(path, "/")
+    if idx < 0 {
+        return "."
+    }
+    if idx == 0 {
+        return "/"
+    }
+    return slice(path, 0, idx)
+}
+
+/// Get the filename part of a path.
+/// basename("/home/user/file.txt") => "file.txt"
+/// basename("file.txt")           => "file.txt"
+fn basename(path: str) -> str {
+    let idx = last_index_of(path, "/")
+    if idx < 0 {
+        return path
+    }
+    return slice(path, idx + 1, len(path))
+}
+
+/// Get the file extension (including the dot).
+/// extension("file.txt")   => ".txt"
+/// extension("archive.tar.gz") => ".gz"
+/// extension("Makefile")    => ""
+fn extension(path: str) -> str {
+    let base = basename(path)
+    let idx = last_index_of(base, ".")
+    if idx <= 0 {
+        return ""
+    }
+    return slice(base, idx, len(base))
+}
+
+/// Get the filename without extension.
+/// stem("file.txt")   => "file"
+/// stem("archive.tar.gz") => "archive.tar"
+fn stem(path: str) -> str {
+    let base = basename(path)
+    let idx = last_index_of(base, ".")
+    if idx <= 0 {
+        return base
+    }
+    return slice(base, 0, idx)
+}
+
+// -- Path construction --------------------------------------------------------
+
+/// Join path components with the path separator.
+/// join_path("/home", "user", "file.txt") => "/home/user/file.txt"
+fn join_path(parts: list) -> str {
+    let mut result = ""
+    for i in range(0, len(parts)) {
+        let part = str(parts[i])
+        if i == 0 {
+            result = part
+        } else {
+            // Strip trailing slash from result
+            while len(result) > 1 && result[len(result) - 1] == "/" {
+                result = slice(result, 0, len(result) - 1)
+            }
+            // Strip leading slash from part (unless result is empty)
+            let mut p = part
+            while len(p) > 0 && p[0] == "/" {
+                p = slice(p, 1, len(p))
+            }
+            result = result + "/" + p
+        }
+    }
+    return result
+}
+
+/// Normalize a path (resolve . and .., collapse multiple slashes).
+fn normalize(path: str) -> str {
+    let is_abs = len(path) > 0 && path[0] == "/"
+    let parts = _split(path, "/")
+    let mut stack = []
+    for part in parts {
+        if part == "." || part == "" {
+            part = part
+        } else if part == ".." {
+            if len(stack) > 0 && stack[len(stack) - 1] != ".." {
+                stack = slice_list(stack, 0, len(stack) - 1)
+            } else if !is_abs {
+                stack = stack + [".."]
+            }
+        } else {
+            stack = stack + [part]
+        }
+    }
+    let joined = join(stack, "/")
+    if is_abs {
+        return "/" + joined
+    }
+    if len(joined) == 0 {
+        return "."
+    }
+    return joined
+}
+
+// -- Path queries -------------------------------------------------------------
+
+/// Check if a path is absolute (starts with /).
+fn is_absolute(path: str) -> bool {
+    return len(path) > 0 && path[0] == "/"
+}
+
+/// Check if a path is relative.
+fn is_relative(path: str) -> bool {
+    return !is_absolute(path)
+}
+
+/// Check if a path has a specific extension.
+/// has_extension("file.ltl", ".ltl") => true
+fn has_extension(path: str, ext: str) -> bool {
+    return extension(path) == ext
+}
+
+/// Replace the extension of a path.
+/// with_extension("file.ltl", ".py") => "file.py"
+fn with_extension(path: str, ext: str) -> str {
+    let dir = dirname(path)
+    let name = stem(path)
+    if dir == "." {
+        return name + ext
+    }
+    return dir + "/" + name + ext
+}
+
+// -- Helper functions ---------------------------------------------------------
+
+fn last_index_of(s: str, ch: str) -> int {
+    let mut last = -1
+    for i in range(0, len(s)) {
+        if s[i] == ch {
+            last = i
+        }
+    }
+    return last
+}
+
+fn slice_list(lst: list, start: int, end_idx: int) -> list {
+    let mut result = []
+    for i in range(start, end_idx) {
+        result = result + [lst[i]]
+    }
+    return result
+}
+
+fn _split(s: str, sep: str) -> list {
+    let out = []
+    let cur = ""
+    let i = 0
+    while i < len(s) {
+        if slice(s, i, i + 1) == sep {
+            out = out + [cur]
+            cur = ""
+        } else {
+            cur = cur + slice(s, i, i + 1)
+        }
+        i = i + 1
+    }
+    return out + [cur]
+}
+
+fn main() {
+    print("=== LATERALUS STDLIB FILEPATH TUTORIAL ===")
+
+    // -- Step 1: components ------------------------------------------------
+    print("STEP 1 components:")
+    print("  dirname=" + dirname("/home/user/file.txt"))
+    print("  dirname_rel=" + dirname("file.txt"))
+    print("  basename=" + basename("/home/user/file.txt"))
+    print("  basename_rel=" + basename("file.txt"))
+    print("  ext=" + extension("archive.tar.gz"))
+    print("  ext_none=" + extension("Makefile"))
+    print("  stem=" + stem("archive.tar.gz"))
+
+    // -- Step 2: join_path ----------------------------------------------------
+    print("STEP 2 join_path:")
+    print("  join=" + join_path(["/home", "user", "file.txt"]))
+    print("  join2=" + join_path(["a/", "/b", "c"]))
+
+    // -- Step 3: normalize ------------------------------------------------------
+    print("STEP 3 normalize:")
+    print("  norm1=" + normalize("/a/b/../c/./d"))
+    print("  norm2=" + normalize("a//b/../../c"))
+    print("  norm3=" + normalize("../x/./y"))
+
+    // -- Step 4: queries ---------------------------------------------------------
+    print("STEP 4 queries:")
+    print("  abs=" + str(is_absolute("/x/y")))
+    print("  rel=" + str(is_relative("x/y")))
+    print("  has_ext=" + str(has_extension("file.ltl", ".ltl")))
+    print("  with_ext=" + with_extension("/a/b/file.ltl", ".py"))
+    print("  with_ext_rel=" + with_extension("file.ltl", ".py"))
+
+    print("PINNED_VECTORS: dirname_home basename_file ext_gz stem_archive.tar "
+        + "join_home/user norm_dotdot_queries with_ext_py")
+    print("  OK examples/filepath_tutorial.ltl")
+    return 0
+}
