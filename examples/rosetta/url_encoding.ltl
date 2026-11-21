@@ -1,0 +1,75 @@
+// Rosetta Code · URL encoding · Lateralus
+// https://rosettacode.org/wiki/URL_encoding
+//
+// Percent-encode every byte that is not alphanumeric. Characters are first
+// encoded as UTF-8, so non-ASCII text becomes one %XX escape per byte.
+// The task's optional variants are supported by passing extra characters
+// that must be left alone (RFC 3986 unreserved: "-._~").
+
+let HEX = "0123456789ABCDEF"
+
+fn utf8_bytes(s: str) -> list {
+    let out = []
+    let i = 0
+    while i < len(s) {
+        let cp = ord(slice(s, i, i + 1))
+        if cp < 0x80 {
+            out = out + [cp]
+        } else if cp < 0x800 {
+            out = out + [0xC0 | (cp >> 6), 0x80 | (cp & 0x3F)]
+        } else if cp < 0x10000 {
+            out = out + [0xE0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F)]
+        } else {
+            out = out + [0xF0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3F),
+                         0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F)]
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn is_alnum(b: int) -> bool {
+    return (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122)
+}
+
+fn url_encode_keep(s: str, keep: str) -> str {
+    let bytes = utf8_bytes(s)
+    let out = ""
+    let i = 0
+    while i < len(bytes) {
+        let b = bytes[i]
+        if is_alnum(b) || (b < 128 && str_contains(keep, chr(b))) {
+            out = out + chr(b)
+        } else {
+            out = out + "%" + slice(HEX, b >> 4, (b >> 4) + 1) + slice(HEX, b & 15, (b & 15) + 1)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn url_encode(s: str) -> str {
+    return url_encode_keep(s, "")
+}
+
+fn main() {
+    // The Rosetta task example.
+    let got = url_encode("http://foo bar/")
+    print("http://foo bar/  ->  " + got)
+    assert_eq(got, "http%3A%2F%2Ffoo%20bar%2F")
+
+    // RFC 3986 variant: unreserved punctuation is left as-is.
+    let rfc = url_encode_keep("a-b_c.d~e f", "-._~")
+    print("RFC 3986 variant ->  " + rfc)
+    assert_eq(rfc, "a-b_c.d~e%20f")
+
+    // UTF-8 input: e-acute is 2 bytes, the euro sign is 3 bytes.
+    let utf = url_encode("caf" + chr(0xE9) + " " + chr(0x20AC))
+    print("UTF-8 input      ->  " + utf)
+    assert_eq(utf, "caf%C3%A9%20%E2%82%AC")
+
+    // Pure alphanumerics pass through untouched.
+    assert_eq(url_encode("Lateralus2024"), "Lateralus2024")
+}
+
+main()

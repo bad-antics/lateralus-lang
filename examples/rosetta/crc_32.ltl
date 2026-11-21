@@ -1,0 +1,93 @@
+// Rosetta Code · CRC-32 · Lateralus
+// https://rosettacode.org/wiki/CRC-32
+//
+// IEEE 802.3 / zlib CRC-32: reflected polynomial 0xEDB88320, initial value
+// and final XOR of 0xFFFFFFFF. A 256-entry table is built once and the
+// message is processed one byte at a time.
+
+let MASK32 = 0xFFFFFFFF
+let POLY = 0xEDB88320
+let HEX = "0123456789ABCDEF"
+
+fn make_table() -> list {
+    let table = []
+    let n = 0
+    while n < 256 {
+        let c = n
+        let k = 0
+        while k < 8 {
+            if (c & 1) == 1 { c = POLY ^ (c >> 1) }
+            else            { c = c >> 1 }
+            k = k + 1
+        }
+        table = table + [c]
+        n = n + 1
+    }
+    return table
+}
+
+let CRC_TABLE = make_table()
+
+fn utf8_bytes(s: str) -> list {
+    let out = []
+    let i = 0
+    while i < len(s) {
+        let cp = ord(slice(s, i, i + 1))
+        if cp < 0x80 {
+            out = out + [cp]
+        } else if cp < 0x800 {
+            out = out + [0xC0 | (cp >> 6), 0x80 | (cp & 0x3F)]
+        } else if cp < 0x10000 {
+            out = out + [0xE0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F)]
+        } else {
+            out = out + [0xF0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3F),
+                         0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F)]
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn crc32_bytes(data: list) -> int {
+    let crc = MASK32
+    let i = 0
+    while i < len(data) {
+        crc = CRC_TABLE[(crc ^ data[i]) & 0xFF] ^ (crc >> 8)
+        i = i + 1
+    }
+    return crc ^ MASK32
+}
+
+fn crc32(s: str) -> int {
+    return crc32_bytes(utf8_bytes(s))
+}
+
+fn hex_word(w: int) -> str {
+    let out = ""
+    let shift = 28
+    while shift >= 0 {
+        let nib = (w >> shift) & 15
+        out = out + slice(HEX, nib, nib + 1)
+        shift = shift - 4
+    }
+    return out
+}
+
+fn main() {
+    // The Rosetta task string, the CRC catalogue "check" input 123456789,
+    // and the empty message.
+    let cases = [
+        ["The quick brown fox jumps over the lazy dog", "414FA339"],
+        ["123456789", "CBF43926"],
+        ["", "00000000"]
+    ]
+    let i = 0
+    while i < len(cases) {
+        let got = hex_word(crc32(cases[i][0]))
+        print(got + "  \"" + cases[i][0] + "\"")
+        assert_eq(got, cases[i][1])
+        i = i + 1
+    }
+}
+
+main()

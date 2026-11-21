@@ -1,0 +1,142 @@
+// Rosetta Code · MD4 · Lateralus
+// https://rosettacode.org/wiki/MD4
+//
+// From-scratch RFC 1320 message digest: three rounds of 16 operations over
+// little-endian 32-bit words. Many crypto libraries have dropped MD4, which
+// is exactly why a self-contained implementation is useful.
+
+let MASK32 = 0xFFFFFFFF
+let HEX = "0123456789abcdef"
+
+// Word order and rotation amounts for rounds 2 and 3.
+let R2_ORDER = [0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15]
+let R3_ORDER = [0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15]
+let R1_SHIFT = [3, 7, 11, 19]
+let R2_SHIFT = [3, 5, 9, 13]
+let R3_SHIFT = [3, 9, 11, 15]
+
+fn utf8_bytes(s: str) -> list {
+    let out = []
+    let i = 0
+    while i < len(s) {
+        let cp = ord(slice(s, i, i + 1))
+        if cp < 0x80 {
+            out = out + [cp]
+        } else if cp < 0x800 {
+            out = out + [0xC0 | (cp >> 6), 0x80 | (cp & 0x3F)]
+        } else if cp < 0x10000 {
+            out = out + [0xE0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F)]
+        } else {
+            out = out + [0xF0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3F),
+                         0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F)]
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn rotl(x: int, n: int) -> int {
+    x = x & MASK32
+    return ((x << n) | (x >> (32 - n))) & MASK32
+}
+
+fn hex_byte(b: int) -> str {
+    return slice(HEX, b >> 4, (b >> 4) + 1) + slice(HEX, b & 15, (b & 15) + 1)
+}
+
+fn md4_bytes(msg: list) -> str {
+    let bit_len = len(msg) * 8
+    let data = msg + [0x80]
+    while len(data) % 64 != 56 { data = data + [0] }
+    let i = 0
+    while i < 8 {
+        data = data + [(bit_len >> (8 * i)) & 0xFF]
+        i = i + 1
+    }
+
+    // State lives in a list so the round loops can rotate it uniformly:
+    // h[0..3] = A, B, C, D.
+    let h = [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476]
+
+    let off = 0
+    while off < len(data) {
+        let x = []
+        let w = 0
+        while w < 16 {
+            let p = off + 4 * w
+            x = x + [data[p] | (data[p + 1] << 8) | (data[p + 2] << 16) | (data[p + 3] << 24)]
+            w = w + 1
+        }
+
+        let v = [h[0], h[1], h[2], h[3]]
+        let j = 0
+        while j < 48 {
+            // Step j updates register (4 - j % 4) % 4, i.e. A, D, C, B, A, ...
+            let ia = (4 - j % 4) % 4
+            let ib = (ia + 1) % 4
+            let ic = (ia + 2) % 4
+            let id = (ia + 3) % 4
+            let b = v[ib]
+            let c = v[ic]
+            let d = v[id]
+            let t = 0
+            if j < 16 {
+                t = v[ia] + ((b & c) | ((~b) & d)) + x[j]
+                v[ia] = rotl(t, R1_SHIFT[j % 4])
+            } else if j < 32 {
+                t = v[ia] + ((b & c) | (b & d) | (c & d)) + x[R2_ORDER[j - 16]] + 0x5A827999
+                v[ia] = rotl(t, R2_SHIFT[j % 4])
+            } else {
+                t = v[ia] + (b ^ c ^ d) + x[R3_ORDER[j - 32]] + 0x6ED9EBA1
+                v[ia] = rotl(t, R3_SHIFT[j % 4])
+            }
+            j = j + 1
+        }
+
+        let k = 0
+        while k < 4 {
+            h[k] = (h[k] + v[k]) & MASK32
+            k = k + 1
+        }
+        off = off + 64
+    }
+
+    let out = ""
+    let k = 0
+    while k < 4 {
+        let s = 0
+        while s < 4 {
+            out = out + hex_byte((h[k] >> (8 * s)) & 0xFF)
+            s = s + 1
+        }
+        k = k + 1
+    }
+    return out
+}
+
+fn md4(s: str) -> str {
+    return md4_bytes(utf8_bytes(s))
+}
+
+fn main() {
+    // Rosetta task string, then the RFC 1320 appendix A.5 suite.
+    let cases = [
+        ["Rosetta Code", "a52bcfc6a0d0d300cdc5ddbfbefe478b"],
+        ["", "31d6cfe0d16ae931b73c59d7e0c089c0"],
+        ["a", "bde52cb31de33e46245e05fbdbd6fb24"],
+        ["abc", "a448017aaf21d8525fc10ae87aa6729d"],
+        ["message digest", "d9130a8164549fe818874806e1c7014b"],
+        ["abcdefghijklmnopqrstuvwxyz", "d79e1c308aa5bbcdeea8ed63df412da9"],
+        ["12345678901234567890123456789012345678901234567890123456789012345678901234567890",
+         "e33b4ddc9c38f2199c3e7b164fcc0536"]
+    ]
+    let i = 0
+    while i < len(cases) {
+        let got = md4(cases[i][0])
+        print(got + "  \"" + cases[i][0] + "\"")
+        assert_eq(got, cases[i][1])
+        i = i + 1
+    }
+}
+
+main()
