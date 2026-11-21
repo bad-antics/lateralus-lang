@@ -59,6 +59,10 @@ pub fn off_all(emitter: map, event: str) -> map {
 /// Fire an event, calling all registered handlers with the given data.
 /// One-shot handlers are removed after firing.
 /// Returns the updated emitter.
+// FIX: typeof() returns the Python class repr (e.g. <class 'list'>),
+// never the string "list" — the once-handler check never matched, so
+// one-shot handlers fell through to h(data) and crashed.  Compares
+// against typeof([]) instead.
 pub fn fire(emitter: map, event: str, data) -> map {
     if !contains(keys(emitter), event) {
         return emitter
@@ -66,7 +70,7 @@ pub fn fire(emitter: map, event: str, data) -> map {
     let handlers = emitter[event]
     let keep = []
     for h in handlers {
-        if typeof(h) == "list" && len(h) == 2 && h[0] == "once" {
+        if typeof(h) == typeof([]) && len(h) == 2 && h[0] == "once" {
             // One-shot handler: fire and discard
             h[1](data)
         } else {
@@ -86,9 +90,14 @@ pub fn fire_empty(emitter: map, event: str) -> map {
 
 // -- Inspection ------------------------------------------------------
 
-/// List all registered event names.
+/// List all registered event names (events with zero handlers are
+/// omitted — off()/off_all() leave an empty list under the key).
 pub fn event_names(emitter: map) -> list {
-    return keys(emitter)
+    let out = []
+    for name in keys(emitter) {
+        if len(emitter[name]) > 0 { out = out + [name] }
+    }
+    return out
 }
 
 /// Count handlers registered for an event.
