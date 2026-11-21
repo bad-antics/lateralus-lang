@@ -260,7 +260,9 @@ const __ltl = {
   replace:  (s, pat, rep) => s.replace(new RegExp(pat, 'g'), rep),
   starts_with: (s, p) => s.startsWith(p),
   ends_with:   (s, p) => s.endsWith(p),
-  contains:    (s, p) => s.includes(p),
+  contains:    (collection, item) => typeof collection === 'string' || Array.isArray(collection)
+    ? collection.includes(item)
+    : Object.hasOwn(collection, item),
   pad_left:    (s, n, c = ' ') => s.padStart(n, c),
   pad_right:   (s, n, c = ' ') => s.padEnd(n, c),
 
