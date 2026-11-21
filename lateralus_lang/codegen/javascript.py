@@ -194,6 +194,9 @@ const __ltl = {
   // probe — log and return
   probe: (label, val) => { console.log(`[probe:${label}]`, val); return val; },
 
+  // Division matching VM Op.DIV: int/int -> floor, else true division
+  div: (a, b) => (Number.isInteger(a) && Number.isInteger(b)) ? Math.floor(a / b) : a / b,
+
   // measure — time a thunk
   measure: async (name, fn) => {
     const t0 = performance.now();
@@ -412,6 +415,9 @@ class JavaScriptTranspiler:
             if op in ("..", "..="):
                 incl = "true" if op == "..=" else "false"
                 return f"__ltl.range({left}, {right})"
+            # Division needs runtime dispatch (int/int floors, else true div)
+            if op == "/":
+                return f"__ltl.div({left}, {right})"
             # Map to JS ops
             js_op = BINARY_OPS.get(op, op)
             if op == "and":
@@ -842,7 +848,10 @@ class JavaScriptTranspiler:
         target = self._expr(node.target)
         op = node.op or "="
         val = self._expr(node.value)
-        self._buf.write(f"{target} {op} {val};")
+        if op == "/=":
+            self._buf.write(f"{target} = __ltl.div({target}, {val});")
+        else:
+            self._buf.write(f"{target} {op} {val};")
 
     # -- Visitor: ReturnStmt ---------------------------------------------
 
