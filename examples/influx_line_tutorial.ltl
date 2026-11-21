@@ -1,0 +1,207 @@
+// ===================================================================
+// examples/influx_line_tutorial.ltl
+// Tutorial demonstration for stdlib.influx_line
+// ===================================================================
+
+fn char_at(s: str, i: int) -> str { return slice(s, i, i + 1) }
+fn index_of(s: str, sub: str) -> int { return s.find(sub) }
+fn try_int(s: str, d: int) -> int { return to_int(s) }
+
+fn escape_ident(s: str) -> str {
+    let out = ""
+    let i = 0
+    while i < len(s) {
+        let c = char_at(s, i)
+        if c == "," || c == "=" || c == " " {
+            out = out + "\\" + c
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn escape_measurement(s: str) -> str {
+    let out = ""
+    let i = 0
+    while i < len(s) {
+        let c = char_at(s, i)
+        if c == "," || c == " " { out = out + "\\" + c }
+        else                    { out = out + c }
+        i = i + 1
+    }
+    return out
+}
+
+fn escape_string_field(s: str) -> str {
+    let out = ""
+    let i = 0
+    while i < len(s) {
+        let c = char_at(s, i)
+        if c == "\"" || c == "\\" { out = out + "\\" + c }
+        else                      { out = out + c }
+        i = i + 1
+    }
+    return out
+}
+
+fn field_string(v: str) -> str { return "\"" + escape_string_field(v) + "\"" }
+fn field_int(v: int) -> str { return str(v) + "i" }
+fn field_float(v: str) -> str { return v }
+fn field_bool(v: bool) -> str {
+    if v { return "true" }
+    return "false"
+}
+
+fn line(measurement: str, tags: list, fields: list, timestamp_ns: int) -> str {
+    let out = escape_measurement(measurement)
+    let i = 0
+    while i < len(tags) {
+        let t = tags[i]
+        out = out + "," + escape_ident(t[0]) + "=" + escape_ident(t[1])
+        i = i + 1
+    }
+    out = out + " "
+    let j = 0
+    while j < len(fields) {
+        let f = fields[j]
+        if j > 0 { out = out + "," }
+        out = out + escape_ident(f[0]) + "=" + f[1]
+        j = j + 1
+    }
+    if timestamp_ns > 0 {
+        out = out + " " + str(timestamp_ns)
+    }
+    return out
+}
+
+fn scan_unescaped(s: str, start: int, stops: str) -> int {
+    let n = len(s)
+    let i = start
+    while i < n {
+        let c = char_at(s, i)
+        if c == "\\" && i + 1 < n { i = i + 2 }
+        else if index_of(stops, c) >= 0 { return i }
+        else { i = i + 1 }
+    }
+    return n
+}
+
+fn unescape_simple(s: str) -> str {
+    let out = ""
+    let i = 0
+    let n = len(s)
+    while i < n {
+        let c = char_at(s, i)
+        if c == "\\" && i + 1 < n {
+            out = out + char_at(s, i + 1)
+            i = i + 2
+        } else {
+            out = out + c
+            i = i + 1
+        }
+    }
+    return out
+}
+
+fn parse_line(line_str: str) -> map {
+    let n = len(line_str)
+    let m_end = scan_unescaped(line_str, 0, ", ")
+    if m_end >= n { return nil }
+    let measurement = unescape_simple(slice(line_str, 0, m_end))
+    let i = m_end
+    let tags = []
+    while i < n && char_at(line_str, i) == "," {
+        i = i + 1
+        let k_end = scan_unescaped(line_str, i, "=")
+        if k_end >= n { return nil }
+        let k = unescape_simple(slice(line_str, i, k_end))
+        i = k_end + 1
+        let v_end = scan_unescaped(line_str, i, ", ")
+        let v = unescape_simple(slice(line_str, i, v_end))
+        tags = tags + [[k, v]]
+        i = v_end
+    }
+    if i >= n || char_at(line_str, i) != " " { return nil }
+    i = i + 1
+    let fields = []
+    let parsing = true
+    while parsing {
+        let k_end = scan_unescaped(line_str, i, "=")
+        if k_end >= n { return nil }
+        let k = unescape_simple(slice(line_str, i, k_end))
+        i = k_end + 1
+        let v = ""
+        if i < n && char_at(line_str, i) == "\"" {
+            let j = i + 1
+            while j < n {
+                let c = char_at(line_str, j)
+                if c == "\\" && j + 1 < n { j = j + 2 }
+                else if c == "\"" { j = j + 1; break }
+                else { j = j + 1 }
+            }
+            v = slice(line_str, i, j)
+            i = j
+        } else {
+            let v_end = scan_unescaped(line_str, i, ", ")
+            v = slice(line_str, i, v_end)
+            i = v_end
+        }
+        fields = fields + [[k, v]]
+        if i < n && char_at(line_str, i) == "," { i = i + 1 }
+        else { parsing = false }
+    }
+    let ts = 0
+    if i < n && char_at(line_str, i) == " " {
+        ts = try_int(slice(line_str, i + 1, n), 0)
+    }
+    let out = {}
+    out["measurement"] = measurement
+    out["tags"]        = tags
+    out["fields"]      = fields
+    out["timestamp"]   = ts
+    return out
+}
+
+fn build_sample_line() -> str {
+    let tags = [["region", "north bay"], ["sensor_id", "temp_01"]]
+    let fields = [
+        ["temperature", field_float("23.5")],
+        ["error_count", field_int(3)],
+        ["status", field_string("ok")],
+        ["active", field_bool(true)]
+    ]
+    return line("weather sensor", tags, fields, 1700000000000000000)
+}
+
+fn build_no_timestamp_line() -> str {
+    let tags = [["region", "north bay"]]
+    let fields = [["count", field_int(3)]]
+    return line("sensor", tags, fields, 0)
+}
+
+fn main() {
+    print("=== LATERALUS STDLIB INFLUX_LINE TUTORIAL ===")
+    
+    // 1. Full metric with multiple tags and diverse field types
+    let full_metric = build_sample_line()
+    print("STEP 1: Serialized full sensor metric with nanosecond timestamp:")
+    print(full_metric)
+
+    // 2. Metric omitting timestamp
+    let no_ts_metric = build_no_timestamp_line()
+    print("STEP 2: Serialized metric omitting timestamp (server arrival):")
+    print(no_ts_metric)
+
+    // 3. Parse serialized line back into structured map
+    let parsed = parse_line(full_metric)
+    print("STEP 3: Deserialized measurement: " + parsed["measurement"])
+    print("STEP 3: Deserialized timestamp: " + str(parsed["timestamp"]))
+
+    // Pinned verification line
+    print("PINNED_VECTORS: measurement=" + parsed["measurement"] + " ts=" + str(parsed["timestamp"]))
+}
+
+main()
+
