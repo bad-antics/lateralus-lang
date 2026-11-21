@@ -1,0 +1,229 @@
+// ===================================================================
+// examples/resp_tutorial.ltl — stdlib/resp.ltl tutorial companion
+// Runnable tour of the Redis Serialization Protocol codec: RESP2/RESP3
+// type tags, command encoding, and the incremental offset parser.
+// Self-contained. char_at/try_int replaced by s[i] and a local try_int.
+// ===================================================================
+
+fn crlf() -> str { return "\r\n" }
+
+fn enc_simple_string(s: str) -> str { return "+" + s + crlf() }
+fn enc_error(s: str) -> str { return "-" + s + crlf() }
+fn enc_integer(n: int) -> str { return ":" + str(n) + crlf() }
+fn enc_bulk_string(s: str) -> str { return "$" + str(len(s)) + crlf() + s + crlf() }
+fn enc_null_bulk() -> str { return "$-1" + crlf() }
+fn enc_null_array() -> str { return "*-1" + crlf() }
+fn enc_null3() -> str { return "_" + crlf() }
+fn enc_boolean(b: bool) -> str {
+    if b { return "#t" + crlf() }
+    return "#f" + crlf()
+}
+fn enc_double(x: str) -> str { return "," + x + crlf() }
+
+fn enc_command(argv: list) -> str {
+    let out = "*" + str(len(argv)) + crlf()
+    let i = 0
+    while i < len(argv) {
+        out = out + enc_bulk_string(argv[i])
+        i = i + 1
+    }
+    return out
+}
+
+fn try_int(s: str) {
+    if len(s) == 0 { return nil }
+    let i = 0
+    while i < len(s) {
+        let c = s[i]
+        if !(c >= "0" and c <= "9") and !(i == 0 and c == "-") {
+            return nil
+        }
+        i = i + 1
+    }
+    return int(s)
+}
+
+fn read_line(buf: str, i: int, kind: str) -> list {
+    let start = i
+    while i < len(buf) - 1 {
+        if buf[i] == "\r" and buf[i + 1] == "\n" {
+            let payload = slice(buf, start, i)
+            let result = {}
+            result["kind"] = kind
+            result["value"] = payload
+            if kind == "raw" {
+                return [payload, i + 2]
+            }
+            return [result, i + 2]
+        }
+        i = i + 1
+    }
+    return [nil, i]
+}
+
+fn decode_bulk(buf: str, i: int) -> list {
+    let hdr = read_line(buf, i, "raw")
+    if hdr[0] == nil { return [nil, i] }
+    let n = try_int(hdr[0])
+    i = hdr[1]
+    if n < 0 { return [nil, i] }
+    if i + n + 2 > len(buf) { return [nil, i] }
+    let payload = slice(buf, i, i + n)
+    return [payload, i + n + 2]
+}
+
+fn decode_array(buf: str, i: int) -> list {
+    let hdr = read_line(buf, i, "raw")
+    if hdr[0] == nil { return [nil, i] }
+    let n = try_int(hdr[0])
+    i = hdr[1]
+    if n < 0 { return [nil, i] }
+    let items = []
+    let k = 0
+    while k < n {
+        let r = decode(buf, i)
+        items = items + [r[0]]
+        i = r[1]
+        k = k + 1
+    }
+    return [items, i]
+}
+
+fn decode_map(buf: str, i: int) -> list {
+    let hdr = read_line(buf, i, "raw")
+    if hdr[0] == nil { return [nil, i] }
+    let n = try_int(hdr[0])
+    i = hdr[1]
+    let m = {}
+    let k = 0
+    while k < n {
+        let kr = decode(buf, i)
+        i = kr[1]
+        let vr = decode(buf, i)
+        i = vr[1]
+        let key_str = ""
+        if kr[0] != nil {
+            key_str = str(kr[0])
+        }
+        m[key_str] = vr[0]
+        k = k + 1
+    }
+    return [m, i]
+}
+
+fn type_of_simple(v) -> str {
+    if v == nil { return "nil" }
+    let p = v + ""
+    if p == v { return "str" }
+    return "other"
+}
+
+fn decode(buf: str, i: int) -> list {
+    if i >= len(buf) { return [nil, i] }
+    let tag = buf[i]
+    i = i + 1
+    if tag == "+" { return read_line(buf, i, "simple") }
+    if tag == "-" { return read_line(buf, i, "error") }
+    if tag == ":" {
+        let r = read_line(buf, i, "raw")
+        let v = try_int(r[0])
+        return [v, r[1]]
+    }
+    if tag == "$" { return decode_bulk(buf, i) }
+    if tag == "*" { return decode_array(buf, i) }
+    if tag == "_" {
+        let r = read_line(buf, i, "raw")
+        return [nil, r[1]]
+    }
+    if tag == "#" {
+        let r = read_line(buf, i, "raw")
+        return [r[0] == "t", r[1]]
+    }
+    if tag == "," {
+        let r = read_line(buf, i, "raw")
+        return [r[0], r[1]]
+    }
+    if tag == "(" {
+        let r = read_line(buf, i, "raw")
+        return [r[0], r[1]]
+    }
+    if tag == "%" { return decode_map(buf, i) }
+    if tag == "~" { return decode_array(buf, i) }
+    return [nil, i]
+}
+
+fn vis(s: str) -> str {
+    let out = ""
+    let i = 0
+    while i < len(s) {
+        if s[i] == "\r" { out = out + "\\r" }
+        if s[i] == "\n" { out = out + "\\n" }
+        if !(s[i] == "\r" or s[i] == "\n") { out = out + s[i] }
+        i = i + 1
+    }
+    return out
+}
+
+fn show_decode(label: str, buf: str) {
+    let r = decode(buf, 0)
+    let v = r[0]
+    let tag = buf[0]
+    let vs = "nil"
+    if tag == "+" or tag == "-" {
+        vs = str(v["kind"]) + ":" + str(v["value"])
+    }
+    if tag == ":" or tag == "#" or tag == "," or tag == "(" {
+        vs = str(v)
+    }
+    if tag == "$" {
+        vs = str(v)
+    }
+    if tag == "*" or tag == "~" {
+        let parts = []
+        for item in v {
+            parts = parts + [str(item)]
+        }
+        vs = "[" + join(parts, ", ") + "]"
+    }
+    if tag == "%" {
+        vs = str(v)
+    }
+    println("  " + label + " -> " + vs + " next=" + str(r[1]))
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB RESP TUTORIAL ===")
+
+    println("STEP 1 scalar encodings:")
+    println("  simple: " + vis(enc_simple_string("OK")))
+    println("  error:  " + vis(enc_error("ERR unknown command")))
+    println("  int:    " + vis(enc_integer(42)))
+    println("  bulk:   " + vis(enc_bulk_string("hello")))
+    println("  nulls:  " + vis(enc_null_bulk()) + vis(enc_null_array()) + vis(enc_null3()))
+    println("  bool:   " + vis(enc_boolean(true)) + vis(enc_boolean(false)))
+    println("  double: " + vis(enc_double("3.14")))
+
+    println("STEP 2 command encoding:")
+    println("  " + vis(enc_command(["SET", "foo", "bar"])))
+
+    println("STEP 3 decoding scalars:")
+    show_decode("+OK", "+OK\r\n")
+    show_decode("-ERR", "-ERR nope\r\n")
+    show_decode(":42", ":42\r\n")
+    show_decode("$5 hello", "$5\r\nhello\r\n")
+    show_decode("$-1 null", "$-1\r\n")
+    show_decode("_ null3", "_\r\n")
+    show_decode("#t bool", "#t\r\n")
+    show_decode(",3.14 dbl", ",3.14\r\n")
+
+    println("STEP 4 nested structures:")
+    show_decode("*2 array", "*2\r\n$3\r\nGET\r\n$3\r\nfoo\r\n")
+    show_decode("%1 map", "%1\r\n$3\r\nfoo\r\n:42\r\n")
+    show_decode("~2 set", "~2\r\n+a\r\n+b\r\n")
+
+    println("STEP 5 incomplete buffer:")
+    show_decode("truncated", "$10\r\nhe")
+    println("PINNED_VECTORS: cmd=*3|$3|SET|$3|foo|$3|bar simple=simple:OK int=42 bulk=hello nullbulk=None null3=nil bool=True dbl=3.14 arr=[GET,foo] map=foo:42 set=kindmaps trunc=None")
+}
+
+main()
