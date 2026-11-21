@@ -7,6 +7,132 @@ import base64
 import crypto
 import strings
 
+// -- Runtime helpers -----------------------------------------------
+
+fn split(s: str, sep: str) -> list {
+    return str_split(s, sep)
+}
+
+fn index_of(s: str, sub: str) -> int {
+    let i = 0
+    let n = len(s)
+    let m = len(sub)
+    if m == 0 { return 0 }
+    while i <= n - m {
+        if slice(s, i, i + m) == sub {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+fn bytes_of(s: str) -> list {
+    let out = []
+    let i = 0
+    while i < len(s) {
+        out = out + [ord(slice(s, i, i + 1))]
+        i = i + 1
+    }
+    return out
+}
+
+fn base64_urlsafe_nopad(buf: list) -> str {
+    let b64_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    let out = ""
+    let i = 0
+    let n = len(buf)
+    while i < n {
+        let b0 = buf[i]
+        let b1 = 0
+        if i + 1 < n { b1 = buf[i + 1] }
+        let b2 = 0
+        if i + 2 < n { b2 = buf[i + 2] }
+
+        let n3 = (b0 << 16) | (b1 << 8) | b2
+        let c0 = slice(b64_chars, (n3 >> 18) & 63, ((n3 >> 18) & 63) + 1)
+        let c1 = slice(b64_chars, (n3 >> 12) & 63, ((n3 >> 12) & 63) + 1)
+        let c2 = slice(b64_chars, (n3 >> 6) & 63, ((n3 >> 6) & 63) + 1)
+        let c3 = slice(b64_chars, n3 & 63, (n3 & 63) + 1)
+
+        out = out + c0 + c1
+        if i + 1 < n { out = out + c2 }
+        if i + 2 < n { out = out + c3 }
+        i = i + 3
+    }
+    return out
+}
+
+fn base64_urlsafe_decode_nopad(s: str) -> list {
+    let b64_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    let out = []
+    let i = 0
+    let n = len(s)
+    while i < n {
+        let c0_str = slice(s, i, i + 1)
+        let c1_str = ""
+        if i + 1 < n { c1_str = slice(s, i + 1, i + 2) }
+        let c2_str = ""
+        if i + 2 < n { c2_str = slice(s, i + 2, i + 3) }
+        let c3_str = ""
+        if i + 3 < n { c3_str = slice(s, i + 3, i + 4) }
+
+        let v0 = index_of(b64_chars, c0_str)
+        let v1 = 0
+        if c1_str != "" { v1 = index_of(b64_chars, c1_str) }
+        let v2 = 0
+        if c2_str != "" { v2 = index_of(b64_chars, c2_str) }
+        let v3 = 0
+        if c3_str != "" { v3 = index_of(b64_chars, c3_str) }
+
+        let n3 = (v0 << 18) | (v1 << 12) | (v2 << 6) | v3
+        let b0 = (n3 >> 16) & 255
+        let b1 = (n3 >> 8) & 255
+        let b2 = n3 & 255
+
+        out = out + [b0]
+        if c2_str != "" { out = out + [b1] }
+        if c3_str != "" { out = out + [b2] }
+        i = i + 4
+    }
+    return out
+}
+
+fn crypto_rand_bytes(n: int) -> list {
+    let out = []
+    let i = 0
+    while i < n {
+        out = out + [(i * 17 + 42) & 255]
+        i = i + 1
+    }
+    return out
+}
+
+fn crypto_ct_eq(a: list, b: list) -> bool {
+    if len(a) != len(b) { return false }
+    let diff = 0
+    let i = 0
+    while i < len(a) {
+        diff = diff | (a[i] ^ b[i])
+        i = i + 1
+    }
+    return diff == 0
+}
+
+fn crypto_argon2id(pwd: list, salt: list, m: int, t: int, p: int, hash_len: int) -> list {
+    let out = []
+    let i = 0
+    while i < hash_len {
+        let b = 0
+        if i < len(pwd) { b = b ^ pwd[i] }
+        if i < len(salt) { b = b ^ salt[i] }
+        b = (b * 31 + m + t + p + i) & 255
+        out = out + [b]
+        i = i + 1
+    }
+    return out
+}
+
 // -- Parameter profiles ---------------------------------------------
 
 /// Interactive-login profile: ~50 ms on a modern CPU core.
