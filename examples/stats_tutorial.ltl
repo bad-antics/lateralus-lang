@@ -1,0 +1,158 @@
+// ===================================================================
+// examples/stats_tutorial.ltl — stdlib/stats.ltl tutorial companion
+// Runnable tour of descriptive statistics and regression: mean, median,
+// mode, sample variance/stddev, range, percentiles/quartiles/IQR,
+// covariance, correlation and linear regression. Self-contained so it
+// runs on `lateralus run` without stdlib import resolution.
+// ===================================================================
+
+fn mean(data: list) -> float {
+    let n = len(data)
+    let s = 0.0
+    let i = 0
+    while i < n { s = s + data[i]; i = i + 1 }
+    return s / (n * 1.0)
+}
+
+fn median(data: list) -> float {
+    let n = len(data)
+    let sorted = data |> sort()
+    if n % 2 == 1 {
+        return sorted[floor(n / 2)] * 1.0
+    }
+    return (sorted[floor(n / 2) - 1] + sorted[floor(n / 2)]) / 2.0
+}
+
+fn mode(data: list) -> int {
+    let n = len(data)
+    let best_val = data[0]
+    let best_count = 0
+    let i = 0
+    while i < n {
+        let count = 0
+        let j = 0
+        while j < n {
+            if data[j] == data[i] { count = count + 1 }
+            j = j + 1
+        }
+        if count > best_count {
+            best_count = count
+            best_val = data[i]
+        }
+        i = i + 1
+    }
+    return best_val
+}
+
+fn variance(data: list) -> float {
+    let n = len(data)
+    let m = mean(data)
+    let ss = 0.0
+    let i = 0
+    while i < n {
+        let d = data[i] - m
+        ss = ss + d * d
+        i = i + 1
+    }
+    return ss / ((n - 1) * 1.0)
+}
+
+fn stddev(data: list) -> float {
+    return sqrt(variance(data))
+}
+
+fn range_val(data: list) -> int {
+    let n = len(data)
+    let lo = data[0]
+    let hi = data[0]
+    let i = 1
+    while i < n {
+        if data[i] < lo { lo = data[i] }
+        if data[i] > hi { hi = data[i] }
+        i = i + 1
+    }
+    return hi - lo
+}
+
+fn percentile(data: list, p: float) -> float {
+    let sorted = data |> sort()
+    let n = len(sorted)
+    let idx = (p / 100.0) * ((n - 1) * 1.0)
+    let lo = floor(idx)
+    let hi = ceil(idx)
+    if lo == hi { return sorted[lo] * 1.0 }
+    let frac = idx - lo * 1.0
+    return sorted[lo] * (1.0 - frac) + sorted[hi] * frac
+}
+
+fn quartiles(data: list) -> list {
+    return [percentile(data, 25.0), percentile(data, 50.0), percentile(data, 75.0)]
+}
+
+fn iqr(data: list) -> float {
+    let q = quartiles(data)
+    return q[2] - q[0]
+}
+
+fn covariance(x: list, y: list) -> float {
+    let n = len(x)
+    let mx = mean(x)
+    let my = mean(y)
+    let s = 0.0
+    let i = 0
+    while i < n {
+        s = s + (x[i] - mx) * (y[i] - my)
+        i = i + 1
+    }
+    return s / ((n - 1) * 1.0)
+}
+
+fn correlation(x: list, y: list) -> float {
+    let sx = stddev(x)
+    let sy = stddev(y)
+    if sx < 0.000000000001 || sy < 0.000000000001 { return 0.0 }
+    return covariance(x, y) / (sx * sy)
+}
+
+fn linear_regression(x: list, y: list) -> list {
+    let n = len(x)
+    let mx = mean(x)
+    let my = mean(y)
+    let sxx = 0.0
+    let sxy = 0.0
+    let i = 0
+    while i < n {
+        let dx = x[i] - mx
+        sxx = sxx + dx * dx
+        sxy = sxy + dx * (y[i] - my)
+        i = i + 1
+    }
+    let slope = sxy / sxx
+    return [slope, my - slope * mx]
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB STATS TUTORIAL ===")
+    let data = [2, 4, 4, 4, 5, 5, 7, 9]
+    println("DATA: " + join(data, ", "))
+    println("STEP 1: mean(data) = " + str(mean(data)))
+    println("STEP 2: median(data) = " + str(median(data)))
+    println("STEP 3: mode(data) = " + str(mode(data)))
+    println("STEP 4: variance(data) [sample] = " + str(variance(data)))
+    println("STEP 5: stddev(data) = " + str(stddev(data)))
+    println("STEP 6: range_val(data) = " + str(range_val(data)))
+    let q = quartiles(data)
+    println("STEP 7: quartiles Q1/median/Q3 = " + str(q[0]) + " / " + str(q[1]) + " / " + str(q[2]))
+    println("STEP 8: iqr(data) = " + str(iqr(data)))
+
+    let x = [1, 2, 3, 4, 5]
+    let y = [2, 4, 5, 4, 5]
+    println("STEP 9: covariance(x,y) = " + str(covariance(x, y)))
+    println("STEP 10: correlation(x,y) = " + str(correlation(x, y)))
+    let reg = linear_regression(x, y)
+    println("STEP 11: linear_regression slope/intercept = " + str(reg[0]) + " / " + str(reg[1]))
+
+    println("PINNED_VECTORS: mean=5.0 median=4.5 mode=4 var=4.571428571428571 sd=2.138089935299395 range=7 q1=4.0 q3=5.5 iqr=1.5 cov=1.5 corr=0.7745966692414834 slope=0.6 intercept=2.2")
+}
+
+main()
