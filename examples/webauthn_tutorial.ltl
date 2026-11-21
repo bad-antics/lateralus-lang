@@ -1,0 +1,72 @@
+// ===================================================================
+// examples/webauthn_tutorial.ltl
+// Interactive walkthrough of stdlib/webauthn ceremonies
+// ===================================================================
+
+import stdlib.webauthn
+
+fn run() {
+    println("=== W3C WebAuthn Ceremonies Tutorial ===")
+
+    // 1. Issuing Registration Options
+    println("\n[1] Generating Registration Options:")
+    let reg = new_registration_options(
+        "user_99",
+        "alice@corp.internal",
+        "Alice S.",
+        "corp.internal",
+        "Corporate Internal SSO",
+        "dGVzdF9jaGFsbGVuZ2VfMTIzNA",
+        60000
+    )
+    println("RP Name: " + reg["rp"]["name"])
+    println("User ID: " + reg["user"]["id"])
+    println("Challenge: " + reg["challenge"])
+
+    // 2. Issuing Authentication Options
+    println("\n[2] Generating Authentication Options:")
+    let auth = new_authentication_options(
+        "corp.internal",
+        "YXV0aF9jaGFsbGVuZ2VfNTY3OA",
+        ["cred_key_alpha", "cred_key_beta"],
+        30000
+    )
+    println("RP ID: " + auth["rpId"])
+    println("Timeout: " + str(auth["timeout"]))
+    println("Allowed Credentials: " + str(len(auth["allowCredentials"])))
+
+    // 3. Verifying clientDataJSON
+    println("\n[3] Verifying Client Data JSON:")
+    let cdata = {}
+    cdata["type"] = "webauthn.get"
+    cdata["challenge"] = "YXV0aF9jaGFsbGVuZ2VfNTY3OA"
+    cdata["origin"] = "https://corp.internal"
+
+    let cd_res = verify_client_data(cdata, "webauthn.get", "YXV0aF9jaGFsbGVuZ2VfNTY3OA", "https://corp.internal", "")
+    println("Client Data Verification Success: " + str(cd_res[0]))
+
+    // 4. Parsing Authenticator Data & Counter Check
+    println("\n[4] Parsing Authenticator Data:")
+    let rp_hash = []
+    let i = 0
+    while i < 32 {
+        rp_hash = rp_hash + [0xAA]
+        i = i + 1
+    }
+    let flags = 0x05 // UP (0x01) | UV (0x04)
+    let sign_count_bytes = [0, 0, 0, 15]
+    let auth_data_buf = rp_hash + [flags] + sign_count_bytes
+
+    let ad = parse_authenticator_data(auth_data_buf)
+    println("AuthData OK: " + str(ad["ok"]))
+    println("User Present (UP): " + str(ad["flag_up"]))
+    println("User Verified (UV): " + str(ad["flag_uv"]))
+    println("Sign Count: " + str(ad["sign_count"]))
+
+    let counter_valid = check_counter(10, ad["sign_count"])
+    println("Replay Protection Valid (15 > 10): " + str(counter_valid))
+
+    println("\n=== WebAuthn Ceremony Complete ===")
+}
+
+run()
