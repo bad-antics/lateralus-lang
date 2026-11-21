@@ -2,6 +2,7 @@
 Tests for the LATERALUS scientific computing library.
 """
 import math
+from fractions import Fraction
 
 import pytest
 
@@ -256,6 +257,19 @@ class TestDistributions:
     def test_binomial_sum_to_one(self):
         total = sum(binomial_pmf(k, 10, 0.3) for k in range(11))
         assert abs(total - 1.0) < 1e-10
+
+    def test_binomial_pmf_large_n_no_overflow(self):
+        # comb(1100, 550) exceeds float range; the result still fits a float.
+        expected = float(Fraction(math.comb(1100, 550), 2 ** 1100))
+        assert binomial_pmf(550, 1100, 0.5) == expected
+
+    def test_binomial_pmf_large_n_skewed(self):
+        expected = float(
+            Fraction(math.comb(2000, 700))
+            * Fraction(3, 10) ** 700
+            * Fraction(7, 10) ** 1300
+        )
+        assert abs(binomial_pmf(700, 2000, 0.3) - expected) < 1e-15
 
 
 class TestInterpolation:
