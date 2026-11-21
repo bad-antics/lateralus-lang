@@ -258,6 +258,7 @@ class PythonTranspiler(ASTVisitor):
         self._w += "def push(lst, item):      return lst + [item]"
         self._w += "def pop(lst):             return (lst[:-1], lst[-1]) if lst else (lst, None)"
         self._w += "def slice(s, start, end): return s[start:end]"
+        self._w += "def substr(s, start, length): return s[start:start + length]"
         self._w += "def list_copy(lst):       return list(lst)"
         self._w += "def list_set(lst, i, v):  r = list(lst); r[i] = v; return r"
         self._w += "def slice_list(lst, s, e):return lst[s:e]"
