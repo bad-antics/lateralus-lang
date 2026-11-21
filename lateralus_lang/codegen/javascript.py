@@ -423,7 +423,7 @@ class JavaScriptTranspiler:
         if isinstance(node, UnaryOp):
             operand = self._expr(node.operand)
             js_op = UNARY_OPS.get(node.op, node.op)
-            return f"{js_op}{operand}"
+            return f"({js_op}{operand})"
 
         if isinstance(node, CallExpr):
             callee = self._expr(node.callee)

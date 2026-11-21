@@ -1508,7 +1508,7 @@ class PythonTranspiler(ASTVisitor):
                      "typeof": "type(", "sizeof": "len("}.get(node.op, node.op)
             if node.op in ("typeof", "sizeof"):
                 return f"{py_op}{self._expr(node.operand)})"
-            return f"{py_op}{self._expr(node.operand)}"
+            return f"({py_op}{self._expr(node.operand)})"
         if isinstance(node, CallExpr):
             args = ", ".join(self._expr(a) for a in node.args)
             kwargs = ", ".join(f"{k}={self._expr(v)}" for k, v in node.kwargs)
