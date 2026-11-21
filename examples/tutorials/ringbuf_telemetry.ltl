@@ -1,0 +1,66 @@
+import stdlib/ringbuf as rb
+
+// --- Tutorial Example: Telemetry Window ---
+
+fn main() {
+    // Create a ring buffer that holds the last 3 readings
+    let readings = rb.new(3)
+    
+    // Simulated stream of temperature data
+    let stream = [20.1, 20.5, 21.2, 22.0, 21.8]
+    
+    println("--- Telemetry Monitor Starting ---")
+    println("Window Size: 3")
+    
+    for temp in stream {
+        // We must reassign 'readings' because the buffer is functional
+        readings = rb.push(readings, temp)
+        
+        let current_window = rb.to_list(readings)
+        println("New Reading:")
+        println(temp)
+        println("Current Window:")
+        println(current_window)
+    }
+    
+    println("--- Monitor Finished ---")
+}
+
+// --- Pinned Test Vectors ---
+
+@test
+fn test_ringbuf_behavior() {
+    // 1. Test Empty and Initial Push
+    let b = rb.new(2)
+    if !rb.is_empty(b) { return 1 }
+    
+    b = rb.push(b, 100)
+    if rb.count(b) != 1 { return 1 }
+    if rb.peek_front(b) != 100 { return 1 }
+    
+    // 2. Test Full State
+    b = rb.push(b, 200)
+    if !rb.is_full(b) { return 1 }
+    
+    // 3. Test Wrap-around (Overwrite)
+    // Pushing 300 should overwrite 100
+    b = rb.push(b, 300)
+    if rb.peek_front(b) != 200 { return 1 }
+    if rb.peek_back(b) != 300 { return 1 }
+    if rb.count(b) != 2 { return 1 }
+    
+    // 4. Test Pop
+    let res = rb.pop(b)
+    let val = res[0]
+    let b_after = res[1]
+    if val != 200 { return 1 }
+    if rb.count(b_after) != 1 { return 1 }
+    
+    // 5. Test to_list order (oldest first)
+    let final_list = rb.to_list(b)
+    if len(final_list) != 2 { return 1 }
+    if final_list[0] != 200 { return 1 }
+    if final_list[1] != 300 { return 1 }
+    
+    return 0
+}
