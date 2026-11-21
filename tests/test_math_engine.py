@@ -16,6 +16,7 @@ from lateralus_lang.math_engine import (
     derivative,
     dual_exp,
     dual_sin,
+    gradient,
     linear_regression,
     mean,
     median,
@@ -222,6 +223,28 @@ class TestDual:
         result = x * x + 2 * x + 1
         assert result.val == pytest.approx(16.0)
         assert result.dot == pytest.approx(8.0)
+
+    def test_pow_constant_exponent(self):
+        x = Dual(3.0, 1.0)
+        p2 = x ** 2
+        assert p2.val == pytest.approx(9.0)
+        assert p2.dot == pytest.approx(6.0)
+
+        p3 = x ** 3
+        assert p3.val == pytest.approx(27.0)
+        assert p3.dot == pytest.approx(27.0)
+
+        poly = x ** 2 + 2 * x + 1
+        assert poly.val == pytest.approx(16.0)
+        assert poly.dot == pytest.approx(8.0)
+
+    def test_pow_derivative_and_gradient(self):
+        assert derivative(lambda x: x ** 2, 3.0) == pytest.approx(6.0)
+        assert derivative(lambda x: x ** 3, 3.0) == pytest.approx(27.0)
+        assert derivative(lambda x: x ** 0.5, 3.0) == pytest.approx(0.5 * (3.0 ** -0.5))
+        grad = gradient(lambda a, b: a ** 2 + b ** 2, [3.0, 4.0])
+        assert grad[0] == pytest.approx(6.0)
+        assert grad[1] == pytest.approx(8.0)
 
     def test_derivative_function(self):
         # d/dx(x³) at x=2 = 12

@@ -567,8 +567,9 @@ class Dual:
         if self.val <= 0 and o.dot != 0:
             raise ValueError("Dual pow: negative base with non-constant exponent")
         v = self.val ** o.val
-        d = v * (o.dot * math.log(abs(self.val)) if self.val != 0 else 0
-                 + o.val * self.dot / self.val if self.val != 0 else 0)
+        term_exp = (o.dot * math.log(abs(self.val))) if self.val != 0 else 0.0
+        term_base = (o.val * self.dot / self.val) if self.val != 0 else 0.0
+        d = v * (term_exp + term_base)
         return Dual(v, d)
 
     def __neg__(self):
