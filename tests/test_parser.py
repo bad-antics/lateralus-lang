@@ -205,3 +205,26 @@ class TestMatchStmt:
         stmt = p.body[0]
         assert isinstance(stmt, MatchStmt)
         assert len(stmt.arms) == 3
+
+
+class TestMapLiteral:
+    """Issue #275: map literals with non-IDENT first keys must parse."""
+
+    def test_string_keyed_map(self):
+        p = ast('fn main() { let m = { "a": 1, "b": 2 } }')
+        from lateralus_lang.ast_nodes import MapExpr
+        decl = p.body[0].body.stmts[0]
+        assert isinstance(decl.value, MapExpr)
+        assert len(decl.value.pairs) == 2
+
+    def test_int_keyed_map(self):
+        p = ast('fn main() { let m = { 1: "x" } }')
+        from lateralus_lang.ast_nodes import MapExpr
+        decl = p.body[0].body.stmts[0]
+        assert isinstance(decl.value, MapExpr)
+
+    def test_ident_keyed_map_still_works(self):
+        p = ast('fn main() { let k = "a"\n let m = { k: 1 } }')
+        from lateralus_lang.ast_nodes import MapExpr
+        decl = p.body[0].body.stmts[1]
+        assert isinstance(decl.value, MapExpr)
