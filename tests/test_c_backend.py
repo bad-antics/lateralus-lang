@@ -746,3 +746,22 @@ class TestTypeAlias:
         c_src = check_c("type Score = int")
         assert "typedef" in c_src
         assert "Score" in c_src
+
+
+class TestPushBuiltin:
+    """Issue #330 reproducer 4 + unary-minus reproducer: push() must emit
+    ltl_list_concat (new list, matching Python `lst + [item]`), and unary
+    minus on literals must infer the operand's C type."""
+
+    def test_push_on_typed_array(self):
+        c_src = check_c("fn main() { let xs = [1, 2]\n let ys = push(xs, 3) }")
+        assert "ltl_list_concat" in c_src
+        assert "ltl_list_t* ys" in c_src
+
+    def test_push_on_empty_list(self):
+        c_src = check_c("fn main() { let xs = []\n let ys = push(xs, 3) }")
+        assert "ltl_list_concat" in c_src
+
+    def test_unary_minus_literal(self):
+        c_src = check_c("fn main() { let mut x = -1\n io.println(str(x)) }")
+        assert "int64_t x = (-1)" in c_src
