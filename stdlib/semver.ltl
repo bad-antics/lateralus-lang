@@ -103,6 +103,73 @@ pub fn is_prerelease(v: list) -> bool {
 
 // -- Comparison ------------------------------------------------------
 
+/// True when every character of `s` is an ASCII digit (and `s` is non-empty).
+fn is_numeric_ident(s: str) -> bool {
+    if len(s) == 0 {
+        return false
+    }
+    let i = 0
+    while i < len(s) {
+        let c = s[i]
+        if c < "0" || c > "9" {
+            return false
+        }
+        i += 1
+    }
+    return true
+}
+
+/// Compare a single dot-separated pre-release identifier.
+/// Numeric identifiers compare numerically and always rank below
+/// non-numeric ones; non-numeric identifiers compare lexically (ASCII).
+fn compare_prerelease_ident(a: str, b: str) -> int {
+    let a_num = is_numeric_ident(a)
+    let b_num = is_numeric_ident(b)
+    if a_num && b_num {
+        let an = int(a)
+        let bn = int(b)
+        if an < bn { return -1 }
+        if an > bn { return 1 }
+        return 0
+    }
+    if a_num { return -1 }
+    if b_num { return 1 }
+    if a < b { return -1 }
+    if a > b { return 1 }
+    return 0
+}
+
+/// Compare two non-empty pre-release tags per SemVer 2.0.0 section 11:
+/// identifier by identifier, then by identifier count.
+fn compare_prerelease(a_pre: str, b_pre: str) -> int {
+    let a_len = len(a_pre)
+    let b_len = len(b_pre)
+    let ai = 0
+    let bi = 0
+    while ai < a_len && bi < b_len {
+        // Find the end of the current identifier on each side.
+        let aj = ai
+        while aj < a_len && a_pre[aj] != "." {
+            aj += 1
+        }
+        let bj = bi
+        while bj < b_len && b_pre[bj] != "." {
+            bj += 1
+        }
+        let ident_cmp = compare_prerelease_ident(slice(a_pre, ai, aj), slice(b_pre, bi, bj))
+        if ident_cmp != 0 {
+            return ident_cmp
+        }
+        ai = aj + 1
+        bi = bj + 1
+    }
+    // A larger set of identifiers has higher precedence when all of the
+    // preceding identifiers are equal.
+    if ai < a_len { return 1 }
+    if bi < b_len { return -1 }
+    return 0
+}
+
 /// Compare two version lists.  Returns -1, 0, or 1.
 /// Pre-release versions have lower precedence than stable.
 pub fn compare(a: list, b: list) -> int {
@@ -125,14 +192,8 @@ pub fn compare(a: list, b: list) -> int {
     if len(b_pre) == 0 {
         return -1
     }
-    // Both have pre-release, compare lexicographically
-    if a_pre < b_pre {
-        return -1
-    }
-    if a_pre > b_pre {
-        return 1
-    }
-    return 0
+    // Both have pre-release: compare dot-separated identifiers.
+    return compare_prerelease(a_pre, b_pre)
 }
 
 /// Check if two versions are equal (ignoring build metadata).
