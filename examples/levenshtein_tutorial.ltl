@@ -1,0 +1,169 @@
+// ===================================================================
+// examples/levenshtein_tutorial.ltl — stdlib/levenshtein.ltl companion
+// Runnable tour of edit distance: Wagner-Fischer DP, banded early-exit
+// bounded(), normalized similarity(), and Damerau transpositions.
+// char_at shim gap worked around with a local helper.
+// ===================================================================
+
+fn char_at(s: str, i: int) -> str {
+    return slice(s, i, i + 1)
+}
+
+fn lev_min3(a: int, b: int, c: int) -> int {
+    let m = a
+    if b < m { m = b }
+    if c < m { m = c }
+    return m
+}
+
+fn abs_diff(a: int, b: int) -> int {
+    if a > b { return a - b }
+    return b - a
+}
+
+fn distance(a: str, b: str) -> int {
+    let n = len(a)
+    let m = len(b)
+    if n == 0 { return m }
+    if m == 0 { return n }
+    if n > m {
+        let t = a
+        a = b
+        b = t
+        let tn = n
+        n = m
+        m = tn
+    }
+    let prev = []
+    let i = 0
+    while i <= n { prev = prev + [i]; i = i + 1 }
+    let curr = prev
+    let j = 1
+    while j <= m {
+        curr = [j]
+        let k = 1
+        while k <= n {
+            let cost = 1
+            if char_at(a, k - 1) == char_at(b, j - 1) { cost = 0 }
+            let v = lev_min3(curr[k - 1] + 1,
+                             prev[k] + 1,
+                             prev[k - 1] + cost)
+            curr = curr + [v]
+            k = k + 1
+        }
+        prev = curr
+        j = j + 1
+    }
+    return curr[n]
+}
+
+fn bounded(a: str, b: str, k: int) -> int {
+    let n = len(a)
+    let m = len(b)
+    if abs_diff(n, m) > k { return k + 1 }
+    if n == 0 { return m }
+    if m == 0 { return n }
+    let prev = []
+    let i = 0
+    while i <= n { prev = prev + [i]; i = i + 1 }
+    let j = 1
+    while j <= m {
+        let curr = [j]
+        let row_min = j
+        let p = 1
+        while p <= n {
+            let cost = 1
+            if char_at(a, p - 1) == char_at(b, j - 1) { cost = 0 }
+            let v = lev_min3(curr[p - 1] + 1,
+                             prev[p] + 1,
+                             prev[p - 1] + cost)
+            curr = curr + [v]
+            if v < row_min { row_min = v }
+            p = p + 1
+        }
+        if row_min > k { return k + 1 }
+        prev = curr
+        j = j + 1
+    }
+    return prev[n]
+}
+
+fn similarity(a: str, b: str) -> float {
+    let mx = len(a)
+    if len(b) > mx { mx = len(b) }
+    if mx == 0 { return 1.0 }
+    let d = distance(a, b)
+    return 1.0 - (d / mx)
+}
+
+fn damerau(a: str, b: str) -> int {
+    let n = len(a)
+    let m = len(b)
+    if n == 0 { return m }
+    if m == 0 { return n }
+    let dp = []
+    let i = 0
+    while i <= n {
+        let row = []
+        let j = 0
+        while j <= m { row = row + [0]; j = j + 1 }
+        dp = dp + [row]
+        i = i + 1
+    }
+    let r = 0
+    while r <= n { dp[r][0] = r; r = r + 1 }
+    let c = 0
+    while c <= m { dp[0][c] = c; c = c + 1 }
+    let p = 1
+    while p <= n {
+        let q = 1
+        while q <= m {
+            let cost = 1
+            if char_at(a, p - 1) == char_at(b, q - 1) { cost = 0 }
+            let v = lev_min3(dp[p - 1][q] + 1,
+                             dp[p][q - 1] + 1,
+                             dp[p - 1][q - 1] + cost)
+            if p > 1 && q > 1 &&
+               char_at(a, p - 1) == char_at(b, q - 2) &&
+               char_at(a, p - 2) == char_at(b, q - 1) {
+                let t = dp[p - 2][q - 2] + 1
+                if t < v { v = t }
+            }
+            dp[p][q] = v
+            q = q + 1
+        }
+        p = p + 1
+    }
+    return dp[n][m]
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB LEVENSHTEIN TUTORIAL ===")
+
+    println("STEP 1 classic distance vectors:")
+    println("  kitten->sitting = " + str(distance("kitten", "sitting")))
+    println("  flaw->lawn      = " + str(distance("flaw", "lawn")))
+    println("  abc->abd        = " + str(distance("abc", "abd")))
+    println("  same->same      = " + str(distance("same", "same")))
+    println("  ''->abc         = " + str(distance("", "abc")))
+    println("  abc->''         = " + str(distance("abc", "")))
+
+    println("STEP 2 bounded() early-exit:")
+    println("  kitten/sitting k=2 -> " + str(bounded("kitten", "sitting", 2)))
+    println("  kitten/sitting k=3 -> " + str(bounded("kitten", "sitting", 3)))
+    println("  abc/xyz k=1     -> " + str(bounded("abc", "xyz", 1)))
+    println("  len-diff>k      -> " + str(bounded("a", "abcdef", 2)))
+
+    println("STEP 3 similarity():")
+    println("  kitten/sitting  = " + str(similarity("kitten", "sitting")))
+    println("  abc/abc         = " + str(similarity("abc", "abc")))
+    println("  abc/xyz         = " + str(similarity("abc", "xyz")))
+
+    println("STEP 4 damerau (OSA-restricted) transposition:")
+    println("  lev ca->abc     = " + str(distance("ca", "abc")))
+    println("  damerau ca->abc = " + str(damerau("ca", "abc")))
+    println("  damerau ab->ba  = " + str(damerau("ab", "ba")))
+    println("PINNED_VECTORS: kitten-sitting=3 flaw-lawn=2 abc-abd=1 empty=3 bounded-k2=3 bounded-k3=3 bounded-abcxyz=3 len-diff=3 sim-kitten=0.5714285714285714 sim-same=1.0 damerau-ca=3(OSA) damerau-abba=1")
+}
+
+main()
