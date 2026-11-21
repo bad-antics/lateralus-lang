@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bits, Flags and Binary Protocols in Lateralus</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "Bits, Flags and Binary Protocols in Lateralus"
+author: CrazyEther
+date: 2026-11-17
+abstract: A practical guide to stdlib/bitops.ltl with a runnable example and pinned byte-level vectors.
+---
+
+# Bit Manipulation with stdlib/bitops
+
+Binary protocols pack multiple flags and numeric fields into a single integer. The
+`stdlib/bitops.ltl` module provides the small operations needed to encode, read and
+update those fields. This guide uses actual exported functions from that module,
+rather than reimplementing them.
+
+**Run the companion example** from the repository root:
+
+```sh
+python bin/ltlc check examples/bitops_tutorial.ltl
+python bin/ltlc py stdlib/bitops.ltl -o bitops.py
+python bin/ltlc run examples/bitops_tutorial.ltl
+```
+
+The Python backend currently resolves `import bitops` as a Python import. The
+second command generates that dependency; on other working directories, add
+its directory to `PYTHONPATH`. Remove the generated `bitops.py` after running
+(the file is not part of this tutorial's patch). To execute and verify in a
+temporary directory instead, run `python tests/test_bitops_tutorial.py`.
+
+## 1. Represent independent flags
+
+Bits are numbered from zero, starting at the least significant bit. Bit 1 is
+`0b000010` (2); bit 5 is `0b100000` (32). Combining them yields 34.
+
+```lateralus
+import bitops
+
+let flags: u64 = bitops.bit_set(0, 1)
+let both: u64 = bitops.bit_set(flags, 5)
+// both = 34; bitops.popcount(both) = 2
+```
+
+Useful functions are `bit_set(val, n)`, `bit_clear(val, n)`,
+`bit_toggle(val, n)`, and `bit_test(val, n)`. The functions take a
+`u64` value and a `u32` bit position. They do not mutate the original
+integer: assign the returned value to store the change.
+
+## 2. Decode packed fields without a parser
+
+A packet's three-bit field starts at bit 1. In the byte `0xD6`
+(binary `11010110`), the field occupies bits 1–3 and is `011`
+in low-to-high order, giving decimal **3**:
+
+```lateralus
+let field = bitops.extract_bits(0xD6, 1, 3) // 3
+```
+
+To write a field, `insert_bits(val, field, pos, width)` clears the target
+range and inserts only the field's low `width` bits. `mask(pos, width)`
+creates a mask over the same range. Prefer `extract_bits` over copying
+right-shifts into every decoder.
+
+**Boundary note:** do not pass a width above 64, or rely on shifting a
+64-bit integer by 64 bits; such operations are not guaranteed portable.
+Prefer widths that fit the target field and the integer type.
+
+## 3. Count bits and find their boundaries
+
+`popcount` counts set bits; `clz` counts leading zeroes, while `ctz`
+counts trailing zeroes, all on `u64`. For the all-zero word, both
+`clz(0)` and `ctz(0)` are defined by the module as **64**.
+
+`highest_bit(0)` and `lowest_bit(0)` return **-1**, a useful sentinel.
+For nonzero `v`, `highest_bit(v)` is `63 - clz(v)`. To determine whether
+a capacity fits a power-of-two ring buffer, use
+`is_power_of_2(v)`; it correctly excludes zero.
+
+## 4. Network byte order and rotations
+
+Network formats conventionally use big-endian byte order. `bswap16`,
+`bswap32`, and `bswap64` reverse the bytes of integers of corresponding
+width. A useful sanity check is:
+
+```lateralus
+bitops.bswap16(0x1234) // 0x3412, decimal 13330
+```
+
+The module also exports `rotl32`, `rotr32`, `rotl64` and `rotr64`.
+Rotations preserve all bits while shifting them around a circular word;
+ordinary shifts discard displaced bits. The implementation masks rotation
+counts to 31 or 63, respectively. Avoid assuming a particular backend's
+behavior for a count that is a multiple of the word width until verified,
+because the implementation's complementary shift can equal the full width.
+
+## 5. Pinned, executable test vectors
+
+The checked-in companion program prints these deterministic lines in this
+order. They are tested in `tests/test_bitops_tutorial.py`.
+
+| Operation | Input | Expected |
+|---|---|---|
+| `bit_set` twice | bits 1, 5 of zero | `34` |
+| `popcount` | `34` | `2` |
+| `extract_bits` | `0xD6, 1, 3` | `3` |
+| `is_power_of_2` | `64` | `True` |
+| `bswap16` | `0x1234` | `13330` (`0x3412`) |
+
+When working with bitfields, pin both decimal and hexadecimal values in
+tests; a byte-swap error can accidentally preserve a plausible decimal size
+while corrupting the wire format. The companion example lives at
+`examples/bitops_tutorial.ltl`. Unlike a purely illustrative pseudocode
+fragment, it runs against the actual exported `stdlib/bitops.ltl` code.
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>
