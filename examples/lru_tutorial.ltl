@@ -1,0 +1,145 @@
+// ===================================================================
+// examples/lru_tutorial.ltl — Tutorial for stdlib/lru.ltl
+// -------------------------------------------------------------------
+// Self-contained, executable tutorial demonstrating:
+//   1. LRU cache construction with fixed capacity.
+//   2. Cache hits, misses, and recency updates.
+//   3. Deterministic eviction of the least recently used element.
+//   4. Dynamic capacity resizing and eviction.
+//
+// Inlines stdlib/lru core for runtime portability.
+// ===================================================================
+
+fn lru_new(capacity: int) -> map {
+    let cache = {}
+    cache["data"] = {}
+    cache["order"] = []
+    cache["capacity"] = capacity
+    cache["hits"] = 0
+    cache["misses"] = 0
+    return cache
+}
+
+fn _remove_from_list(lst: list, value) -> list {
+    let result = []
+    for item in lst {
+        if item != value {
+            result = result + [item]
+        }
+    }
+    return result
+}
+
+fn _move_to_end(c: map, key: str) -> map {
+    c["order"] = _remove_from_list(c["order"], key) + [key]
+    return c
+}
+
+fn lru_put(c: map, key: str, value) -> map {
+    let data = c["data"]
+    if contains(keys(data), key) {
+        data[key] = value
+        c["data"] = data
+        c = _move_to_end(c, key)
+        return c
+    }
+
+    let order = c["order"]
+    if len(order) >= c["capacity"] and c["capacity"] > 0 {
+        let evict_key = order[0]
+        order = slice(order, 1, len(order))
+        let new_data = {}
+        for k in keys(data) {
+            if k != evict_key {
+                new_data[k] = data[k]
+            }
+        }
+        data = new_data
+    }
+
+    data[key] = value
+    order = order + [key]
+    c["data"] = data
+    c["order"] = order
+    return c
+}
+
+fn lru_get(c: map, key: str) -> list {
+    let data = c["data"]
+    if contains(keys(data), key) {
+        c["hits"] = c["hits"] + 1
+        c = _move_to_end(c, key)
+        return [c, data[key]]
+    }
+    c["misses"] = c["misses"] + 1
+    return [c, nil]
+}
+
+fn lru_has(c: map, key: str) -> bool {
+    return contains(keys(c["data"]), key)
+}
+
+fn lru_size(c: map) -> int {
+    return len(c["order"])
+}
+
+fn lru_all_keys(c: map) -> list {
+    return c["order"]
+}
+
+fn lru_resize(c: map, new_capacity: int) -> map {
+    c["capacity"] = new_capacity
+    let order = c["order"]
+    while len(order) > new_capacity {
+        let evict_key = order[0]
+        order = slice(order, 1, len(order))
+        let data = c["data"]
+        let new_data = {}
+        for k in keys(data) {
+            if k != evict_key {
+                new_data[k] = data[k]
+            }
+        }
+        data = new_data
+    }
+    c["order"] = order
+    return c
+}
+
+fn main() {
+    print("=== LATERALUS STDLIB LRU TUTORIAL ===")
+
+    // 1. Initialize cache with capacity 3
+    let cache = lru_new(3)
+    print("STEP 1: Initialized LRU cache capacity=3, size=" + str(lru_size(cache)))
+
+    // 2. Insert items
+    cache = lru_put(cache, "user:1", "Alice")
+    cache = lru_put(cache, "user:2", "Bob")
+    cache = lru_put(cache, "user:3", "Charlie")
+    print("STEP 2: Inserted 3 items. Cache size=" + str(lru_size(cache)))
+
+    // 3. Access user:1 -> moves user:1 to most-recently-used
+    let res = lru_get(cache, "user:1")
+    cache = res[0]
+    let user1 = res[1]
+    print("STEP 3: Accessed user:1 -> value=" + str(user1) + " (hits=" + str(cache["hits"]) + ", misses=" + str(cache["misses"]) + ")")
+
+    // 4. Insert user:4 -> capacity 3 exceeded -> least-recently-used (user:2) evicted
+    cache = lru_put(cache, "user:4", "David")
+    let has_user2 = lru_has(cache, "user:2")
+    let has_user1 = lru_has(cache, "user:1")
+    print("STEP 4: Inserted user:4 -> user:2 evicted: has_user2=" + str(has_user2) + ", has_user1=" + str(has_user1))
+
+    // 5. Query evicted user:2 (records miss)
+    let res_miss = lru_get(cache, "user:2")
+    cache = res_miss[0]
+    print("STEP 5: Querying evicted key -> val=" + str(res_miss[1]) + " (hits=" + str(cache["hits"]) + ", misses=" + str(cache["misses"]) + ")")
+
+    // 6. Dynamic resize to capacity 2 -> evicts user:3
+    cache = lru_resize(cache, 2)
+    print("STEP 6: Resized cache to capacity=2 -> current_size=" + str(lru_size(cache)))
+    print("PINNED_VECTORS: hits=" + str(cache["hits"]) + " misses=" + str(cache["misses"]) + " final_size=" + str(lru_size(cache)))
+}
+
+main()
