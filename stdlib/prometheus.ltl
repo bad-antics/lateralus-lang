@@ -12,7 +12,7 @@ fn escape_label_value(v: str) -> str {
     let out = ""
     let i = 0
     while i < len(v) {
-        let c = char_at(v, i)
+        let c = slice(v, i, (i) + 1)
         if c == "\\"      { out = out + "\\\\" }
         else if c == "\"" { out = out + "\\\"" }
         else if c == "\n" { out = out + "\\n" }
@@ -24,6 +24,19 @@ fn escape_label_value(v: str) -> str {
 
 /// `labels` is a list of [key, value] pairs.  Returns `{k="v",...}`
 /// or empty string if no labels.
+
+fn _index_of(s: str, sub: str) -> int {
+    let n = len(s)
+    let m = len(sub)
+    if m == 0 { return 0 }
+    let i = 0
+    while i + m <= n {
+        if slice(s, i, i + m) == sub { return i }
+        i = i + 1
+    }
+    return -1
+}
+
 pub fn format_labels(labels: list) -> str {
     if len(labels) == 0 { return "" }
     let out = chr(123)  // "{"
@@ -82,6 +95,7 @@ pub fn histogram_block(name: str, description: str, labels: list,
     return out
 }
 
+
 // -- Parser --------------------------------------------------------
 
 fn parse_labels(s: str) -> list {
@@ -91,19 +105,19 @@ fn parse_labels(s: str) -> list {
     let i = 0
     while i < n {
         // key up to '='
-        let eq = index_of(slice(s, i, n), "=")
+        let eq = _index_of(slice(s, i, n), "=")
         if eq < 0 { return out }
         let k = slice(s, i, i + eq)
         i = i + eq + 1
         // value: opening quote, then scan with escape awareness.
-        if i >= n || char_at(s, i) != "\"" { return out }
+        if i >= n || slice(s, i, (i) + 1) != "\"" { return out }
         i = i + 1
         let v = ""
         let scanning = true
         while scanning && i < n {
-            let c = char_at(s, i)
+            let c = slice(s, i, (i) + 1)
             if c == "\\" && i + 1 < n {
-                let nx = char_at(s, i + 1)
+                let nx = slice(s, i + 1, (i + 1) + 1)
                 if nx == "n"      { v = v + "\n" }
                 else if nx == "\"" { v = v + "\"" }
                 else if nx == "\\" { v = v + "\\" }
@@ -118,7 +132,7 @@ fn parse_labels(s: str) -> list {
             }
         }
         out = out + [[k, v]]
-        if i < n && char_at(s, i) == "," { i = i + 1 }
+        if i < n && slice(s, i, (i) + 1) == "," { i = i + 1 }
     }
     return out
 }
@@ -128,25 +142,25 @@ fn parse_labels(s: str) -> list {
 pub fn parse_line(line: str) -> map {
     let n = len(line)
     if n == 0 { return nil }
-    if char_at(line, 0) == "#" { return nil }
+    if slice(line, 0, (0) + 1) == "#" { return nil }
     // Metric name runs until '{' or ' '.
     let i = 0
-    while i < n && char_at(line, i) != chr(123) && char_at(line, i) != " " {
+    while i < n && slice(line, i, (i) + 1) != chr(123) && slice(line, i, (i) + 1) != " " {
         i = i + 1
     }
     let metric = slice(line, 0, i)
     let labels = []
-    if i < n && char_at(line, i) == chr(123) {
+    if i < n && slice(line, i, (i) + 1) == chr(123) {
         i = i + 1  // past '{'
-        let close = index_of(slice(line, i, n), "}")
+        let close = _index_of(slice(line, i, n), "}")
         if close < 0 { return nil }
         labels = parse_labels(slice(line, i, i + close))
         i = i + close + 1
     }
-    while i < n && char_at(line, i) == " " { i = i + 1 }
+    while i < n && slice(line, i, (i) + 1) == " " { i = i + 1 }
     // Value runs until end-of-line or trailing timestamp (space).
     let v_end = i
-    while v_end < n && char_at(line, v_end) != " " { v_end = v_end + 1 }
+    while v_end < n && slice(line, v_end, (v_end) + 1) != " " { v_end = v_end + 1 }
     let value = slice(line, i, v_end)
     let m = {}
     m["metric"] = metric
@@ -158,11 +172,11 @@ pub fn parse_line(line: str) -> map {
 /// Parse a whole exposition document into a list of sample maps.
 pub fn parse_exposition(doc: str) -> list {
     let out = []
-    let lines = split(doc, "\n")
+    let lines = str_split(doc, "\n")
     let i = 0
     while i < len(lines) {
         let ln = lines[i]
-        if len(ln) > 0 && char_at(ln, 0) != "#" {
+        if len(ln) > 0 && slice(ln, 0, (0) + 1) != "#" {
             let m = parse_line(ln)
             if m != nil { out = out + [m] }
         }
