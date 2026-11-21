@@ -172,3 +172,22 @@ class TestCompileResult:
     def test_result_error_list_empty_on_success(self):
         r = check("fn f() { }")
         assert r.errors == [] or all(e.severity.value == "warning" for e in r.errors)
+
+
+class TestCorrelationBuiltin:
+    """Issue #252: Python-backend correlation must not use an absolute
+    stddev floor — identical tiny-scale vectors are perfectly correlated."""
+
+    def test_tiny_identical_vectors_correlate(self):
+        import contextlib
+        import io
+        src = ("fn main() {\n"
+               "    println(correlation([0.0, 0.00000000000001], [0.0, 0.00000000000001]))\n"
+               "    println(correlation([1.0, 1.0, 1.0], [1.0, 2.0, 3.0]))\n"
+               "}\nmain()")
+        r = check(src)
+        assert r.ok
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            exec(r.python_src, {})
+        assert buf.getvalue().split() == ["1.0", "0.0"]
