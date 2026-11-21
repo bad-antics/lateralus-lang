@@ -1,0 +1,204 @@
+// ===================================================================
+// examples/xxhash_tutorial.ltl  —  XXH64 & FNV-1a hashing demo
+// -------------------------------------------------------------------
+// Demonstrates the stdlib/xxhash.ltl module: single-shot XXH64 with
+// seeds, the canonical test vectors from the xxHash spec, and the
+// FNV-1a 64-bit variant bundled in the same module.
+//
+// The file is self-contained: the module implementation is inlined
+// below (same code as stdlib/xxhash.ltl) so it runs standalone with
+//   lateralus run examples/xxhash_tutorial.ltl
+// ===================================================================
+
+// Helper string primitives (the module's string wrappers build on
+// bytes_of; defined locally so this file runs on its own).
+fn char_at(s: str, i: int) -> str { return slice(s, i, i + 1) }
+
+fn bytes_of(s: str) -> list {
+    let out = []
+    let i = 0
+    while i < len(s) {
+        out = out + [ord(char_at(s, i))]
+        i = i + 1
+    }
+    return out
+}
+
+// ── stdlib/xxhash.ltl (inlined) ────────────────────────────────────
+
+let XXH_MASK  = 0xFFFFFFFFFFFFFFFF
+let XXH_P1    = 0x9E3779B185EBCA87
+let XXH_P2    = 0xC2B2AE3D27D4EB4F
+let XXH_P3    = 0x165667B19E3779F9
+let XXH_P4    = 0x85EBCA77C2B2AE63
+let XXH_P5    = 0x27D4EB2F165667C5
+
+fn u64(x: int) -> int { return x & XXH_MASK }
+
+fn rotl64(v: int, r: int) -> int {
+    let v2 = v & XXH_MASK
+    return ((v2 << r) | (v2 >> (64 - r))) & XXH_MASK
+}
+
+fn read_u64_le(buf: list, i: int) -> int {
+    return  buf[i]
+         | (buf[i + 1] << 8)
+         | (buf[i + 2] << 16)
+         | (buf[i + 3] << 24)
+         | (buf[i + 4] << 32)
+         | (buf[i + 5] << 40)
+         | (buf[i + 6] << 48)
+         | (buf[i + 7] << 56)
+}
+
+fn read_u32_le(buf: list, i: int) -> int {
+    return  buf[i]
+         | (buf[i + 1] << 8)
+         | (buf[i + 2] << 16)
+         | (buf[i + 3] << 24)
+}
+
+fn round64(acc: int, input: int) -> int {
+    acc = u64(acc + u64(input * XXH_P2))
+    acc = rotl64(acc, 31)
+    return u64(acc * XXH_P1)
+}
+
+fn merge_round(acc: int, val: int) -> int {
+    val = round64(0, val)
+    acc = acc ^ val
+    return u64(u64(acc * XXH_P1) + XXH_P4)
+}
+
+/// Hash a raw byte list with optional 64-bit seed.
+fn hash64(buf: list, seed: int) -> int {
+    let n = len(buf)
+    let h = 0
+    let i = 0
+    if n >= 32 {
+        let v1 = u64(seed + XXH_P1 + XXH_P2)
+        let v2 = u64(seed + XXH_P2)
+        let v3 = u64(seed + 0)
+        let v4 = u64(seed - XXH_P1)
+        while i + 32 <= n {
+            v1 = round64(v1, read_u64_le(buf, i))
+            v2 = round64(v2, read_u64_le(buf, i + 8))
+            v3 = round64(v3, read_u64_le(buf, i + 16))
+            v4 = round64(v4, read_u64_le(buf, i + 24))
+            i = i + 32
+        }
+        h = u64(rotl64(v1, 1) + rotl64(v2, 7) + rotl64(v3, 12) + rotl64(v4, 18))
+        h = merge_round(h, v1)
+        h = merge_round(h, v2)
+        h = merge_round(h, v3)
+        h = merge_round(h, v4)
+    } else {
+        h = u64(seed + XXH_P5)
+    }
+    h = u64(h + n)
+    // tail: 8-byte chunks
+    while i + 8 <= n {
+        let k1 = round64(0, read_u64_le(buf, i))
+        h = rotl64(h ^ k1, 27)
+        h = u64(u64(h * XXH_P1) + XXH_P4)
+        i = i + 8
+    }
+    // 4-byte chunk
+    if i + 4 <= n {
+        h = u64(h ^ u64(read_u32_le(buf, i) * XXH_P1))
+        h = rotl64(h, 23)
+        h = u64(u64(h * XXH_P2) + XXH_P3)
+        i = i + 4
+    }
+    // trailing bytes
+    while i < n {
+        h = u64(h ^ u64(buf[i] * XXH_P5))
+        h = u64(rotl64(h, 11) * XXH_P1)
+        i = i + 1
+    }
+    // final avalanche
+    h = h ^ (h >> 33)
+    h = u64(h * XXH_P2)
+    h = h ^ (h >> 29)
+    h = u64(h * XXH_P3)
+    h = h ^ (h >> 32)
+    return h
+}
+
+/// Convenience wrapper for strings.
+fn hash64_str(s: str, seed: int) -> int {
+    return hash64(bytes_of(s), seed)
+}
+
+/// Lightweight FNV-1a (64-bit) — useful for tiny keys where you
+/// want < 50ns per hash even in the interpreter.
+fn fnv1a_64(buf: list) -> int {
+    let h = 0xCBF29CE484222325
+    let prime = 0x100000001B3
+    let i = 0
+    while i < len(buf) {
+        h = (h ^ buf[i]) & XXH_MASK
+        h = u64(h * prime)
+        i = i + 1
+    }
+    return h
+}
+
+fn fnv1a_64_str(s: str) -> int { return fnv1a_64(bytes_of(s)) }
+
+// ── Tutorial driver ────────────────────────────────────────────────
+
+fn main() {
+    print("=== LATERALUS STDLIB XXHASH TUTORIAL ===")
+
+    print("STEP 1: Canonical XXH64 test vectors (seed 0)")
+    let h_empty = hash64_str("", 0)
+    let h_a = hash64_str("a", 0)
+    let h_abc = hash64_str("abc", 0)
+    print("  xxh64('')    = " + str(h_empty) + "  (spec: 0xEF46DB3751D8E999)")
+    print("  xxh64('a')   = " + str(h_a) + "  (spec: 0xD24EC4F1A98C6E5B)")
+    print("  xxh64('abc') = " + str(h_abc) + "  (spec: 0x44BC2CF5AD770999)")
+
+    print("STEP 2: Every length class — tails and the 32-byte stripe loop")
+    let h_hello = hash64_str("Hello, xxHash!", 0)
+    let long_str = "lateraluslateraluslateraluslateraluslateraluslateraluslateraluslateralus"
+    let h_long = hash64_str(long_str, 0)
+    print("  xxh64('Hello, xxHash!') = " + str(h_hello) + "  (14 bytes: 8 + 4 + 2 tail)")
+    print("  xxh64(72-byte string)   = " + str(h_long) + "  (two full 32-byte stripes + 8-byte tail)")
+    let h_abc_bytes = hash64([97, 98, 99], 0)
+    print("  hash64([97, 98, 99]) == hash64_str('abc'): " + str(h_abc_bytes == h_abc))
+
+    print("STEP 3: Seeds — same input, different hash space")
+    let h_abc_s1 = hash64_str("abc", 1)
+    print("  xxh64('abc', seed=0) = " + str(h_abc))
+    print("  xxh64('abc', seed=1) = " + str(h_abc_s1))
+    print("  seeds differ: " + str(h_abc != h_abc_s1))
+
+    print("STEP 4: FNV-1a 64-bit — the tiny-key variant in the same module")
+    let f_empty = fnv1a_64_str("")
+    let f_a = fnv1a_64_str("a")
+    let f_lat = fnv1a_64_str("lateralus")
+    print("  fnv1a('')          = " + str(f_empty) + "  (the FNV offset basis)")
+    print("  fnv1a('a')         = " + str(f_a) + "  (spec: 0xAF63DC4C8601EC8C)")
+    print("  fnv1a('lateralus') = " + str(f_lat))
+
+    print("STEP 5: Cache keys in practice — stable, and avalanched")
+    let key1 = hash64_str("GET /users/42", 0)
+    let key2 = hash64_str("GET /users/42", 0)
+    let key3 = hash64_str("GET /users/43", 0)
+    print("  key('GET /users/42') twice, identical: " + str(key1 == key2))
+    print("  key('GET /users/43') differs:          " + str(key1 != key3))
+
+    // Pinned verification vectors for automated test suites
+    print("PINNED_VECTORS: xxh64_empty=" + str(h_empty)
+        + " xxh64_a=" + str(h_a)
+        + " xxh64_abc=" + str(h_abc)
+        + " xxh64_abc_seed1=" + str(h_abc_s1)
+        + " xxh64_hello=" + str(h_hello)
+        + " xxh64_long=" + str(h_long)
+        + " fnv_empty=" + str(f_empty)
+        + " fnv_a=" + str(f_a)
+        + " fnv_lateralus=" + str(f_lat))
+}
+
+main()
