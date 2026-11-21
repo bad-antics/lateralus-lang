@@ -1,0 +1,83 @@
+// ===================================================================
+// examples/dict_encoding_tutorial.ltl — stdlib/dict_encoding.ltl companion
+// Runnable tour of dictionary encoding for columnar data: a column of
+// low-cardinality values becomes (dictionary, indices). Self-contained.
+// ===================================================================
+
+fn encode(values: list) -> map {
+    let dict = []
+    let dict_idx = {}
+    let indices = []
+    let i = 0
+    while i < len(values) {
+        let v = values[i]
+        let k = str(v)
+        let idx = -1
+        if contains(dict_idx, k) {
+            idx = dict_idx[k]
+        } else {
+            idx = len(dict)
+            dict = dict + [v]
+            dict_idx[k] = idx
+        }
+        indices = indices + [idx]
+        i = i + 1
+    }
+    let m = {}
+    m["dictionary"] = dict
+    m["indices"] = indices
+    return m
+}
+
+fn decode(enc: map) -> list {
+    let dict = enc["dictionary"]
+    let idx = enc["indices"]
+    let out = []
+    let i = 0
+    while i < len(idx) {
+        out = out + [dict[idx[i]]]
+        i = i + 1
+    }
+    return out
+}
+
+fn index_bit_width(enc: map) -> int {
+    let n = len(enc["dictionary"])
+    if n <= 1 { return 1 }
+    let bits = 0
+    let v = n - 1
+    while v > 0 {
+        v = v >> 1
+        bits = bits + 1
+    }
+    return bits
+}
+
+fn cardinality(enc: map) -> int {
+    return len(enc["dictionary"])
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB DICT_ENCODING TUTORIAL ===")
+    let colors = ["red", "green", "red", "blue", "green", "red", "yellow", "blue"]
+    let enc = encode(colors)
+    println("STEP 1 dict: " + join(enc["dictionary"], ","))
+    println("STEP 2 indices: " + join(enc["indices"], ","))
+    println("STEP 3 cardinality = " + str(cardinality(enc)))
+    println("STEP 4 bit_width = " + str(index_bit_width(enc)))
+    let round = decode(enc)
+    println("STEP 5 round-trip equal: " + str(round == colors))
+
+    let nums = [10, 20, 10, 30, 20, 10]
+    let enc2 = encode(nums)
+    println("STEP 6 int dict: " + join(enc2["dictionary"], ","))
+    println("STEP 7 int indices: " + join(enc2["indices"], ","))
+
+    let single = encode(["only"])
+    println("STEP 8 single card=" + str(cardinality(single)) + " width=" + str(index_bit_width(single)))
+    let empty = encode([])
+    println("STEP 9 empty card=" + str(cardinality(empty)) + " indices=[]")
+    println("PINNED_VECTORS: dict=red,green,blue,yellow idx=0,1,0,2,1,0,3,2 card=4 width=2 rt=true nums=10,20,30 nidx=0,1,0,2,1,0 single=1/1")
+}
+
+main()
