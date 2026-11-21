@@ -12,6 +12,7 @@ from lateralus_lang.lsp_server import (
     get_hover,
     get_references,
     get_signature_help,
+    _stdlib_index,
 )
 
 
@@ -128,6 +129,43 @@ class TestHover:
         doc = TextDocument("file:///test.ltl", "lateralus", 1, "xyz123")
         hover = get_hover(doc, 0, 3)
         assert hover is None
+
+    def test_stdlib_hover_shows_signature_and_doc(self):
+        doc = TextDocument("file:///test.ltl", "lateralus", 1, "let out = encode(payload)")
+        hover = get_hover(doc, 0, 11)
+        assert hover is not None
+        value = hover["contents"]["value"]
+        assert "pub fn encode(data: str) -> str" in value
+        assert "Encode a string to base64." in value
+        assert "base64" in value
+
+    def test_stdlib_hover_without_docstring(self):
+        doc = TextDocument("file:///test.ltl", "lateralus", 1, "correlation(xs, ys)")
+        hover = get_hover(doc, 0, 3)
+        assert hover is not None
+        value = hover["contents"]["value"]
+        assert "pub fn correlation(" in value
+        assert "```" in value
+
+    def test_stdlib_hover_uses_first_doc_line_only(self):
+        entry = _stdlib_index()["encode"]
+        assert entry["doc"] == "Encode a string to base64."
+        assert "\n" not in entry["doc"]
+
+    def test_stdlib_index_is_cached(self):
+        assert _stdlib_index() is _stdlib_index()
+
+    def test_stdlib_index_covers_many_modules(self):
+        index = _stdlib_index()
+        assert len(index) > 100
+        modules = {v["module"] for v in index.values()}
+        assert len(modules) > 10
+
+    def test_stdlib_index_only_public_fns(self):
+        index = _stdlib_index()
+        assert "CHARS" not in index, "module constants are not functions"
+        for entry in index.values():
+            assert entry["signature"].startswith("pub fn ")
 
 
 class TestLSPServer:

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import sys
 from dataclasses import dataclass, field
@@ -398,6 +399,69 @@ def get_completions(doc: TextDocument, line: int, character: int) -> list[dict]:
     return items
 
 
+# --- Stdlib signature index -------------------------------------------
+
+_STDLIB_INDEX: Optional[dict[str, dict]] = None
+
+_RE_PUB_FN = re.compile(r"^\s*pub\s+(?:async\s+)?fn\s+(\w+)\s*(\([^)]*\)\s*(?:->\s*[^{]+)?)")
+
+
+def _stdlib_dir() -> str:
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "stdlib")
+
+
+def _stdlib_index() -> dict[str, dict]:
+    """Map every `pub fn` in stdlib/*.ltl to its signature and first doc line.
+
+    Built once per process and cached; hovering is on the editor's hot path, so
+    re-reading 140 files per keystroke is not an option.
+    """
+    global _STDLIB_INDEX
+    if _STDLIB_INDEX is not None:
+        return _STDLIB_INDEX
+
+    index: dict[str, dict] = {}
+    root = _stdlib_dir()
+    try:
+        names = sorted(os.listdir(root))
+    except OSError:
+        names = []
+
+    for name in names:
+        if not name.endswith(".ltl"):
+            continue
+        module = name[:-4]
+        try:
+            with open(os.path.join(root, name), encoding="utf-8", errors="replace") as f:
+                lines = f.read().splitlines()
+        except OSError:
+            continue
+
+        doc = ""
+        for raw in lines:
+            stripped = raw.strip()
+            if stripped.startswith("///"):
+                # BOUNTIES.md asks for the *first* docstring line.
+                if not doc:
+                    doc = stripped[3:].strip()
+                continue
+            m = _RE_PUB_FN.match(raw)
+            if m:
+                if m.group(1) not in index:
+                    index[m.group(1)] = {
+                        "signature": f"pub fn {m.group(1)}{m.group(2).strip()}",
+                        "doc": doc,
+                        "module": module,
+                    }
+                doc = ""
+            elif stripped:
+                # Any other statement breaks the docstring-to-fn association.
+                doc = ""
+
+    _STDLIB_INDEX = index
+    return index
+
+
 def get_hover(doc: TextDocument, line: int, character: int) -> Optional[dict]:
     """Get hover information at position."""
     word = doc.get_word_at(line, character)
@@ -411,6 +475,17 @@ def get_hover(doc: TextDocument, line: int, character: int) -> Optional[dict]:
             "contents": {
                 "kind": "markdown",
                 "value": f"```lateralus\n{info['detail']}\n```\n\n{info['doc']}",
+            },
+        }
+
+    # Check the stdlib index: signature + first docstring line for any pub fn
+    stdlib = _stdlib_index().get(word)
+    if stdlib:
+        body = f"```lateralus\n{stdlib['signature']}\n```\n\n{stdlib['doc']}" if stdlib["doc"] else f"```lateralus\n{stdlib['signature']}\n```"
+        return {
+            "contents": {
+                "kind": "markdown",
+                "value": f"{body}\n\n_stdlib · `{stdlib['module']}`_",
             },
         }
 
