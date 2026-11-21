@@ -1,0 +1,101 @@
+// Advent of Code 2024 · Day 9 · Disk Fragmenter
+// Part 1: move file blocks one at a time from the end into the leftmost free block; checksum.
+// Part 2: move whole files (highest ID first) into the leftmost free span that fits; checksum.
+
+let SAMPLE = "2333133121414131402"
+
+// Expand the dense disk map into one entry per block: file ID, or -1 for free.
+fn expand(text: str) -> list {
+    let disk = str_trim(text)
+    let blocks = []
+    for i in range(0, len(disk)) {
+        let id = -1
+        if imod(i, 2) == 0 { id = idiv(i, 2) }
+        for k in range(0, int(disk[i])) { blocks.append(id) }
+    }
+    return blocks
+}
+
+fn part1(text: str) -> int {
+    let blocks = expand(text)
+    // two pointers: left finds free blocks, right finds file blocks to move
+    let left = 0
+    let right = len(blocks) - 1
+    while true {
+        while left < len(blocks) && blocks[left] != -1 { left = left + 1 }
+        while right >= 0 && blocks[right] == -1 { right = right - 1 }
+        if left >= right { break }
+        blocks[left] = blocks[right]
+        blocks[right] = -1
+    }
+    let checksum = 0
+    for pos in range(0, len(blocks)) {
+        if blocks[pos] != -1 { checksum = checksum + pos * blocks[pos] }
+    }
+    return checksum
+}
+
+fn part2(text: str) -> int {
+    let disk = str_trim(text)
+    // file_pos/file_len indexed by file ID; gap_pos/gap_len list free spans left to right
+    let file_pos = []
+    let file_len = []
+    let gap_pos = []
+    let gap_len = []
+    let pos = 0
+    for i in range(0, len(disk)) {
+        let n = int(disk[i])
+        if imod(i, 2) == 0 {
+            file_pos.append(pos)
+            file_len.append(n)
+        } else {
+            gap_pos.append(pos)
+            gap_len.append(n)
+        }
+        pos = pos + n
+    }
+    // first_fit[s] = index of the first gap that might still hold s blocks.
+    // Gaps only ever shrink, so these pointers only move right — no rescans.
+    let first_fit = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    let id = len(file_pos) - 1
+    while id >= 0 {
+        let size = file_len[id]
+        if size > 0 {
+            let g = first_fit[size]
+            while g < len(gap_pos) && gap_len[g] < size { g = g + 1 }
+            first_fit[size] = g
+            // only move left, into a gap that starts before the file
+            if g < len(gap_pos) && gap_pos[g] < file_pos[id] {
+                file_pos[id] = gap_pos[g]
+                gap_pos[g] = gap_pos[g] + size
+                gap_len[g] = gap_len[g] - size
+            }
+        }
+        id = id - 1
+    }
+    // sum of id * (p + p+1 + ... + p+len-1) for each file
+    let checksum = 0
+    for f in range(0, len(file_pos)) {
+        let p = file_pos[f]
+        let n = file_len[f]
+        checksum = checksum + f * (n * p + idiv(n * (n - 1), 2))
+    }
+    return checksum
+}
+
+@test
+fn test_sample_part1() {
+    assert_eq(part1(SAMPLE), 1928)
+}
+
+@test
+fn test_sample_part2() {
+    assert_eq(part2(SAMPLE), 2858)
+}
+
+fn main() {
+    print("Day 9 Part 1: " + str(part1(SAMPLE)))
+    print("Day 9 Part 2: " + str(part2(SAMPLE)))
+}
+
+main()

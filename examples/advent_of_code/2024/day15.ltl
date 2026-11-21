@@ -1,0 +1,184 @@
+// Advent of Code 2024 · Day 15 · Warehouse Woes
+// Part 1: the robot pushes boxes around; sum the GPS coordinates (100 * row + col) of all boxes.
+// Part 2: same moves in a double-width warehouse where boxes are "[]" and can push two boxes at once.
+
+let SAMPLE = "##########
+#..O..O.O#
+#......O.#
+#.OO..O.O#
+#..O@..O.#
+#O#..O...#
+#O..O..O.#
+#.OO.O.OO#
+#....O...#
+##########
+
+<vv>^<v^>v>^vv^v>v<>v^v<v<^vv<<<^><<><>>v<vvv<>^v^>^<<<><<v<<<v^vv^v>^
+vvv<<^>^v^^><<>>><>^<<><^vv^^<>vvv<>><^^v>^>vv<>v<<<<v<^v>^<^^>>>^<v<v
+><>vv>v^v^<>><>>>><^^>vv>v<^^^>>v^v^<^^>v^^>v^<^v>v<>>v^v^<v>v^^<^^vv<
+<<v<^>>^^^^>>>v^<>vvv^><v<<<>^^^vv^<vvv>^>v<^^^^v<>^>vvvv><>>v^<<^^^^^
+^><^><>>><>^^<<^^v>>><^<v>^<vv>>v>>>^v><>^v><<<<v>>v<v<v>vvv>^<><<>^><
+^>><>^v<><^vvv<^^<><v<<<<<><^v<<<><<<^^<v<^^^><^>>^<v^><<<^>>^v<v^v<v^
+>^>>^v>vv>^<<^v<>><<><<v<<v><>v<^vv<<<>^^v^>^^>>><<^v>>v^v><^^>>^<>vv^
+<><^^>^^^<><vvvvv^v<v<<>^v<v>v<<^><<><<><<<^^<<<^<<>><<><^^^>^^<>^>v<>
+^^>vv<^v^v<vv>^<><v<^v>^^^>>>^^vvv^>vvv<>>>^<^>>>>>^<<^v>^vvv<>^<><<v>
+v^^>>><<^^<>>^v^<v^vv<>v^<<>^<^v^v><^<<<><<^<v><v<>vv>>v><v^<vv<>v^<<^"
+
+let SMALL_SAMPLE = "########
+#..O.O.#
+##@.O..#
+#...O..#
+#.#.O..#
+#...O..#
+#......#
+########
+
+<^^>>>vv<v>>v<<"
+
+// Small walkthrough from the part 2 text.
+let WIDE_SAMPLE = "#######
+#...#.#
+#.....#
+#..OO@#
+#..O..#
+#.....#
+#######
+
+<vv<<^^<<^^"
+
+// Part 2 doubles every tile horizontally.
+fn widen(tile: str) -> str {
+    if tile == "#" { return "##" }
+    if tile == "O" { return "[]" }
+    if tile == "@" { return "@." }
+    return ".."
+}
+
+// Simulate the whole move list and return the final GPS sum.
+fn simulate(text: str, wide: bool) -> int {
+    let sections = str_split(str_replace(text, "\r", ""), "\n\n")
+    let grid = []
+    let row = 0
+    let col = 0
+    for line in str_split(str_trim(sections[0]), "\n") {
+        let cells = []
+        for tile in str_trim(line) {
+            let tiles = [tile]
+            if wide { tiles = list(widen(tile)) }
+            for t in tiles {
+                if t == "@" {
+                    row = len(grid)
+                    col = len(cells)
+                }
+                cells.append(t)
+            }
+        }
+        grid.append(cells)
+    }
+    let cols = len(grid[0])
+
+    for m in sections[1] {
+        let dr = 0
+        let dc = 0
+        if m == "^" {
+            dr = -1
+        } else if m == "v" {
+            dr = 1
+        } else if m == "<" {
+            dc = -1
+        } else if m == ">" {
+            dc = 1
+        } else {
+            continue  // newlines inside the move list
+        }
+
+        // Collect everything the move would shove, breadth-first from the
+        // robot: each occupied cell pushes the cell ahead of it, and moving a
+        // wide box vertically also drags its other half along. If any of
+        // those cells runs into a wall, nothing moves.
+        let order = [row * cols + col]
+        let seen = set()
+        seen.add(row * cols + col)
+        let i = 0
+        let blocked = false
+        while i < len(order) && !blocked {
+            let r = idiv(order[i], cols) + dr
+            let c = imod(order[i], cols) + dc
+            i = i + 1
+            let tile = grid[r][c]
+            if tile == "#" {
+                blocked = true
+            } else if tile != "." {
+                let ahead = [c]
+                if dr != 0 && tile == "[" { ahead.append(c + 1) }
+                if dr != 0 && tile == "]" { ahead.append(c - 1) }
+                for ac in ahead {
+                    let key = r * cols + ac
+                    if !contains(seen, key) {
+                        seen.add(key)
+                        order.append(key)
+                    }
+                }
+            }
+        }
+        if blocked { continue }
+
+        // Shift the far end first so nothing is overwritten before it moves.
+        let j = len(order) - 1
+        while j >= 0 {
+            let r = idiv(order[j], cols)
+            let c = imod(order[j], cols)
+            grid[r + dr][c + dc] = grid[r][c]
+            grid[r][c] = "."
+            j = j - 1
+        }
+        row = row + dr
+        col = col + dc
+    }
+
+    // A box's GPS coordinate uses its left edge, i.e. "O" or "[".
+    let gps = 0
+    for r in range(0, len(grid)) {
+        for c in range(0, cols) {
+            if grid[r][c] == "O" || grid[r][c] == "[" {
+                gps = gps + 100 * r + c
+            }
+        }
+    }
+    return gps
+}
+
+fn part1(text: str) -> int {
+    return simulate(text, false)
+}
+
+fn part2(text: str) -> int {
+    return simulate(text, true)
+}
+
+@test
+fn test_small_sample_part1() {
+    assert_eq(part1(SMALL_SAMPLE), 2028)
+}
+
+@test
+fn test_sample_part1() {
+    assert_eq(part1(SAMPLE), 10092)
+}
+
+@test
+fn test_wide_sample_part2() {
+    assert_eq(part2(WIDE_SAMPLE), 618)
+}
+
+@test
+fn test_sample_part2() {
+    assert_eq(part2(SAMPLE), 9021)
+}
+
+fn main() {
+    print("Day 15 Part 1: " + str(part1(SAMPLE)))
+    print("Day 15 Part 2: " + str(part2(SAMPLE)))
+}
+
+main()

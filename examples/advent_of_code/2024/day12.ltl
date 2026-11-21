@@ -1,0 +1,113 @@
+// Advent of Code 2024 · Day 12 · Garden Groups
+// Part 1: fence price = sum over regions of area * perimeter.
+// Part 2: bulk discount = sum over regions of area * number of straight sides.
+
+let SAMPLE = "RRRRIICCFF
+RRRRIICCCF
+VVRRRCCFFF
+VVRCCCJFFF
+VVVVCJJCFE
+VVIVCCJJEE
+VVIIICJJEE
+MIIIIIJJEE
+MIIISIJEEE
+MMMISSJEEE"
+
+fn parse(text: str) -> list {
+    let rows = []
+    for raw in str_split(text, "\n") {
+        let line = str_trim(raw)
+        if len(line) > 0 { rows.append(line) }
+    }
+    return rows
+}
+
+// Plant at (r, c), or "" when off the map, so edge checks need no bounds logic.
+fn plant(grid: list, r: int, c: int) -> str {
+    if r < 0 || r >= len(grid) || c < 0 || c >= len(grid[0]) { return "" }
+    return grid[r][c]
+}
+
+// Flood-fill every region once. For each cell we count:
+//   * perimeter: orthogonal neighbours that are not in the region;
+//   * corners:   a polygon has as many sides as corners, so counting corners
+//                counts sides. Looking at each diagonal quadrant of a cell,
+//                it is an outer corner when both orthogonal neighbours are
+//                outside, and an inner corner when both are inside but the
+//                diagonal cell is outside.
+// Returns [sum of area * perimeter, sum of area * sides].
+fn price(text: str) -> list {
+    let grid = parse(text)
+    let rows = len(grid)
+    let cols = len(grid[0])
+    let seen = set()
+    let dr = [1, -1, 0, 0]
+    let dc = [0, 0, 1, -1]
+    let by_perimeter = 0
+    let by_sides = 0
+    for r0 in range(0, rows) {
+        for c0 in range(0, cols) {
+            if contains(seen, r0 * cols + c0) { continue }
+            let p = grid[r0][c0]
+            seen.add(r0 * cols + c0)
+            let stack = [r0 * cols + c0]
+            let area = 0
+            let perimeter = 0
+            let corners = 0
+            while len(stack) > 0 {
+                let key = stack.pop()
+                let r = idiv(key, cols)
+                let c = imod(key, cols)
+                area = area + 1
+                for d in range(0, 4) {
+                    let nr = r + dr[d]
+                    let nc = c + dc[d]
+                    if plant(grid, nr, nc) != p {
+                        perimeter = perimeter + 1
+                    } else if !contains(seen, nr * cols + nc) {
+                        seen.add(nr * cols + nc)
+                        stack.append(nr * cols + nc)
+                    }
+                }
+                for vr in [-1, 1] {
+                    for hc in [-1, 1] {
+                        let vert = plant(grid, r + vr, c) == p
+                        let horiz = plant(grid, r, c + hc) == p
+                        let diag = plant(grid, r + vr, c + hc) == p
+                        if (!vert && !horiz) || (vert && horiz && !diag) {
+                            corners = corners + 1
+                        }
+                    }
+                }
+            }
+            by_perimeter = by_perimeter + area * perimeter
+            by_sides = by_sides + area * corners
+        }
+    }
+    return [by_perimeter, by_sides]
+}
+
+fn part1(text: str) -> int {
+    return price(text)[0]
+}
+
+fn part2(text: str) -> int {
+    return price(text)[1]
+}
+
+@test
+fn test_sample_part1() {
+    assert_eq(part1(SAMPLE), 1930)
+}
+
+@test
+fn test_sample_part2() {
+    assert_eq(part2(SAMPLE), 1206)
+}
+
+fn main() {
+    print("Day 12 Part 1: " + str(part1(SAMPLE)))
+    print("Day 12 Part 2: " + str(part2(SAMPLE)))
+}
+
+main()
