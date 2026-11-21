@@ -1,0 +1,67 @@
+// ═══════════════════════════════════════════════════════════
+// LATERALUS LSP Hover Signatures Provider
+// ═══════════════════════════════════════════════════════════
+
+module LspHover {
+
+  struct StdlibSymbol {
+    let name: str
+    let signature: str
+    let docstring: str
+  }
+
+  let mut STDLIB_SIGNATURES: map[str, StdlibSymbol] = map_new()
+
+  // Parse stdlib signatures from stdlib/*.ltl at startup
+  fn init_stdlib_signatures() {
+    let stdlib_files = ["stdlib/bencode.ltl"];
+    for file_path in stdlib_files {
+      let content = file_read(file_path);
+      let lines = content |> split("\n");
+      let mut current_doc = "";
+      let mut current_mod = "";
+      
+      for line in lines {
+        let trimmed = line |> trim();
+        if trimmed |> starts_with("module ") {
+          current_mod = trimmed |> substring(7) |> trim_end_matches(" {");
+        } else if trimmed |> starts_with("//") {
+          let comment_content = trimmed |> substring(2) |> trim();
+          if comment_content |> starts_with("Exported Function:") || comment_content |> starts_with("Struct Definition:") {
+            // header comment, skip or use next lines
+          } else if comment_content != "" && current_doc == "" {
+            current_doc = comment_content;
+          }
+        } else if trimmed |> starts_with("fn ") {
+          let sig = trimmed;
+          let name_part = trimmed |> substring(3) |> split("(") |> first() |> trim();
+          let full_name = if current_mod != "" { current_mod + "." + name_part } else { name_part };
+          
+          map_set(STDLIB_SIGNATURES, full_name, StdlibSymbol {
+            name: full_name,
+            signature: sig,
+            docstring: current_doc
+          });
+          map_set(STDLIB_SIGNATURES, name_part, StdlibSymbol {
+            name: full_name,
+            signature: sig,
+            docstring: current_doc
+          });
+          current_doc = "";
+        }
+      }
+    }
+  }
+
+  fn handle_hover(symbol_name: str) -> str {
+    if map_contains(STDLIB_SIGNATURES, symbol_name) {
+      let sym = map_get(STDLIB_SIGNATURES, symbol_name);
+      if sym.docstring != "" {
+        return sym.signature + "\n\n" + sym.docstring;
+      } else {
+        return sym.signature;
+      }
+    }
+    return "Unknown symbol: " + symbol_name;
+  }
+}
