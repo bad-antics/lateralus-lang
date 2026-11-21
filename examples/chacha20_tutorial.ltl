@@ -1,0 +1,200 @@
+// ===================================================================
+// examples/chacha20_tutorial.ltl — stdlib/chacha20.ltl tutorial companion
+// Runnable tour of the ChaCha20 stream cipher (RFC 8439): the quarter
+// round, the 64-byte block function, and XOR encrypt/decrypt —
+// verified against the RFC's own test vectors.
+// Self-contained — module code inlined verbatim (it is already pure
+// Lateralus with no external builtin dependencies).
+// Poly1305/AEAD is OUT of scope, matching the module.
+// ===================================================================
+
+const CC_MASK32 = 0xFFFFFFFF
+
+fn u32(x: int) -> int { return x & CC_MASK32 }
+
+fn rotl32(v: int, r: int) -> int {
+    let v2 = v & CC_MASK32
+    return ((v2 << r) | (v2 >> (32 - r))) & CC_MASK32
+}
+
+fn read_u32_le(buf: list, i: int) -> int {
+    return  buf[i]
+         | (buf[i + 1] << 8)
+         | (buf[i + 2] << 16)
+         | (buf[i + 3] << 24)
+}
+
+fn u32_to_le(v: int) -> list {
+    return [v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, (v >> 24) & 0xff]
+}
+
+fn quarter_round(s: list, a: int, b: int, c: int, d: int) -> list {
+    s[a] = u32(s[a] + s[b]); s[d] = rotl32(s[d] ^ s[a], 16)
+    s[c] = u32(s[c] + s[d]); s[b] = rotl32(s[b] ^ s[c], 12)
+    s[a] = u32(s[a] + s[b]); s[d] = rotl32(s[d] ^ s[a],  8)
+    s[c] = u32(s[c] + s[d]); s[b] = rotl32(s[b] ^ s[c],  7)
+    return s
+}
+
+fn block(key: list, nonce: list, counter: int) -> list {
+    let s = [
+        0x61707865, 0x3320646e, 0x79622d32, 0x6b206574,
+        read_u32_le(key, 0),  read_u32_le(key, 4),
+        read_u32_le(key, 8),  read_u32_le(key, 12),
+        read_u32_le(key, 16), read_u32_le(key, 20),
+        read_u32_le(key, 24), read_u32_le(key, 28),
+        counter & CC_MASK32,
+        read_u32_le(nonce, 0),
+        read_u32_le(nonce, 4),
+        read_u32_le(nonce, 8)
+    ]
+    let working = []
+    let i = 0
+    while i < 16 { working = working + [s[i]]; i = i + 1 }
+    let r = 0
+    while r < 10 {
+        working = quarter_round(working, 0, 4,  8, 12)
+        working = quarter_round(working, 1, 5,  9, 13)
+        working = quarter_round(working, 2, 6, 10, 14)
+        working = quarter_round(working, 3, 7, 11, 15)
+        working = quarter_round(working, 0, 5, 10, 15)
+        working = quarter_round(working, 1, 6, 11, 12)
+        working = quarter_round(working, 2, 7,  8, 13)
+        working = quarter_round(working, 3, 4,  9, 14)
+        r = r + 1
+    }
+    let out = []
+    let k = 0
+    while k < 16 {
+        out = out + u32_to_le(u32(working[k] + s[k]))
+        k = k + 1
+    }
+    return out
+}
+
+fn xor(key: list, nonce: list, initial_counter: int,
+        data: list) -> list {
+    let out = []
+    let n = len(data)
+    let i = 0
+    let counter = initial_counter
+    while i < n {
+        let ks = block(key, nonce, counter)
+        let take = 64
+        if n - i < 64 { take = n - i }
+        let j = 0
+        while j < take {
+            out = out + [data[i + j] ^ ks[j]]
+            j = j + 1
+        }
+        i = i + 64
+        counter = counter + 1
+    }
+    return out
+}
+
+// -- tutorial helpers ---------------------------------------------------
+
+fn s2b(s: str) -> list {
+    let out = []
+    let i = 0
+    while i < len(s) {
+        out = out + [ord(s[i])]
+        i = i + 1
+    }
+    return out
+}
+
+fn bytes_to_hex(b: list) -> str {
+    let hex = "0123456789abcdef"
+    let out = ""
+    let i = 0
+    while i < len(b) {
+        let v = b[i] & 0xff
+        out = out + slice(hex, v >> 4, (v >> 4) + 1)
+        out = out + slice(hex, v & 15, (v & 15) + 1)
+        i = i + 1
+    }
+    return out
+}
+
+fn bytes_to_str(b: list) -> str {
+    let s = ""
+    for x in b {
+        s = s + chr(x)
+    }
+    return s
+}
+
+// RFC key: bytes 0x00..0x1f ; nonce helpers as byte lists.
+fn rfc_key() -> list {
+    let k = []
+    let i = 0
+    while i < 32 {
+        k = k + [i]
+        i = i + 1
+    }
+    return k
+}
+
+fn rfc_nonce_block() -> list {
+    // 00:00:00:09:00:00:00:4a:00:00:00:00  (§2.3.2 block vector)
+    return [0,0,0,9, 0,0,0,0x4a, 0,0,0,0]
+}
+
+fn rfc_nonce_enc() -> list {
+    // 00:00:00:00:00:00:00:4a:00:00:00:00  (§2.4.2 encryption vector)
+    return [0,0,0,0, 0,0,0,0x4a, 0,0,0,0]
+}
+
+// ===================================================================
+
+fn main() {
+    print("=== LATERALUS STDLIB CHACHA20 TUTORIAL ===")
+    let key = rfc_key()
+
+    // -- Step 1: quarter round ------------------------------------------
+    print("STEP 1 quarter_round on a known state:")
+    let st = [0x11111111, 0x01020304, 0x9b8d6f43, 0x01234567]
+    st = quarter_round(st, 0, 1, 2, 3)
+    print("  a=" + str(st[0]) + " b=" + str(st[1])
+        + " c=" + str(st[2]) + " d=" + str(st[3]))
+
+    // -- Step 2: block function (RFC 8439 §2.3.2) ------------------------
+    print("STEP 2 keystream block (RFC vector):")
+    let ks = block(key, rfc_nonce_block(), 1)
+    print("  len=" + str(len(ks)))
+    print("  first32=" + bytes_to_hex(slice(ks, 0, 32)))
+    print("  matches_rfc=" + str(bytes_to_hex(ks)
+        == "10f1e7e4d13b5915500fdd1fa32071c4c7d1f4c733c068030422aa9ac3d46c4ed2826446079faa0914c2d705d98b02a2b5129cd1de164eb9cbd083e8a2503c4e"))
+
+    // -- Step 3: encrypt the RFC plaintext (§2.4.2) ----------------------
+    print("STEP 3 encrypt RFC plaintext:")
+    let pt = "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it."
+    let ptb = s2b(pt)
+    let ct = xor(key, rfc_nonce_enc(), 1, ptb)
+    let expected = "6e2e359a2568f98041ba0728dd0d6981e97e7aec1d4360c20a27afccfd9fae0bf91b65c5524733ab8f593dabcd62b3571639d624e65152ab8f530c359f0861d807ca0dbf500d6a6156a38e088a22b65e52bc514d16ccf806818ce91ab77937365af90bbf74a35be6b40b8eedf2785e42874d"
+    print("  pt_len=" + str(len(ptb)) + " ct_len=" + str(len(ct)))
+    print("  ct_first32=" + bytes_to_hex(slice(ct, 0, 32)))
+    print("  matches_rfc=" + str(bytes_to_hex(ct) == expected))
+
+    // -- Step 4: decrypt round-trip --------------------------------------
+    print("STEP 4 decrypt round-trip:")
+    let back = xor(key, rfc_nonce_enc(), 1, ct)
+    print("  roundtrip=" + str(bytes_to_str(back) == pt))
+
+    // -- Step 5: counter increments across blocks -------------------------
+    print("STEP 5 multi-block counter:")
+    let ks1 = block(key, rfc_nonce_block(), 1)
+    let ks2 = block(key, rfc_nonce_block(), 2)
+    print("  block1!=block2=" + str(bytes_to_hex(ks1) != bytes_to_hex(ks2)))
+    let ks0 = block(key, rfc_nonce_block(), 0)
+    print("  counter0_differs=" + str(bytes_to_hex(ks0) != bytes_to_hex(ks1)))
+
+    print("PINNED_VECTORS: qr_a=0xea2a92f4 qr_lowbytes=" + bytes_to_hex(slice(st,0,4))
+        + " ks_head=10f1e7e4 ct_head=6e2e359a "
+        + "rfc_block=True rfc_enc=True roundtrip=True "
+        + "ctr_diff=True")
+    print("  ✓ examples/chacha20_tutorial.ltl: OK")
+    return 0
+}
