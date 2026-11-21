@@ -236,6 +236,28 @@ class PythonTranspiler(ASTVisitor):
         self._w += "ord = _builtins.ord"
         self._w += "none = None    # Lateralus alias for Python None"
         self._w += "null = None    # Lateralus alias for Python None"
+        self._w += "nil  = None    # Lateralus alias for Python None"
+        self._w += "def substring(s, start, end=None): return s[start:] if end is None else s[start:end]"
+        self._w += "def split(s, sep=None): return s.split(sep)"
+        self._w += "def panic(msg=''): raise RuntimeError(str(msg))"
+        self._w += "def bytes_of(s): return [ord(c) for c in s] if isinstance(s, str) else list(s)"
+        self._w += "def type_of(v):"
+        self._w += "    if v is None: return 'nil'"
+        self._w += "    if isinstance(v, bool): return 'bool'"
+        self._w += "    if isinstance(v, int): return 'int'"
+        self._w += "    if isinstance(v, float): return 'float'"
+        self._w += "    if isinstance(v, str): return 'str'"
+        self._w += "    if isinstance(v, list): return 'list'"
+        self._w += "    if isinstance(v, dict): return 'map'"
+        self._w += "    return type(v).__name__"
+        self._w += "lowercase = lambda s: s.lower() if isinstance(s, str) else s"
+        self._w += "uppercase = lambda s: s.upper() if isinstance(s, str) else s"
+        self._w += "replace = lambda s, a, b: s.replace(a, b) if isinstance(s, str) else s"
+        self._w += "__builtin_uuid4 = lambda: str(_uuid2.uuid4())"
+        self._w += "def index_of(c, item):"
+        self._w += "    if isinstance(c, str): return c.find(str(item))"
+        self._w += "    try: return c.index(item)"
+        self._w += "    except (ValueError, AttributeError): return -1"
         self._w += "keys = lambda d: list(d.keys())"
         self._w += "values = lambda d: list(d.values())"
         self._w += "sorted = _builtins.sorted"
@@ -1078,6 +1100,9 @@ class PythonTranspiler(ASTVisitor):
         self._w += "continue"
 
     def visit_BlockStmt(self, node: BlockStmt):
+        if not node.stmts:
+            self._w += "pass"
+            return
         for stmt in node.stmts:
             stmt.accept(self)
 
