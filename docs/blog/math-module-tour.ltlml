@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>math.ltl in Practice — 26 Pinned Vectors and Four Traps — Lateralus</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "math.ltl in Practice: 26 Pinned Vectors and Four Traps"
+author: xilin2020
+date: 2026-11-21
+abstract: A working tour of stdlib/math.ltl — the import form, the 26 vectors that pin its behaviour, and the four places where a programmer coming from Python or C will guess wrong.
+---
+
+## The pitch
+
+Most "math library" tutorials enumerate functions alphabetically. That is
+useless the moment you need to trust the output. This one does the
+opposite: it pins **26 exact vectors** with a runnable program, and spends
+its remaining space on the four places where the behaviour is *not* what
+you would guess.
+
+The companion program is [examples/math_tour.ltl](../../examples/math_tour.ltl).
+Run it and every vector below is asserted on your machine:
+
+```bash
+python3 -m lateralus_lang run examples/math_tour.ltl
+```
+
+```text
+  26 passed, 0 failed  (26 vectors)
+```
+
+## The import form matters
+
+The stdlib is not a single namespace. You import the module you need, and
+you name the symbols you use:
+
+```lateralus
+from stdlib.math import sqrt, pow, floor, ceil, clamp, sign
+from stdlib.math import gcd, lcm, factorial, log, exp, sin, cos, tan
+from stdlib.math import PI, E
+```
+
+`import math` is not the same thing and will not bind the module's
+functions into scope. Name the symbols.
+
+## The 26 pinned vectors
+
+Everything in this table is asserted by the companion program.
+
+| Expression | Value | Note |
+|---|---|---|
+| `sqrt(2.0)` | `1.4142135623730951` | IEEE-754 double, shortest round-trip form |
+| `sqrt(16.0)` | `4.0` | stays a double, not an int |
+| `pow(2.0, 10.0)` | `1024.0` | exponent is a double here |
+| `floor(2.5)` | `2` | returns `int` |
+| `floor(-2.5)` | `-3` | **trap 1** |
+| `ceil(2.5)` | `3` | returns `int` |
+| `ceil(-2.5)` | `-2` | **trap 1** |
+| `clamp(9, 0, 5)` | `5` | **trap 2** |
+| `clamp(-1, 0, 5)` | `0` | |
+| `clamp(3, 0, 5)` | `3` | |
+| `sign(-3)` | `-1` | returns `int` |
+| `sign(0)` | `0` | **trap 3** |
+| `sign(4)` | `1` | |
+| `gcd(12, 18)` | `6` | |
+| `gcd(0, 5)` | `5` | gcd(0, n) = n, not 0 |
+| `lcm(4, 6)` | `12` | |
+| `factorial(5)` | `120` | |
+| `factorial(0)` | `1` | empty product convention |
+| `log(8.0)` | `2.0794415416798357` | **trap 4** |
+| `exp(1.0)` | `2.718281828459045` | |
+| `sin(0.0)` | `0.0` | exact |
+| `cos(0.0)` | `1.0` | exact |
+| `tan(0.0)` | `0.0` | exact |
+| `PI` | `3.141592653589793` | constant, not a call |
+| `E` | `2.718281828459045` | constant, not a call |
+| `-sqrt(4.0)` | `-2.0` | unary minus binds to the call result |
+
+## Trap 1: floor and ceil round toward ±infinity, not toward zero
+
+If you arrive from C's `(int)` cast or Python's `int()`, you expect
+truncation toward zero:
+
+```lateralus
+floor(-2.5)   // -3   <- NOT -2
+ceil(-2.5)    // -2   <- NOT -3
+```
+
+That is the mathematically correct definition, and it is the one the
+stdlib uses. It also means `floor` and `ceil` are the right primitives for
+pagination and bucketing, and the wrong primitives for
+round-toward-zero. Both return `int`, so they are safe to use as indices:
+
+```lateralus
+let page = floor(float(index) / 10.0)   // int, ready for indexing
+```
+
+## Trap 2: clamp returns a float, even when you pass ints
+
+```lateralus
+clamp(9, 0, 5)     // 5      (printed as 5, typed as float)
+let i = clamp(9, 0, 5) as int   // keep indices int
+```
+
+The intent is obvious, but if you feed the result straight into a list
+index the type checker will ask you to be explicit. Cast once at the
+boundary and stay `int` inside loops.
+
+## Trap 3: sign(0) is 0, and that is load-bearing
+
+```lateralus
+sign(-3)   // -1
+sign(0)    //  0
+sign(4)    //  1
+```
+
+Three-way, not two-way. Code that does `if sign(x) > 0 { ... } else { ... }`
+silently folds zero into the negative branch. Use `== 0` explicitly when
+zero is a distinct case — emitters and normalisation both care.
+
+## Trap 4: log is the natural log
+
+```lateralus
+log(8.0)    // 2.0794415416798357   == ln(8)
+```
+
+Not `log10`. If what you wanted was log base 10, divide by `log(10.0)`;
+if you wanted base 2, divide by `log(2.0)`. This is the single most common
+"the number is wrong" bug in numeric Lateralus code, because the name
+looks like every other language's `log` — which is usually base 10 in
+calculator-shaped APIs and base e in math-shaped ones.
+
+## Pinning floats: use the shortest round-trip form
+
+Every float in the table above is written in the shortest decimal form
+that round-trips to the same IEEE-754 double. That is what makes the
+assertions exact:
+
+```lateralus
+fn check(name: str, actual: float, expected: float) -> int {
+    if actual == expected {
+        print("  ok    " + name + " = " + str(actual))
+        return 1
+    }
+    print("  FAIL  " + name + " = " + str(actual) + "  (expected " + str(expected) + ")")
+    return 0
+}
+```
+
+Two rules follow from this:
+
+1. Pin `sqrt`, `exp`, `log` at exact literals. They are deterministic on a
+   given platform and the literal is reproducible.
+2. Do **not** pin `sin`/`cos` at non-trivial angles. `sin(PI / 6.0)` is
+   `0.49999999999999994`, not `0.5`. At zero, as in the table, they are
+   exact and safe to pin.
+
+## One implementation detail worth knowing
+
+`check` returns `int` and `main` accumulates the count:
+
+```lateralus
+let p = 0
+p = p + check("sqrt(2.0)", sqrt(2.0), 1.4142135623730951)
+```
+
+Accumulating in `main` instead of mutating a module-level `let` from
+inside `check` matters on the Python backend: assigning to a
+module-level binding from inside a function is a local-variable error
+there. Returning the result and summing it in the caller is portable
+across backends.
+
+## What is callable today — and the union that isn't the declaration list
+
+`stdlib/math.ltl` declares 6 constants (`PI`, `E`, `TAU`, `PHI`, `INF`,
+`SQRT2`) and 24 functions. The vector table above does not cover the
+declaration list; it covers the surface that actually binds in the Python
+backend, and those two sets are *not* the same.
+
+Verified callable (the 26 vectors):
+
+```text
+sqrt  pow  floor  ceil  clamp  sign  gcd  lcm  factorial  sin  cos  tan
+PI  E
+```
+
+Verified **not** callable, despite being declared in `math.ltl`:
+
+```text
+abs_val  round_val  lerp  hypot  is_prime  isqrt  fibonacci
+radians  degrees  ln  log2  log10
+```
+
+And here is the part that surprises people: `log` and `exp` are **not
+declared in `math.ltl` at all**, yet both resolve and both are pinned
+above. They come from the backend's own math mapping, which is a
+hand-written whitelist. So the callable surface is the *union* of the
+module's declarations and that whitelist — and the two disagree in both
+directions.
+
+Practically:
+
+- Use the table in this post as the contract. Anything not in it may
+  type-check and still fail at run time with `NameError`.
+- Prefer `log(x)` for natural log over the declared-but-unbound `ln(x)`,
+  and build base-10 / base-2 from it by division.
+- If you are working on the backend, closing the gap means routing the
+  declared names through the same alias path that already carries `sqrt`.
+  Until then, this table is the honest answer to "what can I call?".
+
+## Try it
+
+```bash
+python3 -m lateralus_lang run examples/math_tour.ltl
+```
+
+Expected tail:
+
+```text
+  26 passed, 0 failed  (26 vectors)
+```
+
+Change one literal in the table and the program tells you which vector
+broke, with the actual value printed next to the expected one. That is
+the whole point: a tutorial you can run as a regression test.
+
+## Spiral outward.
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>
