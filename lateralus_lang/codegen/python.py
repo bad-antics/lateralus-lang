@@ -234,6 +234,8 @@ class PythonTranspiler(ASTVisitor):
         self._w += "E = _math.e"
         self._w += "chr = _builtins.chr"
         self._w += "ord = _builtins.ord"
+        self._w += "def char_at(s, i): return s[i]"
+        self._w += "def bytes_of(s): return list(s.encode('utf-8')) if isinstance(s, str) else list(s)"
         self._w += "none = None    # Lateralus alias for Python None"
         self._w += "null = None    # Lateralus alias for Python None"
         self._w += "keys = lambda d: list(d.keys())"
@@ -879,6 +881,12 @@ class PythonTranspiler(ASTVisitor):
             "algorithms":       "lateralus_lang.algorithms",
             "data":             "lateralus_lang.data",
             "crypto":           "lateralus_lang.crypto_engine",
+            # Benchmark-ingest stdlib modules (Python mirrors of stdlib/*.ltl)
+            "xxhash":           "lateralus_lang.xxhash",
+            "lz4":              "lateralus_lang.lz4",
+            "chacha20":         "lateralus_lang.chacha20",
+            "aho_corasick":     "lateralus_lang.aho_corasick",
+            "radix_sort":       "lateralus_lang.radix_sort",
         }
         if node.path in _alias_map:
             target = _alias_map[node.path]
