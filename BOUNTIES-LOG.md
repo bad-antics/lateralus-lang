@@ -1,6 +1,6 @@
 # Bounty claims log
 
-- 2026-11-21 — recurring documentation tutorial bounty ($25): `stdlib/encoding.ltl`
-  tutorial at `docs/blog/stdlib-encoding-tutorial.md` with runnable companion
-  `examples/encoding_tutorial.ltl` (pinned RFC vectors) and pytest coverage
-  in `tests/test_encoding_tutorial.py`.
+- 2026-11-21 — recurring documentation tutorial bounty ($25): `stdlib/color.ltl`
+  tutorial at `docs/blog/stdlib-color-tutorial.md` with runnable companion
+  `examples/color_tutorial.ltl` (pinned vectors) and pytest coverage in
+  `tests/test_color_tutorial.py`.
