@@ -1,0 +1,102 @@
+---
+title: stdlib.algorithms in Practice
+subtitle: Sorting, searching, and list utilities with Lateralus
+author: atlasdata
+date: 2026-11-17
+abstract: A practical tour of stdlib/algorithms.ltl — the standard library's grab-bag of sorting, searching, list manipulation, string helpers, and number-theory utilities. Every output shown was produced by actually running the module.
+---
+
+# stdlib.algorithms in Practice
+
+`stdlib/algorithms.ltl` is where Lateralus keeps the classics: sorting, searching, list reshapers like `chunk` and `rotate`, small string checks, and a pocket of number theory (`gcd`, `lcm`, `is_prime`, `power_mod`). Import it once and call everything through the `algorithms` namespace:
+
+```ltl
+import algorithms
+```
+
+## Sorting: pick merge_sort unless you have a reason not to
+
+The module ships three sorts with the same signature — list in, sorted copy out (the input is never mutated):
+
+```ltl
+let messy = [42, 7, 19, 3, 88, 1, 55]
+algorithms.merge_sort(messy)      // [1, 3, 7, 19, 42, 55, 88]
+algorithms.bubble_sort(messy)     // [1, 3, 7, 19, 42, 55, 88]
+algorithms.insertion_sort(messy)  // [1, 3, 7, 19, 42, 55, 88]
+```
+
+`merge_sort` recursively splits and recombines via `merge_sorted`, which is itself exported and handy for merging two already-sorted lists in one pass:
+
+```ltl
+algorithms.merge_sorted([1, 5, 9], [2, 3])  // [1, 2, 3, 5, 9]
+```
+
+Edge cases behave exactly as you would hope: `merge_sort([])` returns `[]` and `merge_sort([7])` returns `[7]` — verified by running them, not by reading the code.
+
+## Searching: binary_search needs sorted input
+
+`binary_search(arr, target)` returns the index of `target`, or `-1` when it is absent. It only works on sorted lists — on unsorted input the result is meaningless, and that is a contract you must uphold, not a bug.
+
+```ltl
+let haystack = [3, 8, 15, 23, 42, 57]
+algorithms.binary_search(haystack, 23)  // 3
+algorithms.binary_search(haystack, 99)  // -1
+```
+
+`linear_search` does the same job without the sorted-input requirement — use it on small or unordered lists. Both return `-1` for "not found", so the idiom is always `if idx >= 0`.
+
+## Reshaping lists
+
+The list utilities are where most day-to-day value lives:
+
+```ltl
+algorithms.unique([1, 2, 2, 3, 1, 4])     // [1, 2, 3, 4]
+algorithms.chunk([1,2,3,4,5,6,7], 3)      // [[1,2,3],[4,5,6],[7]]
+algorithms.rotate([1,2,3,4,5], 2)         // [3, 4, 5, 1, 2]
+algorithms.flatten([[1, 2], [3]])         // [1, 2, 3]
+```
+
+One detail worth pinning down: `rotate` rotates **left**. `rotate(xs, 2)` moves the first two elements to the back — it is not a right-rotation, and flipping that assumption in a sliding buffer will bite you.
+
+`interleave(a, b)` and `sliding_window(arr, size)` round out the set for zip-style merges and fixed-window passes over a stream.
+
+## String and number helpers
+
+```ltl
+algorithms.is_palindrome("racecar")   // true
+algorithms.gcd(48, 36)                // 12
+algorithms.lcm(4, 6)                  // 12
+algorithms.is_prime(97)               // true
+algorithms.primes_up_to(30)           // [2,3,5,7,11,13,17,19,23,29]
+algorithms.power_mod(2, 10, 1000)     // 24
+```
+
+`count_occurrences` counts pattern hits in a text, `caesar_cipher` does a classic rotational shift, and `power_mod` is real modular exponentiation — useful when you need `(base ** exp) % modulus` without building the unbounded intermediate yourself.
+
+## The runnable example and pinned test vector
+
+`examples/algorithms_demo.ltl` exercises every function above and prints its real output. Its `@test` block pins the verified values:
+
+```ltl
+@test
+fn algorithms_demo() {
+    assert_eq(algorithms.merge_sort([42,7,19,3,88,1,55]), [1,3,7,19,42,55,88])
+    assert_eq(algorithms.binary_search([3,8,15,23,42,57], 23), 3)
+    assert_eq(algorithms.binary_search([3,8,15,23,42,57], 99), -1)
+    assert_eq(algorithms.rotate([1,2,3,4,5], 2), [3,4,5,1,2])
+    assert_eq(algorithms.gcd(48,36), 12)
+    assert_eq(algorithms.lcm(4,6), 12)
+    assert_eq(algorithms.is_prime(97), true)
+    assert_eq(algorithms.power_mod(2,10,1000), 24)
+}
+```
+
+## Reproduce
+
+From the repo root:
+
+```sh
+PYTHONPATH=$PWD python3 -m lateralus_lang run examples/algorithms_demo.ltl
+```
+
+You should see the same output quoted in this article — including the left rotation `[3, 4, 5, 1, 2]` and `-1` for the failed searches. If a value differs, the module changed; the test vector is the canary.
