@@ -33,3 +33,11 @@ def test_no_fn_keyword_as_param():
     # `fn` may appear as the lambda keyword but never as a bare param
     for bad in ("lst: list, fn)", "b: list, fn)", "init, fn)"):
         assert bad not in src, f"reserved `fn` still used as param: {bad}"
+
+
+def test_group_by_guards_missing_keys():
+    """groups[k] on a missing key raises KeyError under the shim —
+    group_by must guard with contains(keys(...)) like ini.ltl."""
+    src = COLL_LTL.read_text()
+    assert "groups[k] == nil" not in src
+    assert "contains(keys(groups), k)" in src
