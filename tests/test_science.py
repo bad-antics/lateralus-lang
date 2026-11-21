@@ -187,6 +187,15 @@ class TestFFT:
         for i in range(4):
             assert abs(recovered[i].real - signal[i]) < 1e-10
 
+    @pytest.mark.parametrize(("bins", "padded_size"), [(3, 4), (5, 8)])
+    def test_inverse_normalizes_padded_spectrum(self, bins, padded_size):
+        """Issue #230: ifft must divide by the padded transform length,
+        not the unpadded input length."""
+        spectrum = [1.0] + [0.0] * (bins - 1)
+        samples = ifft(spectrum)
+        assert len(samples) == padded_size
+        assert samples == pytest.approx([1 / padded_size] * padded_size)
+
     def test_power_spectrum(self):
         signal = [math.sin(2 * math.pi * k / 8) for k in range(8)]
         ps = power_spectrum(signal)

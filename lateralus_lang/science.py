@@ -281,9 +281,9 @@ def fft(x: list[complex]) -> list[complex]:
 
 def ifft(x: list[complex]) -> list[complex]:
     """Inverse FFT."""
-    n = len(x)
     conjugated = [z.conjugate() for z in x]
     result = fft(conjugated)
+    n = len(result)
     return [z.conjugate() / n for z in result]
 
 
