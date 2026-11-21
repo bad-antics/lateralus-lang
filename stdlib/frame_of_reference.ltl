@@ -76,6 +76,7 @@ pub fn decode(enc: map) -> list {
 /// For time-series timestamps.  Returns {first, second_delta, dods}.
 pub fn encode_dod(xs: list) -> map {
     let m = {}
+    m["count"] = len(xs)
     if len(xs) == 0 {
         m["first"] = 0; m["second_delta"] = 0; m["dods"] = []
         return m
@@ -101,8 +102,15 @@ pub fn encode_dod(xs: list) -> map {
 
 pub fn decode_dod(enc: map) -> list {
     let out = [enc["first"]]
-    if len(enc["dods"]) == 0 && enc["second_delta"] == 0 && len(out) == 1 {
-        // single-element column
+    // Prefer the explicit element count added by encode_dod; fall back
+    // to the legacy heuristic for encodings produced before `count`
+    // existed (which cannot distinguish [x] from [x, x]).
+    if contains(enc, "count") {
+        let want = enc["count"]
+        if want == 0 { return [] }
+        if want == 1 { return out }
+    } else if len(enc["dods"]) == 0 && enc["second_delta"] == 0 {
+        // single-element column (legacy encoding)
         return out
     }
     let prev_d = enc["second_delta"]
