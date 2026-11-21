@@ -5,6 +5,19 @@
 
 import strings
 
+
+fn _index_of(s: str, sub: str) -> int {
+    let n = len(s)
+    let m = len(sub)
+    if m == 0 { return 0 }
+    let i = 0
+    while i + m <= n {
+        if slice(s, i, i + m) == sub { return i }
+        i = i + 1
+    }
+    return -1
+}
+
 // -- Parsing ---------------------------------------------------------
 
 /// Parse a semver string like "1.2.3" or "1.2.3-beta.1+build.42"
@@ -18,7 +31,7 @@ pub fn parse(version: str) -> list {
 
     // Split off build metadata (+...)
     let build = ""
-    let plus_idx = index_of(s, "+")
+    let plus_idx = _index_of(s, "+")
     if plus_idx >= 0 {
         build = slice(s, plus_idx + 1, len(s))
         s = slice(s, 0, plus_idx)
@@ -26,14 +39,14 @@ pub fn parse(version: str) -> list {
 
     // Split off pre-release (-...)
     let pre = ""
-    let dash_idx = index_of(s, "-")
+    let dash_idx = _index_of(s, "-")
     if dash_idx >= 0 {
         pre = slice(s, dash_idx + 1, len(s))
         s = slice(s, 0, dash_idx)
     }
 
     // Parse major.minor.patch
-    let parts = split(s, ".")
+    let parts = str_split(s, ".")
     let major = int(parts[0])
     let minor = 0
     let patch = 0
@@ -189,10 +202,38 @@ pub fn with_build(v: list, build: str) -> list {
 
 // -- Validation ------------------------------------------------------
 
+fn _is_digits(t: str) -> bool {
+    if len(t) == 0 { return false }
+    let i = 0
+    while i < len(t) {
+        let c = slice(t, i, i + 1)
+        if c < "0" || c > "9" { return false }
+        i = i + 1
+    }
+    return true
+}
+
 /// Check if a string is a valid semver.
 pub fn is_valid(s: str) -> bool {
-    let v = parse(s)
-    return v[0] >= 0 && v[1] >= 0 && v[2] >= 0
+    // Validate the numeric core before parse(), which raises on
+    // non-numeric components.
+    let core = s
+    let plus = _index_of(core, "+")
+    if plus >= 0 { core = slice(core, 0, plus) }
+    let dash = _index_of(core, "-")
+    if dash >= 0 { core = slice(core, 0, dash) }
+    if len(core) > 0 && (core[0] == "v" || core[0] == "V") {
+        core = slice(core, 1, len(core))
+    }
+    if len(core) == 0 { return false }
+    let parts = str_split(core, ".")
+    if len(parts) < 1 || len(parts) > 3 { return false }
+    let i = 0
+    while i < len(parts) {
+        if not _is_digits(parts[i]) { return false }
+        i = i + 1
+    }
+    return true
 }
 
 /// Check if version satisfies "^major.minor" (compatible range).
