@@ -1,0 +1,172 @@
+// Advent of Code 2024 · Day 20 · Race Condition
+// Racetrack maze; normal path has one route.
+// A "cheat" lets the robot pass through walls for exactly 2 picoseconds.
+// Part 1: how many cheats save >= 100 picoseconds? (sample: >= 2 for counting)
+// Part 2: cheats can last up to 20 picoseconds.
+
+let SAMPLE = "###############
+#...#...#.....#
+#.#.#.#.#.###.#
+#S#...#.#.#...#
+#######.#.#.###
+#######.#.#...#
+#######.#.###.#
+###..E#...#...#
+###.#######.###
+#...###...#...#
+#.###.###.#.###
+##.#...#.#.#.##
+###.###.#.#.###
+#...#...#...###
+###############"
+
+fn parse_grid(text: str) -> list {
+    let lines = str_split(text, "\n")
+    let grid = []
+    let i = 0
+    while i < len(lines) {
+        let row = str_trim(lines[i])
+        if len(row) > 0 { grid = grid + [row] }
+        i = i + 1
+    }
+    return grid
+}
+
+fn get_cell(grid: list, r: int, c: int) -> str {
+    if r < 0 || r >= len(grid) { return "#" }
+    let row = grid[r]
+    if c < 0 || c >= len(row) { return "#" }
+    return slice(row, c, c + 1)
+}
+
+fn find_char(grid: list, ch: str) -> list {
+    let r = 0
+    while r < len(grid) {
+        let c = 0
+        while c < len(grid[r]) {
+            if get_cell(grid, r, c) == ch { return [r, c] }
+            c = c + 1
+        }
+        r = r + 1
+    }
+    return [-1, -1]
+}
+
+// BFS from start, return distance map for all reachable non-wall cells
+fn bfs_dist(grid: list, start_r: int, start_c: int) -> map {
+    let dist = {}
+    let queue = [[start_r, start_c, 0]]
+    dist[str(start_r) + "," + str(start_c)] = 0
+
+    while len(queue) > 0 {
+        let cur = queue[0]
+        queue = queue[1:]
+        let r = cur[0]
+        let c = cur[1]
+        let d = cur[2]
+        let neighbors = [[r-1,c],[r+1,c],[r,c-1],[r,c+1]]
+        let i = 0
+        while i < len(neighbors) {
+            let nr = neighbors[i][0]
+            let nc = neighbors[i][1]
+            let nk = str(nr) + "," + str(nc)
+            if get_cell(grid, nr, nc) != "#" && !contains(dist, nk) {
+                dist[nk] = d + 1
+                queue = queue + [[nr, nc, d + 1]]
+            }
+            i = i + 1
+        }
+    }
+    return dist
+}
+
+fn abs_i(n: int) -> int {
+    if n < 0 { return -n }
+    return n
+}
+
+// Count cheats with duration <= max_cheat that save >= threshold
+fn count_cheats(grid: list, threshold: int, max_cheat: int) -> int {
+    let start = find_char(grid, "S")
+    let end_pos = find_char(grid, "E")
+    let dist_from_start = bfs_dist(grid, start[0], start[1])
+    let dist_from_end = bfs_dist(grid, end_pos[0], end_pos[1])
+
+    // Normal path length
+    let normal_key = str(end_pos[0]) + "," + str(end_pos[1])
+    if !contains(dist_from_start, normal_key) { return 0 }
+    let normal_len = dist_from_start[normal_key]
+
+    // For each pair of track cells within cheat distance, check savings
+    let count = 0
+    let rows = len(grid)
+    let cols = len(grid[0])
+
+    // Collect all track cells
+    let track = []
+    let r = 0
+    while r < rows {
+        let c = 0
+        while c < cols {
+            let k = str(r) + "," + str(c)
+            if get_cell(grid, r, c) != "#" && contains(dist_from_start, k) {
+                track = track + [[r, c]]
+            }
+            c = c + 1
+        }
+        r = r + 1
+    }
+
+    let i = 0
+    while i < len(track) {
+        let r1 = track[i][0]
+        let c1 = track[i][1]
+        let k1 = str(r1) + "," + str(c1)
+        let d1 = dist_from_start[k1]
+
+        let j = i + 1
+        while j < len(track) {
+            let r2 = track[j][0]
+            let c2 = track[j][1]
+            let manhattan = abs_i(r2 - r1) + abs_i(c2 - c1)
+            if manhattan <= max_cheat {
+                let k2 = str(r2) + "," + str(c2)
+                let d2e = dist_from_end[k2]
+                // path: start→(r1,c1) + cheat + (r2,c2)→end
+                let cheat_len = d1 + manhattan + d2e
+                if normal_len - cheat_len >= threshold { count = count + 1 }
+                // Also try reversed
+                let d2 = dist_from_start[k2]
+                let d1e = dist_from_end[k1]
+                let cheat_len2 = d2 + manhattan + d1e
+                if normal_len - cheat_len2 >= threshold { count = count + 1 }
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return count
+}
+
+// For sample, threshold=2 gives meaningful results
+fn part1(text: str) -> int {
+    return count_cheats(parse_grid(text), 2, 2)
+}
+
+fn part2(text: str) -> int {
+    return count_cheats(parse_grid(text), 50, 20)
+}
+
+@test
+fn test_part1() {
+    // Sample: cheats saving >= 2 picoseconds
+    let result = part1(SAMPLE)
+    assert_eq(result > 0, true)
+}
+
+fn main() {
+    print("Day 20 Part 1 (cheats saving >= 2ps): " + str(part1(SAMPLE)))
+    print("Day 20 Part 2 (cheats saving >= 50ps, up to 20 steps): " + str(part2(SAMPLE)))
+}
+
+main()

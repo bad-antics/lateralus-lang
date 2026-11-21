@@ -1,0 +1,276 @@
+// Advent of Code 2024 · Day 16 · Reindeer Maze
+// Reindeer starts at S facing East.
+// Moving forward costs 1; turning 90° costs 1000.
+// Part 1: minimum score to reach E.
+// Part 2: count tiles that are on any shortest path (Dijkstra + backtrack).
+
+let SAMPLE = "###############
+#.......#....E#
+#.#.###.#.###.#
+#.....#.#...#.#
+#.###.#####.#.#
+#.#.#.......#.#
+#.#.#####.###.#
+#...........#.#
+###.#.#####.#.#
+#...#.....#.#.#
+#.#.#.###.#.#.#
+#.....#...#.#.#
+#.###.#.#.#.#.#
+#S..#.....#...#
+###############"
+
+fn parse_maze(text: str) -> list {
+    let lines = str_split(text, "\n")
+    let grid = []
+    let i = 0
+    while i < len(lines) {
+        let row = str_trim(lines[i])
+        if len(row) > 0 {
+            grid = grid + [row]
+        }
+        i = i + 1
+    }
+    return grid
+}
+
+fn get_cell(grid: list, r: int, c: int) -> str {
+    if r < 0 || r >= len(grid) { return "#" }
+    let row = grid[r]
+    if c < 0 || c >= len(row) { return "#" }
+    return slice(row, c, c + 1)
+}
+
+fn find_char(grid: list, ch: str) -> list {
+    let r = 0
+    while r < len(grid) {
+        let c = 0
+        while c < len(grid[r]) {
+            if get_cell(grid, r, c) == ch { return [r, c] }
+            c = c + 1
+        }
+        r = r + 1
+    }
+    return [-1, -1]
+}
+
+// dirs: 0=N, 1=E, 2=S, 3=W
+let DR = [-1, 0, 1, 0]
+let DC = [0, 1, 0, -1]
+
+// Simple Dijkstra using a priority-queue simulation
+// State: (cost, r, c, dir)
+fn dijkstra(grid: list) -> map {
+    let start = find_char(grid, "S")
+    let sr = start[0]
+    let sc = start[1]
+    // Start facing East (dir=1)
+    let dist = {}
+    let start_key = str(sr) + "," + str(sc) + "," + str(1)
+    dist[start_key] = 0
+
+    // Priority queue as a sorted list of [cost, r, c, dir]
+    let pq = [[0, sr, sc, 1]]
+
+    while len(pq) > 0 {
+        // Find minimum cost item (simple linear scan for correctness)
+        let min_idx = 0
+        let i = 1
+        while i < len(pq) {
+            if pq[i][0] < pq[min_idx][0] { min_idx = i }
+            i = i + 1
+        }
+        let cur = pq[min_idx]
+        // Remove from queue
+        let new_pq = []
+        let j = 0
+        while j < len(pq) {
+            if j != min_idx { new_pq = new_pq + [pq[j]] }
+            j = j + 1
+        }
+        pq = new_pq
+
+        let cost = cur[0]
+        let r = cur[1]
+        let c = cur[2]
+        let dir = cur[3]
+        let key = str(r) + "," + str(c) + "," + str(dir)
+
+        if contains(dist, key) && dist[key] < cost { }
+        else {
+            // Try moving forward
+            let nr = r + DR[dir]
+            let nc = c + DC[dir]
+            if get_cell(grid, nr, nc) != "#" {
+                let nkey = str(nr) + "," + str(nc) + "," + str(dir)
+                let ncost = cost + 1
+                if !contains(dist, nkey) || dist[nkey] > ncost {
+                    dist[nkey] = ncost
+                    pq = pq + [[ncost, nr, nc, dir]]
+                }
+            }
+            // Try turning left and right
+            let turns = [(dir + 1) % 4, (dir + 3) % 4]
+            let k = 0
+            while k < len(turns) {
+                let ndir = turns[k]
+                let tkey = str(r) + "," + str(c) + "," + str(ndir)
+                let tcost = cost + 1000
+                if !contains(dist, tkey) || dist[tkey] > tcost {
+                    dist[tkey] = tcost
+                    pq = pq + [[tcost, r, c, ndir]]
+                }
+                k = k + 1
+            }
+        }
+    }
+    return dist
+}
+
+fn part1(text: str) -> int {
+    let grid = parse_maze(text)
+    let dist = dijkstra(grid)
+    let end_pos = find_char(grid, "E")
+    let er = end_pos[0]
+    let ec = end_pos[1]
+    let best = -1
+    let d = 0
+    while d < 4 {
+        let key = str(er) + "," + str(ec) + "," + str(d)
+        if contains(dist, key) {
+            if best < 0 || dist[key] < best { best = dist[key] }
+        }
+        d = d + 1
+    }
+    return best
+}
+
+fn part2(text: str) -> int {
+    let grid = parse_maze(text)
+    let dist = dijkstra(grid)
+    let end_pos = find_char(grid, "E")
+    let er = end_pos[0]
+    let ec = end_pos[1]
+
+    // Find best score at end
+    let best = -1
+    let d = 0
+    while d < 4 {
+        let key = str(er) + "," + str(ec) + "," + str(d)
+        if contains(dist, key) {
+            if best < 0 || dist[key] < best { best = dist[key] }
+        }
+        d = d + 1
+    }
+
+    // Also run dijkstra from end backwards
+    // Reverse: forward becomes backward, turns stay same cost
+    // Build reversed dist
+    let grid2 = grid
+    let rdist = {}
+    // Start from all end states with best cost
+    let pq2 = []
+    let d2 = 0
+    while d2 < 4 {
+        let key = str(er) + "," + str(ec) + "," + str(d2)
+        if contains(dist, key) && dist[key] == best {
+            rdist[key] = 0
+            pq2 = pq2 + [[0, er, ec, d2]]
+        }
+        d2 = d2 + 1
+    }
+
+    while len(pq2) > 0 {
+        let min_idx = 0
+        let i = 1
+        while i < len(pq2) {
+            if pq2[i][0] < pq2[min_idx][0] { min_idx = i }
+            i = i + 1
+        }
+        let cur = pq2[min_idx]
+        let new_pq2 = []
+        let j = 0
+        while j < len(pq2) {
+            if j != min_idx { new_pq2 = new_pq2 + [pq2[j]] }
+            j = j + 1
+        }
+        pq2 = new_pq2
+
+        let cost = cur[0]
+        let r = cur[1]
+        let c = cur[2]
+        let dir = cur[3]
+        let key = str(r) + "," + str(c) + "," + str(dir)
+        if contains(rdist, key) && rdist[key] < cost { }
+        else {
+            // Reverse move: came from behind (opposite dir)
+            let rev_dir = (dir + 2) % 4
+            let pr = r + DR[rev_dir]
+            let pc = c + DC[rev_dir]
+            if get_cell(grid, pr, pc) != "#" {
+                let pkey = str(pr) + "," + str(pc) + "," + str(dir)
+                let pcost = cost + 1
+                if !contains(rdist, pkey) || rdist[pkey] > pcost {
+                    rdist[pkey] = pcost
+                    pq2 = pq2 + [[pcost, pr, pc, dir]]
+                }
+            }
+            let turns2 = [(dir + 1) % 4, (dir + 3) % 4]
+            let k = 0
+            while k < len(turns2) {
+                let ndir = turns2[k]
+                let tkey = str(r) + "," + str(c) + "," + str(ndir)
+                let tcost = cost + 1000
+                if !contains(rdist, tkey) || rdist[tkey] > tcost {
+                    rdist[tkey] = tcost
+                    pq2 = pq2 + [[tcost, r, c, ndir]]
+                }
+                k = k + 1
+            }
+        }
+    }
+
+    // A cell is on a best path if forward_dist(r,c,d) + reverse_dist(r,c,d) == best for some d
+    let on_best = {}
+    let rows = len(grid)
+    let cols = len(grid[0])
+    let r = 0
+    while r < rows {
+        let c = 0
+        while c < cols {
+            if get_cell(grid, r, c) != "#" {
+                let d3 = 0
+                while d3 < 4 {
+                    let fkey = str(r) + "," + str(c) + "," + str(d3)
+                    let rkey = str(r) + "," + str(c) + "," + str(d3)
+                    if contains(dist, fkey) && contains(rdist, rkey) {
+                        if dist[fkey] + rdist[rkey] == best {
+                            on_best[str(r) + "," + str(c)] = true
+                        }
+                    }
+                    d3 = d3 + 1
+                }
+            }
+            c = c + 1
+        }
+        r = r + 1
+    }
+    return len(on_best)
+}
+
+@test
+fn test_part1() {
+    assert_eq(part1(SAMPLE), 7036)
+}
+
+@test
+fn test_part2() {
+    assert_eq(part2(SAMPLE), 45)
+}
+
+fn main() {
+    print("Day 16 Part 1: " + str(part1(SAMPLE)))
+    print("Day 16 Part 2: " + str(part2(SAMPLE)))
+}
+
+main()

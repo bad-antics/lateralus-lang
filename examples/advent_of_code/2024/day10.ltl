@@ -1,0 +1,144 @@
+// Advent of Code 2024 · Day 10 · Hoof It
+// Topographic map of heights 0-9. Trailheads are at 0.
+// Part 1: for each trailhead, count distinct 9s reachable via step-by-step +1 paths.
+//         Sum all trailhead scores.
+// Part 2: for each trailhead, count distinct hiking trails (paths) to any 9.
+
+let SAMPLE = "89010123
+78121874
+87430965
+96549874
+45678903
+32019012
+01329801
+10456732"
+
+fn parse_grid(text: str) -> list {
+    let lines = str_split(text, "\n")
+    let grid = []
+    let i = 0
+    while i < len(lines) {
+        let row = str_trim(lines[i])
+        if len(row) > 0 {
+            grid = grid + [row]
+        }
+        i = i + 1
+    }
+    return grid
+}
+
+fn get_height(grid: list, r: int, c: int) -> int {
+    if r < 0 || r >= len(grid) { return -1 }
+    let row = grid[r]
+    if c < 0 || c >= len(row) { return -1 }
+    let ch = slice(row, c, c + 1)
+    if ch == "." { return -1 }
+    return int(ch)
+}
+
+// BFS from (sr, sc) with height 0; returns set of reachable 9-positions
+fn score_trailhead(grid: list, sr: int, sc: int) -> map {
+    let nines = {}
+    let queue = [[sr, sc]]
+    let visited = {}
+    visited[str(sr) + "," + str(sc)] = true
+
+    while len(queue) > 0 {
+        let cur = queue[0]
+        queue = queue[1:]
+        let r = cur[0]
+        let c = cur[1]
+        let h = get_height(grid, r, c)
+
+        if h == 9 {
+            nines[str(r) + "," + str(c)] = true
+        } else {
+            let neighbors = [[r-1,c],[r+1,c],[r,c-1],[r,c+1]]
+            let i = 0
+            while i < len(neighbors) {
+                let nr = neighbors[i][0]
+                let nc = neighbors[i][1]
+                let nh = get_height(grid, nr, nc)
+                if nh == h + 1 {
+                    let key = str(nr) + "," + str(nc)
+                    if !contains(visited, key) {
+                        visited[key] = true
+                        queue = queue + [[nr, nc]]
+                    }
+                }
+                i = i + 1
+            }
+        }
+    }
+    return nines
+}
+
+// DFS counting distinct paths to any 9
+fn count_paths(grid: list, r: int, c: int, h: int) -> int {
+    if h == 9 { return 1 }
+    let total = 0
+    let neighbors = [[r-1,c],[r+1,c],[r,c-1],[r,c+1]]
+    let i = 0
+    while i < len(neighbors) {
+        let nr = neighbors[i][0]
+        let nc = neighbors[i][1]
+        let nh = get_height(grid, nr, nc)
+        if nh == h + 1 {
+            total = total + count_paths(grid, nr, nc, nh)
+        }
+        i = i + 1
+    }
+    return total
+}
+
+fn part1(text: str) -> int {
+    let grid = parse_grid(text)
+    let total = 0
+    let r = 0
+    while r < len(grid) {
+        let c = 0
+        while c < len(grid[r]) {
+            if get_height(grid, r, c) == 0 {
+                let nines = score_trailhead(grid, r, c)
+                total = total + len(nines)
+            }
+            c = c + 1
+        }
+        r = r + 1
+    }
+    return total
+}
+
+fn part2(text: str) -> int {
+    let grid = parse_grid(text)
+    let total = 0
+    let r = 0
+    while r < len(grid) {
+        let c = 0
+        while c < len(grid[r]) {
+            if get_height(grid, r, c) == 0 {
+                total = total + count_paths(grid, r, c, 0)
+            }
+            c = c + 1
+        }
+        r = r + 1
+    }
+    return total
+}
+
+@test
+fn test_part1() {
+    assert_eq(part1(SAMPLE), 36)
+}
+
+@test
+fn test_part2() {
+    assert_eq(part2(SAMPLE), 81)
+}
+
+fn main() {
+    print("Day 10 Part 1: " + str(part1(SAMPLE)))
+    print("Day 10 Part 2: " + str(part2(SAMPLE)))
+}
+
+main()

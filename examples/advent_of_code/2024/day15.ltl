@@ -1,0 +1,303 @@
+// Advent of Code 2024 · Day 15 · Warehouse Woes
+// Robot (@) pushes boxes (O) according to movement instructions.
+// Walls (#) can't be moved.
+// Part 1: simulate moves; sum GPS coords (100*row + col) of all boxes.
+// Part 2: double the warehouse width; boxes are now 2 cells wide ([]).
+
+let SAMPLE = "##########
+#..O..O.O#
+#......O.#
+#.OO..O.#
+##O#..O.O#
+#O..O..O.#
+#O.OO..O.#
+#....O...#
+#.....OOO#
+##########
+
+<vv>^<v^>v>^vv^v>v<>v^v<v<^vv<<<^><<><>>v<vvv<>^v^>^^>>><<^v<v>^vv>v^^<^^v>>+
+<v<v^^>v<^^>vvv<^>v<v>v<<^>v^^>v><<v^^vv^>vv><<>>v<<v>^<v>^>^^v>v>v<^<^>^^<^v
+vv<<>v^^v^^>^^><<>^><>^v>>><<>v>><^^<><v^^<>^<v>^<^^v^v<><>^^>v^<><v^>v^^<>>v^
+<^<^>v<>v^^^v<^<>^^v<v^^>v>v>vv<v<>>^<v>vv^^<>v<^>>^>v>^><v><<v^<v^^>v>v<v^v>
+vv<>v^^v>>>^>v>^v^^>v^^>v^>v^v<><>v<>v<>vv<v^^>^>^<^<^vvvv^><>v>v^><^^>>^v>vv
+vv<v<>>^v^^^>>v^^<>v^v^^<>v>^^v^^>>^<>>v<^<>>^^v^<^>>v>v^^>v^^<>^v>^>vv<v<^<v^
+^v<>v^v^^>^v><<>^^v><<^>v^<^<^>v<>v>>>^v>^^>^>v^^<>v<^<>^v^^<>v^v<><^<^v<><>v
+<>>v>v>v<v>>^>v>v^<><^^<v^^v^^<>><>vv<v>^^>>^<>^^<^v>v^<>vv<v<>>^v>>>^><^^<>^<
+^>^>vvv<>^^<>^^<^v<^v>v>vv><>>><<><>v^<><v^>v^^<>>^v>v>vvv^v>>><>^>>^>^<>>^>v<"
+
+fn parse_warehouse(text: str) -> list {
+    let parts = str_split(text, "\n\n")
+    let grid_lines = str_split(str_trim(parts[0]), "\n")
+    let move_text = str_trim(parts[1])
+    let grid = []
+    let i = 0
+    while i < len(grid_lines) {
+        let row = str_trim(grid_lines[i])
+        if len(row) > 0 {
+            grid = grid + [row]
+        }
+        i = i + 1
+    }
+    // Collect moves (ignore newlines)
+    let moves = ""
+    let j = 0
+    while j < len(move_text) {
+        let ch = slice(move_text, j, j + 1)
+        if ch == "^" || ch == "v" || ch == "<" || ch == ">" {
+            moves = moves + ch
+        }
+        j = j + 1
+    }
+    return [grid, moves]
+}
+
+fn get_cell(grid: list, r: int, c: int) -> str {
+    if r < 0 || r >= len(grid) { return "#" }
+    let row = grid[r]
+    if c < 0 || c >= len(row) { return "#" }
+    return slice(row, c, c + 1)
+}
+
+fn set_cell(grid: list, r: int, c: int, ch: str) -> list {
+    let new_grid = []
+    let i = 0
+    while i < len(grid) {
+        if i == r {
+            let row = grid[i]
+            let new_row = slice(row, 0, c) + ch + slice(row, c + 1, len(row))
+            new_grid = new_grid + [new_row]
+        } else {
+            new_grid = new_grid + [grid[i]]
+        }
+        i = i + 1
+    }
+    return new_grid
+}
+
+fn find_robot(grid: list) -> list {
+    let r = 0
+    while r < len(grid) {
+        let c = 0
+        while c < len(grid[r]) {
+            if get_cell(grid, r, c) == "@" { return [r, c] }
+            c = c + 1
+        }
+        r = r + 1
+    }
+    return [0, 0]
+}
+
+fn dir_to_delta(ch: str) -> list {
+    if ch == "^" { return [-1, 0] }
+    if ch == "v" { return [1, 0] }
+    if ch == "<" { return [0, -1] }
+    return [0, 1]
+}
+
+fn try_push(grid: list, r: int, c: int, dr: int, dc: int) -> list {
+    // Try to move item at (r,c) in direction (dr,dc).
+    // Returns [new_grid, success].
+    let ch = get_cell(grid, r, c)
+    let nr = r + dr
+    let nc = c + dc
+    let ahead = get_cell(grid, nr, nc)
+    if ahead == "#" { return [grid, false] }
+    if ahead == "." {
+        let g = set_cell(grid, nr, nc, ch)
+        let g2 = set_cell(g, r, c, ".")
+        return [g2, true]
+    }
+    if ahead == "O" {
+        let result = try_push(grid, nr, nc, dr, dc)
+        if result[1] {
+            let g = set_cell(result[0], nr, nc, ch)
+            let g2 = set_cell(g, r, c, ".")
+            return [g2, true]
+        }
+        return [grid, false]
+    }
+    return [grid, false]
+}
+
+fn simulate(grid: list, moves: str) -> list {
+    let pos = find_robot(grid)
+    let r = pos[0]
+    let c = pos[1]
+    let i = 0
+    while i < len(moves) {
+        let mv = slice(moves, i, i + 1)
+        let d = dir_to_delta(mv)
+        let result = try_push(grid, r, c, d[0], d[1])
+        if result[1] {
+            grid = result[0]
+            r = r + d[0]
+            c = c + d[1]
+        }
+        i = i + 1
+    }
+    return grid
+}
+
+fn gps_sum(grid: list, box_char: str) -> int {
+    let total = 0
+    let r = 0
+    while r < len(grid) {
+        let c = 0
+        while c < len(grid[r]) {
+            if get_cell(grid, r, c) == box_char {
+                total = total + 100 * r + c
+            }
+            c = c + 1
+        }
+        r = r + 1
+    }
+    return total
+}
+
+fn part1(text: str) -> int {
+    let parsed = parse_warehouse(text)
+    let grid = parsed[0]
+    let moves = parsed[1]
+    let final_grid = simulate(grid, moves)
+    return gps_sum(final_grid, "O")
+}
+
+// Part 2: double-wide warehouse
+fn widen_grid(grid: list) -> list {
+    let wide = []
+    let i = 0
+    while i < len(grid) {
+        let row = grid[i]
+        let new_row = ""
+        let j = 0
+        while j < len(row) {
+            let ch = slice(row, j, j + 1)
+            if ch == "#" { new_row = new_row + "##" }
+            else if ch == "O" { new_row = new_row + "[]" }
+            else if ch == "." { new_row = new_row + ".." }
+            else if ch == "@" { new_row = new_row + "@." }
+            j = j + 1
+        }
+        wide = wide + [new_row]
+        i = i + 1
+    }
+    return wide
+}
+
+// Push wide boxes — complex but correct
+fn can_push_wide(grid: list, r: int, c: int, dr: int, dc: int) -> bool {
+    let ch = get_cell(grid, r, c)
+    let nr = r + dr
+    let nc = c + dc
+    let ahead = get_cell(grid, nr, nc)
+    if ahead == "#" { return false }
+    if ahead == "." { return true }
+    if ahead == "[" || ahead == "]" {
+        let other_c = nc + (if ahead == "[" { 1 } else { -1 })
+        if dc != 0 {
+            // horizontal: just push in that direction
+            return can_push_wide(grid, nr, nc, dr, dc)
+        } else {
+            // vertical: must push both halves
+            return can_push_wide(grid, nr, nc, dr, dc)
+                && can_push_wide(grid, nr, other_c, dr, dc)
+        }
+    }
+    return false
+}
+
+fn do_push_wide(grid: list, r: int, c: int, dr: int, dc: int) -> list {
+    let ch = get_cell(grid, r, c)
+    let nr = r + dr
+    let nc = c + dc
+    let ahead = get_cell(grid, nr, nc)
+    if ahead == "." {
+        let g = set_cell(grid, nr, nc, ch)
+        return set_cell(g, r, c, ".")
+    }
+    if ahead == "[" || ahead == "]" {
+        let other_c = nc + (if ahead == "[" { 1 } else { -1 })
+        if dc != 0 {
+            let g = do_push_wide(grid, nr, nc, dr, dc)
+            let g2 = set_cell(g, nr, nc, ch)
+            return set_cell(g2, r, c, ".")
+        } else {
+            // vertical: push both box halves
+            let g = do_push_wide(grid, nr, nc, dr, dc)
+            let g2 = do_push_wide(g, nr, other_c, dr, dc)
+            let g3 = set_cell(g2, nr, nc, ch)
+            return set_cell(g3, r, c, ".")
+        }
+    }
+    return grid
+}
+
+fn simulate_wide(grid: list, moves: str) -> list {
+    let pos = find_robot(grid)
+    let r = pos[0]
+    let c = pos[1]
+    let i = 0
+    while i < len(moves) {
+        let mv = slice(moves, i, i + 1)
+        let d = dir_to_delta(mv)
+        let dr = d[0]
+        let dc = d[1]
+        let nr = r + dr
+        let nc = c + dc
+        let ahead = get_cell(grid, nr, nc)
+        if ahead == "." {
+            grid = set_cell(grid, nr, nc, "@")
+            grid = set_cell(grid, r, c, ".")
+            r = nr
+            c = nc
+        } else if ahead == "[" || ahead == "]" {
+            let other_c = nc + (if ahead == "[" { 1 } else { -1 })
+            let can = false
+            if dc != 0 {
+                can = can_push_wide(grid, nr, nc, dr, dc)
+            } else {
+                can = can_push_wide(grid, nr, nc, dr, dc)
+                    && can_push_wide(grid, nr, other_c, dr, dc)
+            }
+            if can {
+                if dc != 0 {
+                    grid = do_push_wide(grid, nr, nc, dr, dc)
+                } else {
+                    grid = do_push_wide(grid, nr, nc, dr, dc)
+                    grid = do_push_wide(grid, nr, other_c, dr, dc)
+                }
+                grid = set_cell(grid, nr, nc, "@")
+                grid = set_cell(grid, r, c, ".")
+                r = nr
+                c = nc
+            }
+        }
+        i = i + 1
+    }
+    return grid
+}
+
+fn part2(text: str) -> int {
+    let parsed = parse_warehouse(text)
+    let grid = widen_grid(parsed[0])
+    let moves = parsed[1]
+    let final_grid = simulate_wide(grid, moves)
+    return gps_sum(final_grid, "[")
+}
+
+@test
+fn test_part1() {
+    assert_eq(part1(SAMPLE), 10092)
+}
+
+@test
+fn test_part2() {
+    assert_eq(part2(SAMPLE), 9021)
+}
+
+fn main() {
+    print("Day 15 Part 1: " + str(part1(SAMPLE)))
+    print("Day 15 Part 2: " + str(part2(SAMPLE)))
+}
+
+main()

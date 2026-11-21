@@ -1,0 +1,158 @@
+// Advent of Code 2024 · Day 9 · Disk Fragmenter
+// Disk map alternates file-length and free-space-length.
+// Part 1: compact by moving individual blocks right-to-left into free space;
+//         compute checksum = sum(position * file_id).
+// Part 2: move whole files (highest ID first) into leftmost fitting gap.
+
+let SAMPLE = "2333133121414131402"
+
+fn expand_disk(text: str) -> list {
+    let disk = []
+    let s = str_trim(text)
+    let file_id = 0
+    let i = 0
+    while i < len(s) {
+        let ch = slice(s, i, i + 1)
+        let count = int(ch)
+        if i % 2 == 0 {
+            // file block
+            let k = 0
+            while k < count {
+                disk = disk + [file_id]
+                k = k + 1
+            }
+            file_id = file_id + 1
+        } else {
+            // free space: -1
+            let k = 0
+            while k < count {
+                disk = disk + [-1]
+                k = k + 1
+            }
+        }
+        i = i + 1
+    }
+    return disk
+}
+
+fn checksum(disk: list) -> int {
+    let total = 0
+    let i = 0
+    while i < len(disk) {
+        if disk[i] >= 0 {
+            total = total + i * disk[i]
+        }
+        i = i + 1
+    }
+    return total
+}
+
+fn part1(text: str) -> int {
+    let disk = expand_disk(text)
+    let left = 0
+    let right = len(disk) - 1
+
+    while left < right {
+        while left < right && disk[left] >= 0 {
+            left = left + 1
+        }
+        while left < right && disk[right] < 0 {
+            right = right - 1
+        }
+        if left < right {
+            disk[left] = disk[right]
+            disk[right] = -1
+            left = left + 1
+            right = right - 1
+        }
+    }
+    return checksum(disk)
+}
+
+fn part2(text: str) -> int {
+    let disk = expand_disk(text)
+    let n = len(disk)
+
+    // Find the highest file id
+    let max_id = 0
+    let i = 0
+    while i < n {
+        if disk[i] > max_id { max_id = disk[i] }
+        i = i + 1
+    }
+
+    // Move each file from highest id down to 0
+    let fid = max_id
+    while fid >= 0 {
+        // Find file extent
+        let fstart = -1
+        let flen = 0
+        let j = 0
+        while j < n {
+            if disk[j] == fid {
+                if fstart < 0 { fstart = j }
+                flen = flen + 1
+            }
+            j = j + 1
+        }
+
+        if fstart >= 0 && flen > 0 {
+            // Find leftmost free span of size >= flen before fstart
+            let best_gap = -1
+            let k = 0
+            while k < fstart {
+                if disk[k] < 0 {
+                    // measure span
+                    let span = 0
+                    let m = k
+                    while m < fstart && disk[m] < 0 {
+                        span = span + 1
+                        m = m + 1
+                    }
+                    if span >= flen && best_gap < 0 {
+                        best_gap = k
+                        k = m
+                    } else {
+                        k = m
+                    }
+                } else {
+                    k = k + 1
+                }
+            }
+            if best_gap >= 0 {
+                // Clear old location
+                let p = 0
+                while p < flen {
+                    disk[fstart + p] = -1
+                    p = p + 1
+                }
+                // Write to new location
+                let q = 0
+                while q < flen {
+                    disk[best_gap + q] = fid
+                    q = q + 1
+                }
+            }
+        }
+
+        fid = fid - 1
+    }
+    return checksum(disk)
+}
+
+@test
+fn test_part1() {
+    assert_eq(part1(SAMPLE), 1928)
+}
+
+@test
+fn test_part2() {
+    assert_eq(part2(SAMPLE), 2858)
+}
+
+fn main() {
+    print("Day 9 Part 1: " + str(part1(SAMPLE)))
+    print("Day 9 Part 2: " + str(part2(SAMPLE)))
+}
+
+main()

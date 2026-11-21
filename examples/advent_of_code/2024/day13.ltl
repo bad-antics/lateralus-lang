@@ -1,0 +1,159 @@
+// Advent of Code 2024 · Day 13 · Claw Contraption
+// Button A: costs 3 tokens, moves X+Y.
+// Button B: costs 1 token, moves X+Y.
+// Part 1: find min tokens to reach prize (at most 100 presses each button).
+//         Sum tokens for all winnable machines.
+// Part 2: add 10000000000000 to each prize coordinate.
+//         Use Cramer's rule (no 100-press limit).
+
+let SAMPLE = "Button A: X+94, Y+34
+Button B: X+22, Y+67
+Prize: X=8400, Y=5400
+
+Button A: X+26, Y+66
+Button B: X+67, Y+21
+Prize: X=12748, Y=12176
+
+Button A: X+17, Y+86
+Button B: X+84, Y+37
+Prize: X=7870, Y=6450
+
+Button A: X+69, Y+23
+Button B: X+27, Y+71
+Prize: X=18641, Y=10279"
+
+fn parse_machines(text: str) -> list {
+    let machines = []
+    let blocks = str_split(text, "\n\n")
+    let i = 0
+    while i < len(blocks) {
+        let block = str_trim(blocks[i])
+        if len(block) == 0 { i = i + 1 }
+        else {
+            let lines = str_split(block, "\n")
+            fn extract_xy(line: str) -> list {
+                // Parse "Button A: X+94, Y+34" or "Prize: X=8400, Y=5400"
+                let xpos = 0
+                let j = 0
+                while j < len(line) {
+                    if slice(line, j, j + 1) == "X" { xpos = j }
+                    j = j + 1
+                }
+                let rest = slice(line, xpos + 1, len(line))
+                let comma = 0
+                let k = 0
+                while k < len(rest) {
+                    if slice(rest, k, k + 1) == "," { comma = k }
+                    k = k + 1
+                }
+                let xpart = slice(rest, 0, comma)
+                let ypart = str_trim(slice(rest, comma + 1, len(rest)))
+                let ypos2 = 0
+                let m = 0
+                while m < len(ypart) {
+                    if slice(ypart, m, m + 1) == "Y" { ypos2 = m }
+                    m = m + 1
+                }
+                let yval = slice(ypart, ypos2 + 1, len(ypart))
+                let xval = slice(xpart, 0, len(xpart))
+                // remove leading + or =
+                let xn = xval
+                if len(xn) > 0 && (slice(xn, 0, 1) == "+" || slice(xn, 0, 1) == "=") {
+                    xn = slice(xn, 1, len(xn))
+                }
+                let yn = yval
+                if len(yn) > 0 && (slice(yn, 0, 1) == "+" || slice(yn, 0, 1) == "=") {
+                    yn = slice(yn, 1, len(yn))
+                }
+                return [int(str_trim(xn)), int(str_trim(yn))]
+            }
+            let a = extract_xy(str_trim(lines[0]))
+            let b = extract_xy(str_trim(lines[1]))
+            let p = extract_xy(str_trim(lines[2]))
+            machines = machines + [[a, b, p]]
+            i = i + 1
+        }
+    }
+    return machines
+}
+
+fn solve_machine(ax: int, ay: int, bx: int, by: int, px: int, py: int, limit: int) -> int {
+    // Solve: a*ax + b*bx = px, a*ay + b*by = py
+    // Using Cramer's rule: det = ax*by - ay*bx
+    let det = ax * by - ay * bx
+    if det == 0 {
+        // degenerate — try brute force (only for part 1)
+        if limit > 0 {
+            let best = -1
+            let a = 0
+            while a <= limit {
+                let rem_x = px - a * ax
+                let rem_y = py - a * ay
+                if rem_x >= 0 && rem_y >= 0 && bx > 0 && rem_x % bx == 0 {
+                    let b = rem_x / bx
+                    if b <= limit && a * ay + b * by == py {
+                        let cost = a * 3 + b
+                        if best < 0 || cost < best { best = cost }
+                    }
+                }
+                a = a + 1
+            }
+            return best
+        }
+        return -1
+    }
+    let a_num = px * by - py * bx
+    let b_num = ax * py - ay * px
+    if a_num % det != 0 || b_num % det != 0 { return -1 }
+    let a = a_num / det
+    let b = b_num / det
+    if a < 0 || b < 0 { return -1 }
+    if limit > 0 && (a > limit || b > limit) { return -1 }
+    return a * 3 + b
+}
+
+fn part1(text: str) -> int {
+    let machines = parse_machines(text)
+    let total = 0
+    let i = 0
+    while i < len(machines) {
+        let m = machines[i]
+        let cost = solve_machine(m[0][0], m[0][1], m[1][0], m[1][1], m[2][0], m[2][1], 100)
+        if cost >= 0 { total = total + cost }
+        i = i + 1
+    }
+    return total
+}
+
+fn part2(text: str) -> int {
+    let machines = parse_machines(text)
+    let offset = 10000000000000
+    let total = 0
+    let i = 0
+    while i < len(machines) {
+        let m = machines[i]
+        let px = m[2][0] + offset
+        let py = m[2][1] + offset
+        let cost = solve_machine(m[0][0], m[0][1], m[1][0], m[1][1], px, py, 0)
+        if cost >= 0 { total = total + cost }
+        i = i + 1
+    }
+    return total
+}
+
+@test
+fn test_part1() {
+    assert_eq(part1(SAMPLE), 480)
+}
+
+@test
+fn test_part2() {
+    assert_eq(part2(SAMPLE), 875318608908)
+}
+
+fn main() {
+    print("Day 13 Part 1: " + str(part1(SAMPLE)))
+    print("Day 13 Part 2: " + str(part2(SAMPLE)))
+}
+
+main()

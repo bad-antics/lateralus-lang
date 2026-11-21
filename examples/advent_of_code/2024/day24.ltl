@@ -1,0 +1,244 @@
+// Advent of Code 2024 · Day 24 · Crossed Wires
+// Logic gates: AND, OR, XOR. Wires have initial values or computed values.
+// Part 1: simulate circuit; read z-wires as a binary number (z00=LSB).
+// Part 2: find 4 pairs of swapped output wires that fix an adder circuit.
+//         (Part 2 answer is the 8 wire names sorted and joined with commas.)
+
+let SAMPLE = "x00: 1
+x01: 1
+x02: 1
+y00: 0
+y01: 1
+y02: 0
+
+x00 AND y00 -> z00
+x01 XOR y01 -> z01
+x02 OR y02 -> z02"
+
+fn parse_circuit(text: str) -> list {
+    let parts = str_split(text, "\n\n")
+    let init_lines = str_split(str_trim(parts[0]), "\n")
+    let gate_lines = str_split(str_trim(parts[1]), "\n")
+
+    let values = {}
+    let i = 0
+    while i < len(init_lines) {
+        let line = str_trim(init_lines[i])
+        if len(line) > 0 {
+            let colon = 0
+            let j = 0
+            while j < len(line) {
+                if slice(line, j, j + 1) == ":" { colon = j }
+                j = j + 1
+            }
+            let name = str_trim(slice(line, 0, colon))
+            let val = int(str_trim(slice(line, colon + 1, len(line))))
+            values[name] = val
+        }
+        i = i + 1
+    }
+
+    let gates = []
+    let k = 0
+    while k < len(gate_lines) {
+        let line = str_trim(gate_lines[k])
+        if len(line) > 0 {
+            // "a OP b -> out"
+            let arrow = 0
+            let j = 0
+            while j < len(line) - 1 {
+                if slice(line, j, j + 2) == "-" { arrow = j }
+                j = j + 1
+            }
+            let lhs = str_trim(slice(line, 0, arrow))
+            let out = str_trim(slice(line, arrow + 3, len(line)))
+            let toks = str_split(lhs, " ")
+            let a = str_trim(toks[0])
+            let op = str_trim(toks[1])
+            let b = str_trim(toks[2])
+            gates = gates + [[a, op, b, out]]
+        }
+        k = k + 1
+    }
+    return [values, gates]
+}
+
+fn simulate(values: map, gates: list) -> map {
+    let remaining = gates
+    let max_iters = len(gates) * len(gates) + 1
+    let iters = 0
+    while len(remaining) > 0 && iters < max_iters {
+        let next = []
+        let i = 0
+        while i < len(remaining) {
+            let g = remaining[i]
+            let a = g[0]
+            let op = g[1]
+            let b = g[2]
+            let out = g[3]
+            if contains(values, a) && contains(values, b) {
+                let va = values[a]
+                let vb = values[b]
+                let res = 0
+                if op == "AND" { res = va & vb }
+                else if op == "OR" { res = va | vb }
+                else if op == "XOR" { res = va ^ vb }
+                values[out] = res
+            } else {
+                next = next + [g]
+            }
+            i = i + 1
+        }
+        remaining = next
+        iters = iters + 1
+    }
+    return values
+}
+
+fn read_z_wires(values: map) -> int {
+    // Collect all z-wire names
+    let z_names = []
+    for name in values {
+        if len(name) > 0 && slice(name, 0, 1) == "z" {
+            z_names = z_names + [name]
+        }
+    }
+    // Sort descending by name to build binary number
+    // Simple insertion sort
+    let i = 1
+    while i < len(z_names) {
+        let key = z_names[i]
+        let j = i - 1
+        while j >= 0 && z_names[j] < key {
+            z_names[j + 1] = z_names[j]
+            j = j - 1
+        }
+        z_names[j + 1] = key
+        i = i + 1
+    }
+    let result = 0
+    let k = 0
+    while k < len(z_names) {
+        result = result * 2 + values[z_names[k]]
+        k = k + 1
+    }
+    return result
+}
+
+fn part1(text: str) -> int {
+    let parsed = parse_circuit(text)
+    let values = parsed[0]
+    let gates = parsed[1]
+    let final_values = simulate(values, gates)
+    return read_z_wires(final_values)
+}
+
+// Part 2: find swapped wires in a ripple-carry adder.
+// The correct adder has specific structural patterns:
+// - Each bit i: sum = xi XOR yi XOR carry_in
+//              carry_out = (xi AND yi) OR (carry_in AND (xi XOR yi))
+// Find wires that violate the adder structure.
+fn part2(text: str) -> str {
+    let parsed = parse_circuit(text)
+    let gates = parsed[1]
+
+    // Index gates by output and by inputs
+    let by_out = {}
+    let i = 0
+    while i < len(gates) {
+        let g = gates[i]
+        by_out[g[3]] = g
+        i = i + 1
+    }
+
+    // Identify suspicious wires using adder invariants:
+    // 1. z-wires (except z_max) must be outputs of XOR gates
+    // 2. XOR gates with both inputs being x/y wires must feed into another XOR or AND
+    // 3. AND gates (not x0 AND y0) must feed into OR gates
+    let swapped = {}
+
+    let j = 0
+    while j < len(gates) {
+        let g = gates[j]
+        let a = g[0]
+        let op = g[1]
+        let b = g[2]
+        let out = g[3]
+
+        let a_is_xy = (len(a) > 0 && (slice(a, 0, 1) == "x" || slice(a, 0, 1) == "y"))
+        let b_is_xy = (len(b) > 0 && (slice(b, 0, 1) == "x" || slice(b, 0, 1) == "y"))
+        let out_is_z = (len(out) > 0 && slice(out, 0, 1) == "z")
+        let is_first_bit = (a == "x00" || a == "y00" || b == "x00" || b == "y00")
+
+        // z-wires must come from XOR (except the carry out of the last bit)
+        if out_is_z && op != "XOR" && out != "z45" {
+            swapped[out] = true
+        }
+
+        // XOR gate with non-x/y inputs must output to z
+        if op == "XOR" && !a_is_xy && !b_is_xy && !out_is_z {
+            swapped[out] = true
+        }
+
+        // AND gate (not first bit) must feed into OR
+        if op == "AND" && !is_first_bit {
+            let k = 0
+            while k < len(gates) {
+                let g2 = gates[k]
+                if (g2[0] == out || g2[2] == out) && g2[1] != "OR" {
+                    swapped[out] = true
+                }
+                k = k + 1
+            }
+        }
+
+        // XOR gate with x/y inputs must feed into XOR or AND (not OR)
+        if op == "XOR" && a_is_xy && b_is_xy && !is_first_bit {
+            let k = 0
+            while k < len(gates) {
+                let g2 = gates[k]
+                if (g2[0] == out || g2[2] == out) && g2[1] == "OR" {
+                    swapped[out] = true
+                }
+                k = k + 1
+            }
+        }
+
+        j = j + 1
+    }
+
+    let names = []
+    for n in swapped { names = names + [n] }
+    // Sort
+    let m = 1
+    while m < len(names) {
+        let key = names[m]
+        let n = m - 1
+        while n >= 0 && names[n] > key {
+            names[n + 1] = names[n]
+            n = n - 1
+        }
+        names[n + 1] = key
+        m = m + 1
+    }
+    let result = ""
+    let p = 0
+    while p < len(names) {
+        if p > 0 { result = result + "," }
+        result = result + names[p]
+        p = p + 1
+    }
+    return result
+}
+
+@test
+fn test_part1() {
+    assert_eq(part1(SAMPLE), 4)
+}
+
+fn main() {
+    print("Day 24 Part 1: " + str(part1(SAMPLE)))
+    print("Day 24 Part 2: " + part2(SAMPLE))
+}
+
+main()

@@ -1,0 +1,204 @@
+// Advent of Code 2024 · Day 12 · Garden Groups
+// Connected regions of same letter.
+// Part 1: price = area * perimeter for each region; sum all.
+// Part 2: price = area * sides (number of straight fence sides).
+
+let SAMPLE = "RRRRIICCFF
+RRRRIICCCF
+VVRRRCCFFF
+VVRCCCJFFF
+VVVVCJJCFE
+VVIVCCJJEE
+VVIIICJJEE
+MIIIIIJJEE
+MIIISIJEEE
+MMMISSJEEE"
+
+fn parse_grid(text: str) -> list {
+    let lines = str_split(text, "\n")
+    let grid = []
+    let i = 0
+    while i < len(lines) {
+        let row = str_trim(lines[i])
+        if len(row) > 0 {
+            grid = grid + [row]
+        }
+        i = i + 1
+    }
+    return grid
+}
+
+fn get_cell(grid: list, r: int, c: int) -> str {
+    if r < 0 || r >= len(grid) { return "." }
+    let row = grid[r]
+    if c < 0 || c >= len(row) { return "." }
+    return slice(row, c, c + 1)
+}
+
+// BFS to find all cells in a region; returns list of [r,c] pairs
+fn flood_fill(grid: list, sr: int, sc: int, visited: map) -> list {
+    let ch = get_cell(grid, sr, sc)
+    let region = []
+    let queue = [[sr, sc]]
+    let key = str(sr) + "," + str(sc)
+    visited[key] = true
+
+    while len(queue) > 0 {
+        let cur = queue[0]
+        queue = queue[1:]
+        region = region + [cur]
+        let r = cur[0]
+        let c = cur[1]
+        let neighbors = [[r-1,c],[r+1,c],[r,c-1],[r,c+1]]
+        let i = 0
+        while i < len(neighbors) {
+            let nr = neighbors[i][0]
+            let nc = neighbors[i][1]
+            let nk = str(nr) + "," + str(nc)
+            if !contains(visited, nk) && get_cell(grid, nr, nc) == ch {
+                visited[nk] = true
+                queue = queue + [[nr, nc]]
+            }
+            i = i + 1
+        }
+    }
+    return region
+}
+
+fn calc_perimeter(region: list, grid: list) -> int {
+    let ch = get_cell(grid, region[0][0], region[0][1])
+    let cells = {}
+    let i = 0
+    while i < len(region) {
+        cells[str(region[i][0]) + "," + str(region[i][1])] = true
+        i = i + 1
+    }
+    let peri = 0
+    let j = 0
+    while j < len(region) {
+        let r = region[j][0]
+        let c = region[j][1]
+        let neighbors = [[r-1,c],[r+1,c],[r,c-1],[r,c+1]]
+        let k = 0
+        while k < len(neighbors) {
+            let nk = str(neighbors[k][0]) + "," + str(neighbors[k][1])
+            if !contains(cells, nk) {
+                peri = peri + 1
+            }
+            k = k + 1
+        }
+        j = j + 1
+    }
+    return peri
+}
+
+// Count sides using corner counting: each convex/concave corner = 1 side change.
+// Number of sides = number of corners.
+fn calc_sides(region: list) -> int {
+    let cells = {}
+    let i = 0
+    while i < len(region) {
+        cells[str(region[i][0]) + "," + str(region[i][1])] = true
+        i = i + 1
+    }
+
+    fn has(r: int, c: int) -> bool {
+        return contains(cells, str(r) + "," + str(c))
+    }
+
+    let corners = 0
+    let j = 0
+    while j < len(region) {
+        let r = region[j][0]
+        let c = region[j][1]
+        // Check all 4 corner types: each corner of the cell square
+        // Convex corner: two adjacent sides missing
+        // Concave corner: two adjacent sides present but diagonal missing
+        let configs = [
+            [[-1,0],[0,-1],[-1,-1]],
+            [[-1,0],[0,1],[-1,1]],
+            [[1,0],[0,-1],[1,-1]],
+            [[1,0],[0,1],[1,1]]
+        ]
+        let k = 0
+        while k < len(configs) {
+            let dr1 = configs[k][0][0]
+            let dc1 = configs[k][0][1]
+            let dr2 = configs[k][1][0]
+            let dc2 = configs[k][1][1]
+            let dr3 = configs[k][2][0]
+            let dc3 = configs[k][2][1]
+            let a = has(r + dr1, c + dc1)
+            let b = has(r + dr2, c + dc2)
+            let d = has(r + dr3, c + dc3)
+            // Convex corner: neither neighbor is in the region
+            if !a && !b { corners = corners + 1 }
+            // Concave corner: both neighbors in region but diagonal is not
+            if a && b && !d { corners = corners + 1 }
+            k = k + 1
+        }
+        j = j + 1
+    }
+    return corners
+}
+
+fn part1(text: str) -> int {
+    let grid = parse_grid(text)
+    let visited = {}
+    let total = 0
+    let r = 0
+    while r < len(grid) {
+        let c = 0
+        while c < len(grid[r]) {
+            let key = str(r) + "," + str(c)
+            if !contains(visited, key) {
+                let region = flood_fill(grid, r, c, visited)
+                let area = len(region)
+                let peri = calc_perimeter(region, grid)
+                total = total + area * peri
+            }
+            c = c + 1
+        }
+        r = r + 1
+    }
+    return total
+}
+
+fn part2(text: str) -> int {
+    let grid = parse_grid(text)
+    let visited = {}
+    let total = 0
+    let r = 0
+    while r < len(grid) {
+        let c = 0
+        while c < len(grid[r]) {
+            let key = str(r) + "," + str(c)
+            if !contains(visited, key) {
+                let region = flood_fill(grid, r, c, visited)
+                let area = len(region)
+                let sides = calc_sides(region)
+                total = total + area * sides
+            }
+            c = c + 1
+        }
+        r = r + 1
+    }
+    return total
+}
+
+@test
+fn test_part1() {
+    assert_eq(part1(SAMPLE), 1930)
+}
+
+@test
+fn test_part2() {
+    assert_eq(part2(SAMPLE), 1206)
+}
+
+fn main() {
+    print("Day 12 Part 1: " + str(part1(SAMPLE)))
+    print("Day 12 Part 2: " + str(part2(SAMPLE)))
+}
+
+main()

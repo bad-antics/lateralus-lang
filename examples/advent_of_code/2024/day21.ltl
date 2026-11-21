@@ -1,0 +1,190 @@
+// Advent of Code 2024 · Day 21 · Keypad Conundrum
+// Numeric keypad and directional keypads in a chain.
+// Each robot presses keys on the keypad in front of it.
+// Part 1: 2 directional robots + 1 numeric; sum complexity (len * numeric_part).
+// Part 2: 25 directional robots + 1 numeric.
+
+let SAMPLE = "029A
+980A
+179A
+456A
+379A"
+
+// Numeric keypad layout:
+// 7 8 9
+// 4 5 6
+// 1 2 3
+//   0 A
+let NUM_POS = {
+    "7": [0, 0], "8": [0, 1], "9": [0, 2],
+    "4": [1, 0], "5": [1, 1], "6": [1, 2],
+    "1": [2, 0], "2": [2, 1], "3": [2, 2],
+    "0": [3, 1], "A": [3, 2]
+}
+// Gap at [3,0]
+let NUM_GAP = [3, 0]
+
+// Directional keypad layout:
+//   ^ A
+// < v >
+let DIR_POS = {
+    "^": [0, 1], "A": [0, 2],
+    "<": [1, 0], "v": [1, 1], ">": [1, 2]
+}
+// Gap at [0,0]
+let DIR_GAP = [0, 0]
+
+fn abs_i(n: int) -> int { if n < 0 { return -n } return n }
+
+// Generate all shortest button sequences to move from (r1,c1) to (r2,c2)
+// avoiding the gap, and press A. Returns list of strings.
+fn shortest_seqs(r1: int, c1: int, r2: int, c2: int, gap_r: int, gap_c: int) -> list {
+    let dr = r2 - r1
+    let dc = c2 - c1
+    let vert = ""
+    if dr < 0 {
+        let k = 0
+        while k < -dr { vert = vert + "^"; k = k + 1 }
+    } else {
+        let k = 0
+        while k < dr { vert = vert + "v"; k = k + 1 }
+    }
+    let horiz = ""
+    if dc < 0 {
+        let k = 0
+        while k < -dc { horiz = horiz + "<"; k = k + 1 }
+    } else {
+        let k = 0
+        while k < dc { horiz = horiz + ">"; k = k + 1 }
+    }
+    // Try horiz-first and vert-first; exclude if they pass over the gap
+    let result = []
+    // vert-first: move vertically then horizontally
+    if !(c1 == gap_c && r2 == gap_r) {
+        result = result + [vert + horiz + "A"]
+    }
+    // horiz-first: move horizontally then vertically
+    if !(r1 == gap_r && c2 == gap_c) {
+        let hv = horiz + vert + "A"
+        // avoid duplicate if one is empty
+        if len(vert) == 0 || len(horiz) == 0 {
+            if len(result) == 0 { result = result + [hv] }
+        } else {
+            result = result + [hv]
+        }
+    }
+    if len(result) == 0 {
+        result = [vert + horiz + "A"]
+    }
+    return result
+}
+
+// Cache for min cost of pressing a sequence on a directional keypad with `depth` robots
+let COST_CACHE = {}
+
+fn min_cost(seq: str, depth: int) -> int {
+    let cache_key = seq + "," + str(depth)
+    if contains(COST_CACHE, cache_key) { return COST_CACHE[cache_key] }
+
+    if depth == 0 { return len(seq) }
+
+    let total = 0
+    let cur_r = 0
+    let cur_c = 2  // start at "A" on dir pad
+    let i = 0
+    while i < len(seq) {
+        let ch = slice(seq, i, i + 1)
+        let pos = DIR_POS[ch]
+        let nr = pos[0]
+        let nc = pos[1]
+        let seqs = shortest_seqs(cur_r, cur_c, nr, nc, DIR_GAP[0], DIR_GAP[1])
+        let best = -1
+        let j = 0
+        while j < len(seqs) {
+            let cost = min_cost(seqs[j], depth - 1)
+            if best < 0 || cost < best { best = cost }
+            j = j + 1
+        }
+        total = total + best
+        cur_r = nr
+        cur_c = nc
+        i = i + 1
+    }
+    COST_CACHE[cache_key] = total
+    return total
+}
+
+fn solve_code(code: str, num_dir_robots: int) -> int {
+    // Expand numeric keypad sequence via num_dir_robots layers
+    let cur_r = 3
+    let cur_c = 2  // start at "A" on numeric pad
+    let total = 0
+    let i = 0
+    while i < len(code) {
+        let ch = slice(code, i, i + 1)
+        let pos = NUM_POS[ch]
+        let nr = pos[0]
+        let nc = pos[1]
+        let seqs = shortest_seqs(cur_r, cur_c, nr, nc, NUM_GAP[0], NUM_GAP[1])
+        let best = -1
+        let j = 0
+        while j < len(seqs) {
+            let cost = min_cost(seqs[j], num_dir_robots)
+            if best < 0 || cost < best { best = cost }
+            j = j + 1
+        }
+        total = total + best
+        cur_r = nr
+        cur_c = nc
+        i = i + 1
+    }
+    // Numeric part of code (strip leading zeros and trailing A)
+    let num_str = ""
+    let k = 0
+    while k < len(code) {
+        let ch = slice(code, k, k + 1)
+        if ch >= "0" && ch <= "9" { num_str = num_str + ch }
+        k = k + 1
+    }
+    let numeric_val = 0
+    let m = 0
+    while m < len(num_str) {
+        numeric_val = numeric_val * 10 + int(slice(num_str, m, m + 1))
+        m = m + 1
+    }
+    return total * numeric_val
+}
+
+fn solve(text: str, depth: int) -> int {
+    let lines = str_split(text, "\n")
+    let total = 0
+    let i = 0
+    while i < len(lines) {
+        let code = str_trim(lines[i])
+        if len(code) > 0 {
+            total = total + solve_code(code, depth)
+        }
+        i = i + 1
+    }
+    return total
+}
+
+fn part1(text: str) -> int {
+    return solve(text, 2)
+}
+
+fn part2(text: str) -> int {
+    return solve(text, 25)
+}
+
+@test
+fn test_part1() {
+    assert_eq(part1(SAMPLE), 126384)
+}
+
+fn main() {
+    print("Day 21 Part 1: " + str(part1(SAMPLE)))
+    print("Day 21 Part 2: " + str(part2(SAMPLE)))
+}
+
+main()

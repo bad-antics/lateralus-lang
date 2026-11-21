@@ -1,0 +1,173 @@
+// Advent of Code 2024 · Day 23 · LAN Party
+// Undirected graph of computer connections.
+// Part 1: count sets of 3 mutually connected computers where >= 1 name starts with 't'.
+// Part 2: find the largest clique; output names sorted, comma-joined (the LAN party password).
+
+let SAMPLE = "kh-tc
+qp-kh
+de-cg
+ka-de
+ka-cg
+qp-de
+cg-tb
+vc-aq
+tb-ka
+wh-tc
+yn-vc
+wh-cg
+kh-hn
+qp-ub
+ub-vc
+de-ta
+wh-tn
+tb-wh
+tn-ub
+vc-de
+ta-ka
+wh-qp
+tb-vc
+td-yn"
+
+fn parse_graph(text: str) -> map {
+    let adj = {}
+    let lines = str_split(text, "\n")
+    let i = 0
+    while i < len(lines) {
+        let line = str_trim(lines[i])
+        if len(line) > 0 {
+            let parts = str_split(line, "-")
+            let a = str_trim(parts[0])
+            let b = str_trim(parts[1])
+            if !contains(adj, a) { adj[a] = {} }
+            if !contains(adj, b) { adj[b] = {} }
+            adj[a][b] = true
+            adj[b][a] = true
+        }
+        i = i + 1
+    }
+    return adj
+}
+
+fn has_edge(adj: map, a: str, b: str) -> bool {
+    if !contains(adj, a) { return false }
+    return contains(adj[a], b)
+}
+
+fn starts_with_t(s: str) -> bool {
+    if len(s) == 0 { return false }
+    return slice(s, 0, 1) == "t"
+}
+
+fn part1(text: str) -> int {
+    let adj = parse_graph(text)
+    let nodes = []
+    for n in adj { nodes = nodes + [n] }
+    let count = 0
+    let i = 0
+    while i < len(nodes) {
+        let j = i + 1
+        while j < len(nodes) {
+            let k = j + 1
+            while k < len(nodes) {
+                let a = nodes[i]
+                let b = nodes[j]
+                let c = nodes[k]
+                if has_edge(adj, a, b) && has_edge(adj, b, c) && has_edge(adj, a, c) {
+                    if starts_with_t(a) || starts_with_t(b) || starts_with_t(c) {
+                        count = count + 1
+                    }
+                }
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return count
+}
+
+// Bron-Kerbosch for maximum clique
+fn bron_kerbosch(r: list, p: list, x: list, adj: map) -> list {
+    if len(p) == 0 && len(x) == 0 { return r }
+    let best = r
+    let i = 0
+    while i < len(p) {
+        let v = p[i]
+        let new_r = r + [v]
+        let new_p = []
+        let j = 0
+        while j < len(p) {
+            if has_edge(adj, v, p[j]) { new_p = new_p + [p[j]] }
+            j = j + 1
+        }
+        let new_x = []
+        let k = 0
+        while k < len(x) {
+            if has_edge(adj, v, x[k]) { new_x = new_x + [x[k]] }
+            k = k + 1
+        }
+        let result = bron_kerbosch(new_r, new_p, new_x, adj)
+        if len(result) > len(best) { best = result }
+        // Move v from P to X
+        let new_p2 = []
+        let m = 0
+        while m < len(p) {
+            if m != i { new_p2 = new_p2 + [p[m]] }
+            m = m + 1
+        }
+        p = new_p2
+        x = x + [v]
+        // Don't increment i since we removed p[i]
+    }
+    return best
+}
+
+fn sort_strings(lst: list) -> list {
+    // Insertion sort
+    let arr = lst
+    let i = 1
+    while i < len(arr) {
+        let key = arr[i]
+        let j = i - 1
+        while j >= 0 && arr[j] > key {
+            arr[j + 1] = arr[j]
+            j = j - 1
+        }
+        arr[j + 1] = key
+        i = i + 1
+    }
+    return arr
+}
+
+fn part2(text: str) -> str {
+    let adj = parse_graph(text)
+    let nodes = []
+    for n in adj { nodes = nodes + [n] }
+    let clique = bron_kerbosch([], nodes, [], adj)
+    let sorted = sort_strings(clique)
+    let result = ""
+    let i = 0
+    while i < len(sorted) {
+        if i > 0 { result = result + "," }
+        result = result + sorted[i]
+        i = i + 1
+    }
+    return result
+}
+
+@test
+fn test_part1() {
+    assert_eq(part1(SAMPLE), 7)
+}
+
+@test
+fn test_part2() {
+    assert_eq(part2(SAMPLE), "co,de,ka,ta")
+}
+
+fn main() {
+    print("Day 23 Part 1: " + str(part1(SAMPLE)))
+    print("Day 23 Part 2: " + part2(SAMPLE))
+}
+
+main()

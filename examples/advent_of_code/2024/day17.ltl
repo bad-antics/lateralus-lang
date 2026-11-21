@@ -1,0 +1,174 @@
+// Advent of Code 2024 · Day 17 · Chronospatial Computer
+// 3-bit computer: registers A, B, C; 8 instructions; combo operands.
+// Part 1: run the program; collect output values joined by commas.
+// Part 2: find initial A so program outputs itself (quine).
+
+let SAMPLE = "Register A: 729
+Register B: 0
+Register C: 0
+
+Program: 0,1,5,4,3,0"
+
+// Combo operand value
+fn combo(op: int, a: int, b: int, c: int) -> int {
+    if op <= 3 { return op }
+    if op == 4 { return a }
+    if op == 5 { return b }
+    if op == 6 { return c }
+    return 0
+}
+
+fn run_program(prog: list, a_init: int, b_init: int, c_init: int) -> list {
+    let a = a_init
+    let b = b_init
+    let c = c_init
+    let ip = 0
+    let output = []
+    let max_steps = 100000
+
+    let steps = 0
+    while ip < len(prog) - 1 && steps < max_steps {
+        let op = prog[ip]
+        let operand = prog[ip + 1]
+        if op == 0 {
+            // adv: A = A / 2^combo
+            let shift = combo(operand, a, b, c)
+            let denom = 1
+            let k = 0
+            while k < shift { denom = denom * 2; k = k + 1 }
+            a = a / denom
+            ip = ip + 2
+        } else if op == 1 {
+            // bxl: B = B XOR literal
+            b = b ^ operand
+            ip = ip + 2
+        } else if op == 2 {
+            // bst: B = combo % 8
+            b = combo(operand, a, b, c) % 8
+            ip = ip + 2
+        } else if op == 3 {
+            // jnz: if A != 0 jump to literal
+            if a != 0 {
+                ip = operand
+            } else {
+                ip = ip + 2
+            }
+        } else if op == 4 {
+            // bxc: B = B XOR C (operand ignored)
+            b = b ^ c
+            ip = ip + 2
+        } else if op == 5 {
+            // out: output combo % 8
+            output = output + [combo(operand, a, b, c) % 8]
+            ip = ip + 2
+        } else if op == 6 {
+            // bdv: B = A / 2^combo
+            let shift = combo(operand, a, b, c)
+            let denom = 1
+            let k = 0
+            while k < shift { denom = denom * 2; k = k + 1 }
+            b = a / denom
+            ip = ip + 2
+        } else if op == 7 {
+            // cdv: C = A / 2^combo
+            let shift = combo(operand, a, b, c)
+            let denom = 1
+            let k = 0
+            while k < shift { denom = denom * 2; k = k + 1 }
+            c = a / denom
+            ip = ip + 2
+        } else {
+            ip = ip + 2
+        }
+        steps = steps + 1
+    }
+    return output
+}
+
+fn join_ints(nums: list) -> str {
+    let s = ""
+    let i = 0
+    while i < len(nums) {
+        if i > 0 { s = s + "," }
+        s = s + str(nums[i])
+        i = i + 1
+    }
+    return s
+}
+
+fn parse_input(text: str) -> list {
+    let parts = str_split(text, "\n\n")
+    let reg_lines = str_split(str_trim(parts[0]), "\n")
+    fn parse_reg(line: str) -> int {
+        let colon = 0
+        let j = 0
+        while j < len(line) {
+            if slice(line, j, j + 1) == ":" { colon = j }
+            j = j + 1
+        }
+        return int(str_trim(slice(line, colon + 1, len(line))))
+    }
+    let a = parse_reg(str_trim(reg_lines[0]))
+    let b = parse_reg(str_trim(reg_lines[1]))
+    let c = parse_reg(str_trim(reg_lines[2]))
+    let prog_line = str_trim(parts[1])
+    let colon = 0
+    let j = 0
+    while j < len(prog_line) {
+        if slice(prog_line, j, j + 1) == ":" { colon = j }
+        j = j + 1
+    }
+    let prog_str = str_trim(slice(prog_line, colon + 1, len(prog_line)))
+    let toks = str_split(prog_str, ",")
+    let prog = []
+    let k = 0
+    while k < len(toks) {
+        prog = prog + [int(str_trim(toks[k]))]
+        k = k + 1
+    }
+    return [a, b, c, prog]
+}
+
+fn part1(text: str) -> str {
+    let parsed = parse_input(text)
+    let output = run_program(parsed[3], parsed[0], parsed[1], parsed[2])
+    return join_ints(output)
+}
+
+// Part 2: find minimal A such that program outputs itself.
+// Use recursive search building A 3 bits at a time from the end.
+fn find_quine_a(prog: list, target_idx: int, current_a: int) -> int {
+    if target_idx < 0 { return current_a }
+    let digit = prog[target_idx]
+    let candidate = current_a * 8
+    let trial = 0
+    while trial < 8 {
+        let test_a = candidate + trial
+        let output = run_program(prog, test_a, 0, 0)
+        if len(output) > 0 && output[0] == digit {
+            let result = find_quine_a(prog, target_idx - 1, test_a)
+            if result >= 0 { return result }
+        }
+        trial = trial + 1
+    }
+    return -1
+}
+
+fn part2(text: str) -> int {
+    let parsed = parse_input(text)
+    let prog = parsed[3]
+    return find_quine_a(prog, len(prog) - 1, 0)
+}
+
+@test
+fn test_part1() {
+    assert_eq(part1(SAMPLE), "4,6,3,5,6,3,5,2,1,0")
+}
+
+fn main() {
+    print("Day 17 Part 1: " + part1(SAMPLE))
+    // Part 2 quine search is specific to real input structure
+    print("Day 17 Part 2 (quine): requires real puzzle input")
+}
+
+main()
