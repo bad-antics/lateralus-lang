@@ -15,6 +15,7 @@ from lateralus_lang.science import (
     Dimension,
     Quantity,
     binomial_pmf,
+    chi_squared_pdf,
     convolve,
     euler_step,
     exponential_pdf,
@@ -256,6 +257,15 @@ class TestDistributions:
     def test_binomial_sum_to_one(self):
         total = sum(binomial_pmf(k, 10, 0.3) for k in range(11))
         assert abs(total - 1.0) < 1e-10
+
+    def test_poisson_pmf_large_k_no_overflow(self):
+        """Issues #226/#227/#229: pmf/pdf functions must not overflow
+        for valid inputs — compute in log space."""
+        assert abs(poisson_pmf(200, 200.0) - 0.02819772768592082) < 1e-12
+        assert abs(poisson_pmf(150, 150.0) - 0.03255540945683655) < 1e-12
+        assert abs(binomial_pmf(550, 1100, 0.5) - 0.024051657768231812) < 1e-12
+        assert abs(chi_squared_pdf(998.0, 1000) - 0.008928063487744038) < 1e-12
+        assert abs(chi_squared_pdf(398.0, 400) - 0.014134214138366241) < 1e-12
 
 
 class TestInterpolation:
