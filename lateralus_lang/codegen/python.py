@@ -154,6 +154,15 @@ _PY_BUILTINS = {"int", "float", "str", "bool", "len", "print", "input",
                 "open", "sorted", "reversed", "any", "all"}
 
 
+_PY_KEYWORDS = frozenset({
+    "False", "None", "True", "and", "as", "assert", "async", "await",
+    "break", "class", "continue", "def", "del", "elif", "else", "except",
+    "finally", "for", "from", "global", "if", "import", "in", "is",
+    "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try",
+    "while", "with", "yield",
+})
+
+
 class PythonTranspiler(ASTVisitor):
 
     def __init__(self, use_match_stmt: bool = True):
@@ -883,25 +892,25 @@ class PythonTranspiler(ASTVisitor):
         if node.path in _alias_map:
             target = _alias_map[node.path]
             if target.startswith("__import__"):
-                self._w += f"{alias} = {target}"
+                self._w += f"{self._sid(alias)} = {target}"
             elif target.startswith("lateralus_lang."):
                 # Try to import the lateralus_lang sub-module; silently skip if missing
                 mod_path = target
                 self._w += "try:"
                 with self._w.indent():
-                    self._w += f"import {mod_path} as {alias}"
+                    self._w += f"import {mod_path} as {self._sid(alias)}"
                 self._w += "except ImportError:"
                 with self._w.indent():
-                    self._w += f"{alias} = None  # stdlib module '{node.path}' not available"
+                    self._w += f"{self._sid(alias)} = None  # stdlib module '{node.path}' not available"
             else:
-                self._w += f"{alias} = {target}"
+                self._w += f"{self._sid(alias)} = {target}"
             return
         # For from-imports of stdlib, emit a comment — symbols already in preamble
         if any(node.path.startswith(p) for p in ("stdlib.",)):
             self._w += f"# stdlib '{node.path}' resolved via preamble shims"
             return
         py_path = node.path.replace(".", ".")
-        self._w += f"import {py_path} as {alias}"
+        self._w += f"import {py_path} as {self._sid(alias)}"
 
     # ── declarations ──────────────────────────────────────────────────────────
 
@@ -924,7 +933,7 @@ class PythonTranspiler(ASTVisitor):
 
         params = self._render_params(node.params)
         kw = "async def" if node.is_async else "def"
-        self._w += f"{kw} {node.name}({params}):"
+        self._w += f"{kw} {self._sid(node.name)}({params}):"
         if node.body and node.body.stmts:
             with self._w.indent():
                 self._emit_fn_body(node.body)
@@ -941,7 +950,7 @@ class PythonTranspiler(ASTVisitor):
             for p in node.params:
                 tname = self._ltl_type_str(p.type_) if p.type_ else "any"
                 spec_parts.append(f"({p.name!r}, {tname!r})")
-            self._w += f"{node.name}._law_spec = [{', '.join(spec_parts)}]"
+            self._w += f"{self._sid(node.name)}._law_spec = [{', '.join(spec_parts)}]"
             self._w += ""
 
     @staticmethod
@@ -982,12 +991,12 @@ class PythonTranspiler(ASTVisitor):
                 source = first.expr.value
         params_str = self._render_params(node.params)
         kw = "async def" if node.is_async else "def"
-        self._w += f"{kw} {node.name}({params_str}):"
+        self._w += f"{kw} {self._sid(node.name)}({params_str}):"
         with self._w.indent():
             # Build the params dict from function parameter names
             param_names = [p.name for p in node.params]
             if param_names:
-                kv = ", ".join(f'"{n}": {n}' for n in param_names)
+                kv = ", ".join(f'"{n}": {self._sid(n)}' for n in param_names)
                 self._w += f"_params = {{{kv}}}"
             else:
                 self._w += "_params = {}"
@@ -1018,6 +1027,12 @@ class PythonTranspiler(ASTVisitor):
         """Map Lateralus type name to valid Python annotation."""
         return self._TYPE_MAP.get(name, name)
 
+    def _sid(self, name: str) -> str:
+        """Return a Python-safe identifier: Lateralus allows identifiers
+        that are Python keywords (assert, class, del, ...); mangle them
+        with a trailing underscore so the emitted source parses."""
+        return name + "_" if name in _PY_KEYWORDS else name
+
     def _ltl_type_str(self, t) -> str:
         """Serialize a Lateralus TypeRef back to its source form, preserving
         generic parameters so the @law runner sees `list[int]` not `list`."""
@@ -1037,7 +1052,7 @@ class PythonTranspiler(ASTVisitor):
     def _render_params(self, params) -> str:
         parts = []
         for p in params:
-            s = ("*" if p.vararg else "") + p.name
+            s = ("*" if p.vararg else "") + self._sid(p.name)
             if p.type_:
                 s += f": {self._py_type(p.type_.name)}"
             if p.default:
@@ -1049,7 +1064,7 @@ class PythonTranspiler(ASTVisitor):
         """Render params for lambda expressions — no type annotations allowed in Python."""
         parts = []
         for p in params:
-            s = ("*" if p.vararg else "") + p.name
+            s = ("*" if p.vararg else "") + self._sid(p.name)
             if p.default:
                 s += f" = {self._expr(p.default)}"
             parts.append(s)
@@ -1060,9 +1075,9 @@ class PythonTranspiler(ASTVisitor):
         # Flush hoisted block-lambdas before the variable that uses them
         self._flush_hoisted_lambdas()
         if node.type_:
-            self._w += f"{node.name}: {self._py_type(node.type_.name)} = {val}"
+            self._w += f"{self._sid(node.name)}: {self._py_type(node.type_.name)} = {val}"
         else:
-            self._w += f"{node.name} = {val}"
+            self._w += f"{self._sid(node.name)} = {val}"
 
     # ── statements ────────────────────────────────────────────────────────────
 
@@ -1147,7 +1162,7 @@ class PythonTranspiler(ASTVisitor):
             node.body.accept(self)
 
     def visit_ForStmt(self, node: ForStmt):
-        self._w += f"for {node.var} in {self._expr(node.iter)}:"
+        self._w += f"for {self._sid(node.var)} in {self._expr(node.iter)}:"
         with self._w.indent():
             node.body.accept(self)
 
@@ -1172,7 +1187,7 @@ class PythonTranspiler(ASTVisitor):
         for clause in node.recoveries:
             py_exc = _exc_map.get(clause.error_type, clause.error_type or "Exception") \
                      if clause.error_type else "Exception"
-            exc_decl = f"{py_exc} as {clause.binding}" if clause.binding else py_exc
+            exc_decl = f"{py_exc} as {self._sid(clause.binding)}" if clause.binding else py_exc
             self._w += f"except {exc_decl}:"
             with self._w.indent():
                 clause.body.accept(self)
@@ -1262,17 +1277,17 @@ class PythonTranspiler(ASTVisitor):
         if isinstance(pattern, WildcardPattern):
             return "_"
         if isinstance(pattern, BindingPattern):
-            return pattern.name
+            return self._sid(pattern.name)
         if isinstance(pattern, LiteralPattern):
             return self._expr(pattern.value)
         if isinstance(pattern, TypePattern):
             if pattern.fields:
                 fields = ", ".join(self._render_type_pattern(f) for f in pattern.fields)
-                return f"{pattern.type_name}({fields})"
-            return pattern.type_name
+                return f"{self._sid(pattern.type_name)}({fields})"
+            return self._sid(pattern.type_name)
         if isinstance(pattern, EnumVariantPattern):
             # Result::Ok(v) → Ok(v), Result::Err(e) → Err(e), Option::Some(v) → Some(v)
-            cls = pattern.variant_name
+            cls = self._sid(pattern.variant_name)
             if pattern.fields:
                 fields = ", ".join(self._render_type_pattern(f) for f in pattern.fields)
                 return f"{cls}({fields})"
@@ -1283,7 +1298,7 @@ class PythonTranspiler(ASTVisitor):
         if isinstance(pattern, ListPattern):
             parts = [self._render_type_pattern(h) for h in pattern.head]
             if pattern.rest:
-                parts.append(f"*{pattern.rest}")
+                parts.append(f"*{self._sid(pattern.rest)}")
             return f"[{', '.join(parts)}]"
         if isinstance(pattern, OrPattern):
             return f"{self._render_type_pattern(pattern.left)} | {self._render_type_pattern(pattern.right)}"
@@ -1302,15 +1317,15 @@ class PythonTranspiler(ASTVisitor):
         self._w += "@_dataclass"
         if node.interfaces:
             bases = ", ".join(node.interfaces)
-            self._w += f"class {node.name}({bases}):"
+            self._w += f"class {self._sid(node.name)}({bases}):"
         else:
-            self._w += f"class {node.name}:"
+            self._w += f"class {self._sid(node.name)}:"
         with self._w.indent():
             if node.fields:
                 for f in node.fields:
                     type_ann = f": {self._py_type(f.type_.name)}" if f.type_ else ""
                     default  = f" = {self._expr(f.default)}" if f.default else ""
-                    self._w += f"{f.name}{type_ann}{default}"
+                    self._w += f"{self._sid(f.name)}{type_ann}{default}"
             # Inject impl methods collected in the pre-scan
             for method in self._impl_map.get(node.name, []):
                 self._w += ""
@@ -1326,8 +1341,8 @@ class PythonTranspiler(ASTVisitor):
             for f in node.fields:
                 tname = self._ltl_type_str(f.type_) if f.type_ else "any"
                 spec_parts.append(f"({f.name!r}, {tname!r})")
-            self._w += f"{node.name}._ltl_struct_spec = [{', '.join(spec_parts)}]"
-            self._w += f"_LATERALUS_STRUCTS[{node.name!r}] = {node.name}"
+            self._w += f"{self._sid(node.name)}._ltl_struct_spec = [{', '.join(spec_parts)}]"
+            self._w += f"_LATERALUS_STRUCTS[{node.name!r}] = {self._sid(node.name)}"
         self._w += ""
 
     def visit_EnumDecl(self, node: EnumDecl):
@@ -1337,14 +1352,14 @@ class PythonTranspiler(ASTVisitor):
         for d in node.decorators:
             if d.name != "derive":
                 self._w += self._render_decorator(d)
-        self._w += f"class {node.name}(_Enum):"
+        self._w += f"class {self._sid(node.name)}(_Enum):"
         with self._w.indent():
             if node.variants:
                 for i, v in enumerate(node.variants):
                     if v.value:
-                        self._w += f"{v.name} = {self._expr(v.value)}"
+                        self._w += f"{self._sid(v.name)} = {self._expr(v.value)}"
                     elif v.fields:
-                        self._w += f"{v.name} = {i + 1}"
+                        self._w += f"{self._sid(v.name)} = {i + 1}"
                     else:
                         self._w += f"{v.name} = {i + 1}"
             else:
@@ -1368,7 +1383,7 @@ class PythonTranspiler(ASTVisitor):
         target = node.target.name if hasattr(node.target, 'name') else str(node.target)
         if target in _primitives:
             return
-        self._w += f"{node.name} = {target}"
+        self._w += f"{self._sid(node.name)} = {target}"
         self._w += ""
 
     def visit_ImplBlock(self, node: ImplBlock):
@@ -1380,14 +1395,14 @@ class PythonTranspiler(ASTVisitor):
 
     def visit_InterfaceDecl(self, node: InterfaceDecl):
         bases = ", ".join(node.extends) if node.extends else "_ABC"
-        self._w += f"class {node.name}({bases}):"
+        self._w += f"class {self._sid(node.name)}({bases}):"
         with self._w.indent():
             if node.methods:
                 for m in node.methods:
                     params = self._render_params(m.params)
                     kw = "async def" if m.is_async else "def"
                     self._w += "@_abstractmethod"
-                    self._w += f"{kw} {m.name}({params}):"
+                    self._w += f"{kw} {self._sid(m.name)}({params}):"
                     with self._w.indent():
                         self._w += "..."
             else:
@@ -1423,7 +1438,7 @@ class PythonTranspiler(ASTVisitor):
         """Emit a function declaration inside a class body."""
         params = self._render_params(m.params)
         kw = "async def" if m.is_async else "def"
-        self._w += f"{kw} {m.name}({params}):"
+        self._w += f"{kw} {self._sid(m.name)}({params}):"
         if m.body and m.body.stmts:
             with self._w.indent():
                 self._emit_fn_body(m.body)
@@ -1446,7 +1461,7 @@ class PythonTranspiler(ASTVisitor):
             "deprecated": "_deprecated",   # shim: just a print-on-call wrapper
             "inline":     "",              # no-op in Python
         }
-        py_name = _deco_map.get(d.name, d.name)
+        py_name = _deco_map.get(d.name, self._sid(d.name))
         if not py_name:
             return f"# @{d.name} (no-op)"
         if d.args or d.kwargs:
@@ -1466,7 +1481,7 @@ class PythonTranspiler(ASTVisitor):
             if node.kind == "str":    return repr(node.value)
             return repr(node.value)
         if isinstance(node, Ident):
-            return node.name
+            return self._sid(node.name)
         if isinstance(node, BinOp):
             if node.op == "|>":
                 left = self._expr(node.left)
@@ -1517,7 +1532,7 @@ class PythonTranspiler(ASTVisitor):
         if isinstance(node, IndexExpr):
             return f"{self._expr(node.obj)}[{self._expr(node.index)}]"
         if isinstance(node, FieldExpr):
-            return f"{self._expr(node.obj)}.{node.field}"
+            return f"{self._expr(node.obj)}.{self._sid(node.field)}"
         if isinstance(node, LambdaExpr):
             params = self._render_lambda_params(node.params)
             if node.body:
@@ -1575,8 +1590,8 @@ class PythonTranspiler(ASTVisitor):
         if isinstance(node, SelfExpr):
             return "self"
         if isinstance(node, StructLiteral):
-            fields = ", ".join(f"{k}={self._expr(v)}" for k, v in node.fields)
-            return f"{node.name}({fields})"
+            fields = ", ".join(f"{self._sid(k)}={self._expr(v)}" for k, v in node.fields)
+            return f"{self._sid(node.name)}({fields})"
         if isinstance(node, YieldExpr):
             val = self._expr(node.value) if node.value else ""
             return f"(yield {val})"
@@ -1625,10 +1640,10 @@ class PythonTranspiler(ASTVisitor):
         if isinstance(node, ComprehensionExpr):
             cond = f" if {self._expr(node.condition)}" if node.condition else ""
             if node.kind == "set":
-                return f"{{{self._expr(node.expr)} for {node.var} in {self._expr(node.iter)}{cond}}}"
+                return f"{{{self._expr(node.expr)} for {self._sid(node.var)} in {self._expr(node.iter)}{cond}}}"
             elif node.kind == "map":
                 return f"{{{self._expr(node.expr)} for {node.var} in {self._expr(node.iter)}{cond}}}"
-            return f"[{self._expr(node.expr)} for {node.var} in {self._expr(node.iter)}{cond}]"
+            return f"[{self._expr(node.expr)} for {self._sid(node.var)} in {self._expr(node.iter)}{cond}]"
         if isinstance(node, GuardExpr):
             return f"(None if not ({self._expr(node.condition)}) else True)"
         if isinstance(node, WhereClause):
@@ -1643,7 +1658,7 @@ class PythonTranspiler(ASTVisitor):
         # v1.5 — ResultExpr: Result::Ok(v) → Ok(v), Result::Err(e) → Err(e)
         if isinstance(node, ResultExpr):
             val = self._expr(node.value) if node.value is not None else "None"
-            return f"{node.variant}({val})"
+            return f"{self._sid(node.variant)}({val})"
         # v1.5 — OptionExpr: Option::Some(v) → Some(v), Option::None → None_
         if isinstance(node, OptionExpr):
             if node.variant == "None" or node.value is None:
@@ -1656,14 +1671,14 @@ class PythonTranspiler(ASTVisitor):
         if isinstance(node, WildcardPattern):
             return "_"
         if isinstance(node, BindingPattern):
-            return node.name
+            return self._sid(node.name)
         if isinstance(node, LiteralPattern):
             return self._expr(node.value)
         if isinstance(node, EnumVariantPattern):
             if node.fields:
                 fields = ", ".join(self._render_type_pattern(f) for f in node.fields)
-                return f"{node.variant_name}({fields})"
-            return node.variant_name
+                return f"{self._sid(node.variant_name)}({fields})"
+            return self._sid(node.variant_name)
         # v1.8 — metaprogramming expression nodes
         if isinstance(node, MacroInvocation):
             args = ", ".join(self._expr(a) for a in node.args)

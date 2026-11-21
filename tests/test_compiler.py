@@ -172,3 +172,45 @@ class TestCompileResult:
     def test_result_error_list_empty_on_success(self):
         r = check("fn f() { }")
         assert r.errors == [] or all(e.severity.value == "warning" for e in r.errors)
+
+
+class TestPythonKeywordIdentifiers:
+    """Issue #276: identifiers that are Python keywords must be mangled
+    so the emitted source parses."""
+
+    def _run(self, src):
+        import contextlib
+        import io
+        r = check(src)
+        assert r.ok
+        compile(r.python_src, "<test>", "exec")  # must be valid Python
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            exec(r.python_src, {})
+        return buf.getvalue()
+
+    def test_keyword_var(self):
+        out = self._run('fn main() {\n let assert = "hi"\n println(assert)\n}\nmain()')
+        assert "hi" in out
+
+    def test_keyword_fn_and_param(self):
+        out = self._run(
+            'fn main() {\n'
+            ' let class = 2\n'
+            ' let f = fn(assert: int) -> int { return assert + 1 }\n'
+            ' println(f(class))\n'
+            '}\nmain()')
+        assert "3" in out
+
+    def test_keyword_for_var(self):
+        out = self._run('fn main() {\n for with in [1, 2] { println(with) }\n}\nmain()')
+        assert "1" in out and "2" in out
+
+    def test_keyword_struct_field(self):
+        out = self._run(
+            'struct Point { class: int, name: str }\n'
+            'fn main() {\n'
+            ' let p = Point { class: 1, name: "a" }\n'
+            ' println(p.class)\n'
+            '}\nmain()')
+        assert "1" in out
