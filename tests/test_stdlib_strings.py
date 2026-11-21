@@ -32,5 +32,5 @@ def test_stdlib_strings_typechecks():
 
 def test_str_reverse_avoids_empty_separator_split():
     src = STR_LTL.read_text()
-    assert 'split(s, "")' not in src
-    assert "slice(s, i, i + 1)" in src
+    assert 'let parts = split(s, "")' not in src
+    assert 'parts = parts + [slice(s, i, i + 1)]' in src
