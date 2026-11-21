@@ -1,0 +1,165 @@
+// ===================================================================
+// examples/fmt_tutorial.ltl — stdlib/fmt.ltl tutorial companion
+// Runnable tour: sprintf {} substitution, pad_left/right, center,
+// hex/bin/oct conversion, join/repeat, table layout.
+// Workarounds: int() for /-division in hex/bin/oct/center (float bug);
+// while loops for for/range; __builtin_format not in shim (skipped).
+// ===================================================================
+
+fn fpad_left(s: str, width: int, fill: str) -> str {
+    let result = s
+    while len(result) < width { result = fill + result }
+    return result
+}
+fn fpad_right(s: str, width: int, fill: str) -> str {
+    let result = s
+    while len(result) < width { result = result + fill }
+    return result
+}
+fn frepeat(s: str, n: int) -> str {
+    let result = ""
+    let i = 0
+    while i < n { result = result + s; i = i + 1 }
+    return result
+}
+fn fcenter(s: str, width: int, fill: str) -> str {
+    let diff = width - len(s)
+    if diff <= 0 { return s }
+    let left = int(diff / 2)
+    let right = diff - left
+    return frepeat(fill, left) + s + frepeat(fill, right)
+}
+fn fjoin(parts: list, sep: str) -> str {
+    let result = ""
+    let i = 0
+    while i < len(parts) {
+        if i > 0 { result = result + sep }
+        result = result + str(parts[i])
+        i = i + 1
+    }
+    return result
+}
+let OB = chr(123)
+let CB = chr(125)
+
+fn sprintf(template: str, args: list) -> str {
+    let result = ""
+    let i = 0
+    let arg_idx = 0
+    while i < len(template) {
+        if i + 1 < len(template) && template[i] == OB && template[i + 1] == CB {
+            if arg_idx < len(args) {
+                result = result + str(args[arg_idx])
+                arg_idx = arg_idx + 1
+            } else {
+                result = result + OB + CB
+            }
+            i = i + 2
+        } else {
+            result = result + slice(template, i, i + 1)
+            i = i + 1
+        }
+    }
+    return result
+}
+fn iabs(n: int) -> int { if n < 0 { return 0 - n } return n }
+fn fhex(n: int, upper: bool) -> str {
+    let digits = "0123456789abcdef"
+    let digits_upper = "0123456789ABCDEF"
+    let chars = digits
+    if upper { chars = digits_upper }
+    if n == 0 { return "0" }
+    let result = ""
+    let val = iabs(n)
+    while val > 0 {
+        result = slice(chars, val % 16, (val % 16) + 1) + result
+        val = int(val / 16)
+    }
+    if n < 0 { result = "-" + result }
+    return result
+}
+fn fbin(n: int) -> str {
+    if n == 0 { return "0" }
+    let result = ""
+    let val = iabs(n)
+    while val > 0 {
+        result = str(val % 2) + result
+        val = int(val / 2)
+    }
+    if n < 0 { result = "-" + result }
+    return result
+}
+fn foct(n: int) -> str {
+    if n == 0 { return "0" }
+    let result = ""
+    let val = iabs(n)
+    while val > 0 {
+        result = str(val % 8) + result
+        val = int(val / 8)
+    }
+    if n < 0 { result = "-" + result }
+    return result
+}
+fn show_table(rows: list, sep: str) -> str {
+    if len(rows) == 0 { return "" }
+    let num_cols = len(rows[0])
+    let widths = []
+    let c = 0
+    while c < num_cols {
+        let max_w = 0
+        let r = 0
+        while r < len(rows) {
+            if c < len(rows[r]) {
+                let w = len(str(rows[r][c]))
+                if w > max_w { max_w = w }
+            }
+            r = r + 1
+        }
+        widths = widths + [max_w]
+        c = c + 1
+    }
+    let lines = []
+    let r2 = 0
+    while r2 < len(rows) {
+        let parts = []
+        let c2 = 0
+        while c2 < num_cols {
+            let cell = ""
+            if c2 < len(rows[r2]) { cell = str(rows[r2][c2]) }
+            parts = parts + [fpad_right(cell, widths[c2], " ")]
+            c2 = c2 + 1
+        }
+        lines = lines + [fjoin(parts, sep)]
+        r2 = r2 + 1
+    }
+    return fjoin(lines, "\n")
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB FMT TUTORIAL ===")
+
+    println("STEP 1 sprintf placeholder substitution:")
+    println("  " + sprintf("Hello, "+OB+CB+"!", ["world"]))
+    println("  " + sprintf(OB+CB+" + "+OB+CB+" = "+OB+CB, [1, 2, 3]))
+    println("  " + sprintf("missing "+OB+CB+" args "+OB+CB+" "+OB+CB, ["only"]))
+
+    println("STEP 2 pad / center:")
+    println("  pad_left  -> [" + fpad_left("42", 5, "0") + "]")
+    println("  pad_right -> [" + fpad_right("hi", 6, ".") + "]")
+    println("  center    -> [" + fcenter("hi", 10, "-") + "]")
+    println("  join      -> " + fjoin(["a", "b", "c"], ", "))
+    println("  repeat    -> " + frepeat("ab", 3))
+
+    println("STEP 3 hex / bin / oct:")
+    println("  hex(255)=" + fhex(255, false) + " hex(255,upper)=" + fhex(255, true))
+    println("  hex(-255)=" + fhex(-255, false) + " hex(0)=" + fhex(0, false))
+    println("  bin(42)=" + fbin(42) + " oct(42)=" + foct(42))
+    println("  bin(-5)=" + fbin(-5))
+
+    println("STEP 4 table layout:")
+    let rows = [["Name", "Age"], ["Alice", 30], ["Bo", 4]]
+    println(show_table(rows, " | "))
+    println("PINNED_VECTORS: sprintf='1 + 2 = 3' padL=00042 padR=hi.... center=----hi---- join='a, b, c' rep=ababab hex=ff/FF/-ff bin=101010/-101 oct=52 table-cols")
+}
+
+main()
