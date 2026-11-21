@@ -407,6 +407,7 @@ def _apply_join(left: Collection, clause) -> Collection:
         k = r.get(clause.on_right)
         right_idx.setdefault(k, []).append(r)
 
+    right_defaults = dict.fromkeys(right[0]) if kind == "left" and right else {}
     result = []
     matched_right: set[int] = set()
 
@@ -419,7 +420,7 @@ def _apply_join(left: Collection, clause) -> Collection:
                 matched_right.add(id(r))
         elif kind == "left":
             # Left join: keep left row with nulls for right
-            result.append({**l, **{k: None for k in (right[0].keys() if right else [])}})
+            result.append({**right_defaults, **l})
 
     if kind == "right":
         # Add unmatched right rows
