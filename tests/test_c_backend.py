@@ -746,3 +746,19 @@ class TestTypeAlias:
         c_src = check_c("type Score = int")
         assert "typedef" in c_src
         assert "Score" in c_src
+
+
+class TestMainWrapperGuard:
+    """Issue #245: _emit_main_wrapper must not emit ltl_main() unconditionally."""
+
+    def test_no_main_emits_stub_not_undefined_call(self):
+        c_src = check_c("fn helper(x: int) -> int { return x * 2 }")
+        assert "No main() found" in c_src
+        # the C entry point must not call an undefined ltl_main
+        entry = c_src.split("int main(int argc, char *argv[])", 1)[1]
+        assert "ltl_main();" not in entry
+
+    def test_main_emits_ltl_main_call(self):
+        c_src = check_c('fn main() { io.println("hi") }')
+        entry = c_src.split("int main(int argc, char *argv[])", 1)[1]
+        assert "ltl_main();" in entry
