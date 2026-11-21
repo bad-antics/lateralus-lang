@@ -1,0 +1,135 @@
+=======================================================================
+LATERALUS STANDARD LIBRARY TUTORIAL — Stack (stdlib/stack.ltl)
+=======================================================================
+
+Welcome to the `stdlib/stack` tutorial. In this guide, we explore Last-In,
+First-Out (LIFO) data structures in Lateralus, covering construction,
+core push/pop/peek operations, edge cases with empty stacks, and advanced
+manipulations such as swapping and duplicating elements.
+
+-- 1. Introduction to LIFO Stacks ------------------------------------
+
+A stack is a linear collection that restricts insertion and removal to
+one end of the structure, known as the "top". Think of a stack of plates:
+the last plate placed on top is the first one removed.
+
+In Lateralus, stacks are built on top of native lists with optimized
+helper functions provided by `stdlib/stack.ltl`.
+
+-- 2. Basic Usage: Push, Pop, and Peek -------------------------------
+
+Let's look at a runnable example demonstrating core stack operations
+with pinned test vectors.
+
+```lateralus
+import stack
+import testing
+
+@test
+fn test_stack_core_operations() {
+    // Create a new empty stack
+    let s = stack.new()
+    assert_true(stack.is_empty(s), "new stack is empty")
+    assert_eq(stack.size(s), 0, "size is 0")
+
+    // Push elements onto the stack
+    s = stack.push(s, "first")
+    s = stack.push(s, "second")
+    s = stack.push(s, "third")
+
+    assert_eq(stack.size(s), 3, "size after 3 pushes")
+    assert_false(stack.is_empty(s), "stack is not empty")
+
+    // Peek at the top element without removing it
+    assert_eq(stack.peek(s), "third", "peek top element")
+    assert_eq(stack.size(s), 3, "size unchanged after peek")
+
+    // Pop elements (LIFO order)
+    let res1 = stack.pop(s)
+    let val1 = res1[0]
+    s = res1[1]
+    assert_eq(val1, "third", "first popped is third")
+
+    let res2 = stack.pop(s)
+    let val2 = res2[0]
+    s = res2[1]
+    assert_eq(val2, "second", "second popped is second")
+
+    // Remaining stack should contain only "first"
+    assert_eq(stack.size(s), 1, "size is 1")
+    assert_eq(stack.peek(s), "first", "top is now first")
+}
+```
+
+-- 3. Empty-Stack Handling and Edge Cases ----------------------------
+
+Robust error handling is critical when dealing with data structures.
+Attempting to `pop` or `peek` from an empty stack in Lateralus safely
+returns `nil` or preserves safety without crashing the runtime.
+
+```lateralus
+@test
+fn test_empty_stack_edge_cases() {
+    let s = stack.new()
+
+    // Peek on empty stack returns nil
+    assert_eq(stack.peek(s), nil, "peek empty stack returns nil")
+
+    // Pop on empty stack returns [nil, stack]
+    let res = stack.pop(s)
+    assert_eq(res[0], nil, "pop empty stack value is nil")
+    assert_eq(stack.size(res[1]), 0, "pop empty stack preserves empty stack")
+
+    // Drop from empty stack
+    let dropped = stack.drop(s, 5)
+    assert_true(stack.is_empty(dropped), "drop on empty stack is safe")
+
+    // Swap top on stack with < 2 elements
+    s = stack.push(s, 42)
+    let swapped = stack.swap_top(s)
+    assert_eq(swapped, [42], "swap_top with 1 element is safe")
+}
+```
+
+-- 4. Advanced Stack Operations ------------------------------------
+
+The stack module also provides convenience helpers like `dup`, `swap_top`,
+`drop`, and `fold` for stack-based virtual machine patterns or expression
+evaluation.
+
+```lateralus
+@test
+fn test_advanced_stack_ops() {
+    let s = stack.from_list([10, 20, 30])
+
+    // Duplicate top element
+    s = stack.dup(s)
+    assert_eq(stack.peek(s), 30, "top is duplicated 30")
+    assert_eq(stack.size(s), 4, "size is now 4")
+
+    // Swap top two elements (30 and 30 -> swap keeps them equal or swaps distinct)
+    s = stack.push(s, 40)
+    // stack is now [10, 20, 30, 30, 40]
+    s = stack.swap_top(s)
+    // top two elements (30 and 40) are swapped -> [10, 20, 30, 40, 30]
+    assert_eq(stack.peek(s), 30, "swapped top")
+
+    // Drop top 2 elements
+    s = stack.drop(s, 2)
+    assert_eq(stack.size(s), 3, "dropped 2 elements")
+
+    // Fold over stack from bottom to top
+    let sum = stack.fold(s, 0, fn(acc, x) { acc + x })
+    assert_eq(sum, 60, "fold sum of [10, 20, 30]")
+}
+```
+
+-- 5. Conclusion ----------------------------------------------------
+
+The `stdlib/stack` module provides a clean, idiomatic LIFO interface for
+Lateralus programs, suitable for parsers, calculators, graph traversals,
+and virtual machines. Run your tests with:
+
+```bash
+lateralus test stdlib/stack.ltl
+```
