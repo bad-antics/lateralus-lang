@@ -1,0 +1,59 @@
+// examples/scim_tutorial.ltl
+// Demonstrates RFC 7643 / RFC 7644 SCIM 2.0 Identity Management:
+// User/Group canonicalisation, ListResponse pagination, PATCH and Bulk documents,
+// and filtering expressions (eq, ne, co, sw, ew, pr, and, or).
+
+import stdlib.scim
+
+fn main() {
+    println("=== SCIM 2.0 (RFC 7643 / RFC 7644) Identity Management Tutorial ===")
+
+    // 1. User Resource Canonicalisation
+    let u = new_user("2819c223-7f76-453a-919d-413861904646", "bjensen@example.com", true)
+    u = with_name(u, "Barbara", "Jensen", "Ms. Barbara J Jensen, III")
+    u = with_email(u, "bjensen@example.com", "work", true)
+    println("User schema: " + u["schemas"][0])
+    println("User name: " + u["name"]["formatted"])
+    println("User active: " + str(u["active"]))
+
+    // 2. Group Resource Canonicalisation
+    let g = new_group("e9e30dba-f0e2-4382-b42b-57230d37d374", "Tour Guides", ["2819c223-7f76-453a-919d-413861904646"])
+    println("Group name: " + g["displayName"])
+    println("Group members: " + str(len(g["members"])))
+
+    // 3. ListResponse Pagination
+    let lr = list_response([u], 1, 10, 1)
+    println("ListResponse total: " + str(lr["totalResults"]))
+    println("ListResponse items per page: " + str(lr["itemsPerPage"]))
+
+    // 4. Error Document
+    let err = error(404, "notFound", "User with ID 'usr-999' not found")
+    println("Error status: " + err["status"] + " scimType: " + err["scimType"])
+
+    // 5. PATCH Operations
+    let op1 = patch_op("replace", "active", false)
+    let email_val = {}
+    email_val["value"] = "barbara.jensen@personal.com"
+    email_val["type"] = "home"
+    let op2 = patch_op("add", "emails", email_val)
+    let op3 = patch_op("remove", "title", nil)
+    let patch_doc = patch_document([op1, op2, op3])
+    let parsed_ops = parse_patch(patch_doc)
+    println("PATCH operations count: " + str(len(parsed_ops)))
+
+    // 6. Bulk Request Document
+    let b_op = bulk_operation("POST", "/Users", "bulk-1", u)
+    let b_doc = bulk_request(1, [b_op])
+    println("Bulk operations count: " + str(len(b_doc["Operations"])))
+
+    // 7. Filter Expression Parsing & Evaluation
+    let f1 = parse_filter("userName eq bjensen@example.com and active eq true")
+    let match1 = eval_filter(f1, u)
+    println("Filter 'userName eq ... and active eq true' match: " + str(match1))
+
+    let f2 = parse_filter("name.formatted co Jensen and emails.value pr")
+    let match2 = eval_filter(f2, u)
+    println("Filter 'name.formatted co Jensen' match: " + str(match2))
+}
+
+main()
