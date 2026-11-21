@@ -14,6 +14,34 @@
 
 // -- Tags -----------------------------------------------------------
 
+// FIX: index_of/split/char_at are not runtime builtins.  Minimal
+// self-contained helpers (single-char and short-separator use only).
+fn _index_of(s: str, sub: str) -> int {
+    let i = 0
+    while i + len(sub) <= len(s) {
+        if slice(s, i, i + len(sub)) == sub { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn _split(s: str, sep: str) -> list {
+    let out = []
+    let start = 0
+    let i = 0
+    while i + len(sep) <= len(s) {
+        if slice(s, i, i + len(sep)) == sep {
+            out = out + [slice(s, start, i)]
+            i = i + len(sep)
+            start = i
+        } else {
+            i = i + 1
+        }
+    }
+    out = out + [slice(s, start, len(s))]
+    return out
+}
+
 fn format_tags(tags: list) -> str {
     if len(tags) == 0 { return "" }
     let out = "|#"
@@ -68,11 +96,11 @@ pub fn set_metric(name: str, member: str, tags: list) -> str {
 
 fn parse_tags_str(s: str) -> list {
     let out = []
-    let parts = split(s, ",")
+    let parts = _split(s, ",")
     let i = 0
     while i < len(parts) {
         let p = parts[i]
-        let c = index_of(p, ":")
+        let c = _index_of(p, ":")
         if c < 0 { out = out + [[p, ""]] }
         else     { out = out + [[slice(p, 0, c), slice(p, c + 1, len(p))]] }
         i = i + 1
@@ -82,11 +110,11 @@ fn parse_tags_str(s: str) -> list {
 
 /// Parse one line.  Returns {name, value, kind, rate, tags} or nil.
 pub fn parse_line(line: str) -> map {
-    let colon = index_of(line, ":")
+    let colon = _index_of(line, ":")
     if colon < 0 { return nil }
     let name = slice(line, 0, colon)
     let rest = slice(line, colon + 1, len(line))
-    let parts = split(rest, "|")
+    let parts = _split(rest, "|")
     if len(parts) < 2 { return nil }
     let m = {}
     m["name"]  = name
@@ -98,7 +126,7 @@ pub fn parse_line(line: str) -> map {
     while i < len(parts) {
         let p = parts[i]
         if len(p) > 1 {
-            let head = char_at(p, 0)
+            let head = slice(p, 0, 1)
             if head == "@" {
                 m["rate"] = slice(p, 1, len(p))
             } else if head == "#" {
