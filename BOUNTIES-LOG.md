@@ -1,0 +1,1 @@
+- 2026-04-06: stdlib/hash.ltl tutorial claimed and submitted by @contributor
