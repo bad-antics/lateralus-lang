@@ -674,7 +674,8 @@ print(f"\n  {_passed} passed  {_failed} failed")
                 result = linter.lint(src, str(fp))
                 for issue in result.issues:
                     sev = issue.severity.name
-                    print(f"  {fp}:{issue.line}:{issue.col}  [{sev}]  {issue.message}  ({issue.rule})")
+                    col = getattr(issue, "column", getattr(issue, "col", 0))
+                    print(f"  {fp}:{issue.line}:{col}  [{sev}]  {issue.message}  ({issue.rule})")
                 total_issues += len(result.issues)
         if total_issues:
             print(f"\n{total_issues} issue(s) found.")
