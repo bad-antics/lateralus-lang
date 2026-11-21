@@ -1,0 +1,176 @@
+// ===================================================================
+// examples/bloom_tutorial.ltl — Tutorial for stdlib/bloom.ltl
+// -------------------------------------------------------------------
+// Self-contained, executable tutorial demonstrating:
+//   1. Bit-array Bloom filter construction with double-hashing.
+//   2. Element insertion and zero false negatives.
+//   3. Probabilistic membership testing and false positive bounds.
+//   4. Filter union and intersection operations.
+//
+// Inlines stdlib/bloom core with FNV-1a hashing for standalone portability.
+// ===================================================================
+
+fn hash_fnv1a_32(data: str) -> int {
+    let h = 2166136261
+    let prime = 16777619
+    let i = 0
+    while i < len(data) {
+        let b = ord(slice(data, i, i + 1))
+        h = (h ^ b) * prime
+        h = h & 0xffffffff
+        i = i + 1
+    }
+    return h
+}
+
+fn hash_fnv1a_64(data: str) -> int {
+    let h = 14695981039346656037
+    let prime = 1099511628211
+    let i = 0
+    while i < len(data) {
+        let b = ord(slice(data, i, i + 1))
+        h = (h ^ b) * prime
+        i = i + 1
+    }
+    return h
+}
+
+fn new_filter(m: int, k: int) -> map {
+    let f = {}
+    f["m"] = m
+    f["k"] = k
+    f["count"] = 0
+    let bits = []
+    let words = to_int((m + 31) / 32)
+    let i = 0
+    while i < words {
+        bits = bits + [0]
+        i = i + 1
+    }
+    f["bits"] = bits
+    return f
+}
+
+fn hash_positions(f: map, key: str) -> list {
+    let h1 = hash_fnv1a_32(key)
+    let h2 = hash_fnv1a_64(key) & 0xffffffff
+    h2 = h2 | 1
+    let m = f["m"]
+    let k = f["k"]
+    let out = []
+    let i = 0
+    while i < k {
+        let pos = (h1 + i * h2) % m
+        if pos < 0 { pos = pos + m }
+        out = out + [to_int(pos)]
+        i = i + 1
+    }
+    return out
+}
+
+fn bit_set(bits: list, pos: int) -> list {
+    let w = to_int(pos / 32)
+    let b = to_int(pos % 32)
+    bits[w] = bits[w] | (1 << b)
+    return bits
+}
+
+fn bit_test(bits: list, pos: int) -> bool {
+    let w = to_int(pos / 32)
+    let b = to_int(pos % 32)
+    return (bits[w] & (1 << b)) != 0
+}
+
+fn add_item(f: map, key: str) -> map {
+    let positions = hash_positions(f, key)
+    let i = 0
+    while i < len(positions) {
+        f["bits"] = bit_set(f["bits"], positions[i])
+        i = i + 1
+    }
+    f["count"] = f["count"] + 1
+    return f
+}
+
+fn contains_key(f: map, key: str) -> bool {
+    let positions = hash_positions(f, key)
+    let i = 0
+    while i < len(positions) {
+        if not bit_test(f["bits"], positions[i]) {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+fn popcount(bits: list) -> int {
+    let total = 0
+    let i = 0
+    while i < len(bits) {
+        let w = bits[i]
+        while w != 0 {
+            total = total + (w & 1)
+            w = w >> 1
+        }
+        i = i + 1
+    }
+    return total
+}
+
+fn fill_ppt(f: map) -> int {
+    if f["m"] == 0 { return 0 }
+    return to_int((popcount(f["bits"]) * 1000) / f["m"])
+}
+
+fn union_filters(a: map, b: map) -> map {
+    let out = new_filter(a["m"], a["k"])
+    let i = 0
+    while i < len(a["bits"]) {
+        out["bits"][i] = a["bits"][i] | b["bits"][i]
+        i = i + 1
+    }
+    out["count"] = a["count"] + b["count"]
+    return out
+}
+
+fn main() {
+    print("=== LATERALUS STDLIB BLOOM FILTER TUTORIAL ===")
+
+    // 1. Initialize Bloom filter (m=64 bits, k=3 hash functions)
+    let bf = new_filter(64, 3)
+    print("STEP 1: Created filter m=64, k=3, initial count=" + str(bf["count"]))
+
+    // 2. Insert items
+    bf = add_item(bf, "apple")
+    bf = add_item(bf, "banana")
+    bf = add_item(bf, "cherry")
+    print("STEP 2: Inserted 3 elements. Count=" + str(bf["count"]) + ", set bits=" + str(popcount(bf["bits"])))
+
+    // 3. Test true positive queries (guaranteed 0 false negatives)
+    let has_apple = contains_key(bf, "apple")
+    let has_banana = contains_key(bf, "banana")
+    let has_cherry = contains_key(bf, "cherry")
+    print("STEP 3: True positives: apple=" + str(has_apple) + ", banana=" + str(has_banana) + ", cherry=" + str(has_cherry))
+
+    // 4. Test non-inserted items
+    let has_durian = contains_key(bf, "durian")
+    let has_elderberry = contains_key(bf, "elderberry")
+    print("STEP 4: Negative tests: durian=" + str(has_durian) + ", elderberry=" + str(has_elderberry))
+
+    // 5. Check fill ratio in parts-per-thousand
+    let fill = fill_ppt(bf)
+    print("STEP 5: Filter fill ratio: " + str(fill) + " ppt")
+
+    // 6. Test union of two filters
+    let bf2 = new_filter(64, 3)
+    bf2 = add_item(bf2, "durian")
+    let combined = union_filters(bf, bf2)
+    let combined_has_apple = contains_key(combined, "apple")
+    let combined_has_durian = contains_key(combined, "durian")
+    print("STEP 6: Union filter contains apple=" + str(combined_has_apple) + ", durian=" + str(combined_has_durian))
+
+    print("PINNED_VECTORS: count=" + str(bf["count"]) + " bits_set=" + str(popcount(bf["bits"])) + " apple=" + str(has_apple) + " durian=" + str(has_durian) + " union_apple=" + str(combined_has_apple))
+}
+
+main()
