@@ -1,0 +1,226 @@
+// ===================================================================
+// examples/protobuf_tutorial.ltl — stdlib/protobuf.ltl tutorial companion
+// Runnable tour of the proto3 wire-format codec: varints, zig-zag,
+// tag packing, every field encoder, and stream/message decoding.
+// Self-contained.
+// NOTE: bytes_of shim missing -> local ord-based helper.
+// ===================================================================
+
+fn bytes_of(s: str) -> list {
+    let out = []
+    let i = 0
+    while i < len(s) {
+        out = out + [ord(s[i])]
+        i = i + 1
+    }
+    return out
+}
+
+fn str_of(bytes: list) -> str {
+    let out = ""
+    let i = 0
+    while i < len(bytes) {
+        out = out + chr(bytes[i])
+        i = i + 1
+    }
+    return out
+}
+
+fn wire_varint()    -> int { return 0 }
+fn wire_fixed64()   -> int { return 1 }
+fn wire_bytes()     -> int { return 2 }
+fn wire_fixed32()   -> int { return 5 }
+
+fn enc_varint(v: int) -> list {
+    let out = []
+    while v >= 128 {
+        out = out + [(v & 0x7f) | 0x80]
+        v = v >> 7
+    }
+    out = out + [v & 0x7f]
+    return out
+}
+
+fn dec_varint(buf: list, i: int) -> list {
+    let result = 0
+    let shift = 0
+    while i < len(buf) {
+        let b = buf[i]
+        result = result | ((b & 0x7f) << shift)
+        i = i + 1
+        if (b & 0x80) == 0 {
+            return [result, i]
+        }
+        shift = shift + 7
+    }
+    return [result, i]
+}
+
+fn zz_encode(n: int) -> int {
+    if n >= 0 { return n << 1 }
+    return ((0 - n) << 1) - 1
+}
+
+fn zz_decode(n: int) -> int {
+    let low_bit = n & 1
+    let half = n >> 1
+    if low_bit == 0 { return half }
+    return 0 - (half + 1)
+}
+
+fn enc_tag(field_number: int, wire_type: int) -> list {
+    return enc_varint((field_number << 3) | wire_type)
+}
+
+fn dec_tag(buf: list, i: int) -> list {
+    let r = dec_varint(buf, i)
+    let t = r[0]
+    let wt = t & 0x07
+    let fn_ = t >> 3
+    return [fn_, wt, r[1]]
+}
+
+fn enc_int32(field_number: int, v: int) -> list {
+    return enc_tag(field_number, wire_varint()) + enc_varint(v)
+}
+
+fn enc_sint32(field_number: int, v: int) -> list {
+    return enc_tag(field_number, wire_varint()) + enc_varint(zz_encode(v))
+}
+
+fn enc_bool(field_number: int, b: bool) -> list {
+    let v = 0
+    if b { v = 1 }
+    return enc_tag(field_number, wire_varint()) + enc_varint(v)
+}
+
+fn enc_string(field_number: int, s: str) -> list {
+    let bytes = bytes_of(s)
+    return enc_tag(field_number, wire_bytes()) + enc_varint(len(bytes)) + bytes
+}
+
+fn enc_bytes(field_number: int, bytes: list) -> list {
+    return enc_tag(field_number, wire_bytes()) + enc_varint(len(bytes)) + bytes
+}
+
+fn enc_message(field_number: int, sub_bytes: list) -> list {
+    return enc_tag(field_number, wire_bytes()) + enc_varint(len(sub_bytes)) + sub_bytes
+}
+
+fn enc_fixed32(field_number: int, v: int) -> list {
+    let b0 = v & 0xff
+    let b1 = (v >> 8) & 0xff
+    let b2 = (v >> 16) & 0xff
+    let b3 = (v >> 24) & 0xff
+    return enc_tag(field_number, wire_fixed32()) + [b0, b1, b2, b3]
+}
+
+fn enc_fixed64(field_number: int, v: int) -> list {
+    let bs = []
+    let k = 0
+    while k < 8 {
+        bs = bs + [(v >> (k * 8)) & 0xff]
+        k = k + 1
+    }
+    return enc_tag(field_number, wire_fixed64()) + bs
+}
+
+fn dec_field(buf: list, i: int) -> list {
+    let t = dec_tag(buf, i)
+    let fn_ = t[0]
+    let wt = t[1]
+    i = t[2]
+    if wt == wire_varint() {
+        let v = dec_varint(buf, i)
+        return [fn_, wt, v[0], v[1]]
+    }
+    if wt == wire_bytes() {
+        let ln = dec_varint(buf, i)
+        i = ln[1]
+        let payload = slice(buf, i, i + ln[0])
+        return [fn_, wt, payload, i + ln[0]]
+    }
+    if wt == wire_fixed32() {
+        let v = buf[i] | (buf[i + 1] << 8) | (buf[i + 2] << 16) | (buf[i + 3] << 24)
+        return [fn_, wt, v, i + 4]
+    }
+    if wt == wire_fixed64() {
+        let v = 0
+        let k = 0
+        while k < 8 {
+            v = v | (buf[i + k] << (k * 8))
+            k = k + 1
+        }
+        return [fn_, wt, v, i + 8]
+    }
+    return [fn_, wt, nil, i]
+}
+
+fn decode_message(buf: list) -> map {
+    let out = {}
+    let i = 0
+    while i < len(buf) {
+        let f = dec_field(buf, i)
+        out[str(f[0])] = f[2]
+        i = f[3]
+    }
+    return out
+}
+
+fn hexs(bytes: list) -> str {
+    let h = "0123456789abcdef"
+    let out = ""
+    let i = 0
+    while i < len(bytes) {
+        let b = bytes[i] & 0xff
+        out = out + slice(h, b >> 4, (b >> 4) + 1)
+               + slice(h, b & 0x0f, (b & 0x0f) + 1)
+        i = i + 1
+    }
+    return out
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB PROTOBUF TUTORIAL ===")
+
+    println("STEP 1 varint + zigzag:")
+    println("  varint(300)=" + hexs(enc_varint(300)))
+    let dv = dec_varint(enc_varint(300) + [0x00], 0)
+    println("  dec -> " + str(dv[0]) + " next=" + str(dv[1]))
+    println("  zz(-1)=" + str(zz_encode(0 - 1)) + " zz_decode(1)=" + str(zz_decode(1)))
+    println("  zz(-2)=" + str(zz_encode(0 - 2)) + " zz_decode(3)=" + str(zz_decode(3)))
+
+    println("STEP 2 tag packing:")
+    println("  field 5 varint tag=" + hexs(enc_tag(5, wire_varint())))
+    println("  field 16 bytes tag=" + hexs(enc_tag(16, wire_bytes())))
+    let dt = dec_tag(enc_tag(300, wire_bytes()), 0)
+    println("  dec tag(300,bytes) -> fn=" + str(dt[0]) + " wt=" + str(dt[1]))
+
+    println("STEP 3 field encoders:")
+    println("  int32 f1=150=" + hexs(enc_int32(1, 150)))
+    println("  sint32 f2=-5=" + hexs(enc_sint32(2, 0 - 5)))
+    println("  bool f3=true=" + hexs(enc_bool(3, true)))
+    println("  string f4=\"hi\"=" + hexs(enc_string(4, "hi")))
+    println("  fixed32 f5=0x01020304=" + hexs(enc_fixed32(5, 0x01020304)))
+    println("  fixed64 f6=0x0102030405060708=" + hexs(enc_fixed64(6, 0x0102030405060708)))
+
+    println("STEP 4 nested message + decode_message:")
+    let inner = enc_string(1, "Ann") + enc_int32(2, 30)
+    let msg = enc_string(1, "alice") + enc_int32(2, 42) + enc_bool(3, true)
+            + enc_message(4, inner) + enc_fixed32(5, 7)
+    println("  msg len=" + str(len(msg)) + " hex=" + hexs(msg))
+    let dm = decode_message(msg)
+    println("  f1=" + str_of(dm["1"]) + " f2=" + str(dm["2"]) + " f3=" + str(dm["3"]))
+    let sub = decode_message(dm["4"])
+    println("  nested f1=" + str_of(sub["1"]) + " f2=" + str(sub["2"]))
+
+    println("STEP 5 dec_field stream walk:")
+    let one = enc_int32(9, 1) + enc_string(10, "x")
+    let f1 = dec_field(one, 0)
+    println("  field1 fn=" + str(f1[0]) + " val=" + str(f1[2]) + " next=" + str(f1[3]))
+    let f2 = dec_field(one, f1[3])
+    println("  field2 fn=" + str(f2[0]) + " val=" + str_of(f2[2]) + " next=" + str(f2[3]))
+    println("PINNED_VECTORS: varint300=ac02 zzneg1=01 zzneg2=03 tag5=28 tag16bytes=82 str_hi=0a026869 f32=2d04030201 msg=decode-5fields nested=Ann+30 stream=fn9+fn10")
+}
+
+main()
