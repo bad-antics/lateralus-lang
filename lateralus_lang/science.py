@@ -363,7 +363,15 @@ def exponential_pdf(x: float, lam: float = 1) -> float:
 
 def binomial_pmf(k: int, n: int, p: float) -> float:
     """Binomial probability mass function."""
-    return math.comb(n, k) * (p ** k) * ((1 - p) ** (n - k))
+    if k < 0 or k > n:
+        return 0.0
+    if p == 0.0:
+        return 1.0 if k == 0 else 0.0
+    if p == 1.0:
+        return 1.0 if k == n else 0.0
+    log_comb = math.lgamma(n + 1) - math.lgamma(k + 1) - math.lgamma(n - k + 1)
+    log_pmf = log_comb + k * math.log(p) + (n - k) * math.log1p(-p)
+    return math.exp(log_pmf)
 
 
 def chi_squared_pdf(x: float, k: int) -> float:
