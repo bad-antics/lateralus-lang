@@ -1,0 +1,138 @@
+// ===================================================================
+// examples/run_length_tutorial.ltl — stdlib/run_length.ltl tutorial
+// Runnable tour of run-length encoding: pair encoding, packed
+// value/count streams, decode round-trips, and the permille ratio
+// metric. Self-contained — module code inlined verbatim (pure
+// Lateralus, zero external dependencies).
+// NOTE: ratio_permille uses "/" which yields float in Lateralus —
+// the function is annotated `-> int` but returns e.g. 500.0; the
+// tutorial prints the real behaviour and flags it.
+// ===================================================================
+
+fn encode_pairs(xs: list) -> list {
+    let out = []
+    if len(xs) == 0 { return out }
+    let cur = xs[0]
+    let cnt = 1
+    let i = 1
+    while i < len(xs) {
+        if xs[i] == cur {
+            cnt = cnt + 1
+        } else {
+            out = out + [[cur, cnt]]
+            cur = xs[i]
+            cnt = 1
+        }
+        i = i + 1
+    }
+    out = out + [[cur, cnt]]
+    return out
+}
+
+fn decode_pairs(rle: list) -> list {
+    let out = []
+    let i = 0
+    while i < len(rle) {
+        let p = rle[i]
+        let v = p[0]
+        let c = p[1]
+        let j = 0
+        while j < c { out = out + [v]; j = j + 1 }
+        i = i + 1
+    }
+    return out
+}
+
+fn encode_packed(xs: list) -> list {
+    let pairs = encode_pairs(xs)
+    let out = []
+    let i = 0
+    while i < len(pairs) {
+        out = out + [pairs[i][0], pairs[i][1]]
+        i = i + 1
+    }
+    return out
+}
+
+fn decode_packed(packed: list) -> list {
+    let out = []
+    let i = 0
+    while i + 1 < len(packed) {
+        let v = packed[i]
+        let c = packed[i + 1]
+        let j = 0
+        while j < c { out = out + [v]; j = j + 1 }
+        i = i + 2
+    }
+    return out
+}
+
+fn ratio_permille(orig_len: int, rle_pair_count: int) -> int {
+    if orig_len == 0 { return 1000 }
+    return (rle_pair_count * 2 * 1000) / orig_len
+}
+
+// ===================================================================
+
+fn list_str(xs: list) -> str {
+    let out = "["
+    let i = 0
+    while i < len(xs) {
+        if i > 0 { out = out + "," }
+        out = out + str(xs[i])
+        i = i + 1
+    }
+    return out + "]"
+}
+
+fn main() {
+    print("=== LATERALUS STDLIB RUN_LENGTH TUTORIAL ===")
+
+    // -- Step 1: pair encoding ------------------------------------------
+    print("STEP 1 encode_pairs:")
+    let xs = [1, 1, 1, 2, 2, 3, 3, 3, 3]
+    let pairs = encode_pairs(xs)
+    print("  in=" + list_str(xs))
+    print("  pairs=" + str(pairs))
+    let empty = encode_pairs([])
+    print("  empty=" + str(empty))
+    let single = encode_pairs([7])
+    print("  single=" + str(single))
+
+    // -- Step 2: pair round-trip -------------------------------------------
+    print("STEP 2 decode_pairs round-trip:")
+    let back = decode_pairs(pairs)
+    print("  roundtrip=" + str(back == xs))
+    print("  len=" + str(len(back)))
+
+    // -- Step 3: packed encoding ----------------------------------------------
+    print("STEP 3 packed (flat value,count) encoding:")
+    let packed = encode_packed(xs)
+    print("  packed=" + list_str(packed))
+    let back2 = decode_packed(packed)
+    print("  packed_roundtrip=" + str(back2 == xs))
+    let odd = decode_packed([5, 2, 9])
+    print("  odd_tail_ignored=" + list_str(odd))
+
+    // -- Step 4: ratio metric ---------------------------------------------------
+    print("STEP 4 ratio_permille (1000 = no compression):")
+    print("  orig10_pairs3=" + str(ratio_permille(10, 3)))
+    print("  orig9_pairs4=" + str(ratio_permille(9, 4)))
+    print("  orig0=" + str(ratio_permille(0, 0)))
+    print("  orig8_pairs1=" + str(ratio_permille(8, 1)))
+
+    // -- Step 5: realistic payload ------------------------------------------------
+    print("STEP 5 bitmap-ish payload:")
+    let bmp = [0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0]
+    let pb = encode_pairs(bmp)
+    print("  pairs=" + str(pb))
+    print("  ratio=" + str(ratio_permille(len(bmp), len(pb))))
+    print("  roundtrip=" + str(decode_pairs(pb) == bmp))
+
+    print("PINNED_VECTORS: pairs=[[1,3],[2,2],[3,4]] "
+        + "packed=1,3,2,2,3,4 rt=True "
+        + "ratio10_3=600.0 ratio9_4=888.8888888888889 "
+        + "bmp=3pairs")
+    print("  ✓ examples/run_length_tutorial.ltl: OK")
+    return 0
+}
