@@ -1,0 +1,374 @@
+// ===================================================================
+// examples/saml_tutorial.ltl — stdlib/saml.ltl tutorial companion
+// Runnable tour of the SAML 2.0 browser-SSO helpers: AuthnRequest /
+// LogoutRequest rendering, HTTP-Redirect and HTTP-POST bindings, and
+// the shallow Response-envelope parser. Self-contained — module code
+// inlined with the same shims other tutorials use:
+//   char_at(s,i) -> s[i], index_of -> local helper,
+//   bytes_of(ch) -> [ord(ch)] (ASCII inputs only),
+//   base64 "/"-division -> ">>" shifts (lateralus "/" yields float).
+// XML-DSig is OUT of scope, matching the module.
+// ===================================================================
+
+const B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+const B64_PAD = "="
+
+fn index_of(s: str, needle: str) -> int {
+    let n = len(needle)
+    let i = 0
+    while i + n <= len(s) {
+        if slice(s, i, i + n) == needle {
+            return i
+        }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+fn index_of_from(s: str, needle: str, start_at: int) -> int {
+    let i = start_at
+    let n = len(needle)
+    while i + n <= len(s) {
+        if slice(s, i, i + n) == needle {
+            return i
+        }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+// -- base64 (RFC 4648) — encode only, shifts instead of "/" ----------
+
+fn b64_encode(data: str) -> str {
+    let result = ""
+    let i = 0
+    let n = len(data)
+    while i < n {
+        let b0 = ord(data[i])
+        let b1 = 0
+        let b2 = 0
+        let padding = 0
+        if i + 1 < n {
+            b1 = ord(data[i + 1])
+        } else {
+            padding = padding + 1
+        }
+        if i + 2 < n {
+            b2 = ord(data[i + 2])
+        } else {
+            padding = padding + 1
+        }
+        let c0 = b0 >> 2
+        let c1 = ((b0 & 3) << 4) | (b1 >> 4)
+        let c2 = ((b1 & 15) << 2) | (b2 >> 6)
+        let c3 = b2 & 63
+        result = result + slice(B64_CHARS, c0, c0 + 1)
+        result = result + slice(B64_CHARS, c1, c1 + 1)
+        if padding <= 1 {
+            result = result + slice(B64_CHARS, c2, c2 + 1)
+        } else {
+            result = result + B64_PAD
+        }
+        if padding == 0 {
+            result = result + slice(B64_CHARS, c3, c3 + 1)
+        } else {
+            result = result + B64_PAD
+        }
+        i = i + 3
+    }
+    return result
+}
+
+// -- percent-encoding (RFC 3986 unreserved set) ---------------------
+
+fn is_unreserved(ch: str) -> bool {
+    if ch >= "a" && ch <= "z" { return true }
+    if ch >= "A" && ch <= "Z" { return true }
+    if ch >= "0" && ch <= "9" { return true }
+    return ch == "-" || ch == "_" || ch == "." || ch == "~"
+}
+
+fn hex_nibble(n: int) -> str {
+    return slice("0123456789ABCDEF", n & 15, (n & 15) + 1)
+}
+
+fn percent_encode(s: str) -> str {
+    let out = ""
+    let i = 0
+    while i < len(s) {
+        let ch = s[i]
+        if is_unreserved(ch) {
+            out = out + ch
+        } else {
+            let b = ord(ch)
+            out = out + "%" + hex_nibble(b >> 4) + hex_nibble(b)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn form_encode(pairs: map) -> str {
+    let ks = keys(pairs)
+    let out = ""
+    let i = 0
+    while i < len(ks) {
+        if i > 0 { out = out + "&" }
+        out = out + percent_encode(ks[i]) + "=" + percent_encode(pairs[ks[i]])
+        i = i + 1
+    }
+    return out
+}
+
+fn strip_padding(s: str) -> str {
+    let i = len(s)
+    while i > 0 && s[i - 1] == "=" {
+        i = i - 1
+    }
+    return slice(s, 0, i)
+}
+
+// -- xml_escape ------------------------------------------------------
+
+fn xml_escape(s: str) -> str {
+    let out = ""
+    let i = 0
+    while i < len(s) {
+        let ch = s[i]
+        if ch == "<"      { out = out + "&lt;" }
+        else { if ch == ">" { out = out + "&gt;" }
+        else { if ch == "&" { out = out + "&amp;" }
+        else { if ch == "\"" { out = out + "&quot;" }
+        else { if ch == "'"  { out = out + "&apos;" }
+        else { out = out + ch } } } } }
+        i = i + 1
+    }
+    return out
+}
+
+// -- request builders -------------------------------------------------
+
+fn new_authn_request(sp_entity_id: str, acs_url: str,
+                     idp_sso_url: str, request_id: str,
+                     issue_instant: str) -> map {
+    let r = {}
+    r["sp_entity_id"] = sp_entity_id
+    r["acs_url"]      = acs_url
+    r["idp_sso_url"]  = idp_sso_url
+    r["id"]           = request_id
+    r["issue_instant"] = issue_instant
+    return r
+}
+
+fn render_authn_request(req: map) -> str {
+    let out = "<samlp:AuthnRequest xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\""
+    out = out + " xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\""
+    out = out + " ID=\"" + xml_escape(req["id"]) + "\""
+    out = out + " Version=\"2.0\""
+    out = out + " IssueInstant=\"" + xml_escape(req["issue_instant"]) + "\""
+    out = out + " Destination=\"" + xml_escape(req["idp_sso_url"]) + "\""
+    out = out + " AssertionConsumerServiceURL=\"" + xml_escape(req["acs_url"]) + "\""
+    out = out + " ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\">"
+    out = out + "<saml:Issuer>" + xml_escape(req["sp_entity_id"]) + "</saml:Issuer>"
+    out = out + "<samlp:NameIDPolicy Format=\"urn:oasis:names:tc:SAML:2.0:nameid-format:transient\" AllowCreate=\"true\"/>"
+    out = out + "</samlp:AuthnRequest>"
+    return out
+}
+
+fn render_logout_request(sp_entity_id: str, idp_slo_url: str,
+                         request_id: str, issue_instant: str,
+                         name_id: str, session_index: str) -> str {
+    let out = "<samlp:LogoutRequest xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\""
+    out = out + " xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\""
+    out = out + " ID=\"" + xml_escape(request_id) + "\""
+    out = out + " Version=\"2.0\""
+    out = out + " IssueInstant=\"" + xml_escape(issue_instant) + "\""
+    out = out + " Destination=\"" + xml_escape(idp_slo_url) + "\">"
+    out = out + "<saml:Issuer>" + xml_escape(sp_entity_id) + "</saml:Issuer>"
+    out = out + "<saml:NameID>" + xml_escape(name_id) + "</saml:NameID>"
+    if session_index != "" {
+        out = out + "<samlp:SessionIndex>" + xml_escape(session_index) + "</samlp:SessionIndex>"
+    }
+    out = out + "</samlp:LogoutRequest>"
+    return out
+}
+
+// -- bindings ----------------------------------------------------------
+
+fn redirect_binding_url(xml: str, deflate_raw, relay_state: str,
+                        destination: str) -> str {
+    let compressed = xml
+    if deflate_raw != nil {
+        compressed = deflate_raw(xml)
+    }
+    let encoded = strip_padding(b64_encode(compressed))
+    let params = {}
+    params["SAMLRequest"] = encoded
+    if relay_state != "" {
+        params["RelayState"] = relay_state
+    }
+    return destination + "?" + form_encode(params)
+}
+
+fn post_binding(xml: str, destination: str, relay_state: str) -> list {
+    let encoded = b64_encode(xml)
+    let html = "<form method=\"POST\" action=\"" + xml_escape(destination) + "\">"
+    html = html + "<input type=\"hidden\" name=\"SAMLRequest\" value=\"" + xml_escape(encoded) + "\"/>"
+    if relay_state != "" {
+        html = html + "<input type=\"hidden\" name=\"RelayState\" value=\"" + xml_escape(relay_state) + "\"/>"
+    }
+    html = html + "<noscript><input type=\"submit\" value=\"Submit\"/></noscript>"
+    html = html + "</form>"
+    return [encoded, html]
+}
+
+// -- shallow response parsing -------------------------------------------
+
+fn attr_of(xml: str, local: str, attr: str) -> str {
+    let candidates = ["<" + local + " ",
+                      "<saml:" + local + " ",
+                      "<samlp:" + local + " "]
+    let i = 0
+    while i < len(candidates) {
+        let start = index_of(xml, candidates[i])
+        if start >= 0 {
+            let tag_end = index_of_from(xml, ">", start)
+            let tag = slice(xml, start, tag_end)
+            let needle = " " + attr + "=\""
+            let a = index_of(tag, needle)
+            if a >= 0 {
+                let start_at = a + len(needle)
+                let to = index_of_from(tag, "\"", start_at)
+                return slice(tag, start_at, to)
+            }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+fn between_tags(xml: str, local: str) -> str {
+    let candidates = ["<" + local + ">",
+                      "<saml:" + local + ">"]
+    let i = 0
+    while i < len(candidates) {
+        let start = index_of(xml, candidates[i])
+        if start >= 0 {
+            let content_start = start + len(candidates[i])
+            let close_tag = "</" + slice(candidates[i], 1, len(candidates[i]) - 1) + ">"
+            let end = index_of_from(xml, close_tag, content_start)
+            if end > 0 {
+                return slice(xml, content_start, end)
+            }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+fn extract_assertion(xml: str) -> str {
+    let open = index_of(xml, "<saml:Assertion")
+    if open < 0 { open = index_of(xml, "<Assertion") }
+    if open < 0 { return "" }
+    let close_end = index_of_from(xml, "</saml:Assertion>", open)
+    if close_end < 0 {
+        close_end = index_of_from(xml, "</Assertion>", open)
+        if close_end < 0 { return "" }
+        return slice(xml, open, close_end + len("</Assertion>"))
+    }
+    return slice(xml, open, close_end + len("</saml:Assertion>"))
+}
+
+fn parse_response(xml: str) -> map {
+    let m = {}
+    m["id"]             = attr_of(xml, "Response", "ID")
+    m["in_response_to"] = attr_of(xml, "Response", "InResponseTo")
+    m["destination"]    = attr_of(xml, "Response", "Destination")
+    m["issue_instant"]  = attr_of(xml, "Response", "IssueInstant")
+    m["status_code"]    = attr_of(xml, "StatusCode", "Value")
+    m["name_id"]        = between_tags(xml, "NameID")
+    m["assertion"]      = extract_assertion(xml)
+    return m
+}
+
+fn is_success(resp: map) -> bool {
+    return resp["status_code"] == "urn:oasis:names:tc:SAML:2.0:status:Success"
+}
+
+// ===================================================================
+
+fn main() {
+    print("=== LATERALUS STDLIB SAML TUTORIAL ===")
+
+    // -- Step 1: XML escaping -----------------------------------------
+    print("STEP 1 xml_escape:")
+    print("  " + xml_escape("a<b>&\"'c"))
+
+    // -- Step 2: AuthnRequest -----------------------------------------
+    print("STEP 2 build + render an AuthnRequest:")
+    let req = new_authn_request(
+        "https://sp.example.com", "https://sp.example.com/acs",
+        "https://idp.example.com/sso", "_req-42",
+        "2026-11-21T12:00:00Z")
+    let xml = render_authn_request(req)
+    print("  len=" + str(len(xml)))
+    print("  has_id=" + str(contains(xml, "ID=\"_req-42\"")))
+    print("  has_dest=" + str(contains(xml, "Destination=\"https://idp.example.com/sso\"")))
+    print("  has_acs=" + str(contains(xml, "AssertionConsumerServiceURL=\"https://sp.example.com/acs\"")))
+    print("  has_nameidpolicy=" + str(contains(xml, "NameIDPolicy")))
+
+    // -- Step 3: HTTP-Redirect binding --------------------------------
+    print("STEP 3 HTTP-Redirect binding (identity deflate):")
+    let url = redirect_binding_url(xml, nil, "relay-1",
+                                   "https://idp.example.com/sso")
+    print("  starts=" + str(str_starts_with(url, "https://idp.example.com/sso?")))
+    print("  has_samlrequest=" + str(contains(url, "SAMLRequest=")))
+    print("  has_relay=" + str(contains(url, "RelayState=relay-1")))
+    let enc = slice(url, index_of(url, "SAMLRequest=") + 12,
+                    index_of(url, "&RelayState"))
+    print("  b64_len=" + str(len(enc)) + " pct_encoded=" + str(contains(enc, "%")))
+    print("  b64_prefix=" + slice(enc, 0, 24))
+
+    // -- Step 4: HTTP-POST binding ------------------------------------
+    print("STEP 4 HTTP-POST binding:")
+    let pb = post_binding(xml, "https://idp.example.com/sso", "relay-2")
+    print("  form_action=" + str(contains(pb[1], "action=\"https://idp.example.com/sso\"")))
+    print("  has_hidden=" + str(contains(pb[1], "name=\"SAMLRequest\"")))
+    print("  has_noscript=" + str(contains(pb[1], "<noscript>")))
+    print("  b64_starts=" + slice(pb[0], 0, 16) + " len=" + str(len(pb[0])))
+
+    // -- Step 5: LogoutRequest ----------------------------------------
+    print("STEP 5 LogoutRequest:")
+    let lo = render_logout_request("https://sp.example.com",
+                                   "https://idp.example.com/slo",
+                                   "_lo-7", "2026-11-21T12:05:00Z",
+                                   "alice@example.com", "sess-9")
+    print("  is_logout=" + str(contains(lo, "<samlp:LogoutRequest")))
+    print("  has_nameid=" + str(contains(lo, "<saml:NameID>alice@example.com</saml:NameID>")))
+    print("  has_sessionindex=" + str(contains(lo, "<samlp:SessionIndex>sess-9</samlp:SessionIndex>")))
+
+    // -- Step 6: parse a Response --------------------------------------
+    print("STEP 6 parse a SAML Response envelope:")
+    let resp_xml = "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\""
+        + " ID=\"r-1\" InResponseTo=\"_req-42\""
+        + " Destination=\"https://sp.example.com/acs\""
+        + " IssueInstant=\"2026-11-21T12:01:00Z\">"
+        + "<samlp:Status><samlp:StatusCode Value=\"urn:oasis:names:tc:SAML:2.0:status:Success\"/></samlp:Status>"
+        + "<saml:Assertion xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\">"
+        + "<saml:NameID>alice@example.com</saml:NameID>"
+        + "</saml:Assertion></samlp:Response>"
+    let r = parse_response(resp_xml)
+    print("  id=" + r["id"] + " in_response_to=" + r["in_response_to"])
+    print("  status=" + r["status_code"])
+    print("  name_id=" + r["name_id"])
+    print("  is_success=" + str(is_success(r)))
+    print("  assertion_len=" + str(len(r["assertion"])))
+
+    print("PINNED_VECTORS: esc=a&lt;b&gt;&amp;&quot;&apos;c "
+        + "authn_id=_req-42 b64_prefix=" + slice(enc, 0, 12)
+        + " redirect_has=SAMLRequest+RelayState "
+        + " post_form=True parse_id=r-1 success=True "
+        + " nameid=alice@example.com")
+    print("  ✓ examples/saml_tutorial.ltl: OK")
+    return 0
+}
