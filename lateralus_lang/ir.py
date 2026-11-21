@@ -136,6 +136,7 @@ class IROp(Enum):
 
     # Pipeline
     PIPE      = auto()  # dest = src2(src1)  (a |> f)
+    PIPE_OPT  = auto()  # dest = src2(src1) if src1 != nil else nil (a |? f)
 
     # Async
     AWAIT     = auto()  # dest = await src1
@@ -673,12 +674,14 @@ class SemanticAnalyzer(ASTVisitor):
             ">": IROp.GT,   ">=": IROp.GE,
             "&&": IROp.AND, "||": IROp.OR,
             "|>": IROp.PIPE,
+            "|?": IROp.PIPE_OPT,
         }
-        if node.op == "|>":
+        if node.op in ("|>", "|?"):
             left_tmp  = node.left.accept(self)
             right_tmp = node.right.accept(self)
             tmp = self._builder.new_tmp()
-            self._emit(IROp.PIPE, dest=tmp, src1=left_tmp, src2=right_tmp, span=node.span)
+            ir_op = IROp.PIPE if node.op == "|>" else IROp.PIPE_OPT
+            self._emit(ir_op, dest=tmp, src1=left_tmp, src2=right_tmp, span=node.span)
             return tmp
         left_tmp  = node.left.accept(self)
         right_tmp = node.right.accept(self)
