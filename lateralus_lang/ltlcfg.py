@@ -429,7 +429,7 @@ class LtlCfgParser:
 
             # Field assignment: name: type = value  or  name = value
             field_match = re.match(
-                r'^\s*(\w+)\s*(?::\s*(\w+(?:\[[\w\s,]+\])?))?\s*=\s*(.*?)\s*$',
+                r'^\s*(\w+)\s*(?::\s*(\w+(?:\[[\w\s,]+\])?))?\s*=\s*([\s\S]*?)\s*$',
                 line
             )
             if field_match:
