@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ini-config-files</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "Working with INI config files using stdlib/ini"
+author: contributor
+date: 2026-11-21
+abstract: A hands-on tutorial for the stdlib ini module: parse INI text into a config map, read strings, ints, floats and bools with defaults, update values, and write the config back out. Includes a runnable example with a pinned test vector.
+
+# Why INI, why this module
+
+INI is the config format that refuses to die: sections in brackets, `key = value` lines, comments starting with `;` or `#`. The stdlib `ini` module (`stdlib/ini.ltl`) parses that text into a plain map — `map[section -> map[key -> value]]` — and gives you typed getters on top, so a port number comes back as an int and a debug flag as a bool instead of everything being a string you convert by hand.
+
+This tutorial walks through the whole loop: parse, read, update, serialise. Everything below is exercised by the companion example, `examples/ini_tutorial.ltl`, which runs as-is and asserts every expected value.
+
+# The pinned test vector
+
+One fixed document is used throughout the tutorial, so every result can be checked by eye:
+
+    ; a comment
+    [server]
+    host = example.com
+    port = 8080
+    debug = true
+    timeout = 2.5
+
+    [ui]
+    title = "My App"
+
+# Parsing and reading values
+
+`parse(text)` returns the config map. The `get` family reads from it, and every getter takes a default that is returned when the section or key is missing:
+
+fn main() {
+    let cfg = parse(doc)
+    get(cfg, "server", "host", "none")            // "example.com"
+    get_int(cfg, "server", "port", 0)             // 8080
+    get_bool(cfg, "server", "debug", false)       // true
+    get_float(cfg, "server", "timeout", 0.0)      // 2.5
+    get(cfg, "ui", "title", "none")               // "My App"
+    get(cfg, "server", "missing", "fallback")     // "fallback"
+}
+
+Things worth knowing, all verified against the module as shipped:
+
+- Quoted values are unquoted: `title = "My App"` reads back as `My App`.
+- Lines starting with `;` or `#` are comments.
+- The parser always creates a `default` section for keys that appear before any `[section]` header, so `sections(cfg)` returns `["default", "server", "ui"]` for the document above.
+- `has_section(cfg, name)` and `has_key(cfg, section, key)` test for presence when a default is not enough.
+
+# Updating and writing back
+
+`set(cfg, section, key, value)` returns the updated config, and `to_string(cfg)` serialises a config back to INI text:
+
+    let updated = set(cfg, "server", "host", "example.org")
+    get(updated, "server", "host", "none")        // "example.org"
+    print(to_string(updated))
+
+Two honest quirks of the current serialiser: keys are emitted in alphabetical order within each section, and values are written in their runtime form, so the bool above comes back out as `debug = True`. The round trip is safe for reading back with this same module; do not expect byte-identical output.
+
+`merge(base, other)` combines two configs, `delete(cfg, section, key)` removes a key, and `section_keys(cfg, section)` lists a section's keys.
+
+# Running the example
+
+`examples/ini_tutorial.ltl` is self-contained and runnable:
+
+    lateralus run examples/ini_tutorial.ltl
+    // ini tutorial: all checks passed
+
+Like `examples/spiral_ranking.ltl`, the example inlines the modules it uses (`stdlib/strings.ltl` and `stdlib/ini.ltl`, verbatim) because `import stdlib.*` does not resolve in the runner yet. It also documents one gap it works around: `stdlib/ini.ltl` calls `substr(s, start, length)`, which the stdlib does not define for strings, so the example provides it in one line on top of the runtime's `slice()` builtin. If the module grows a native `substr`, the shim can simply be deleted.
+
+Every line of the pinned test vector is asserted with `assert_eq`, so if the parser's behaviour changes, the example fails loudly instead of silently teaching stale behaviour — which is what a tutorial example is for.
+
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>
