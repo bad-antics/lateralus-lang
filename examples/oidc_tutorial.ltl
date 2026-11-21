@@ -1,0 +1,447 @@
+// ===================================================================
+// examples/oidc_tutorial.ltl — stdlib/oidc.ltl tutorial companion
+// Runnable tour of the OIDC helpers: discovery doc parsing, client
+// binding (openid scope injection), authorization URL with nonce,
+// id_token verification (iss/aud/exp/nbf/nonce), at_hash, and
+// end_session URL. HS256 JWT sign/verify inlined (imports don't
+// resolve under ltlc run); mini flat-JSON parser for claims.
+// ===================================================================
+
+fn char_at(s: str, i: int) -> str { return s[i] }
+
+fn bytes_of(s: str) -> list {
+    let out = []
+    let i = 0
+    while i < len(s) {
+        out = out + [ord(s[i])]
+        i = i + 1
+    }
+    return out
+}
+
+fn str_of(bytes: list) -> str {
+    let out = ""
+    let i = 0
+    while i < len(bytes) {
+        out = out + chr(bytes[i])
+        i = i + 1
+    }
+    return out
+}
+
+fn hexval(c: str) -> int {
+    if c >= "0" && c <= "9" { return ord(c) - ord("0") }
+    if c >= "a" && c <= "f" { return ord(c) - ord("a") + 10 }
+    return ord(c) - ord("A") + 10
+}
+
+fn hex_to_bytes(hex: str) -> list {
+    let out = []
+    let i = 0
+    while i + 1 < len(hex) {
+        out = out + [(hexval(hex[i]) << 4) | hexval(hex[i + 1])]
+        i = i + 2
+    }
+    return out
+}
+
+fn bytes_to_hex(bytes: list) -> str {
+    let h = "0123456789abcdef"
+    let out = ""
+    let i = 0
+    while i < len(bytes) {
+        let b = bytes[i] & 0xff
+        out = out + slice(h, b >> 4, (b >> 4) + 1)
+               + slice(h, b & 0x0f, (b & 0x0f) + 1)
+        i = i + 1
+    }
+    return out
+}
+
+fn sha256_bytes(s: str) -> list {
+    return hex_to_bytes(sha256(s))
+}
+
+fn b64url(bytes: list) -> str {
+    let alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    let out = ""
+    let i = 0
+    while i < len(bytes) {
+        let b0 = bytes[i]
+        let b1 = 0
+        let b2 = 0
+        let pad = 0
+        if i + 1 < len(bytes) { b1 = bytes[i + 1] } else { pad = pad + 1 }
+        if i + 2 < len(bytes) { b2 = bytes[i + 2] } else { pad = pad + 1 }
+        out = out + char_at(alpha, b0 >> 2)
+             + char_at(alpha, ((b0 & 3) << 4) | (b1 >> 4))
+        if pad <= 1 { out = out + char_at(alpha, ((b1 & 15) << 2) | (b2 >> 6)) }
+                  else { out = out + "=" }
+        if pad == 0    { out = out + char_at(alpha, b2 & 63) }
+                  else { out = out + "=" }
+        i = i + 3
+    }
+    return out
+}
+
+fn b64url_decode(s: str) -> list {
+    let alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_="
+    let clean = ""
+    let i = 0
+    while i < len(s) {
+        if s[i] != "=" { clean = clean + s[i] }
+        i = i + 1
+    }
+    while len(clean) % 4 != 0 { clean = clean + "=" }
+    let out = []
+    let acc = 0
+    let nbits = 0
+    let i = 0
+    while i < len(clean) {
+        let c = clean[i]
+        if c == "=" { break }
+        let j = 0
+        while j < 64 && char_at(alpha, j) != c { j = j + 1 }
+        acc = (acc << 6) | j
+        nbits = nbits + 6
+        if nbits >= 8 {
+            nbits = nbits - 8
+            out = out + [(acc >> nbits) & 0xff]
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn strip_padding(s: str) -> str {
+    let i = len(s)
+    while i > 0 && char_at(s, i - 1) == "=" {
+        i = i - 1
+    }
+    return slice(s, 0, i)
+}
+
+fn b64url_nopad(bytes: list) -> str {
+    return strip_padding(b64url(bytes))
+}
+
+fn b64url_decode_nopad(s: str) -> list {
+    return b64url_decode(s)
+}
+
+fn is_unreserved(ch: str) -> bool {
+    if ch >= "a" && ch <= "z" { return true }
+    if ch >= "A" && ch <= "Z" { return true }
+    if ch >= "0" && ch <= "9" { return true }
+    return ch == "-" || ch == "_" || ch == "." || ch == "~"
+}
+
+fn hex_nibble(n: int) -> str {
+    return char_at("0123456789ABCDEF", n & 0x0f)
+}
+
+fn percent_encode(s: str) -> str {
+    let out = ""
+    let i = 0
+    while i < len(s) {
+        let ch = char_at(s, i)
+        if is_unreserved(ch) {
+            out = out + ch
+        } else {
+            let b = bytes_of(ch)
+            let j = 0
+            while j < len(b) {
+                out = out + "%" + hex_nibble(b[j] >> 4) + hex_nibble(b[j])
+                j = j + 1
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn form_encode(pairs: map) -> str {
+    let ks = keys(pairs)
+    let out = ""
+    let i = 0
+    while i < len(ks) {
+        if i > 0 { out = out + "&" }
+        out = out + percent_encode(ks[i]) + "=" + percent_encode(pairs[ks[i]])
+        i = i + 1
+    }
+    return out
+}
+
+fn new_client(client_id: str, client_secret: str,
+              auth_url: str, token_url: str,
+              redirect_uri: str, scopes: list) -> map {
+    let c = {}
+    c["client_id"]     = client_id
+    c["client_secret"] = client_secret
+    c["auth_url"]      = auth_url
+    c["token_url"]     = token_url
+    c["redirect_uri"]  = redirect_uri
+    c["scopes"]        = scopes
+    return c
+}
+
+fn oauth2_authorization_url(client: map, state: str, pkce_challenge: str,
+                            extra: map) -> str {
+    let params = {}
+    params["response_type"] = "code"
+    params["client_id"]     = client["client_id"]
+    params["redirect_uri"]  = client["redirect_uri"]
+    params["scope"]         = join(client["scopes"], " ")
+    params["state"]         = state
+    if pkce_challenge != "" {
+        params["code_challenge"]        = pkce_challenge
+        params["code_challenge_method"] = "S256"
+    }
+    let ks = keys(extra)
+    let i = 0
+    while i < len(ks) {
+        params[ks[i]] = extra[ks[i]]
+        i = i + 1
+    }
+    return client["auth_url"] + "?" + form_encode(params)
+}
+
+// -- OIDC ------------------------------------------------------------
+
+fn parse_discovery(doc: map) -> map {
+    let m = {}
+    m["issuer"]                 = ""
+    m["authorization_endpoint"] = ""
+    m["token_endpoint"]         = ""
+    m["userinfo_endpoint"]      = ""
+    m["jwks_uri"]               = ""
+    m["end_session_endpoint"]   = ""
+    m["scopes_supported"]       = []
+    m["response_types_supported"]     = []
+    m["id_token_signing_alg_values_supported"] = []
+    let ks = keys(doc)
+    let i = 0
+    while i < len(ks) {
+        let k = ks[i]
+        if contains(keys(m), k) {
+            m[k] = doc[k]
+        }
+        i = i + 1
+    }
+    return m
+}
+
+fn client_from_discovery(client_id: str, client_secret: str,
+                         redirect_uri: str, scopes: list,
+                         disco: map) -> map {
+    let has_openid = false
+    let i = 0
+    while i < len(scopes) {
+        if scopes[i] == "openid" { has_openid = true }
+        i = i + 1
+    }
+    if not has_openid {
+        scopes = ["openid"] + scopes
+    }
+    return new_client(client_id, client_secret,
+                      disco["authorization_endpoint"],
+                      disco["token_endpoint"],
+                      redirect_uri, scopes)
+}
+
+fn authorization_url(client: map, state: str, nonce: str,
+                     pkce_challenge: str) -> str {
+    let extra = {}
+    extra["nonce"] = nonce
+    return oauth2_authorization_url(client, state, pkce_challenge, extra)
+}
+
+// -- Minimal flat-JSON object parser (claims are flat) ----------------
+
+fn mini_json_parse(text: str) -> map {
+    let m = {}
+    let i = 1
+    let n = len(text)
+    while i < n {
+        if text[i] == " " || text[i] == "\n" || text[i] == "\t" { i = i + 1; continue }
+        if text[i] == chr(125) { break }
+        if text[i] == "," { i = i + 1; continue }
+        if text[i] != "\"" { i = i + 1; continue }
+        let kstart = i + 1
+        i = kstart
+        while i < n && text[i] != "\"" { i = i + 1 }
+        let key = slice(text, kstart, i)
+        i = i + 1
+        while i < n && (text[i] == " " || text[i] == ":") { i = i + 1 }
+        if text[i] == "\"" {
+            let vstart = i + 1
+            i = vstart
+            while i < n && text[i] != "\"" { i = i + 1 }
+            m[key] = slice(text, vstart, i)
+            i = i + 1
+        } else {
+            let vstart = i
+            while i < n && text[i] != "," && text[i] != chr(125) { i = i + 1 }
+            let raw = slice(text, vstart, i)
+            while len(raw) > 0 && raw[len(raw)-1] == " " { raw = slice(raw, 0, len(raw)-1) }
+            if raw == "true" { m[key] = true }
+            else if raw == "false" { m[key] = false }
+            else if raw == "null" { m[key] = nil }
+            else if contains(raw, ".") { m[key] = float(raw) }
+            else { m[key] = int(raw) }
+        }
+    }
+    return m
+}
+
+fn hmac_sha256_hex(key: str, msg: str) -> str {
+    return hmac_sha256(key, msg)
+}
+
+fn jwt_verify_hs256(token: str, key_str: str, now_s: int) -> list {
+    let parts = str_split(token, ".")
+    if len(parts) != 3 {
+        return [false, "malformed"]
+    }
+    let signing_input = parts[0] + "." + parts[1]
+    let want_hex = bytes_to_hex(b64url_decode_nopad(parts[2]))
+    let got_hex = hmac_sha256_hex(key_str, signing_input)
+    if not constant_time_compare(got_hex, want_hex) {
+        return [false, "bad_signature"]
+    }
+    let payload_str = str_of(b64url_decode_nopad(parts[1]))
+    let claims = mini_json_parse(payload_str)
+    if contains(keys(claims), "exp") {
+        if now_s > claims["exp"] {
+            return [false, "expired"]
+        }
+    }
+    if contains(keys(claims), "nbf") {
+        if now_s < claims["nbf"] {
+            return [false, "not_yet_valid"]
+        }
+    }
+    return [true, claims]
+}
+
+fn jwt_sign_hs256(payload_json: str, key_str: str) -> str {
+    let header_json = chr(123) + "\"typ\":\"JWT\",\"alg\":\"HS256\"" + chr(125)
+    let h = b64url_nopad(bytes_of(header_json))
+    let p = b64url_nopad(bytes_of(payload_json))
+    let signing_input = h + "." + p
+    let sig_hex = hmac_sha256_hex(key_str, signing_input)
+    let sig = hex_to_bytes(sig_hex)
+    return signing_input + "." + b64url_nopad(sig)
+}
+
+fn verify_id_token(token: str, key_str: str, issuer: str, audience: str,
+                   expected_nonce: str, now_s: int) -> list {
+    let res = jwt_verify_hs256(token, key_str, now_s)
+    if not res[0] {
+        return [false, res[1]]
+    }
+    let claims = res[1]
+    if not contains(keys(claims), "iss") || claims["iss"] != issuer {
+        return [false, "iss mismatch"]
+    }
+    let aud_ok = false
+    if contains(keys(claims), "aud") {
+        let aud = claims["aud"]
+        if aud == audience {
+            aud_ok = true
+        } else {
+            let j = 0
+            while j < len(aud) {
+                if aud[j] == audience { aud_ok = true }
+                j = j + 1
+            }
+        }
+    }
+    if not aud_ok {
+        return [false, "aud mismatch"]
+    }
+    if expected_nonce != "" {
+        if not contains(keys(claims), "nonce") || claims["nonce"] != expected_nonce {
+            return [false, "nonce mismatch"]
+        }
+    }
+    return [true, claims]
+}
+
+fn at_hash_s256(access_token: str, sha256_bytes_fn) -> str {
+    let d = sha256_bytes_fn(access_token)
+    let half = int(len(d) / 2)
+    let raw = ""
+    let i = 0
+    while i < half {
+        raw = raw + chr(d[i])
+        i = i + 1
+    }
+    return strip_padding(b64url(bytes_of(raw)))
+}
+
+fn end_session_url(disco: map, id_token_hint: str,
+                   post_logout_redirect_uri: str, state: str) -> str {
+    if disco["end_session_endpoint"] == "" {
+        return ""
+    }
+    let params = {}
+    params["id_token_hint"] = id_token_hint
+    if post_logout_redirect_uri != "" {
+        params["post_logout_redirect_uri"] = post_logout_redirect_uri
+    }
+    if state != "" {
+        params["state"] = state
+    }
+    return disco["end_session_endpoint"] + "?" + form_encode(params)
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB OIDC TUTORIAL ===")
+
+    println("STEP 1 discovery document:")
+    let doc = {}
+    doc["issuer"] = "https://idp.example.com"
+    doc["authorization_endpoint"] = "https://idp.example.com/auth"
+    doc["token_endpoint"] = "https://idp.example.com/token"
+    doc["jwks_uri"] = "https://idp.example.com/jwks"
+    doc["end_session_endpoint"] = "https://idp.example.com/logout"
+    doc["scopes_supported"] = ["openid", "profile"]
+    doc["unknown_field"] = "dropped"
+    let disco = parse_discovery(doc)
+    println("  issuer=" + str(disco["issuer"]) + " auth=" + str(disco["authorization_endpoint"]))
+    println("  scopes=" + str(len(disco["scopes_supported"])) + " unknown dropped=" + str(not contains(keys(disco), "unknown_field")))
+
+    println("STEP 2 client binding + auth URL (nonce + PKCE):")
+    let scopes = ["profile", "email"]
+    let client = client_from_discovery("app-client", "sec", "https://app/cb", scopes, disco)
+    println("  scopes=" + str(client["scopes"][0]) + "," + str(client["scopes"][1]) + "," + str(client["scopes"][2]))
+    let url = authorization_url(client, "st8", "nc-42", "CHALLENGE123")
+    println("  url=" + url)
+
+    println("STEP 3 sign + verify id_token (HS256):")
+    let payload = chr(123) + "\"iss\":\"https://idp.example.com\",\"aud\":\"app-client\",\"sub\":\"user-1\",\"exp\":2000000000,\"iat\":1700000000,\"nonce\":\"nc-42\"" + chr(125)
+    let token = jwt_sign_hs256(payload, "topsecret")
+    println("  token parts=" + str(len(str_split(token, "."))) + " len=" + str(len(token)))
+    let v = verify_id_token(token, "topsecret", "https://idp.example.com", "app-client", "nc-42", 1750000000)
+    println("  verify ok=" + str(v[0]) + " sub=" + str(v[1]["sub"]) + " nonce=" + str(v[1]["nonce"]))
+
+    println("STEP 4 negative checks:")
+    let bad_nonce = verify_id_token(token, "topsecret", "https://idp.example.com", "app-client", "WRONG", 1750000000)
+    println("  wrong nonce -> " + str(bad_nonce[0]) + " " + str(bad_nonce[1]))
+    let bad_iss = verify_id_token(token, "topsecret", "https://evil.example.com", "app-client", "nc-42", 1750000000)
+    println("  wrong iss -> " + str(bad_iss[0]) + " " + str(bad_iss[1]))
+    let expired = verify_id_token(token, "topsecret", "https://idp.example.com", "app-client", "nc-42", 3000000000)
+    println("  far-future now -> " + str(expired[0]) + " " + str(expired[1]))
+    let tampered = token + "x"
+    let tv = verify_id_token(tampered, "topsecret", "https://idp.example.com", "app-client", "nc-42", 1750000000)
+    println("  tampered -> " + str(tv[0]) + " " + str(tv[1]))
+
+    println("STEP 5 at_hash + end_session:")
+    let ah = at_hash_s256("at-xyz", sha256_bytes)
+    println("  at_hash=" + ah + " len=" + str(len(ah)))
+    println("  logout=" + end_session_url(disco, "idt-hint", "https://app/cb", "lo-1"))
+    println("PINNED_VECTORS: disco=issuer+authurl scopes=injected-openid url=nonce+CHALLENGE123 jwt=3parts+verify-ok neg=nonce/iss/expired/tamper at_hash=b64url-half logout=end_session+params")
+}
+
+main()
