@@ -247,11 +247,23 @@ def main(argv=None) -> int:
     add_p.add_argument("--path", default=None)
     add_p.add_argument("--git", default=None)
     add_p.add_argument("--dev", action="store_true")
+    add_p.add_argument("--registry-path", default=None,
+                       help="Fetch the package from this registry directory")
+    add_p.add_argument("--registry-url", default=None,
+                       help="Fetch the package from this registry base URL")
+    add_p.add_argument("--no-install", action="store_true",
+                       help="Record the dependency without downloading it")
 
     # publish  (v1.7)
     pub_p = sub.add_parser("publish", help="Publish package to registry")
     pub_p.add_argument("--dry-run", action="store_true",
                        help="Preview without uploading")
+    pub_p.add_argument("--registry-path", default=None,
+                       help="Write the package and index.json into this directory")
+    pub_p.add_argument("--registry-url", default=None,
+                       help="PUT the package and index.json to this base URL")
+    pub_p.add_argument("--json", action="store_true",
+                       help="Emit the publish record as JSON")
 
     # serve  (v2.2)
     serve_p = sub.add_parser("serve", help="Serve .ltlml docs as HTML pages")
@@ -705,47 +717,127 @@ print(f"\n  {_passed} passed  {_failed} failed")
         return 0
 
     elif ns.cmd == "add":
-        from .package_manager import Dependency, ProjectManifest, _find_manifest
+        from .package_manager import (
+            LOCK_FILE,
+            Dependency,
+            LockEntry,
+            LockFile,
+            ProjectManifest,
+            _find_manifest,
+        )
         manifest_path = _find_manifest()
         if not manifest_path:
             print("No lateralus.toml found. Run 'lateralus init' first.",
                   file=sys.stderr)
             return 1
         manifest = ProjectManifest.from_file(manifest_path)
-        dep = Dependency(
-            name=ns.package,
-            version=getattr(ns, "version", "*"),
-            path=getattr(ns, "path", None),
-            git=getattr(ns, "git", None),
-        )
-        if getattr(ns, "dev", False):
-            manifest.dev_dependencies[ns.package] = dep
-        else:
-            manifest.dependencies[ns.package] = dep
+        project_dir = manifest_path.parent
+        version_spec = getattr(ns, "version", "*")
+        wanted = (manifest.dev_dependencies if getattr(ns, "dev", False)
+                  else manifest.dependencies)
+
+        # Local and git dependencies keep their old behaviour: they are
+        # recorded, and `lateralus install` materialises them.
+        if getattr(ns, "path", None) or getattr(ns, "git", None):
+            dep = Dependency(name=ns.package, version=version_spec,
+                             path=getattr(ns, "path", None),
+                             git=getattr(ns, "git", None))
+            wanted[ns.package] = dep
+            manifest.save(manifest_path)
+            print(f"Added {ns.package}@{dep.version}")
+            return 0
+
+        if getattr(ns, "no_install", False):
+            wanted[ns.package] = Dependency(name=ns.package, version=version_spec)
+            manifest.save(manifest_path)
+            print(f"Recorded {ns.package}@{version_spec} (not fetched)")
+            return 0
+
+        from .registry import RegistryError, RegistryIndex, RegistryLocation, fetch_package
+
+        try:
+            location = RegistryLocation.from_manifest(
+                manifest,
+                override_path=getattr(ns, "registry_path", None),
+                override_url=getattr(ns, "registry_url", None))
+            index = RegistryIndex.load(location)
+            result = fetch_package(index, location, ns.package, version_spec,
+                                   project_dir / "vendor")
+        except RegistryError as exc:
+            print(f"add failed: {exc}", file=sys.stderr)
+            return 1
+
+        wanted[ns.package] = Dependency(name=ns.package,
+                                        version=f"={result['version']}")
         manifest.save(manifest_path)
-        print(f"Added {ns.package}@{dep.version}")
+
+        lock_path = project_dir / LOCK_FILE
+        lock = LockFile.from_file(lock_path)
+        lock.entries[ns.package] = LockEntry(
+            name=ns.package,
+            version=result["version"],
+            resolved=result["digest"],
+            integrity=result["digest"],
+        )
+        lock.save(lock_path)
+
+        try:
+            shown = result["path"].relative_to(project_dir)
+        except ValueError:
+            shown = result["path"]
+        print(f"Added {ns.package}@{result['version']}")
+        print(f"  Unpacked {result['files']} file(s) into {shown}")
+        print(f"  Verified {result['digest']}")
         return 0
 
     elif ns.cmd == "publish":
-        from .package_manager import PackageBundle, ProjectManifest, _find_manifest
+        from .package_manager import ProjectManifest, _find_manifest
+        from .registry import RegistryError, RegistryLocation, publish_package
+
         manifest_path = _find_manifest()
         if not manifest_path:
             print("No lateralus.toml found.", file=sys.stderr)
             return 1
         manifest = ProjectManifest.from_file(manifest_path)
-        bundle = PackageBundle.create(manifest_path.parent, manifest)
-        if getattr(ns, "dry_run", False):
-            print(f"Would publish {bundle.name}@{bundle.version}")
-            print(f"  Files: {len(bundle.files)}")
-            print(f"  Size:  {bundle.size:,} bytes")
-            print(f"  Integrity: {bundle.integrity}")
-            for f in bundle.files[:10]:
-                print(f"    {f}")
-            if len(bundle.files) > 10:
-                print(f"    ... and {len(bundle.files) - 10} more")
-        else:
-            print(f"Publishing {bundle.name}@{bundle.version}")
-            print("  (Registry not yet available — use --dry-run to preview)")
+        try:
+            location = RegistryLocation.from_manifest(
+                manifest,
+                override_path=getattr(ns, "registry_path", None),
+                override_url=getattr(ns, "registry_url", None),
+                allow_unconfigured=bool(getattr(ns, "dry_run", False)))
+            outcome = publish_package(manifest_path.parent, manifest, location,
+                                      dry_run=getattr(ns, "dry_run", False))
+        except RegistryError as exc:
+            print(f"publish failed: {exc}", file=sys.stderr)
+            return 1
+
+        record = outcome["record"]
+        if getattr(ns, "json", False):
+            import json as _json
+            print(_json.dumps({
+                "status": outcome["status"],
+                "registry": location.describe(),
+                "record": record,
+            }, indent=2))
+            return 0
+
+        verb = {"published": "Published",
+                "unchanged": "Already published",
+                "dry-run": "Would publish"}[outcome["status"]]
+        print(f"{verb} {manifest.name}@{manifest.version} "
+              f"-> {location.describe()}")
+        print(f"  Files:    {len(outcome['files'])}")
+        print(f"  Archive:  {record['size']:,} bytes")
+        print(f"  Digest:   {record['digest']}")
+        if outcome["status"] != "dry-run":
+            print(f"  Tarball:  {record['tarball']}")
+        if outcome.get("replaced"):
+            print("  Note:     replaced an existing digest for this version")
+        if outcome["status"] == "dry-run":
+            for name in outcome["files"][:10]:
+                print(f"    {name}")
+            if len(outcome["files"]) > 10:
+                print(f"    ... and {len(outcome['files']) - 10} more")
         return 0
 
     elif ns.cmd == "serve":
