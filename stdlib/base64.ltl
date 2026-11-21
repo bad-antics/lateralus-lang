@@ -8,6 +8,11 @@
 let CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 let PAD = "="
 
+/// Helper: return character ASCII code.
+fn char_code(c: str) -> int {
+    return ord(c)
+}
+
 // -- Encoding --------------------------------------------------------
 
 /// Encode a string to base64.
@@ -33,11 +38,11 @@ pub fn encode(data: str) -> str {
             padding = padding + 1
         }
 
-        // Split 3 bytes into 4 sextets
-        let c0 = b0 / 4
-        let c1 = ((b0 % 4) * 16) + (b1 / 16)
-        let c2 = ((b1 % 16) * 4) + (b2 / 64)
-        let c3 = b2 % 64
+        // Split 3 bytes into 4 sextets using bitwise operations
+        let c0 = b0 >> 2
+        let c1 = ((b0 & 3) << 4) | (b1 >> 4)
+        let c2 = ((b1 & 15) << 2) | (b2 >> 6)
+        let c3 = b2 & 63
 
         result = result + CHARS[c0]
         result = result + CHARS[c1]
@@ -94,17 +99,17 @@ pub fn decode(encoded: str) -> str {
             v3 = char_index(encoded[i + 3])
         }
 
-        // Reconstruct 3 bytes from 4 sextets
-        let byte0 = c0 * 4 + c1 / 16
+        // Reconstruct 3 bytes from 4 sextets using bitwise operations
+        let byte0 = (c0 << 2) | (c1 >> 4)
         result = result + chr(byte0)
 
         if has_c2 {
-            let byte1 = (c1 % 16) * 16 + v2 / 4
+            let byte1 = ((c1 & 15) << 4) | (v2 >> 2)
             result = result + chr(byte1)
         }
 
         if has_c3 {
-            let byte2 = (v2 % 4) * 64 + v3
+            let byte2 = ((v2 & 3) << 6) | v3
             result = result + chr(byte2)
         }
 
@@ -168,7 +173,7 @@ pub fn is_valid(s: str) -> bool {
 
 /// Compute the encoded length for `n` input bytes.
 pub fn encoded_length(n: int) -> int {
-    return ((n + 2) / 3) * 4
+    return idiv(n + 2, 3) * 4
 }
 
 /// Compute the decoded length from encoded string length.
@@ -181,5 +186,5 @@ pub fn decoded_length(encoded: str) -> int {
     if n > 1 and encoded[n - 2] == PAD {
         padding = padding + 1
     }
-    return (n / 4) * 3 - padding
+    return (n >> 2) * 3 - padding
 }
