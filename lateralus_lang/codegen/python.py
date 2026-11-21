@@ -271,6 +271,8 @@ class PythonTranspiler(ASTVisitor):
         self._w += "def str_contains(s, sub): return sub in s"
         self._w += "def str_starts_with(s, p):return s.startswith(p)"
         self._w += "def str_ends_with(s, p):  return s.endswith(p)"
+        self._w += "def char_at(s, i):        return s[i] if 0 <= i < len(s) else ''"
+        self._w += "def index_of(s, sub):     return s.find(sub)"
         self._w += "def pad_left(s, n, c=' '): return str(s).rjust(n, c)"
         self._w += "def pad_right(s, n, c=' '):return str(s).ljust(n, c)"
         self._w += "def pad_center(s, n, c=' '):return str(s).center(n, c)"
