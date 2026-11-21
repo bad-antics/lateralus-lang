@@ -82,6 +82,23 @@ class TestPythonTranspiler:
         # pipeline should expand to a call
         assert "double" in r.python_src
 
+    def test_optional_pipeline_bytecode(self):
+        # `a |? f` must not fall through to ADD in the IR (issue #447):
+        # nil -> nil, otherwise f(a). Verified end-to-end on the VM.
+        from lateralus_lang.vm.vm import VM
+        src = ("fn inc(x: int) -> int { return x + 1 }\n"
+               "fn add2(x: int, y: int) -> int { return x + y }\n"
+               "fn main() -> int { return EXPR }")
+        for expr, want in [("5 |? inc", 6), ("nil |? inc", 0),
+                           ("41 |? inc", 42), ("5 |? add2(10)", 15),
+                           ("nil |? add2(10)", 0)]:
+            r = Compiler().compile_source(src.replace("EXPR", expr),
+                                          target=Target.BYTECODE, filename="<test>")
+            assert r.ok, (expr, r.errors)
+            vm = VM(r.bytecode)
+            vm.run()
+            assert vm.stack[-1] == want, (expr, vm.stack)
+
     def test_try_recover_becomes_try_except(self):
         r = check("try { } recover IOError(e) { }")
         assert r.ok

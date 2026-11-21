@@ -1194,6 +1194,25 @@ class CTranspiler(ASTVisitor):
             right = self._visit_expr(node.right)
             left  = self._visit_expr(node.left)
             return f"{right}({left})"
+        if op == "|?":
+            left = self._visit_expr(node.left)
+            lt   = self._infer_ctype_from_expr(node.left)
+            recv = left
+            prefix = suffix = ""
+            if lt == "ltl_value_t":
+                # nil-aware: evaluate the receiver once, skip the call on LTL_NIL
+                recv = "_ltl_po_val"
+                prefix = ("({ ltl_value_t _ltl_po_val = (" + left + "); "
+                          "(_ltl_po_val.tag == LTL_NIL ? "
+                          "(ltl_value_t){.tag = LTL_NIL} : ")
+                suffix = "); })"
+            if isinstance(node.right, CallExpr):
+                callee = self._visit_expr(node.right.callee)
+                rest   = [self._visit_expr(a) for a in node.right.args]
+                call   = f"{callee}({', '.join([recv] + rest)})"
+            else:
+                call   = f"{self._visit_expr(node.right)}({recv})"
+            return prefix + "(" + call + ")" + suffix
         if op == "**":
             left  = self._visit_expr(node.left)
             right = self._visit_expr(node.right)
