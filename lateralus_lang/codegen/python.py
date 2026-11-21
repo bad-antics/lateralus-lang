@@ -246,6 +246,9 @@ class PythonTranspiler(ASTVisitor):
         self._w += "def map_del(d, k): d.pop(k, None); return d"
         self._w += "def contains(collection, item): return (item in collection) if not isinstance(collection, dict) else (item in collection)"
         self._w += "def not_contains(collection, item): return item not in collection"
+        self._w += "def bytes_of(s):          return [ord(c) for c in s] if isinstance(s, str) else list(s)"
+        self._w += "def crypto_sha1(b):       import hashlib as _h; return list(_h.sha1(bytes(b) if not isinstance(b, str) else b.encode('utf-8')).digest())"
+        self._w += "def base64_encode(b):     import base64 as _b64; return _b64.b64encode(bytes(b) if not isinstance(b, (str, bytes)) else (b if isinstance(b, bytes) else b.encode('utf-8'))).decode('ascii')"
         self._w += ""
         # Pipeline-friendly value-first builtins
         self._w += "# ── Pipeline-friendly & core builtins ───────────────────"

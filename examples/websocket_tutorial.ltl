@@ -1,0 +1,54 @@
+// examples/websocket_tutorial.ltl
+// Demonstrates RFC 6455 WebSocket frame encoding, decoding, masking,
+// medium/large payloads, close frames, and the Sec-WebSocket-Accept handshake.
+
+import stdlib.websocket
+
+fn main() {
+    println("=== RFC 6455 WebSocket Codec Tutorial ===")
+
+    // 1. Basic Text Frame (Server to Client, unmasked)
+    let msg = "Hello from Lateralus!"
+    let payload = bytes_of(msg)
+    let frame = encode_frame(1, op_text(), payload)
+    let decoded = decode_frame(frame)
+
+    println("Original text: " + msg)
+    println("Encoded frame length: " + str(len(frame)))
+    println("Decoded opcode: " + str(decoded["opcode"]))
+    println("Decoded payload length: " + str(len(decoded["payload"])))
+
+    // 2. Medium Payload (126 length header)
+    let med_payload = []
+    let i = 0
+    while i < 256 {
+        med_payload = med_payload + [65] // 'A'
+        i = i + 1
+    }
+    let med_frame = encode_frame(1, op_binary(), med_payload)
+    let med_decoded = decode_frame(med_frame)
+    println("Medium frame bytes: " + str(len(med_frame)))
+    println("Medium decoded payload: " + str(len(med_decoded["payload"])))
+
+    // 3. Masked Frame (Client to Server)
+    let mask = [0x12, 0x34, 0x56, 0x78]
+    let masked_frame = encode_masked(1, op_text(), payload, mask)
+    let masked_decoded = decode_frame(masked_frame)
+    println("Masked frame length: " + str(len(masked_frame)))
+    println("Unmasked payload match: " + str(len(masked_decoded["payload"]) == len(payload)))
+
+    // 4. Close Frame with code 1000
+    let close = close_frame(1000, "Normal Closure")
+    let close_decoded = decode_frame(close)
+    let code = (close_decoded["payload"][0] << 8) | close_decoded["payload"][1]
+    println("Close frame opcode: " + str(close_decoded["opcode"]))
+    println("Close status code: " + str(code))
+
+    // 5. Sec-WebSocket-Accept Handshake
+    let client_key = "dGhlIHNhbXBsZSBub25jZQ=="
+    let accept = compute_accept(client_key)
+    println("Client Key: " + client_key)
+    println("Sec-WebSocket-Accept: " + accept)
+}
+
+main()
