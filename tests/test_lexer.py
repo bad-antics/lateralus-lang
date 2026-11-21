@@ -109,6 +109,17 @@ class TestOperators:
     def test_dotdotlt(self):
         assert kinds("..<")[0] == TK.DOTDOTLT
 
+    @pytest.mark.parametrize("src", ["-42", "- 42", "-0x1F", "-1.5", "-42 + 1"])
+    def test_leading_minus_is_operator(self, src):
+        # Regression: "-42" at the start of the source used to raise ValueError.
+        k = kinds(src)
+        assert k[0] == TK.MINUS
+        assert k[1] in (TK.INT, TK.FLOAT)
+
+    def test_leading_negative_values(self):
+        assert [t.value for t in tokens("-42")][1] == 42
+        assert [t.value for t in tokens("-0x1F")][1] == 31
+
 
 class TestComments:
     def test_line_comment_skipped(self):
