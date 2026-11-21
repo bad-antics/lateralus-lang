@@ -1,0 +1,309 @@
+// ===================================================================
+// examples/linalg_tutorial.ltl — stdlib/linalg.ltl tutorial companion
+// Runnable tour of vector/matrix ops: arithmetic, dot/cross,
+// magnitude/normalize/angle/projection, matrix multiply/transpose/
+// trace/determinants, and LU decomposition with solve. Self-contained.
+// ===================================================================
+
+import math
+
+fn vec_add(a: list, b: list) -> list {
+    let result = []
+    let i = 0
+    while i < len(a) {
+        result = result + [a[i] + b[i]]
+        i = i + 1
+    }
+    return result
+}
+
+fn vec_sub(a: list, b: list) -> list {
+    let result = []
+    let i = 0
+    while i < len(a) {
+        result = result + [a[i] - b[i]]
+        i = i + 1
+    }
+    return result
+}
+
+fn vec_scale(v: list, scalar: float) -> list {
+    let result = []
+    let i = 0
+    while i < len(v) {
+        result = result + [v[i] * scalar]
+        i = i + 1
+    }
+    return result
+}
+
+fn dot_product(a: list, b: list) -> float {
+    let s = 0.0
+    let i = 0
+    while i < len(a) {
+        s = s + a[i] * b[i]
+        i = i + 1
+    }
+    return s
+}
+
+fn cross_product(a: list, b: list) -> list {
+    return [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0]
+    ]
+}
+
+fn magnitude(v: list) -> float {
+    return math.sqrt(dot_product(v, v))
+}
+
+fn normalize(v: list) -> list {
+    let mag = magnitude(v)
+    if mag < 1e-12 {
+        return [0.0, 0.0, 0.0]
+    }
+    return vec_scale(v, 1.0 / mag)
+}
+
+fn angle_between(a: list, b: list) -> float {
+    let d = dot_product(a, b)
+    let ma = magnitude(a)
+    let mb = magnitude(b)
+    let c = clamp(d / (ma * mb), -1.0, 1.0)
+    return math.acos(c)
+}
+
+fn projection(a: list, b: list) -> list {
+    let d = dot_product(a, b)
+    let bb = dot_product(b, b)
+    if bb < 1e-12 {
+        return [0.0, 0.0, 0.0]
+    }
+    return vec_scale(b, d / bb)
+}
+
+fn mat_zeros(rows: int, cols: int) -> list {
+    let m = []
+    let i = 0
+    while i < rows {
+        let row = []
+        let j = 0
+        while j < cols {
+            row = row + [0.0]
+            j = j + 1
+        }
+        m = m + [row]
+        i = i + 1
+    }
+    return m
+}
+
+fn mat_identity(n: int) -> list {
+    let m = mat_zeros(n, n)
+    let i = 0
+    while i < n {
+        m[i][i] = 1.0
+        i = i + 1
+    }
+    return m
+}
+
+fn mat_add(a: list, b: list) -> list {
+    let m = []
+    let i = 0
+    while i < len(a) {
+        let row = []
+        let j = 0
+        while j < len(a[i]) {
+            row = row + [a[i][j] + b[i][j]]
+            j = j + 1
+        }
+        m = m + [row]
+        i = i + 1
+    }
+    return m
+}
+
+fn mat_mul(a: list, b: list) -> list {
+    let rows = len(a)
+    let cols = len(b[0])
+    let inner = len(b)
+    let m = mat_zeros(rows, cols)
+    let i = 0
+    while i < rows {
+        let j = 0
+        while j < cols {
+            let s = 0.0
+            let k = 0
+            while k < inner {
+                s = s + a[i][k] * b[k][j]
+                k = k + 1
+            }
+            m[i][j] = s
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return m
+}
+
+fn mat_transpose(m: list) -> list {
+    let rows = len(m)
+    let cols = len(m[0])
+    let t = mat_zeros(cols, rows)
+    let i = 0
+    while i < rows {
+        let j = 0
+        while j < cols {
+            t[j][i] = m[i][j]
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return t
+}
+
+fn mat_trace(m: list) -> float {
+    let s = 0.0
+    let i = 0
+    while i < len(m) {
+        s = s + m[i][i]
+        i = i + 1
+    }
+    return s
+}
+
+fn mat_det_2x2(m: list) -> float {
+    return m[0][0] * m[1][1] - m[0][1] * m[1][0]
+}
+
+fn mat_det_3x3(m: list) -> float {
+    return m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+        - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+        + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+}
+
+fn mat_lu(m: list) -> list {
+    let n = len(m)
+    let L = mat_identity(n)
+    let U = mat_zeros(n, n)
+    let j = 0
+    while j < n {
+        let i = 0
+        while i <= j {
+            let s = 0.0
+            let k = 0
+            while k < i {
+                s = s + L[i][k] * U[k][j]
+                k = k + 1
+            }
+            U[i][j] = m[i][j] - s
+            i = i + 1
+        }
+        i = j + 1
+        while i < n {
+            let s = 0.0
+            let k = 0
+            while k < j {
+                s = s + L[i][k] * U[k][j]
+                k = k + 1
+            }
+            L[i][j] = (m[i][j] - s) / U[j][j]
+            i = i + 1
+        }
+        j = j + 1
+    }
+    return [L, U]
+}
+
+fn mat_solve_lu(A: list, b: list) -> list {
+    let lu = mat_lu(A)
+    let L = lu[0]
+    let U = lu[1]
+    let n = len(b)
+
+    let y = []
+    let i = 0
+    while i < n {
+        let s = 0.0
+        let j = 0
+        while j < i {
+            s = s + L[i][j] * y[j]
+            j = j + 1
+        }
+        y = y + [b[i] - s]
+        i = i + 1
+    }
+
+    let x = []
+    let k = 0
+    while k < n {
+        x = x + [0.0]
+        k = k + 1
+    }
+    i = n - 1
+    while i >= 0 {
+        let s = 0.0
+        let j = i + 1
+        while j < n {
+            s = s + U[i][j] * x[j]
+            j = j + 1
+        }
+        x[i] = (y[i] - s) / U[i][i]
+        i = i - 1
+    }
+    return x
+}
+
+fn fmt_vec(v: list) -> str {
+    let parts = []
+    for x in v {
+        parts = parts + [str(x)]
+    }
+    return "[" + join(parts, ", ") + "]"
+}
+
+fn fmt_mat(m: list) -> str {
+    let rows = []
+    for r in m {
+        rows = rows + [fmt_vec(r)]
+    }
+    return join(rows, " ; ")
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB LINALG TUTORIAL ===")
+
+    let a = [1.0, 2.0, 3.0]
+    let b = [4.0, 5.0, 6.0]
+    println("STEP 1 add=" + fmt_vec(vec_add(a, b)) + " sub=" + fmt_vec(vec_sub(b, a)))
+    println("STEP 1 scale 2x=" + fmt_vec(vec_scale(a, 2.0)))
+
+    println("STEP 2 dot=" + str(dot_product(a, b)))
+    println("STEP 2 cross i^j=" + fmt_vec(cross_product([1.0, 0.0, 0.0], [0.0, 1.0, 0.0])))
+
+    let v34 = [3.0, 4.0]
+    println("STEP 3 |v|=" + str(magnitude(v34)) + " normalized=" + fmt_vec(normalize(v34)))
+    println("STEP 3 angle i,j=" + str(angle_between([1.0, 0.0], [0.0, 1.0])))
+    println("STEP 3 proj [3,4] onto [1,0]=" + fmt_vec(projection(v34, [1.0, 0.0])))
+
+    let A = [[1.0, 2.0], [3.0, 4.0]]
+    let B = [[5.0, 6.0], [7.0, 8.0]]
+    println("STEP 4 A+B=" + fmt_mat(mat_add(A, B)))
+    println("STEP 4 A*B=" + fmt_mat(mat_mul(A, B)))
+    println("STEP 4 At=" + fmt_mat(mat_transpose(A)))
+    println("STEP 4 trace(A)=" + str(mat_trace(A)) + " det2(A)=" + str(mat_det_2x2(A)))
+
+    let M3 = [[2.0, 0.0, 0.0], [0.0, 3.0, 0.0], [0.0, 0.0, 4.0]]
+    println("STEP 5 det3(diag 2,3,4)=" + str(mat_det_3x3(M3)))
+
+    let S = [[3.0, 1.0], [1.0, 2.0]]
+    let rhs = [9.0, 8.0]
+    let sol = mat_solve_lu(S, rhs)
+    println("STEP 6 solve [[3,1],[1,2]] x = [9,8] -> " + fmt_vec(sol))
+    println("PINNED_VECTORS: dot=32.0 cross=0.0,0.0,1.0 mag=5.0 norm=0.6000000000000001,0.8 angle=1.5707963267948966 proj=3.0,0.0 det2=-2.0 det3=24.0 sol=2.0,3.0")
+}
+
+main()
