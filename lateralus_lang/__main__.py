@@ -59,9 +59,13 @@ def main(argv=None) -> int:
                       help="Module format (default: esm)")
 
     # wasm  (compile to WebAssembly)
-    wasm_p = sub.add_parser("wasm", help="Compile .ltl → WebAssembly (.wat)")
+    wasm_p = sub.add_parser("wasm", help="Compile .ltl → WebAssembly (.wat / .wasm)")
     wasm_p.add_argument("file")
     wasm_p.add_argument("-o", "--output")
+    wasm_p.add_argument("--wasm", "--bin", dest="emit_wasm", action="store_true",
+                        help="Emit binary .wasm instead of .wat text")
+    wasm_p.add_argument("--shim", nargs="?", const="", default=None,
+                        help="Also write the JavaScript host runtime shim (.js)")
 
     # check
     chk_p = sub.add_parser("check", help="Type-check only")
@@ -373,9 +377,25 @@ def main(argv=None) -> int:
         result = c.compile_file(ns.file, target=Target.WASM)
         if result.ok:
             import pathlib
-            out = ns.output or (pathlib.Path(ns.file).stem + ".wat")
-            pathlib.Path(out).write_text(result.wasm_src, encoding="utf-8")
+            from .codegen.wasm import generate_js_host_shim
+            emit_bin = getattr(ns, "emit_wasm", False) or (
+                ns.output is not None and ns.output.endswith(".wasm")
+            )
+            if emit_bin:
+                out = ns.output or (pathlib.Path(ns.file).stem + ".wasm")
+                pathlib.Path(out).write_bytes(result.wasm_bytes or b"")
+            else:
+                out = ns.output or (pathlib.Path(ns.file).stem + ".wat")
+                pathlib.Path(out).write_text(result.wasm_src, encoding="utf-8")
             print(f"Compiled → {out}")
+
+            shim_opt = getattr(ns, "shim", None)
+            if shim_opt is not None:
+                shim_path = shim_opt or (pathlib.Path(out).stem + ".runtime.js")
+                pathlib.Path(shim_path).write_text(
+                    generate_js_host_shim(), encoding="utf-8"
+                )
+                print(f"Shim → {shim_path}")
         else:
             _print_errors(result)
         return 0 if result.ok else 1
