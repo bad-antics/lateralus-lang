@@ -1,0 +1,253 @@
+// ===================================================================
+// examples/math_tutorial.ltl — stdlib/math.ltl tutorial companion
+// Runnable tour of extended math: constants, clamp/lerp/hypot,
+// floor/ceil/round, gcd/lcm/is_prime/isqrt/fibonacci/factorial/pow,
+// Newton sqrt, trig, ln/log2/log10. Self-contained module inline.
+// ===================================================================
+
+const PI: float  = 3.141592653589793
+const E:  float  = 2.718281828459045
+const TAU: float = 6.283185307179586
+const PHI: float = 1.618033988749895
+const INF: float = 1.7976931348623157e+308
+const SQRT2: float = 1.4142135623730951
+
+// -- Core arithmetic ----------------------------------------------------------
+
+fn abs_val(x: float) -> float {
+    if x < 0.0 { return -x }
+    return x
+}
+
+fn sqrt(x: float) -> float {
+    if x < 0.0 {
+        throw ValueError("sqrt of negative number")
+    }
+    // Newton-Raphson
+    let mut guess = x / 2.0
+    let mut prev  = 0.0
+    while abs_val(guess - prev) > 0.0000001 {
+        prev  = guess
+        guess = (guess + x / guess) / 2.0
+    }
+    return guess
+}
+
+fn pow(base: float, exp: int) -> float {
+    if exp == 0 { return 1.0 }
+    if exp < 0  { return 1.0 / pow(base, -exp) }
+    let mut result = 1.0
+    let mut i = 0
+    while i < exp {
+        result = result * base
+        i += 1
+    }
+    return result
+}
+
+fn floor(x: float) -> int {
+    let n = x as int
+    if x < 0.0 && (x as float) != (n as float) {
+        return n - 1
+    }
+    return n
+}
+
+fn ceil(x: float) -> int {
+    let n = x as int
+    if x > 0.0 && (x as float) != (n as float) {
+        return n + 1
+    }
+    return n
+}
+
+fn round_val(x: float) -> int {
+    return floor(x + 0.5)
+}
+
+fn clamp(x: float, lo: float, hi: float) -> float {
+    if x < lo { return lo }
+    if x > hi { return hi }
+    return x
+}
+
+fn sign(x: float) -> int {
+    if x > 0.0 { return 1 }
+    if x < 0.0 { return -1 }
+    return 0
+}
+
+fn lerp(a: float, b: float, t: float) -> float {
+    return a + (b - a) * t
+}
+
+fn hypot(a: float, b: float) -> float {
+    return sqrt(a * a + b * b)
+}
+
+// -- Number theory ------------------------------------------------------------
+
+fn factorial(n: int) -> int {
+    if n <= 1 { return 1 }
+    return n * factorial(n - 1)
+}
+
+fn gcd(a: int, b: int) -> int {
+    let mut aa = a
+    let mut bb = b
+    while bb != 0 {
+        let t = bb
+        bb = aa % bb
+        aa = t
+    }
+    return aa
+}
+
+fn lcm(a: int, b: int) -> int {
+    return (a * b) / gcd(a, b)
+}
+
+fn is_prime(n: int) -> bool {
+    if n < 2 { return false }
+    if n == 2 { return true }
+    if n % 2 == 0 { return false }
+    let mut i = 3
+    while i * i <= n {
+        if n % i == 0 { return false }
+        i += 2
+    }
+    return true
+}
+
+fn isqrt(n: int) -> int {
+    if n < 0 { throw ValueError("isqrt of negative") }
+    return floor(sqrt(n as float))
+}
+
+// Fibonacci (iterative, fast)
+fn fibonacci(n: int) -> int {
+    if n <= 0 { return 0 }
+    if n == 1 { return 1 }
+    let mut a = 0
+    let mut b = 1
+    let mut i = 2
+    while i <= n {
+        let c = a + b
+        a = b
+        b = c
+        i += 1
+    }
+    return b
+}
+
+// -- Trigonometry (Taylor series) ---------------------------------------------
+
+fn sin(x: float) -> float {
+    let mut r = x
+    while r > PI  { r = r - TAU }
+    while r < -PI { r = r + TAU }
+    let mut term = r
+    let mut result = r
+    let mut i = 1
+    while abs_val(term) > 1e-12 {
+        term = -term * r * r / (((2*i) * (2*i + 1)) as float)
+        result = result + term
+        i += 1
+    }
+    return result
+}
+
+fn cos(x: float) -> float {
+    return sin(PI / 2.0 - x)
+}
+
+fn tan(x: float) -> float {
+    let c = cos(x)
+    if abs_val(c) < 1e-12 { throw ValueError("tan undefined at this value") }
+    return sin(x) / c
+}
+
+fn radians(deg: float) -> float {
+    return deg * PI / 180.0
+}
+
+fn degrees(rad: float) -> float {
+    return rad * 180.0 / PI
+}
+
+// -- Logarithms ---------------------------------------------------------------
+
+fn ln(x: float) -> float {
+    if x <= 0.0 { throw ValueError("ln of non-positive number") }
+    let LN2: float = 0.6931471805599453
+    let mut k = 0
+    let mut m = x
+    while m > 1.5 { m = m / 2.0; k += 1 }
+    while m < 0.5 { m = m * 2.0; k -= 1 }
+    let y = (m - 1.0) / (m + 1.0)
+    let y2 = y * y
+    let mut s = 0.0
+    let mut term = y
+    let mut i = 1
+    while abs_val(term) > 1e-12 {
+        s = s + term / (i as float)
+        term = term * y2
+        i += 2
+    }
+    return 2.0 * s + (k as float) * LN2
+}
+
+fn log2(x: float) -> float {
+    if x <= 0.0 { throw ValueError("log2 of non-positive number") }
+    return ln(x) / ln(2.0)
+}
+
+fn log10(x: float) -> float {
+    if x <= 0.0 { throw ValueError("log10 of non-positive number") }
+    return ln(x) / ln(10.0)
+}
+
+fn main() {
+    print("=== LATERALUS STDLIB MATH TUTORIAL ===")
+
+    // -- Step 1: constants + basic ops -----------------------------------------
+    print("STEP 1 basics:")
+    print("  PI=" + str(PI))
+    print("  abs=" + str(abs_val(-3.5)))
+    print("  clamp=" + str(clamp(15.0, 0.0, 10.0)))
+    print("  lerp=" + str(lerp(0.0, 10.0, 0.25)))
+    print("  hypot=" + str(hypot(3.0, 4.0)))
+    print("  sign=" + str(sign(-2.0)) + "/" + str(sign(0.0)) + "/" + str(sign(7.0)))
+
+    // -- Step 2: integer math -----------------------------------------------------
+    print("STEP 2 int math:")
+    print("  floor=" + str(floor(3.7)) + " ceil=" + str(ceil(3.2)) + " round=" + str(round_val(3.5)))
+    print("  gcd=" + str(gcd(48, 18)))
+    print("  lcm=" + str(lcm(4, 6)))
+    print("  is_prime97=" + str(is_prime(97)) + " is_prime91=" + str(is_prime(91)))
+    print("  isqrt99=" + str(isqrt(99)))
+    print("  fib10=" + str(fibonacci(10)))
+    print("  fact5=" + str(factorial(5)))
+    print("  pow2_10=" + str(pow(2.0, 10)))
+
+    // -- Step 3: sqrt Newton ---------------------------------------------------------
+    print("STEP 3 sqrt:")
+    print("  sqrt2=" + str(sqrt(2.0)))
+    print("  sqrt99=" + str(sqrt(99.0)))
+
+    // -- Step 4: trig + logs -----------------------------------------------------------
+    print("STEP 4 trig/logs:")
+    print("  sin_pi/2=" + str(sin(PI / 2.0)))
+    print("  cos_0=" + str(cos(0.0)))
+    print("  tan_0=" + str(tan(0.0)))
+    print("  rad180=" + str(radians(180.0)))
+    print("  deg_pi=" + str(degrees(PI)))
+    print("  ln_e=" + str(ln(E)))
+    print("  log2_8=" + str(log2(8.0)))
+    print("  log10_1000=" + str(log10(1000.0)))
+
+    print("PINNED_VECTORS: hypot5 floor3 gcd6 fib55 ln_e~1 "
+        + "sin_pi2~1 sqrt99~9.95")
+    print("  OK examples/math_tutorial.ltl")
+    return 0
+}
