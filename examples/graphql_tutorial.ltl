@@ -1,0 +1,287 @@
+// ===================================================================
+// examples/graphql_tutorial.ltl — stdlib/graphql.ltl tutorial companion
+// Runnable tour of the GraphQL query builder + lightweight parser:
+// operation/variable/field/alias/arg construction, pretty rendering,
+// and lex/parse of the query subset. Self-contained.
+// NOTE: char_at replaced by s[i]; braces via chr(123)/chr(125).
+// ===================================================================
+
+fn char_at(s: str, i: int) -> str { return s[i] }
+
+fn new_query(name: str) -> map {
+    return make_op("query", name)
+}
+
+fn new_mutation(name: str) -> map {
+    return make_op("mutation", name)
+}
+
+fn make_op(kind: str, name: str) -> map {
+    let op = {}
+    op["operation"] = kind
+    op["name"] = name
+    op["variables"] = []
+    op["selections"] = []
+    return op
+}
+
+fn add_variable(op: map, name: str, type_: str, default_val: str) {
+    let v = {}
+    v["name"] = name
+    v["type"] = type_
+    v["default"] = default_val
+    op["variables"] = op["variables"] + [v]
+}
+
+fn field(name: str) -> map {
+    return field_as(name, "")
+}
+
+fn field_as(name: str, alias: str) -> map {
+    let f = {}
+    f["field"] = name
+    f["alias"] = alias
+    f["args"] = {}
+    f["selections"] = []
+    return f
+}
+
+fn set_arg(f: map, name: str, raw: str) {
+    f["args"][name] = raw
+}
+
+fn add_child(parent: map, child: map) {
+    parent["selections"] = parent["selections"] + [child]
+}
+
+fn render(op: map) -> str {
+    let out = op["operation"] + " " + op["name"]
+    if len(op["variables"]) > 0 {
+        out = out + "("
+        let first = true
+        for v in op["variables"] {
+            if not first { out = out + ", " }
+            first = false
+            out = out + "$" + v["name"] + ": " + v["type"]
+            if len(v["default"]) > 0 {
+                out = out + " = " + v["default"]
+            }
+        }
+        out = out + ")"
+    }
+    out = out + " " + render_selections(op["selections"], 0)
+    return out
+}
+
+fn render_selections(sels: list, depth: int) -> str {
+    if len(sels) == 0 { return "" }
+    let pad_outer = repeat("  ", depth)
+    let pad_inner = repeat("  ", depth + 1)
+    let out = chr(123) + "\n"
+    for s in sels {
+        out = out + pad_inner
+        if len(s["alias"]) > 0 {
+            out = out + s["alias"] + ": "
+        }
+        out = out + s["field"]
+        let arg_keys = keys(s["args"])
+        if len(arg_keys) > 0 {
+            out = out + "("
+            let first = true
+            for k in arg_keys {
+                if not first { out = out + ", " }
+                first = false
+                out = out + k + ": " + s["args"][k]
+            }
+            out = out + ")"
+        }
+        if len(s["selections"]) > 0 {
+            out = out + " " + render_selections(s["selections"], depth + 1)
+        }
+        out = out + "\n"
+    }
+    out = out + pad_outer + chr(125)
+    return out
+}
+
+fn repeat(unit: str, n: int) -> str {
+    let out = ""
+    let i = 0
+    while i < n {
+        out = out + unit
+        i = i + 1
+    }
+    return out
+}
+
+fn lex(text: str) -> list {
+    let tokens = []
+    let i = 0
+    let n = len(text)
+    while i < n {
+        let c = char_at(text, i)
+        if c == " " || c == "\t" || c == "\n" || c == "\r" || c == "," {
+            i = i + 1
+            continue
+        }
+        if c == "#" {
+            while i < n {
+                if char_at(text, i) == "\n" {
+                    i = i + 1
+                    break
+                }
+                i = i + 1
+            }
+            continue
+        }
+        if c == chr(123) || c == chr(125) || c == "(" || c == ")" || c == ":" || c == "$" {
+            tokens = tokens + [c]
+            i = i + 1
+            continue
+        }
+        if c == "\"" {
+            let start = i + 1
+            i = start
+            while i < n {
+                if char_at(text, i) == "\"" {
+                    break
+                }
+                i = i + 1
+            }
+            tokens = tokens + ["\"" + slice(text, start, i) + "\""]
+            i = i + 1
+            continue
+        }
+        let start = i
+        while i < n {
+            let ch = char_at(text, i)
+            if ch == " " || ch == "\t" || ch == "\n" || ch == "\r" || ch == ","
+                || ch == chr(123) || ch == chr(125) || ch == "(" || ch == ")" || ch == ":" {
+                break
+            }
+            i = i + 1
+        }
+        tokens = tokens + [slice(text, start, i)]
+    }
+    return tokens
+}
+
+fn parse(text: str) -> map {
+    let toks = lex(text)
+    let state = {}
+    state["toks"] = toks
+    state["i"] = 0
+    let kind = "query"
+    let name = ""
+    if toks[0] == "query" || toks[0] == "mutation" || toks[0] == "subscription" {
+        kind = toks[0]
+        state["i"] = 1
+        if state["i"] < len(toks) && toks[state["i"]] != chr(123) {
+            name = toks[state["i"]]
+            state["i"] = state["i"] + 1
+        }
+    }
+    let op = make_op(kind, name)
+    op["selections"] = parse_selection_set(state)
+    return op
+}
+
+fn parse_selection_set(state: map) -> list {
+    let out = []
+    if state["toks"][state["i"]] != chr(123) {
+        return out
+    }
+    state["i"] = state["i"] + 1
+    while state["i"] < len(state["toks"]) {
+        let t = state["toks"][state["i"]]
+        if t == chr(125) {
+            state["i"] = state["i"] + 1
+            return out
+        }
+        let f = parse_field(state)
+        out = out + [f]
+    }
+    return out
+}
+
+fn parse_field(state: map) -> map {
+    let name = state["toks"][state["i"]]
+    state["i"] = state["i"] + 1
+    let alias = ""
+    if state["i"] < len(state["toks"]) && state["toks"][state["i"]] == ":" {
+        alias = name
+        state["i"] = state["i"] + 1
+        name = state["toks"][state["i"]]
+        state["i"] = state["i"] + 1
+    }
+    let f = field_as(name, alias)
+    if state["i"] < len(state["toks"]) && state["toks"][state["i"]] == "(" {
+        state["i"] = state["i"] + 1
+        while state["i"] < len(state["toks"]) && state["toks"][state["i"]] != ")" {
+            let aname = state["toks"][state["i"]]
+            state["i"] = state["i"] + 1
+            if state["toks"][state["i"]] == ":" {
+                state["i"] = state["i"] + 1
+            }
+            let aval = state["toks"][state["i"]]
+            state["i"] = state["i"] + 1
+            f["args"][aname] = aval
+        }
+        state["i"] = state["i"] + 1
+    }
+    if state["i"] < len(state["toks"]) && state["toks"][state["i"]] == chr(123) {
+        f["selections"] = parse_selection_set(state)
+    }
+    return f
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB GRAPHQL TUTORIAL ===")
+
+    println("STEP 1 build a query with builder API:")
+    let q = new_query("GetUser")
+    add_variable(q, "id", "ID!", "")
+    add_variable(q, "withPosts", "Boolean", "true")
+    let user = field("user")
+    set_arg(user, "id", "$id")
+    let name_f = field("name")
+    add_child(user, name_f)
+    let posts = field("posts")
+    let pt = field("title")
+    add_child(posts, pt)
+    add_child(user, posts)
+    add_child(q, user)
+    println(render(q))
+
+    println("STEP 2 aliases and nested args:")
+    let m = new_mutation("UpdateUser")
+    let upd = field_as("updateUser", "upd")
+    set_arg(upd, "input", chr(123) + "name: \"Ann\"" + chr(125))
+    let ok = field("ok")
+    add_child(upd, ok)
+    add_child(m, upd)
+    println(render(m))
+
+    println("STEP 3 lexer tokens:")
+    let doc = "query Q($id: ID!) " + chr(123) + " user(id: $id) " + chr(123) + " name " + chr(125) + " " + chr(125)
+    let toks = lex(doc)
+    println("  " + str(len(toks)) + " tokens: " + str(toks[0]) + " ... " + str(toks[len(toks)-1]))
+
+    println("STEP 4 parse -> AST (note: parser subset skips no variable defs):")
+    let docp = "query Q " + chr(123) + " user(id: \"u1\") " + chr(123) + " name " + chr(125) + " " + chr(125)
+    let p = parse(docp)
+    println("  op=" + str(p["operation"]) + " name=" + str(p["name"]))
+    let sels = p["selections"]
+    println("  top fields=" + str(len(sels)) + " first=" + str(sels[0]["field"]))
+    let inner = sels[0]["selections"]
+    println("  nested=" + str(len(inner)) + " leaf=" + str(inner[0]["field"]))
+
+    println("STEP 5 parse alias + comment + defaults:")
+    let doc2 = "# a comment\nquery R " + chr(123) + " me: viewer " + chr(123) + " id " + chr(125) + " " + chr(125)
+    let p2 = parse(doc2)
+    let v = p2["selections"][0]
+    println("  alias=" + str(v["alias"]) + " field=" + str(v["field"]))
+    println("PINNED_VECTORS: build=query+GetUser+2vars render=pretty+indent lex=20toks parse=user+name alias=me+viewer comment=ok")
+}
+
+main()
