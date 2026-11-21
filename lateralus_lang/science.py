@@ -368,10 +368,14 @@ def binomial_pmf(k: int, n: int, p: float) -> float:
 
 def chi_squared_pdf(x: float, k: int) -> float:
     """Chi-squared probability density function."""
-    if x <= 0:
+    if x <= 0 or k <= 0:
         return 0.0
     half_k = k / 2
-    return (x ** (half_k - 1) * math.exp(-x / 2)) / (2 ** half_k * math.gamma(half_k))
+    log_pdf = (half_k - 1) * math.log(x) - (x / 2) - half_k * math.log(2) - math.lgamma(half_k)
+    try:
+        return math.exp(log_pdf)
+    except OverflowError:
+        return 0.0
 
 
 # --- Interpolation ----------------------------------------------------
