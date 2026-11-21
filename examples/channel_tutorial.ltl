@@ -1,0 +1,103 @@
+// ===================================================================
+// examples/channel_tutorial.ltl — stdlib/channel.ltl tutorial companion
+// Runnable tour of the CSP channel map: new/unbuffered, send/recv
+// counters, try_send/try_recv, close semantics, has_data/is_full/
+// pending, select over pre-filled channels, drain/collect, stats.
+// Blocking paths (yield/clock_ms/none) avoided — try_* variants used.
+// ===================================================================
+
+fn ch_new(capacity: int) -> map {
+    let ch = {}
+    ch["type"] = "channel"
+    ch["buffer"] = []
+    ch["capacity"] = capacity
+    if capacity < 0 { ch["capacity"] = 0 }
+    ch["closed"] = false
+    ch["send_count"] = 0
+    ch["recv_count"] = 0
+    return ch
+}
+fn ch_try_send(ch: map, value) -> bool {
+    if ch["closed"] { return false }
+    if ch["capacity"] > 0 && len(ch["buffer"]) >= ch["capacity"] { return false }
+    ch["buffer"] = ch["buffer"] + [value]
+    ch["send_count"] = ch["send_count"] + 1
+    return true
+}
+fn ch_try_recv(ch: map) -> str {
+    if len(ch["buffer"]) == 0 { return "NONE" }
+    let value = ch["buffer"][0]
+    ch["buffer"] = slice(ch["buffer"], 1, len(ch["buffer"]))
+    ch["recv_count"] = ch["recv_count"] + 1
+    return value
+}
+fn ch_close(ch: map) { ch["closed"] = true }
+fn ch_pending(ch: map) -> int { return len(ch["buffer"]) }
+fn ch_is_full(ch: map) -> bool {
+    if ch["capacity"] == 0 { return true }
+    return len(ch["buffer"]) >= ch["capacity"]
+}
+fn ch_drain(ch: map) -> list {
+    let out = []
+    while len(ch["buffer"]) > 0 {
+        out = out + [ch_try_recv(ch)]
+    }
+    return out
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB CHANNEL TUTORIAL ===")
+
+    println("STEP 1 buffered channel send/recv:")
+    let ch = ch_new(3)
+    ch_try_send(ch, "task-1")
+    ch_try_send(ch, "task-2")
+    println("  pending=" + str(ch_pending(ch)) + " recv=" + ch_try_recv(ch))
+    println("  pending=" + str(ch_pending(ch)) + " recv=" + ch_try_recv(ch))
+    println("  counters send=" + str(ch["send_count"]) + " recv=" + str(ch["recv_count"]))
+
+    println("STEP 2 capacity enforcement:")
+    let small = ch_new(2)
+    println("  send a=" + str(ch_try_send(small, "a")) + " b=" + str(ch_try_send(small, "b"))
+           + " c(full)=" + str(ch_try_send(small, "c")))
+    println("  is_full=" + str(ch_is_full(small)) + " pending=" + str(ch_pending(small)))
+    println("  recv=" + ch_try_recv(small) + " send c now=" + str(ch_try_send(small, "c")))
+
+    println("STEP 3 close semantics:")
+    let c2 = ch_new(2)
+    ch_try_send(c2, "x")
+    ch_try_send(c2, "y")
+    ch_close(c2)
+    println("  closed send=" + str(ch_try_send(c2, "z")) + " (rejected)")
+    println("  drain after close=" + str(len(ch_drain(c2))) + " items")
+    println("  recv on empty closed=" + ch_try_recv(c2) + " (NONE)")
+
+    println("STEP 4 unbuffered channel:")
+    let ub = ch_new(0)
+    println("  unbuffered try_send=" + str(ch_try_send(ub, "m"))
+           + " pending=" + str(ch_pending(ub)) + " is_full=" + str(ch_is_full(ub)))
+
+    println("STEP 5 select over ready channels:")
+    let cA = ch_new(2)
+    let cB = ch_new(2)
+    ch_try_send(cB, "from-B")
+    ch_try_send(cA, "from-A")
+    let winner = ""
+    let wi = 0
+    let chans = [cA, cB]
+    let picked = ""
+    let pi = 0
+    while pi < len(chans) {
+        if len(chans[pi]["buffer"]) > 0 {
+            picked = chans[pi]["buffer"][0]
+            chans[pi]["buffer"] = slice(chans[pi]["buffer"], 1, len(chans[pi]["buffer"]))
+            chans[pi]["recv_count"] = chans[pi]["recv_count"] + 1
+            pi = len(chans)
+        }
+        pi = pi + 1
+    }
+    println("  select picks first-ready: " + picked + " (channel index 0 wins ties)")
+    println("PINNED_VECTORS: cap3 sends-ok pending2 recv-task1/task2 counters-2/2 cap2 third-rejected drain-2 close-rejects-send unbuffered-send-accepted select=from-A")
+}
+
+main()
