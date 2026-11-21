@@ -1,0 +1,209 @@
+// ===================================================================
+// examples/stomp_tutorial.ltl — stdlib/stomp.ltl tutorial companion
+// Runnable tour of the STOMP 1.2 text frame codec: header escaping,
+// frame encode/parse, heartbeat skipping, and the common frame
+// builders (CONNECT/SEND/SUBSCRIBE/ACK/BEGIN...). Self-contained.
+// NOTE: char_at/index_of replaced by s[i] and a local index_of.
+// ===================================================================
+
+fn index_of(s: str, needle: str) -> int {
+    let n = len(needle)
+    let i = 0
+    while i + n <= len(s) {
+        if slice(s, i, i + n) == needle {
+            return i
+        }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+fn escape_header(s: str) -> str {
+    let out = ""
+    let i = 0
+    while i < len(s) {
+        let c = s[i]
+        if c == "\\"      { out = out + "\\\\" }
+        else if c == ":"  { out = out + "\\c" }
+        else if c == "\n" { out = out + "\\n" }
+        else if c == "\r" { out = out + "\\r" }
+        else              { out = out + c }
+        i = i + 1
+    }
+    return out
+}
+
+fn unescape_header(s: str) -> str {
+    let out = ""
+    let i = 0
+    let n = len(s)
+    while i < n {
+        let c = s[i]
+        if c == "\\" and i + 1 < n {
+            let nx = s[i + 1]
+            if nx == "\\"     { out = out + "\\" }
+            else if nx == "c" { out = out + ":" }
+            else if nx == "n" { out = out + "\n" }
+            else if nx == "r" { out = out + "\r" }
+            else              { out = out + c + nx }
+            i = i + 2
+        } else {
+            out = out + c
+            i = i + 1
+        }
+    }
+    return out
+}
+
+fn encode_frame(command: str, headers: list, body: str) -> str {
+    let out = command + "\n"
+    let i = 0
+    while i < len(headers) {
+        let h = headers[i]
+        out = out + escape_header(h[0]) + ":" + escape_header(h[1]) + "\n"
+        i = i + 1
+    }
+    out = out + "\n" + body + chr(0)
+    return out
+}
+
+fn parse_frame(buf: str) -> map {
+    let i = 0
+    let n = len(buf)
+    while i < n and (buf[i] == "\n" or buf[i] == "\r") {
+        i = i + 1
+    }
+    if i >= n { return nil }
+    let start = i
+    let cmd_end = index_of(slice(buf, i, n), "\n")
+    if cmd_end < 0 { return nil }
+    let command = slice(buf, i, i + cmd_end)
+    i = i + cmd_end + 1
+    let headers = []
+    let parsing = true
+    while parsing {
+        if i >= n { return nil }
+        let line_end = index_of(slice(buf, i, n), "\n")
+        if line_end < 0 { return nil }
+        if line_end == 0 {
+            i = i + 1
+            parsing = false
+        } else {
+            let line = slice(buf, i, i + line_end)
+            let colon = index_of(line, ":")
+            if colon >= 0 {
+                let k = unescape_header(slice(line, 0, colon))
+                let v = unescape_header(slice(line, colon + 1, len(line)))
+                headers = headers + [[k, v]]
+            }
+            i = i + line_end + 1
+        }
+    }
+    let body_start = i
+    let nul_rel = index_of(slice(buf, i, n), chr(0))
+    if nul_rel < 0 { return nil }
+    let body = slice(buf, body_start, body_start + nul_rel)
+    i = body_start + nul_rel + 1
+    let m = {}
+    m["command"] = command
+    m["headers"] = headers
+    m["body"] = body
+    m["consumed"] = i - start
+    return m
+}
+
+fn connect(host: str, login: str, passcode: str, heartbeat: str) -> str {
+    let hs = []
+    hs = hs + [["accept-version", "1.2"]]
+    hs = hs + [["host", host]]
+    if login != ""     { hs = hs + [["login", login]] }
+    if passcode != ""  { hs = hs + [["passcode", passcode]] }
+    if heartbeat != "" { hs = hs + [["heart-beat", heartbeat]] }
+    return encode_frame("CONNECT", hs, "")
+}
+
+fn send_frame(destination: str, content_type: str, body: str) -> str {
+    let hs = []
+    hs = hs + [["destination", destination]]
+    if content_type != "" {
+        hs = hs + [["content-type", content_type]]
+    }
+    hs = hs + [["content-length", str(len(body))]]
+    return encode_frame("SEND", hs, body)
+}
+
+fn subscribe(id: str, destination: str, ack_mode: str) -> str {
+    let hs = []
+    hs = hs + [["id", id]]
+    hs = hs + [["destination", destination]]
+    if ack_mode != "" { hs = hs + [["ack", ack_mode]] }
+    return encode_frame("SUBSCRIBE", hs, "")
+}
+
+fn ack_frame(message_id: str, transaction: str) -> str {
+    let hs = [["id", message_id]]
+    if transaction != "" { hs = hs + [["transaction", transaction]] }
+    return encode_frame("ACK", hs, "")
+}
+
+fn begin(tx: str)  -> str { return encode_frame("BEGIN",  [["transaction", tx]], "") }
+fn commit(tx: str) -> str { return encode_frame("COMMIT", [["transaction", tx]], "") }
+fn abort(tx: str)  -> str { return encode_frame("ABORT",  [["transaction", tx]], "") }
+
+fn disconnect_frame(receipt: str) -> str {
+    if receipt != "" {
+        return encode_frame("DISCONNECT", [["receipt", receipt]], "")
+    }
+    return encode_frame("DISCONNECT", [], "")
+}
+
+fn vis(s: str) -> str {
+    let out = ""
+    let i = 0
+    while i < len(s) {
+        let c = s[i]
+        if c == chr(0) { out = out + "<NUL>" }
+        else if c == "\n" { out = out + "\\n" }
+        else { out = out + c }
+        i = i + 1
+    }
+    return out
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB STOMP TUTORIAL ===")
+
+    println("STEP 1 header escaping:")
+    let tricky = "a:b\\c\nd\re"
+    let esc = escape_header(tricky)
+    println("  raw: " + tricky)
+    println("  esc: " + esc)
+    println("  round-trip equal: " + str(unescape_header(esc) == tricky))
+
+    println("STEP 2 encode SEND frame:")
+    println(vis(send_frame("/queue/orders", "text/plain", "order-42")))
+
+    println("STEP 3 encode CONNECT:")
+    println(vis(connect("broker.example.com", "alice", "s3cret", "0,0")))
+
+    println("STEP 4 parse a MESSAGE frame:")
+    let wire = "MESSAGE\ndestination:/queue/orders\nmessage-id:007\nsubscription:sub-1\ncontent-length:11\n\nhello world<NUL>"
+    let wire2 = "MESSAGE\ndestination:/queue/orders\nmessage-id:007\nsubscription:sub-1\ncontent-length:11\n\nhello world" + chr(0)
+    let f = parse_frame(wire2)
+    println("  command=" + str(f["command"]) + " body=" + str(f["body"]) + " consumed=" + str(f["consumed"]))
+    let hs = f["headers"]
+    println("  headers=" + str(len(hs)) + " first=" + str(hs[0][0]) + "=" + str(hs[0][1]))
+
+    println("STEP 5 heartbeat + incomplete:")
+    let hb = parse_frame("\n\n\nMESSAGE\nid:x\n\nbody" + chr(0))
+    println("  after 3 newlines: command=" + str(hb["command"]))
+    let inc = parse_frame("MESSAGE\nid:x\n\nno nul yet")
+    println("  missing NUL -> " + str(inc == nil))
+
+    println("STEP 6 transaction frames:")
+    println(vis(begin("tx-1")))
+    println(vis(commit("tx-1")))
+    println("PINNED_VECTORS: esc=a\\c\\\\n\\rd roundtrip=true send=SEND+dest+len+NUL conn=CONNECT+accept-version parse=MESSAGE+007+11+consumed hb_skip=3 inc=nil")
+}
+
+main()
