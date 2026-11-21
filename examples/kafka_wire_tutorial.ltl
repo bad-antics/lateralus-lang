@@ -1,0 +1,52 @@
+// examples/kafka_wire_tutorial.ltl - Practical Kafka Binary Protocol Serialization
+// Demonstrates encoding requests, framing, varints, and parsing responses.
+
+import kafka_wire
+
+fn build_api_versions_request(correlation_id: int, client_id: str) -> list {
+    // API_VERSIONS key = 18, api_version = 3 (flexible header v2)
+    let header = kafka_wire.request_header_v2(
+        kafka_wire.api_api_versions(),
+        3,
+        correlation_id,
+        client_id
+    )
+    
+    // Client software name & version (KIP-511 compact strings)
+    let body = kafka_wire.enc_compact_string("lateralus-client")
+             + kafka_wire.enc_compact_string("1.0.0")
+             + kafka_wire.enc_uvarint(0) // empty tagged fields
+             
+    return kafka_wire.frame_request(header + body)
+}
+
+fn simulate_broker_response(correlation_id: int) -> list {
+    // Kafka response: 4-byte length, 4-byte correlation_id, error_code (int16), api_keys array
+    let error_code = kafka_wire.enc_i16(0) // NO_ERROR
+    let body = error_code + [0, 0] // dummy payload
+    let full_response = kafka_wire.enc_i32(correlation_id) + body
+    return kafka_wire.frame_request(full_response)
+}
+
+fn main() {
+    println("=== Kafka Binary Protocol Serialization ===")
+    
+    // 1. Construct framed request
+    let correlation_id = 1042
+    let request_bytes = build_api_versions_request(correlation_id, "metrics-agent")
+    println("Framed request length (bytes): " + to_str(len(request_bytes)))
+    
+    // 2. Simulate broker round-trip response
+    let response_bytes = simulate_broker_response(correlation_id)
+    println("Broker response length (bytes): " + to_str(len(response_bytes)))
+    
+    // 3. Parse response frame
+    let parsed = kafka_wire.parse_response_frame(response_bytes, 0)
+    let matched_id = parsed[0]
+    let payload = parsed[1]
+    
+    println("Parsed correlation ID: " + to_str(matched_id))
+    if matched_id == correlation_id {
+        println("Correlation ID matched successfully!")
+    }
+}
