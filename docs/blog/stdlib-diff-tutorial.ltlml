@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>stdlib.diff tutorial</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "Two buffers, one shortest path"
+author: bounty-hunter
+date: 2026-11-22
+abstract: A worked tour of stdlib/diff.ltl and Eugene Myers' 1986 O(ND) algorithm. Walk the edit graph on its diagonals, take greedy snakes, and see why the shortest edit script and the longest common subsequence are the same problem viewed from opposite ends.
+---
+
+# Two buffers, one shortest path
+
+Open any code review and the central question is the same: **what changed between these two files?** Git answers it with a diff, and almost every diff engine in use today descends from a 1986 paper by Eugene Myers — *An O(ND) Difference Algorithm and Its Variations*. `stdlib/diff.ltl` packages that idea for LATERALUS.
+
+Take two small buffers:
+
+```
+old:  kitten
+new:  sitting
+```
+
+A **diff** is a script that turns `old` into `new` using three operations: keep a character, delete one, or insert one. We want the *shortest* such script — the **Shortest Edit Script (SES)**. Its length is the **edit distance** under insert/delete only.
+
+## The edit graph and its diagonals
+
+Lay the two strings out on a grid. The x-axis advances through `old` (length N), the y-axis through `new` (length M). A point `(x, y)` means "we have consumed `old[:x]` and `new[:y]`". A rightward step deletes `old[x]`; a downward step inserts `new[y]`; a diagonal step `(x,y) → (x+1,y+1)` is free when the two characters match. Myer's key observation is that a cheapest path hugs a set of **diagonals** `k = x - y`. Each `k` is one diagonal line across the grid, indexed by how far ahead x is of y.
+
+```
+k = x - y          k = -1    k = 0    k = +1
+                     \        |        /
+   edit graph         \       |       /
+   (N x M)             \      |      /
+                        •----•----•
+```
+
+## Greedy snakes
+
+A **snake** is a run of diagonal steps — a stretch where both buffers agree. The algorithm proceeds by *D*, the number of non-diagonal edits. For each D it extends the furthest-reaching path on every diagonal k, taking the longest snake it can, then decides whether to step right (a deletion) or down (an insertion) to reach the next diagonal. When the path first touches `(N, M)`, D is the edit distance and the path itself is the SES. This is why the cost is `O(ND)` — proportional to the answer, which is tiny for nearly-identical files, rather than always `O(N·M)`.
+
+In `stdlib/diff.ltl`, `edit_distance(a, b)` returns an `EditDistance { distance: int }`. Our runnable companion inlines the same recurrence as a dynamic-programming table:
+
+```
+edit_distance("kitten", "sitting") = 3
+```
+
+Three edits: `k → s`, `e → i`, and an inserted `g` at the end.
+
+## SES and LCS: the same problem from opposite ends
+
+The **Longest Common Subsequence** is the characters the two buffers share in order — here `iten`, length 4. Delete everything else from `old`, insert everything else from `new`, and you have the SES. The relation is exact:
+
+```
+D = N + M - 2·L
+```
+
+where D is the delete/insert edit distance, N and M the buffer lengths, and L the LCS length. For `kitten`/`sitting`: `6 + 7 - 2·4 = 5` if only insert/delete are counted — which is precisely `deletions (2) + additions (3)`. The common `lcs_len` helper in the example returns 4, and `deletions` / `additions` fall straight out of it.
+
+> A note on the third operation. If substitutions are allowed at unit cost (Levenshtein distance), `kitten → sitting` collapses to 3 because two of those five edits pair up into replacements. `stdlib.diff`'s `edit_distance` follows Myers' insert/delete model; know which metric your diff tool reports before comparing numbers.
+
+## Line-by-line unified diff
+
+Real diffs work on lines, not characters. Group the SES operations into hunks and prefix each line with a marker — a space for context, `-` for a deletion, `+` for an insertion:
+
+```
+ context line
+-deleted from old
++added in new
+```
+
+The companion's `line_op` classifies a pair of lines into exactly these markers, using a sentinel for a missing side. A character-level `edit_distance` plus line markers is the whole machinery behind a `patch` file.
+
+## Runnable example and pinned vectors
+
+`examples/tutorials/diff_tutorial.ltl` runs the worked example end to end:
+
+```
+$ ltlc run examples/tutorials/diff_tutorial.ltl
+old            : kitten
+new            : sitting
+edit distance  : 3
+LCS length     : 4
+deletions      : 2
+additions      : 3
+patch (unified)
+    kitten  ->  sitting
+  + sitting
+```
+
+It ends with seven pinned `@test` vectors, so the behaviour this tutorial describes self-verifies: the classic SES, the LCS duality identity, substitution-vs-insert/delete, pure insertion, pure deletion, identical buffers, and the empty-boundary cases. Run them with the LATERALUS `@test` runner after transpiling the file to Python.
+
+## Where to go next
+
+`stdlib.diff` is one module in a family of sequence tools. Pair it with `stdlib.diff`'s sibling edit-graph routines and the `lcs_len` pattern here whenever you need change tracking, plagiarism similarity scores, or the diff backing your own version-control experiment.
+
+  </script>
+</body>
+</html>
