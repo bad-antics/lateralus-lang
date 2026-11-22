@@ -103,6 +103,11 @@ class TestPythonTranspiler:
         assert r.ok
         assert "None" in r.python_src
 
+    def test_unary_op_parentheses_precedence(self):
+        r = check("let val = (-2) ** 2")
+        assert r.ok
+        assert "((-2) ** 2)" in r.python_src
+
 
 # --- Error reporting ----------------------------------------------------------
 

@@ -152,6 +152,10 @@ class TestExpressionTranslation:
         out = self._eval("let r = 2 ** 10")
         assert "**" in out
 
+    def test_unary_op_parentheses_exponentiation(self):
+        out = self._eval("let r = (-2) ** 2")
+        assert "((-2) ** 2)" in out
+
     def test_equality_operator(self):
         out = self._eval("let r = 1 == 2")
         assert "===" in out or "==" in out
