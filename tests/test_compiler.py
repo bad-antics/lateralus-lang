@@ -103,6 +103,12 @@ class TestPythonTranspiler:
         assert r.ok
         assert "None" in r.python_src
 
+    def test_python_keyword_identifier_escaping(self):
+        r = check("let lambda = 42; let with = lambda;")
+        assert r.ok
+        assert "lambda_ = 42" in r.python_src
+        assert "with_ = lambda_" in r.python_src
+
 
 # --- Error reporting ----------------------------------------------------------
 

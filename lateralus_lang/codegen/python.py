@@ -23,6 +23,7 @@ standalone (add __main__ guard and import shims for the ltl stdlib).
 """
 from __future__ import annotations
 
+import keyword
 from typing import List, Optional
 
 from ..ast_nodes import (
@@ -161,6 +162,12 @@ class PythonTranspiler(ASTVisitor):
         self._use_match = use_match_stmt
         self._lambda_counter = 0
         self._hoisted_lambdas: list[str] = []
+
+    @staticmethod
+    def _py_ident(name: str) -> str:
+        if keyword.iskeyword(name):
+            return f"{name}_"
+        return name
 
     def transpile(self, program: Program) -> str:
         # Pre-scan: collect impl blocks keyed by type name so they can be
@@ -924,7 +931,8 @@ class PythonTranspiler(ASTVisitor):
 
         params = self._render_params(node.params)
         kw = "async def" if node.is_async else "def"
-        self._w += f"{kw} {node.name}({params}):"
+        fn_name = self._py_ident(node.name)
+        self._w += f"{kw} {fn_name}({params}):"
         if node.body and node.body.stmts:
             with self._w.indent():
                 self._emit_fn_body(node.body)
@@ -1037,7 +1045,8 @@ class PythonTranspiler(ASTVisitor):
     def _render_params(self, params) -> str:
         parts = []
         for p in params:
-            s = ("*" if p.vararg else "") + p.name
+            pname = self._py_ident(p.name)
+            s = ("*" if p.vararg else "") + pname
             if p.type_:
                 s += f": {self._py_type(p.type_.name)}"
             if p.default:
@@ -1049,7 +1058,8 @@ class PythonTranspiler(ASTVisitor):
         """Render params for lambda expressions — no type annotations allowed in Python."""
         parts = []
         for p in params:
-            s = ("*" if p.vararg else "") + p.name
+            pname = self._py_ident(p.name)
+            s = ("*" if p.vararg else "") + pname
             if p.default:
                 s += f" = {self._expr(p.default)}"
             parts.append(s)
@@ -1059,10 +1069,11 @@ class PythonTranspiler(ASTVisitor):
         val = self._expr(node.value) if node.value else "None"
         # Flush hoisted block-lambdas before the variable that uses them
         self._flush_hoisted_lambdas()
+        name = self._py_ident(node.name)
         if node.type_:
-            self._w += f"{node.name}: {self._py_type(node.type_.name)} = {val}"
+            self._w += f"{name}: {self._py_type(node.type_.name)} = {val}"
         else:
-            self._w += f"{node.name} = {val}"
+            self._w += f"{name} = {val}"
 
     # ── statements ────────────────────────────────────────────────────────────
 
@@ -1147,7 +1158,8 @@ class PythonTranspiler(ASTVisitor):
             node.body.accept(self)
 
     def visit_ForStmt(self, node: ForStmt):
-        self._w += f"for {node.var} in {self._expr(node.iter)}:"
+        var_name = self._py_ident(node.var)
+        self._w += f"for {var_name} in {self._expr(node.iter)}:"
         with self._w.indent():
             node.body.accept(self)
 
@@ -1466,7 +1478,7 @@ class PythonTranspiler(ASTVisitor):
             if node.kind == "str":    return repr(node.value)
             return repr(node.value)
         if isinstance(node, Ident):
-            return node.name
+            return self._py_ident(node.name)
         if isinstance(node, BinOp):
             if node.op == "|>":
                 left = self._expr(node.left)
