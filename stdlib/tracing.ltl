@@ -28,13 +28,13 @@ pub fn never_sample(ctx: map)  -> bool { return false }
 pub fn start(tracer: map, name: str, parent: map, kind: str, attrs: map) -> map {
     let ctx = {}
     if parent == nil {
-        ctx["trace_id"] = hex_encode(crypto_rand_bytes(16))
+        ctx["trace_id"] = hex_encode(random_bytes(16))
         ctx["parent"] = ""
     } else {
         ctx["trace_id"] = parent["trace_id"]
         ctx["parent"] = parent["span_id"]
     }
-    ctx["span_id"] = hex_encode(crypto_rand_bytes(8))
+    ctx["span_id"] = hex_encode(random_bytes(8))
     if parent == nil {
         let sampler = tracer["sampler"]
         ctx["sampled"] = sampler(ctx)
@@ -50,7 +50,7 @@ pub fn start(tracer: map, name: str, parent: map, kind: str, attrs: map) -> map 
     span["ctx"] = ctx
     span["name"] = name
     span["kind"] = kind
-    span["start_ns"] = time_wall_ns()
+    span["start_ns"] = _time.time_ns()
     span["end_ns"] = 0
     span["attributes"] = attrs
     span["events"] = []
@@ -66,20 +66,20 @@ pub fn set_attr(span: map, k: str, v) {
 
 pub fn add_event(span: map, event_name: str, attrs: map) {
     let ev = {}
-    ev["t"] = time_wall_ns()
+    ev["t"] = _time.time_ns()
     ev["name"] = event_name
     ev["attrs"] = attrs
     span["events"] = span["events"] + [ev]
 }
 
 pub fn end_ok(span: map) {
-    span["end_ns"] = time_wall_ns()
+    span["end_ns"] = _time.time_ns()
     span["status"] = "ok"
     emit_span(span)
 }
 
 pub fn end_error(span: map, msg: str) {
-    span["end_ns"] = time_wall_ns()
+    span["end_ns"] = _time.time_ns()
     span["status"] = "error"
     span["status_msg"] = msg
     emit_span(span)
@@ -101,7 +101,7 @@ pub fn emit_span(span: map) {
 
 /// Parse `00-{trace-id}-{span-id}-{flags}` into a span context, or nil.
 pub fn parse_traceparent(h: str) -> map {
-    let p = split(h, "-")
+    let p = str_split(h, "-")
     if len(p) != 4 {
         return nil
     }

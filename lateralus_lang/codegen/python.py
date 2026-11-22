@@ -708,6 +708,7 @@ class PythonTranspiler(ASTVisitor):
         self._w += "def constant_time_compare(a, b): return _hmac.compare_digest(a, b)"
         self._w += "def hex_encode(data): return data.hex() if isinstance(data, bytes) else data.encode().hex()"
         self._w += "def hex_decode(s): return bytes.fromhex(s)"
+        self._w += "def parse_int_base(s, base): return int(str(s), int(base))"
         self._w += "try:"
         self._w += "    from cryptography.fernet import Fernet as _Fernet"
         self._w += "    def fernet_keygen(): return _Fernet.generate_key().decode()"
