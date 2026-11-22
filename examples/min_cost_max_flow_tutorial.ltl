@@ -1,0 +1,179 @@
+// ===================================================================
+// examples/min_cost_max_flow_tutorial.ltl
+// -------------------------------------------------------------------
+// Demonstration of Min-Cost Max-Flow in Lateralus.
+// Optimizes cloud datacenter multi-region bandwidth egress expenses.
+// ===================================================================
+
+pub fn mcmf_create(n: int) -> dict {
+    let mut net = {}
+    net["n"] = n
+
+    let mut head = []
+    let mut i = 0
+    while i <= n {
+        head.push([])
+        i = i + 1
+    }
+
+    net["head"] = head
+    net["edge_to"] = []
+    net["edge_cap"] = []
+    net["edge_cost"] = []
+    return net
+}
+
+pub fn mcmf_add_edge(net: dict, u: int, v: int, cap: int, cost: int) {
+    let mut head = net["head"]
+    let mut edge_to = net["edge_to"]
+    let mut edge_cap = net["edge_cap"]
+    let mut edge_cost = net["edge_cost"]
+
+    let forward_id = edge_to.len()
+    let reverse_id = forward_id + 1
+
+    edge_to.push(v)
+    edge_cap.push(cap)
+    edge_cost.push(cost)
+
+    let mut u_edges = head[u]
+    u_edges.push(forward_id)
+    head[u] = u_edges
+
+    edge_to.push(u)
+    edge_cap.push(0)
+    edge_cost.push(0 - cost)
+
+    let mut v_edges = head[v]
+    v_edges.push(reverse_id)
+    head[v] = v_edges
+}
+
+pub fn mcmf_solve(net: dict, s: int, t: int) -> dict {
+    let n = net["n"]
+    let head = net["head"]
+    let edge_to = net["edge_to"]
+    let mut edge_cap = net["edge_cap"]
+    let edge_cost = net["edge_cost"]
+
+    let inf_cost = 1000000000
+    let mut total_flow = 0
+    let mut total_cost = 0
+
+    let mut has_path = true
+    while has_path {
+        let mut dist = []
+        let mut parent_edge = []
+        let mut in_queue = []
+
+        let mut i = 0
+        while i <= n {
+            dist.push(inf_cost)
+            parent_edge.push(-1)
+            in_queue.push(false)
+            i = i + 1
+        }
+
+        dist[s] = 0
+        let mut queue = [s]
+        in_queue[s] = true
+        let mut q_head = 0
+
+        while q_head < queue.len() {
+            let u = queue[q_head]
+            q_head = q_head + 1
+            in_queue[u] = false
+
+            let u_edges = head[u]
+            let n_edges = u_edges.len()
+            let mut j = 0
+            while j < n_edges {
+                let e = u_edges[j]
+                let v = edge_to[e]
+                let cap = edge_cap[e]
+                let c = edge_cost[e]
+
+                if cap > 0 and dist[u] + c < dist[v] {
+                    dist[v] = dist[u] + c
+                    parent_edge[v] = e
+                    if not in_queue[v] {
+                        queue.push(v)
+                        in_queue[v] = true
+                    }
+                }
+                j = j + 1
+            }
+        }
+
+        if dist[t] >= inf_cost {
+            has_path = false
+        } else {
+            let mut bottleneck = 1000000000
+            let mut curr = t
+            while curr != s {
+                let e = parent_edge[curr]
+                let cap = edge_cap[e]
+                if cap < bottleneck {
+                    bottleneck = cap
+                }
+                if e % 2 == 0 {
+                    curr = edge_to[e + 1]
+                } else {
+                    curr = edge_to[e - 1]
+                }
+            }
+
+            curr = t
+            while curr != s {
+                let e = parent_edge[curr]
+                let next_node = 0
+                if e % 2 == 0 {
+                    next_node = edge_to[e + 1]
+                    edge_cap[e] = edge_cap[e] - bottleneck
+                    edge_cap[e + 1] = edge_cap[e + 1] + bottleneck
+                } else {
+                    next_node = edge_to[e - 1]
+                    edge_cap[e] = edge_cap[e] - bottleneck
+                    edge_cap[e - 1] = edge_cap[e - 1] + bottleneck
+                }
+                curr = next_node
+            }
+
+            total_flow = total_flow + bottleneck
+            total_cost = total_cost + bottleneck * dist[t]
+        }
+    }
+
+    let mut res = {}
+    res["flow"] = total_flow
+    res["cost"] = total_cost
+    return res
+}
+
+fn main() {
+    print("=== Multi-Region Egress Bandwidth Cost Optimizer ===")
+    // Datacenter Source: 1, Central Data Lake: 5
+    // Regional Gateway A: 2, Regional Gateway B: 3, Transit Peering: 4
+    let net = mcmf_create(5)
+
+    // Egress connections from primary compute cluster (node 1)
+    mcmf_add_edge(net, 1, 2, 40, 2)  // 40 Gbps @ $2/Gbps
+    mcmf_add_edge(net, 1, 3, 30, 4)  // 30 Gbps @ $4/Gbps
+
+    // Cross-region transit
+    mcmf_add_edge(net, 2, 4, 25, 1)  // 25 Gbps @ $1/Gbps
+    mcmf_add_edge(net, 3, 4, 30, 2)  // 30 Gbps @ $2/Gbps
+    mcmf_add_edge(net, 2, 5, 20, 5)  // 20 Gbps direct @ $5/Gbps
+
+    // Final connection into central data lake
+    mcmf_add_edge(net, 4, 5, 50, 1)  // 50 Gbps @ $1/Gbps
+
+    let solution = mcmf_solve(net, 1, 5)
+    print("Maximum Routed Bandwidth (Gbps):")
+    print(solution["flow"])
+
+    print("Optimal Total Egress Cost ($):")
+    print(solution["cost"])
+}
+
+main()
