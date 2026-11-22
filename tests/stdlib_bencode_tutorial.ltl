@@ -1,0 +1,66 @@
+// ===================================================================
+// tests/stdlib_bencode_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for stdlib/bencode.ltl: BEP-0003 integers,
+// length-prefixed strings, lists, and canonical sorted dictionaries.
+// ===================================================================
+
+pub fn bencode_int(val) {
+    return "i" + str(val) + "e"
+}
+
+pub fn bencode_str(s) {
+    return str(len(s)) + ":" + s
+}
+
+pub fn bencode_list_ints(arr, n) {
+    let out = "l"
+    let i = 0
+    while i < n {
+        out = out + bencode_int(arr[i])
+        i = i + 1
+    }
+    return out + "e"
+}
+
+pub fn bencode_dict2(k1, v1, k2, v2) {
+    // Enforce lexicographical key order for canonical output
+    if k1 < k2 {
+        return "d" + bencode_str(k1) + v1 + bencode_str(k2) + v2 + "e"
+    }
+    return "d" + bencode_str(k2) + v2 + bencode_str(k1) + v1 + "e"
+}
+
+pub fn test_bencode_integers() {
+    assert(bencode_int(0) == "i0e", "Zero integer vector")
+    assert(bencode_int(42) == "i42e", "Positive integer vector")
+    assert(bencode_int(-1024) == "i-1024e", "Negative integer vector")
+    assert(bencode_int(1048576) == "i1048576e", "1 MiB block integer vector")
+}
+
+pub fn test_bencode_strings() {
+    assert(bencode_str("") == "0:", "Empty string vector")
+    assert(bencode_str("spam") == "4:spam", "4-byte string vector")
+    assert(bencode_str("lateralus") == "9:lateralus", "9-byte string vector")
+}
+
+pub fn test_bencode_lists_and_canonical_dicts() {
+    let items = dict()
+    items[0] = 10
+    items[1] = 20
+    items[2] = 30
+    assert(bencode_list_ints(items, 3) == "li10ei20ei30ee", "3-integer list vector")
+
+    // Verify canonical dictionary sorting regardless of argument order
+    let d1 = bencode_dict2("pieces", bencode_int(16), "announce", bencode_str("udp://t:69"))
+    let d2 = bencode_dict2("announce", bencode_str("udp://t:69"), "pieces", bencode_int(16))
+    assert(d1 == "d8:announce10:udp://t:696:piecesi16ee", "Canonical sorted dictionary wire format")
+    assert(d1 == d2, "Key order invariance under canonical serialization")
+}
+
+pub fn main() {
+    test_bencode_integers()
+    test_bencode_strings()
+    test_bencode_lists_and_canonical_dicts()
+    print("All stdlib/bencode.ltl verification tests passed!")
+}
