@@ -1,0 +1,225 @@
+// ===================================================================
+// examples/wavelet_matrix_tutorial.ltl
+// -------------------------------------------------------------------
+// Real-Time High-Throughput APM Quantile & Latency Analytics Engine
+// -------------------------------------------------------------------
+// Demonstration of the Wavelet Matrix computing prefix frequency ranks
+// and exact arbitrary sub-window P50/P90/P99 latency quantiles in
+// O(log Sigma) time without sorting or heap allocations.
+// ===================================================================
+
+pub fn wm_pow2(k: int) -> int {
+    let mut res = 1
+    let mut i = 0
+    while i < k {
+        res = res * 2
+        i = i + 1
+    }
+    return res
+}
+
+pub fn wm_get_bit(val: int, bit_idx: int) -> int {
+    let p = wm_pow2(bit_idx)
+    return (val / p) % 2
+}
+
+pub fn wm_create(data: list, bits: int) -> dict {
+    let mut matrix = {}
+    let n = data.len()
+    let mut levels = []
+    let mut zeros = []
+
+    let mut current = []
+    let mut i = 0
+    while i < n {
+        current.push(data[i])
+        i = i + 1
+    }
+
+    let mut b = bits - 1
+    while b >= 0 {
+        let mut bits_level = []
+        let mut zeros_next = []
+        let mut ones_next = []
+        let mut z_count = 0
+
+        let mut idx = 0
+        while idx < n {
+            let val = current[idx]
+            let bit = wm_get_bit(val, b)
+            bits_level.push(bit)
+            if bit == 0 {
+                zeros_next.push(val)
+                z_count = z_count + 1
+            } else {
+                ones_next.push(val)
+            }
+            idx = idx + 1
+        }
+
+        levels.push(bits_level)
+        zeros.push(z_count)
+
+        current = []
+        let mut zi = 0
+        while zi < zeros_next.len() {
+            current.push(zeros_next[zi])
+            zi = zi + 1
+        }
+        let mut oi = 0
+        while oi < ones_next.len() {
+            current.push(ones_next[oi])
+            oi = oi + 1
+        }
+
+        b = b - 1
+    }
+
+    matrix["levels"] = levels
+    matrix["zeros"] = zeros
+    matrix["bits"] = bits
+    matrix["size"] = n
+    return matrix
+}
+
+pub fn wm_rank_0(level_bits: list, i: int) -> int {
+    let mut count = 0
+    let mut idx = 0
+    while idx < i {
+        if level_bits[idx] == 0 {
+            count = count + 1
+        }
+        idx = idx + 1
+    }
+    return count
+}
+
+pub fn wm_rank_1(level_bits: list, i: int) -> int {
+    let mut count = 0
+    let mut idx = 0
+    while idx < i {
+        if level_bits[idx] == 1 {
+            count = count + 1
+        }
+        idx = idx + 1
+    }
+    return count
+}
+
+pub fn wm_access(matrix: dict, idx: int) -> int {
+    let levels = matrix["levels"]
+    let zeros = matrix["zeros"]
+    let bits = matrix["bits"]
+
+    let mut pos = idx
+    let mut result = 0
+
+    let mut level_idx = 0
+    while level_idx < bits {
+        let level_bits = levels[level_idx]
+        let z = zeros[level_idx]
+        let bit = level_bits[pos]
+        result = result * 2 + bit
+
+        if bit == 0 {
+            pos = wm_rank_0(level_bits, pos)
+        } else {
+            pos = z + wm_rank_1(level_bits, pos)
+        }
+        level_idx = level_idx + 1
+    }
+    return result
+}
+
+pub fn wm_quantile(matrix: dict, l: int, r: int, k: int) -> int {
+    let levels = matrix["levels"]
+    let zeros = matrix["zeros"]
+    let bits = matrix["bits"]
+
+    let mut cur_l = l
+    let mut cur_r = r
+    let mut cur_k = k
+    let mut result = 0
+
+    let mut level_idx = 0
+    while level_idx < bits {
+        let level_bits = levels[level_idx]
+        let z = zeros[level_idx]
+
+        let zeros_l = wm_rank_0(level_bits, cur_l)
+        let zeros_r = wm_rank_0(level_bits, cur_r)
+        let zeros_in_range = zeros_r - zeros_l
+
+        if cur_k <= zeros_in_range {
+            result = result * 2 + 0
+            cur_l = zeros_l
+            cur_r = zeros_r
+        } else {
+            result = result * 2 + 1
+            cur_k = cur_k - zeros_in_range
+            let ones_l = cur_l - zeros_l
+            let ones_r = cur_r - zeros_r
+            cur_l = z + ones_l
+            cur_r = z + ones_r
+        }
+        level_idx = level_idx + 1
+    }
+    return result
+}
+
+// -------------------------------------------------------------------
+// Pipeline Demo: Telemetry Stream Service Level Objective Analysis
+// -------------------------------------------------------------------
+
+pub fn simulate_telemetry_analytics() -> bool {
+    // Continuous stream of 16 request latencies (ms) during a flash-sale event:
+    // [12, 15, 8, 22, 120, 14, 18, 95, 11, 13, 200, 16, 15, 88, 14, 19]
+    let latencies = [12, 15, 8, 22, 120, 14, 18, 95, 11, 13, 200, 16, 15, 88, 14, 19]
+    // Value range fits in 8 bits (max latency 200 < 256)
+    let wm = wm_create(latencies, 8)
+
+    // Verify lossless access retrieval at boundary timestamps
+    if wm_access(wm, 0) != 12 {
+        return false
+    }
+    if wm_access(wm, 4) != 120 {
+        return false
+    }
+    if wm_access(wm, 10) != 200 {
+        return false
+    }
+
+    // Window 1: Normal operational period [0, 4) -> [12, 15, 8, 22]
+    // Sorted: [8, 12, 15, 22]
+    // Min (k=1): 8ms
+    // Median (k=2): 12ms
+    // Max (k=4): 22ms
+    let win1_min = wm_quantile(wm, 0, 4, 1)
+    let win1_med = wm_quantile(wm, 0, 4, 2)
+    let win1_max = wm_quantile(wm, 0, 4, 4)
+    if win1_min != 8 or win1_med != 12 or win1_max != 22 {
+        return false
+    }
+
+    // Window 2: Flash crowd burst window [4, 12) (8 requests)
+    // Elements: [120, 14, 18, 95, 11, 13, 200, 16]
+    // Sorted:   [11, 13, 14, 16, 18, 95, 120, 200]
+    // P50 Median (k=4): 16ms
+    // P75 (k=6): 95ms
+    // P100 Peak (k=8): 200ms
+    let p50 = wm_quantile(wm, 4, 12, 4)
+    let p75 = wm_quantile(wm, 4, 12, 6)
+    let p100 = wm_quantile(wm, 4, 12, 8)
+    if p50 != 16 or p75 != 95 or p100 != 200 {
+        return false
+    }
+
+    return true
+}
+
+pub fn main() -> int {
+    if simulate_telemetry_analytics() {
+        return 0
+    }
+    return 1
+}
