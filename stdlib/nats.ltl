@@ -13,6 +13,32 @@
 //     +OK\r\n  -ERR '<reason>'\r\n  INFO {json}\r\n
 // ===================================================================
 
+
+fn _index_of(s: str, sub: str) -> int {
+    let n = len(s)
+    let m = len(sub)
+    if m == 0 { return 0 }
+    let i = 0
+    while i + m <= n {
+        if slice(s, i, i + m) == sub { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn _try_int(s: str, default: int) -> int {
+    let start = 0
+    if len(s) > 0 && (s[0] == "-" || s[0] == "+") { start = 1 }
+    if len(s) <= start { return default }
+    let i = start
+    while i < len(s) {
+        let c = slice(s, i, i + 1)
+        if c < "0" || c > "9" { return default }
+        i = i + 1
+    }
+    return int(s)
+}
+
 // -- Client → server ------------------------------------------------
 
 pub fn connect(opts_json: str) -> str {
@@ -51,7 +77,7 @@ fn split_ws(s: str) -> list {
     let cur = ""
     let i = 0
     while i < len(s) {
-        let c = char_at(s, i)
+        let c = slice(s, i, (i) + 1)
         if c == " " || c == "\t" {
             if len(cur) > 0 { out = out + [cur]; cur = "" }
         } else {
@@ -68,39 +94,39 @@ fn split_ws(s: str) -> list {
 /// nil if the frame is incomplete.
 pub fn parse_message(buf: str) -> map {
     let n = len(buf)
-    let line_end = index_of(buf, "\r\n")
+    let line_end = _index_of(buf, "\r\n")
     if line_end < 0 { return nil }
     let line = slice(buf, 0, line_end)
     let rest_start = line_end + 2
     let m = {}
-    if starts_with(line, "PING") {
+    if str_starts_with(line, "PING") {
         m["op"] = "PING"
         m["consumed"] = rest_start
         return m
     }
-    if starts_with(line, "PONG") {
+    if str_starts_with(line, "PONG") {
         m["op"] = "PONG"
         m["consumed"] = rest_start
         return m
     }
-    if starts_with(line, "+OK") {
+    if str_starts_with(line, "+OK") {
         m["op"] = "OK"
         m["consumed"] = rest_start
         return m
     }
-    if starts_with(line, "-ERR") {
+    if str_starts_with(line, "-ERR") {
         m["op"] = "ERR"
         m["reason"] = slice(line, 5, len(line))
         m["consumed"] = rest_start
         return m
     }
-    if starts_with(line, "INFO ") {
+    if str_starts_with(line, "INFO ") {
         m["op"] = "INFO"
         m["info"] = slice(line, 5, len(line))
         m["consumed"] = rest_start
         return m
     }
-    if starts_with(line, "MSG ") {
+    if str_starts_with(line, "MSG ") {
         let parts = split_ws(slice(line, 4, len(line)))
         let np = len(parts)
         if np < 3 { return nil }
@@ -109,10 +135,10 @@ pub fn parse_message(buf: str) -> map {
         let reply = ""
         let nbytes = 0
         if np == 3 {
-            nbytes = try_int(parts[2], 0)
+            nbytes = _try_int(parts[2], 0)
         } else {
             reply = parts[2]
-            nbytes = try_int(parts[3], 0)
+            nbytes = _try_int(parts[3], 0)
         }
         if n < rest_start + nbytes + 2 { return nil }
         let payload = slice(buf, rest_start, rest_start + nbytes)
