@@ -1,0 +1,162 @@
+// ===================================================================
+// examples/suffix_automaton_tutorial.ltl
+// -------------------------------------------------------------------
+// Practical Application: Genomic DNA Motif Indexing & Real-Time Deep
+// Packet Inspection (DPI) Signature Scanner using Suffix Automaton.
+// ===================================================================
+
+pub fn new_sam() {
+    let sam = dict()
+    sam["states"] = dict()
+    sam["sz"] = 1
+    sam["last"] = 0
+    
+    let init_state = dict()
+    init_state["len"] = 0
+    init_state["link"] = -1
+    init_state["next"] = dict()
+    sam["states"][0] = init_state
+    return sam
+}
+
+pub fn sam_extend(sam, ch) {
+    let cur = sam["sz"]
+    sam["sz"] = cur + 1
+
+    let cur_state = dict()
+    cur_state["len"] = sam["states"][sam["last"]]["len"] + 1
+    cur_state["link"] = -1
+    cur_state["next"] = dict()
+    sam["states"][cur] = cur_state
+
+    let p = sam["last"]
+    while p != -1 {
+        let p_state = sam["states"][p]
+        if p_state["next"][ch] != nil {
+            break
+        }
+        p_state["next"][ch] = cur
+        p = p_state["link"]
+    }
+
+    if p == -1 {
+        cur_state["link"] = 0
+    } else {
+        let p_state = sam["states"][p]
+        let q = p_state["next"][ch]
+        let q_state = sam["states"][q]
+        if p_state["len"] + 1 == q_state["len"] {
+            cur_state["link"] = q
+        } else {
+            let clone = sam["sz"]
+            sam["sz"] = clone + 1
+
+            let clone_state = dict()
+            clone_state["len"] = p_state["len"] + 1
+            clone_state["link"] = q_state["link"]
+            let copy_next = dict()
+            for key in q_state["next"] {
+                copy_next[key] = q_state["next"][key]
+            }
+            clone_state["next"] = copy_next
+            sam["states"][clone] = clone_state
+
+            while p != -1 {
+                let curr_p = sam["states"][p]
+                if curr_p["next"][ch] != q {
+                    break
+                }
+                curr_p["next"][ch] = clone
+                p = curr_p["link"]
+            }
+
+            q_state["link"] = clone
+            cur_state["link"] = clone
+        }
+    }
+
+    sam["last"] = cur
+    return cur
+}
+
+pub fn sam_count_distinct_substrings(sam) {
+    let total = 0
+    let sz = sam["sz"]
+    let u = 1
+    while u < sz {
+        let u_state = sam["states"][u]
+        let link_id = u_state["link"]
+        let link_len = 0
+        if link_id != -1 {
+            link_len = sam["states"][link_id]["len"]
+        }
+        let diff = u_state["len"] - link_len
+        total = total + diff
+        u = u + 1
+    }
+    return total
+}
+
+pub fn sam_contains(sam, pattern_chars, pat_len) {
+    let curr = 0
+    let i = 0
+    while i < pat_len {
+        let ch = pattern_chars[i]
+        let curr_state = sam["states"][curr]
+        let next_node = curr_state["next"][ch]
+        if next_node == nil {
+            return false
+        }
+        curr = next_node
+        i = i + 1
+    }
+    return true
+}
+
+pub fn run_genomic_dna_pipeline() {
+    let sam = new_sam()
+
+    // Stream DNA nucleotides of target gene: "G", "A", "T", "T", "A", "C", "A"
+    sam_extend(sam, "G")
+    sam_extend(sam, "A")
+    sam_extend(sam, "T")
+    sam_extend(sam, "T")
+    sam_extend(sam, "A")
+    sam_extend(sam, "C")
+    sam_extend(sam, "A")
+
+    // Count all distinct genetic motifs
+    let distinct_motifs = sam_count_distinct_substrings(sam)
+
+    // Query 1: Check primer "ATTA"
+    let primer1 = dict()
+    primer1[0] = "A"
+    primer1[1] = "T"
+    primer1[2] = "T"
+    primer1[3] = "A"
+    let has_primer1 = sam_contains(sam, primer1, 4)
+
+    // Query 2: Check primer "TACA"
+    let primer2 = dict()
+    primer2[0] = "T"
+    primer2[1] = "A"
+    primer2[2] = "C"
+    primer2[3] = "A"
+    let has_primer2 = sam_contains(sam, primer2, 4)
+
+    // Query 3: Non-existent mutation "GGAT"
+    let alien_motif = dict()
+    alien_motif[0] = "G"
+    alien_motif[1] = "G"
+    alien_motif[2] = "A"
+    alien_motif[3] = "T"
+    let has_alien = sam_contains(sam, alien_motif, 4)
+
+    let report = dict()
+    report["total_states"] = sam["sz"]
+    report["distinct_motifs"] = distinct_motifs
+    report["has_primer1"] = has_primer1
+    report["has_primer2"] = has_primer2
+    report["has_alien"] = has_alien
+    return report
+}
