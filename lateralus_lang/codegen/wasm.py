@@ -322,6 +322,28 @@ class WasmCompiler:
             "env", "ltl_println_f64", "ltl_println_f64",
             [("val", "f64")], ""
         )
+        self._add_floordiv_helper()
+
+    def _add_floordiv_helper(self) -> None:
+        """Define $ltl_floordiv: floor division matching VM semantics
+        (Python //). i64.div_s truncates toward zero; the adjustment term
+        is 1 iff the trunc remainder is nonzero and signs differ (#407)."""
+        fn = self._module.add_function(
+            "ltl_floordiv", [("a", "i64"), ("b", "i64")], "i64"
+        )
+        fn.add_local("q", "i64")
+        fn.add_local("r", "i64")
+        fn.emit(
+            local_get("a"), local_get("b"), i64_div_s(), local_set("q"),
+            local_get("a"), local_get("b"), i64_rem_s(), local_set("r"),
+            local_get("q"),
+            # adj = (r != 0) & ((r ^ b) sign bit) & 1
+            local_get("r"), i64_const(0), i64_ne(), "i64.extend_i32_u",
+            local_get("r"), local_get("b"), i64_xor(),
+            i64_const(63), "i64.shr_s", i64_const(1), i64_and(),
+            i64_and(),
+            i64_sub(),
+        )
 
     def _new_label(self) -> str:
         self._label_counter += 1
@@ -370,7 +392,8 @@ class WasmCompiler:
             if wtype == "f64":
                 ops_map = {"add": f64_add, "sub": f64_sub, "mul": f64_mul, "div": f64_div}
             else:
-                ops_map = {"add": i64_add, "sub": i64_sub, "mul": i64_mul, "div": i64_div_s}
+                ops_map = {"add": i64_add, "sub": i64_sub, "mul": i64_mul,
+                           "div": lambda: "call $ltl_floordiv"}
 
             self._current_fn.emit(
                 local_get(a),

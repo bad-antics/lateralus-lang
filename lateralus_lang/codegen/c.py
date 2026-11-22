@@ -386,6 +386,17 @@ static inline bool    ltl_unbox_bool(ltl_value_t v)  { return v.tag == LTL_BOOL 
 static inline int64_t ltl_unbox_int(ltl_value_t v)   { return v.tag == LTL_INT   ? v.i : (v.tag == LTL_BOOL ? (int64_t)v.b : 0); }
 static inline double  ltl_unbox_float(ltl_value_t v) { return v.tag == LTL_FLOAT ? v.f : (v.tag == LTL_INT  ? (double)v.i : 0.0); }
 
+/* Floor division/modulo for int64 operands, matching VM semantics
+ * (Python // and %): C's / and % truncate toward zero instead. */
+static inline int64_t ltl_idiv_floor(int64_t a, int64_t b) {
+    int64_t q = a / b, r = a % b;
+    return (r != 0 && ((r < 0) != (b < 0))) ? q - 1 : q;
+}
+static inline int64_t ltl_imod_floor(int64_t a, int64_t b) {
+    int64_t r = a % b;
+    return (r != 0 && ((r < 0) != (b < 0))) ? r + b : r;
+}
+
 /* Repeat a list: [x] * n → new list with x copied n times. */
 static ltl_list_t* ltl_list_repeat(ltl_list_t *src, int64_t n) {
     int64_t total = src->len * (n > 0 ? n : 0);
@@ -681,6 +692,10 @@ class CTranspiler(ASTVisitor):
             # Look up known function return types
             if nm in self._fn_return_types:
                 return self._fn_return_types[nm]
+        if isinstance(node, UnaryOp):
+            if getattr(node, "op", "-") == "not":
+                return "bool"
+            return self._infer_ctype_from_expr(node.operand)
         if isinstance(node, BinOp):
             op = getattr(node, "op", "+")
             if op in ("+", "-", "*", "/", "%"):
@@ -1246,6 +1261,14 @@ class CTranspiler(ASTVisitor):
             "and": "&&", "or": "||",
             "&": "&", "|": "|", "^": "^", "<<": "<<", ">>": ">>",
         }
+        # int64 / and % must floor like the VM (Python // and %), not C
+        # truncation toward zero (#407).
+        if op in ("/", "%"):
+            lt = self._infer_ctype_from_expr(node.left)
+            rt = self._infer_ctype_from_expr(node.right)
+            if lt == "int64_t" and rt == "int64_t":
+                helper = "ltl_idiv_floor" if op == "/" else "ltl_imod_floor"
+                return f"{helper}({left}, {right})"
         c_op = op_map.get(op, op)
         return f"({left} {c_op} {right})"
 
