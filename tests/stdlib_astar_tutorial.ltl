@@ -1,0 +1,237 @@
+// ===================================================================
+// tests/stdlib_astar_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for the A* Heuristic Search Algorithm,
+// Manhattan distance heuristic, and optimal path reconstruction.
+// ===================================================================
+
+fn abs_val(x) {
+    if x < 0 {
+        return 0 - x
+    }
+    return x
+}
+
+fn manhattan(r1, c1, r2, c2) {
+    return abs_val(r1 - r2) + abs_val(c1 - c2)
+}
+
+fn contains_node(arr, node) {
+    let i = 0
+    while i < len(arr) {
+        if arr[i] == node {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+pub fn astar_search(grid, rows, cols, sr, sc, gr, gc) {
+    let start = sr * cols + sc
+    let goal = gr * cols + gc
+
+    if sr == gr and sc == gc {
+        return [start]
+    }
+
+    if grid[sr][sc] == 1 or grid[gr][gc] == 1 {
+        return []
+    }
+
+    let g_score = dict()
+    let f_score = dict()
+    let closed_set = dict()
+    let came_from = dict()
+
+    let r = 0
+    while r < rows {
+        let c = 0
+        while c < cols {
+            let idx = r * cols + c
+            g_score[idx] = 999999999
+            f_score[idx] = 999999999
+            closed_set[idx] = false
+            c = c + 1
+        }
+        r = r + 1
+    }
+
+    g_score[start] = 0
+    f_score[start] = manhattan(sr, sc, gr, gc)
+
+    let open_set = [start]
+
+    while len(open_set) > 0 {
+        // Find node with minimum f_score in open_set
+        let best_f = 999999999
+        let best_idx = 0
+        let i = 0
+        while i < len(open_set) {
+            let node = open_set[i]
+            if f_score[node] < best_f {
+                best_f = f_score[node]
+                best_idx = i
+            }
+            i = i + 1
+        }
+
+        let current = open_set[best_idx]
+
+        if current == goal {
+            // Reconstruct path
+            let path = [goal]
+            let curr = goal
+            while curr != start {
+                curr = came_from[curr]
+                path = push(path, curr)
+            }
+            let rev_path = []
+            let k = len(path) - 1
+            while k >= 0 {
+                rev_path = push(rev_path, path[k])
+                k = k - 1
+            }
+            return rev_path
+        }
+
+        // Remove current from open_set
+        let next_open = []
+        let j = 0
+        while j < len(open_set) {
+            if j != best_idx {
+                next_open = push(next_open, open_set[j])
+            }
+            j = j + 1
+        }
+        open_set = next_open
+        closed_set[current] = true
+
+        let cur_r = idiv(current, cols)
+        let cur_c = current % cols
+
+        // Check 4 orthogonal neighbors: (r-1, c), (r+1, c), (r, c-1), (r, c+1)
+        let dr = [-1, 1, 0, 0]
+        let dc = [0, 0, -1, 1]
+        let dir = 0
+        while dir < 4 {
+            let nr = cur_r + dr[dir]
+            let nc = cur_c + dc[dir]
+
+            if nr >= 0 and nr < rows and nc >= 0 and nc < cols {
+                let n_idx = nr * cols + nc
+                if grid[nr][nc] == 0 and not closed_set[n_idx] {
+                    let tentative_g = g_score[current] + 1
+                    if tentative_g < g_score[n_idx] {
+                        came_from[n_idx] = current
+                        g_score[n_idx] = tentative_g
+                        f_score[n_idx] = tentative_g + manhattan(nr, nc, gr, gc)
+                        if not contains_node(open_set, n_idx) {
+                            open_set = push(open_set, n_idx)
+                        }
+                    }
+                }
+            }
+            dir = dir + 1
+        }
+    }
+
+    return []
+}
+
+pub fn test_astar_straight_line() -> bool {
+    let grid = [
+        [0, 0, 0],
+        [0, 0, 0],
+        [0, 0, 0]
+    ]
+
+    let path = astar_search(grid, 3, 3, 0, 0, 0, 2)
+    if len(path) != 3 {
+        return false
+    }
+    // Path should be [0, 1, 2]
+    if path[0] != 0 or path[1] != 1 or path[2] != 2 {
+        return false
+    }
+
+    return true
+}
+
+pub fn test_astar_wall_detour() -> bool {
+    let grid = [
+        [0, 0, 0],
+        [1, 1, 0],
+        [0, 0, 0]
+    ]
+
+    // Start: (2, 0) = idx 6, Goal: (0, 0) = idx 0
+    let path = astar_search(grid, 3, 3, 2, 0, 0, 0)
+    // Needs to navigate around the wall at (1,0) and (1,1):
+    // (2,0) -> (2,1) -> (2,2) -> (1,2) -> (0,2) -> (0,1) -> (0,0) = 7 steps
+    if len(path) != 7 {
+        return false
+    }
+    if path[0] != 6 {
+        return false
+    }
+    if path[6] != 0 {
+        return false
+    }
+
+    return true
+}
+
+pub fn test_astar_co_located() -> bool {
+    let grid = [
+        [0, 0],
+        [0, 0]
+    ]
+
+    let path = astar_search(grid, 2, 2, 1, 1, 1, 1)
+    if len(path) != 1 {
+        return false
+    }
+    if path[0] != 3 {
+        return false
+    }
+
+    return true
+}
+
+pub fn test_astar_unreachable() -> bool {
+    let grid = [
+        [0, 1, 0],
+        [1, 1, 0],
+        [0, 0, 0]
+    ]
+
+    // Start (0, 0) boxed in by walls at (0, 1) and (1, 0)
+    let path = astar_search(grid, 3, 3, 0, 0, 2, 2)
+    if len(path) != 0 {
+        return false
+    }
+
+    return true
+}
+
+pub fn test_astar_diagonal_open_grid() -> bool {
+    let grid = [
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0]
+    ]
+
+    // Start (0, 0) = 0, Goal (3, 3) = 15
+    let path = astar_search(grid, 4, 4, 0, 0, 3, 3)
+    // Manhattan distance is 6 steps, path length is 7 nodes
+    if len(path) != 7 {
+        return false
+    }
+    if path[0] != 0 or path[6] != 15 {
+        return false
+    }
+
+    return true
+}
