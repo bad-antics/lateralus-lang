@@ -746,3 +746,22 @@ class TestTypeAlias:
         c_src = check_c("type Score = int")
         assert "typedef" in c_src
         assert "Score" in c_src
+
+
+class TestStrCallConcat:
+    """Issue #330 reproducer 2: str()/int()/float()/bool() calls inside
+    string concat must infer their real C types, not ltl_value_t."""
+
+    def test_str_call_in_concat(self):
+        c_src = check_c('fn main() { let n = 3\n io.println("n=" + str(n)) }')
+        assert "ltl_value_to_str(ltl_int_to_str" not in c_src
+        assert "ltl_str_concat" in c_src
+
+    def test_coercion_calls_infer_c_types(self):
+        for call in ("str(1.5)", "str(int(2.5))", "str(bool(true))"):
+            c_src = check_c(f'fn main() {{ io.println("x=" + {call}) }}')
+            # the concat operand must not be double-wrapped as ltl_value_t
+            for bad in ("ltl_value_to_str(ltl_int_to_str",
+                        "ltl_value_to_str(ltl_float_to_str",
+                        "ltl_value_to_str(ltl_bool_to_str"):
+                assert bad not in c_src

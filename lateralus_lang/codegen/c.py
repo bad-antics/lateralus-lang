@@ -706,6 +706,10 @@ class CTranspiler(ASTVisitor):
                 if nm in ("ltl_int_to_str", "ltl_float_to_str",
                           "ltl_bool_to_str", "ltl_str_new", "ltl_str_concat"):
                     return "ltl_string_t*"
+                # Builtin coercions int()/float()/bool()/str() have fixed C types
+                if node.callee.name in ("int", "float", "bool", "str"):
+                    return {"int": "int64_t", "float": "double",
+                            "bool": "bool", "str": "ltl_string_t*"}[node.callee.name]
                 # Math builtins return double (sqrt, pow, sin, cos, log, etc.)
                 if node.callee.name in self._IO_MATH:
                     return "double"
