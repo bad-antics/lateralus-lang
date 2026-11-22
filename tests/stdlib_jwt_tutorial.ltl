@@ -1,0 +1,106 @@
+// Canonical test vectors for stdlib/jwt tutorial (RFC 7519).
+
+import jwt
+
+pub fn test_jwt_sign_verify_roundtrip() -> bool {
+    let secret = bytes_of("my-high-entropy-jwt-secret-key-256!")
+    let claims = {}
+    claims["sub"] = "user_42"
+    claims["role"] = "admin"
+    claims["exp"] = 4700000000
+
+    let token = jwt_sign_hmac(claims, secret, "HS256")
+    let opts = {}
+    let res = jwt_verify_hmac(token, secret, "HS256", opts)
+
+    if not res[0] { return false }
+    let verified_claims = res[1]
+    if verified_claims["sub"] != "user_42" { return false }
+    if verified_claims["role"] != "admin" { return false }
+
+    return true
+}
+
+pub fn test_jwt_tamper_rejection() -> bool {
+    let secret = bytes_of("secret-signing-key-for-jwt-token-!")
+    let claims = {}
+    claims["sub"] = "guest"
+    claims["exp"] = 4700000000
+
+    let token = jwt_sign_hmac(claims, secret, "HS256")
+
+    // Tamper with signature by modifying the last character
+    let tampered = token + "X"
+    let opts = {}
+    let res = jwt_verify_hmac(tampered, secret, "HS256", opts)
+
+    // Verification must fail on modified token
+    if res[0] { return false }
+    if res[1] != "bad_signature" { return false }
+
+    return true
+}
+
+pub fn test_jwt_expiration_check() -> bool {
+    let secret = bytes_of("secret-signing-key-for-jwt-token-!")
+    let claims = {}
+    claims["sub"] = "expired_user"
+    // Set exp in the far past (Unix timestamp 1000)
+    claims["exp"] = 1000
+
+    let token = jwt_sign_hmac(claims, secret, "HS256")
+    let opts = {}
+    let res = jwt_verify_hmac(token, secret, "HS256", opts)
+
+    // Verification must fail with "expired"
+    if res[0] { return false }
+    if res[1] != "expired" { return false }
+
+    return true
+}
+
+pub fn test_jwt_audience_issuer_validation() -> bool {
+    let secret = bytes_of("secret-signing-key-for-jwt-token-!")
+    let claims = {}
+    claims["sub"] = "service_account"
+    claims["aud"] = "https://api.lateralus.org"
+    claims["iss"] = "https://auth.lateralus.org"
+    claims["exp"] = 4700000000
+
+    let token = jwt_sign_hmac(claims, secret, "HS256")
+
+    // 1. Matches expected audience and issuer
+    let valid_opts = {}
+    valid_opts["audience"] = "https://api.lateralus.org"
+    valid_opts["issuer"] = "https://auth.lateralus.org"
+    let ok_res = jwt_verify_hmac(token, secret, "HS256", valid_opts)
+    if not ok_res[0] { return false }
+
+    // 2. Mismatched audience rejected
+    let bad_aud_opts = {}
+    bad_aud_opts["audience"] = "https://evil.corp"
+    let bad_aud_res = jwt_verify_hmac(token, secret, "HS256", bad_aud_opts)
+    if bad_aud_res[0] { return false }
+    if bad_aud_res[1] != "wrong_audience" { return false }
+
+    return true
+}
+
+pub fn test_jwt_peek_inspection() -> bool {
+    let secret = bytes_of("secret-signing-key-for-jwt-token-!")
+    let claims = {}
+    claims["sub"] = "diagnostics"
+    claims["exp"] = 4700000000
+
+    let token = jwt_sign_hmac(claims, secret, "HS256")
+    let peeked = jwt_peek(token)
+
+    let hdr = peeked["header"]
+    let payload = peeked["claims"]
+
+    if hdr["typ"] != "JWT" { return false }
+    if hdr["alg"] != "HS256" { return false }
+    if payload["sub"] != "diagnostics" { return false }
+
+    return true
+}

@@ -1,0 +1,64 @@
+// ===================================================================
+// examples/jwt_tutorial.ltl
+//
+// Tutorial: Stateless Authentication with Lateralus stdlib/jwt.ltl
+// (RFC 7519).
+//
+// Demonstrates:
+// 1. Issuing signed JWT tokens with standard claims (sub, iat, exp).
+// 2. Constant-time HMAC signature verification.
+// 3. Claims validation (expiration, audience, issuer).
+// 4. Inspecting unverified tokens safely with `jwt_peek`.
+// ===================================================================
+
+import jwt
+
+pub fn main() {
+    print("=== Lateralus JSON Web Tokens (RFC 7519) Tutorial ===")
+
+    // 1. Shared HMAC signing key (at least 256 bits)
+    let hmac_key = bytes_of("my-super-secret-system-signing-key-32b!")
+
+    // 2. Token issuance (User logs in, backend generates token with 3600s TTL)
+    let user_id = "user_prod_98765"
+    let ttl_seconds = 3600
+    let custom_claims = {}
+    custom_claims["role"] = "finance_analyst"
+    custom_claims["aud"] = "https://internal.api"
+    custom_claims["iss"] = "https://auth.company.org"
+
+    print("Issuing token for subject: " + user_id + " (TTL: " + str(ttl_seconds) + "s)...")
+    let token = jwt_issue(user_id, hmac_key, ttl_seconds, custom_claims, "HS256")
+    print("Issued Compact JWT:")
+    print("  " + token)
+
+    // 3. Safe unverified inspection (Diagnostic/Tracing)
+    let inspected = jwt_peek(token)
+    let header = inspected["header"]
+    let payload = inspected["claims"]
+    print("Peeked Header: typ=" + header["typ"] + ", alg=" + header["alg"])
+    print("Peeked Claims: sub=" + payload["sub"] + ", role=" + payload["role"])
+
+    // 4. API Middleware verification
+    let verify_options = {}
+    verify_options["audience"] = "https://internal.api"
+    verify_options["issuer"] = "https://auth.company.org"
+    verify_options["leeway_s"] = 10 // 10 seconds clock-skew tolerance
+
+    let verify_result = jwt_verify_hmac(token, hmac_key, "HS256", verify_options)
+    if verify_result[0] {
+        let claims = verify_result[1]
+        print("PASS: Token verified successfully! Access granted for " + claims["sub"])
+    } else {
+        print("FAIL: Verification failed: " + verify_result[1])
+    }
+
+    // 5. Tamper detection demo
+    let forged_token = token + "forge"
+    let fail_result = jwt_verify_hmac(forged_token, hmac_key, "HS256", verify_options)
+    if not fail_result[0] {
+        print("PASS: Forged token rejected with reason: " + fail_result[1])
+    }
+
+    print("=== JWT tutorial demonstration completed successfully ===")
+}
