@@ -549,6 +549,7 @@ class PythonTranspiler(ASTVisitor):
         self._w += "def b64_encode(s): return _b64.b64encode(s.encode()).decode()"
         self._w += "def b64_decode(s): return _b64.b64decode(s.encode()).decode()"
         self._w += "def uuid4(): return str(_uuid2.uuid4())"
+        self._w += "def __builtin_uuid4(): return str(_uuid2.uuid4())"
         self._w += "def uuid_ns(name): return str(_uuid2.uuid5(_uuid2.NAMESPACE_DNS, name))"
         self._w += ""
         # ── Advanced Linear Algebra ──────────────────────────────────────────
