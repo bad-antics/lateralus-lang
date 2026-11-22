@@ -1,0 +1,139 @@
+// ===================================================================
+// examples/io_tutorial.ltl — stdlib/io.ltl tutorial companion
+// Runnable tour of the pure parts: split_lines, basename, path_join,
+// and an honest look at dirname/extension (upstream returns the
+// whole path / basename — slicing TODOs, documented not fixed).
+// File ops (_host_*) are compiler intrinsics — not demoed.
+// ===================================================================
+
+fn io_basename(path: str) -> str {
+    let current = ""
+    let i = 0
+    while i < len(path) {
+        let ch = slice(path, i, i + 1)
+        if ch == "/" || ch == "\\" {
+            current = ""
+        } else {
+            current = current + ch
+        }
+        i = i + 1
+    }
+    return current
+}
+fn io_path_join(base: str, name: str) -> str {
+    if len(base) == 0 { return name }
+    let last = slice(base, len(base) - 1, len(base))
+    if last == "/" || last == "\\" { return base + name }
+    return base + "/" + name
+}
+fn io_split_lines(s: str) -> list {
+    let lines = []
+    let current = ""
+    let i = 0
+    while i < len(s) {
+        let ch = slice(s, i, i + 1)
+        if ch == "\n" {
+            lines = lines + [current]
+            current = ""
+        } else {
+            current = current + ch
+        }
+        i = i + 1
+    }
+    if len(current) > 0 { lines = lines + [current] }
+    return lines
+}
+fn io_dirname_upstream(path: str) -> str {
+    // upstream: scans for last slash but returns whole path — TODO
+    let last_slash = -1
+    let i = 0
+    while i < len(path) {
+        let ch = slice(path, i, i + 1)
+        if ch == "/" || ch == "\\" { last_slash = i }
+        i = i + 1
+    }
+    if last_slash < 0 { return "." }
+    return path
+}
+fn io_dirname_fixed(path: str) -> str {
+    let last_slash = -1
+    let i = 0
+    while i < len(path) {
+        let ch = slice(path, i, i + 1)
+        if ch == "/" || ch == "\\" { last_slash = i }
+        i = i + 1
+    }
+    if last_slash < 0 { return "." }
+    if last_slash == 0 { return "/" }
+    return slice(path, 0, last_slash)
+}
+fn io_extension_upstream(path: str) -> str {
+    // upstream: finds last dot but returns basename — TODO
+    let b = io_basename(path)
+    let dot_idx = -1
+    let i = 0
+    while i < len(b) {
+        if slice(b, i, i + 1) == "." { dot_idx = i }
+        i = i + 1
+    }
+    if dot_idx < 0 { return "" }
+    return b
+}
+fn io_extension_fixed(path: str) -> str {
+    let b = io_basename(path)
+    let dot_idx = -1
+    let i = 0
+    while i < len(b) {
+        if slice(b, i, i + 1) == "." { dot_idx = i }
+        i = i + 1
+    }
+    if dot_idx < 0 { return "" }
+    return slice(b, dot_idx, len(b))
+}
+fn show(xs: list) -> str {
+    let s = ""
+    let i = 0
+    while i < len(xs) {
+        if i > 0 { s = s + "," }
+        s = s + str(xs[i])
+        i = i + 1
+    }
+    return s
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB IO TUTORIAL ===")
+
+    println("STEP 1 split_lines:")
+    let text = "alpha\nbeta\ngamma"
+    let lines = io_split_lines(text)
+    println("  'alpha\\nbeta\\ngamma' -> " + str(len(lines)) + " lines")
+    println("  lines=" + show(lines))
+    let no_trail = io_split_lines("one\ntwo\n")
+    println("  trailing newline -> " + str(len(no_trail)) + " lines (no empty tail)")
+
+    println("STEP 2 basename:")
+    println("  /var/log/app.log -> " + io_basename("/var/log/app.log"))
+    println("  C:\\\\temp\\\\x.bin -> " + io_basename("C:\\temp\\x.bin"))
+    println("  no-slash.txt -> " + io_basename("no-slash.txt"))
+
+    println("STEP 3 path_join:")
+    println("  ('/var/log','app.log') -> " + io_path_join("/var/log", "app.log"))
+    println("  ('/var/log/','x') -> " + io_path_join("/var/log/", "x"))
+    println("  ('','name') -> " + io_path_join("", "name"))
+
+    println("STEP 4 dirname — upstream is INCOMPLETE:")
+    println("  upstream('/var/log/app.log') = [" + io_dirname_upstream("/var/log/app.log") + "]  (returns whole path!)")
+    println("  fixed   ('/var/log/app.log') = [" + io_dirname_fixed("/var/log/app.log") + "]")
+    println("  fixed   ('rel/file.txt')     = [" + io_dirname_fixed("rel/file.txt") + "]")
+    println("  fixed   ('plain.txt')        = [" + io_dirname_fixed("plain.txt") + "]")
+
+    println("STEP 5 extension — upstream is INCOMPLETE:")
+    println("  upstream('app.log') = [" + io_extension_upstream("app.log") + "]  (returns basename!)")
+    println("  fixed   ('app.log') = [" + io_extension_fixed("app.log") + "]")
+    println("  fixed   ('x.tar.gz')= [" + io_extension_fixed("x.tar.gz") + "]")
+    println("  fixed   ('noext')   = [" + io_extension_fixed("noext") + "]")
+    println("PINNED_VECTORS: lines=3 no-trail=2 base=app.log/x.bin pathjoin=/var/log/app.log ext-fixed=.log/.gz/'' dirname-fixed=/var/log,rel,.")
+}
+
+main()
