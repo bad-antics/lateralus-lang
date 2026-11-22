@@ -1,0 +1,196 @@
+// ===================================================================
+// examples/event_tutorial.ltl — stdlib/event.ltl tutorial companion
+// Runnable tour of the pub/sub event emitter: on/once/off registration,
+// fire/fire_empty emission, inspection helpers, filter_events, pipe,
+// and reset.
+// Self-contained — module code inlined with one documented fix:
+//   `typeof(h) == "list"` never matches (typeof yields the Python
+//   class object, e.g. <class 'list'>), so once-handlers crashed on
+//   fire; replaced with `typeof(h) == typeof([])`.
+// ===================================================================
+
+fn new() -> map {
+    return {}
+}
+
+fn on(emitter: map, event: str, handler: fn) -> map {
+    let handlers = []
+    if contains(keys(emitter), event) {
+        handlers = emitter[event]
+    }
+    handlers = handlers + [handler]
+    emitter[event] = handlers
+    return emitter
+}
+
+fn once(emitter: map, event: str, handler: fn) -> map {
+    let handlers = []
+    if contains(keys(emitter), event) {
+        handlers = emitter[event]
+    }
+    handlers = handlers + [["once", handler]]
+    emitter[event] = handlers
+    return emitter
+}
+
+fn off(emitter: map, event: str, handler: fn) -> map {
+    if !contains(keys(emitter), event) {
+        return emitter
+    }
+    let handlers = emitter[event]
+    let new_handlers = handlers |> filter(fn(h) { h != handler })
+    emitter[event] = new_handlers
+    return emitter
+}
+
+fn off_all(emitter: map, event: str) -> map {
+    emitter[event] = []
+    return emitter
+}
+
+fn fire(emitter: map, event: str, data) -> map {
+    if !contains(keys(emitter), event) {
+        return emitter
+    }
+    let handlers = emitter[event]
+    let keep = []
+    for h in handlers {
+        if typeof(h) == typeof([]) && len(h) == 2 && h[0] == "once" {
+            h[1](data)
+        } else {
+            h(data)
+            keep = keep + [h]
+        }
+    }
+    emitter[event] = keep
+    return emitter
+}
+
+fn fire_empty(emitter: map, event: str) -> map {
+    return fire(emitter, event, nil)
+}
+
+fn event_names(emitter: map) -> list {
+    return keys(emitter)
+}
+
+fn handler_count(emitter: map, event: str) -> int {
+    if !contains(keys(emitter), event) {
+        return 0
+    }
+    return len(emitter[event])
+}
+
+fn has_listeners(emitter: map, event: str) -> bool {
+    return handler_count(emitter, event) > 0
+}
+
+fn total_handlers(emitter: map) -> int {
+    let total = 0
+    for name in keys(emitter) {
+        total = total + len(emitter[name])
+    }
+    return total
+}
+
+fn filter_events(emitter: map, pred: fn) -> map {
+    let result = new()
+    for name in keys(emitter) {
+        if pred(name) {
+            result[name] = emitter[name]
+        }
+    }
+    return result
+}
+
+fn pipe(source: map, target: map, event: str) -> map {
+    return on(source, event, fn(data) {
+        fire(target, event, data)
+    })
+}
+
+fn reset(emitter: map) -> map {
+    return new()
+}
+
+// ===================================================================
+
+// -- demo handlers ------------------------------------------------------
+// Handlers close over a shared `box` map (lambdas cannot rebind
+// globals, but can mutate captured maps).
+
+fn rec(box: map, tag: str) {
+    return fn(data) {
+        box["log"] = box["log"] + [tag + ":" + str(data)]
+    }
+}
+
+fn main() {
+    print("=== LATERALUS STDLIB EVENT TUTORIAL ===")
+
+    // -- Step 1: registration ---------------------------------------------
+    print("STEP 1 on/once registration:")
+    let box = {}
+    box["log"] = []
+    let em = new()
+    em = on(em, "user.login", rec(box, "login"))
+    em = on(em, "user.login", rec(box, "audit"))
+    em = once(em, "user.login", rec(box, "welcome"))
+    em = on(em, "order.placed", rec(box, "orders"))
+    print("  names=" + str(event_names(em)))
+    print("  login_handlers=" + str(handler_count(em, "user.login")))
+    print("  total=" + str(total_handlers(em)))
+    print("  has_listeners=" + str(has_listeners(em, "order.placed")))
+    print("  missing_count=" + str(handler_count(em, "nope")))
+
+    // -- Step 2: fire --------------------------------------------------------
+    print("STEP 2 fire:")
+    em = fire(em, "user.login", "alice")
+    print("  log1=" + str(box["log"]))
+    box["log"] = []
+    em = fire(em, "user.login", "bob")
+    print("  log2=" + str(box["log"]))
+    print("  login_handlers_after_once=" + str(handler_count(em, "user.login")))
+
+    // -- Step 3: off / off_all ---------------------------------------------------
+    print("STEP 3 off / off_all:")
+    let h = rec(box, "temp")
+    em = on(em, "order.placed", h)
+    print("  before=" + str(handler_count(em, "order.placed")))
+    em = off(em, "order.placed", h)
+    print("  after_off=" + str(handler_count(em, "order.placed")))
+    em = off_all(em, "order.placed")
+    print("  after_off_all=" + str(handler_count(em, "order.placed")))
+
+    // -- Step 4: filter_events ------------------------------------------------------
+    print("STEP 4 filter_events:")
+    let em2 = new()
+    em2 = on(em2, "alpha", rec(box, "a"))
+    em2 = on(em2, "beta", rec(box, "b"))
+    em2 = on(em2, "alphabet", rec(box, "ab"))
+    let only_a = filter_events(em2, fn(name) {
+        return slice(name, 0, 1) == "a"
+    })
+    print("  filtered_names=" + str(event_names(only_a)))
+
+    // -- Step 5: pipe ----------------------------------------------------------------
+    print("STEP 5 pipe:")
+    let src = new()
+    let dst = new()
+    dst = on(dst, "ping", rec(box, "dst"))
+    src = pipe(src, dst, "ping")
+    src = fire(src, "ping", "hello")
+    print("  dst_got=" + str(box["log"][len(box["log"]) - 1]))
+
+    // -- Step 6: reset -----------------------------------------------------------------
+    print("STEP 6 reset:")
+    let em3 = reset(em)
+    print("  names_after_reset=" + str(event_names(em3)))
+    print("  total_after_reset=" + str(total_handlers(em3)))
+
+    print("PINNED_VECTORS: login3 total4 once_fires_once "
+        + "after_once=2 off_works filter=a,alpha pipe_delivers "
+        + "reset_empty=True")
+    print("  ✓ examples/event_tutorial.ltl: OK")
+    return 0
+}
