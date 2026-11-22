@@ -1,0 +1,249 @@
+// ===================================================================
+// tests/stdlib_delaunay_triangulation_tutorial.ltl
+// -------------------------------------------------------------------
+// Complete test suite for Delaunay Triangulation in Lateralus.
+// Bowyer-Watson incremental cavity algorithm with exact integer
+// in-circumcircle determinant test and max-min angle property.
+// Boris Delaunay (1934), Adrian Bowyer (1981), David Watson (1981).
+// ===================================================================
+
+pub fn orient2d(ax: int, ay: int, bx: int, by: int, cx: int, cy: int) -> int {
+    return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
+}
+
+pub fn in_circumcircle(ax: int, ay: int, bx: int, by: int, cx: int, cy: int, px: int, py: int) -> bool {
+    // CCW orientation check
+    let ccw = orient2d(ax, ay, bx, by, cx, cy)
+    let mut a_x = ax
+    let mut a_y = ay
+    let mut b_x = bx
+    let mut b_y = by
+
+    if ccw < 0 {
+        // Swap A and B to enforce strict CCW
+        let tmp_x = a_x
+        let tmp_y = a_y
+        a_x = b_x
+        a_y = b_y
+        b_x = tmp_x
+        b_y = tmp_y
+    }
+
+    let d11 = a_x - px
+    let d12 = a_y - py
+    let d13 = d11 * d11 + d12 * d12
+
+    let d21 = b_x - px
+    let d22 = b_y - py
+    let d23 = d21 * d21 + d22 * d22
+
+    let d31 = cx - px
+    let d32 = cy - py
+    let d33 = d31 * d31 + d32 * d32
+
+    // 3x3 Determinant expansion
+    let det = d11 * (d22 * d33 - d23 * d32) - d12 * (d21 * d33 - d23 * d31) + d13 * (d21 * d32 - d22 * d31)
+    return det > 0
+}
+
+pub fn delaunay_triangulate(points: list) -> list {
+    let n = points.len()
+    if n < 3 {
+        return []
+    }
+
+    // Extended points list including super-triangle vertices
+    let mut all_pts = []
+    let mut i = 0
+    while i < n {
+        all_pts.push(points[i])
+        i = i + 1
+    }
+
+    // Super-triangle vertices: large coordinates enclosing the survey points
+    all_pts.push([-1000, -1000]) // n
+    all_pts.push([2000, -1000])  // n + 1
+    all_pts.push([-1000, 2000])  // n + 2
+
+    let super1 = n
+    let super2 = n + 1
+    let super3 = n + 2
+
+    // Triangles stored as [v1, v2, v3]
+    let mut triangles = []
+    triangles.push([super1, super2, super3])
+
+    let mut pt_idx = 0
+    while pt_idx < n {
+        let p = all_pts[pt_idx]
+        let px = p[0]
+        let py = p[1]
+
+        let mut bad_triangles = []
+        let mut t_idx = 0
+        while t_idx < triangles.len() {
+            let tri = triangles[t_idx]
+            let a = all_pts[tri[0]]
+            let b = all_pts[tri[1]]
+            let c = all_pts[tri[2]]
+
+            if in_circumcircle(a[0], a[1], b[0], b[1], c[0], c[1], px, py) {
+                bad_triangles.push(t_idx)
+            }
+            t_idx = t_idx + 1
+        }
+
+        // Extract cavity boundary edges (edges that appear in exactly ONE bad triangle)
+        let mut edges = []
+        let mut bi = 0
+        while bi < bad_triangles.len() {
+            let tri_pos = bad_triangles[bi]
+            let tri = triangles[tri_pos]
+            edges.push([tri[0], tri[1]])
+            edges.push([tri[1], tri[2]])
+            edges.push([tri[2], tri[0]])
+            bi = bi + 1
+        }
+
+        let mut polygon_boundary = []
+        let mut ei = 0
+        while ei < edges.len() {
+            let e1 = edges[ei]
+            let mut u1 = e1[0]
+            let mut v1 = e1[1]
+            if u1 > v1 {
+                let tmp = u1
+                u1 = v1
+                v1 = tmp
+            }
+
+            let mut count = 0
+            let mut ej = 0
+            while ej < edges.len() {
+                let e2 = edges[ej]
+                let mut u2 = e2[0]
+                let mut v2 = e2[1]
+                if u2 > v2 {
+                    let tmp = u2
+                    u2 = v2
+                    v2 = tmp
+                }
+                if u1 == u2 and v1 == v2 {
+                    count = count + 1
+                }
+                ej = ej + 1
+            }
+
+            if count == 1 {
+                // Keep original directed edge for consistent orientation
+                polygon_boundary.push(e1)
+            }
+            ei = ei + 1
+        }
+
+        // Keep surviving triangles not marked as bad
+        let mut survivor_triangles = []
+        let mut si = 0
+        while si < triangles.len() {
+            let mut is_bad = false
+            let mut check_bi = 0
+            while check_bi < bad_triangles.len() {
+                if bad_triangles[check_bi] == si {
+                    is_bad = true
+                }
+                check_bi = check_bi + 1
+            }
+            if not is_bad {
+                survivor_triangles.push(triangles[si])
+            }
+            si = si + 1
+        }
+        triangles = survivor_triangles
+
+        // Create new triangles from cavity boundary to current point
+        let mut pbi = 0
+        while pbi < polygon_boundary.len() {
+            let edge = polygon_boundary[pbi]
+            triangles.push([edge[0], edge[1], pt_idx])
+            pbi = pbi + 1
+        }
+
+        pt_idx = pt_idx + 1
+    }
+
+    // Filter out triangles connected to super-triangle vertices
+    let mut final_triangles = []
+    let mut fi = 0
+    while fi < triangles.len() {
+        let tri = triangles[fi]
+        let v0 = tri[0]
+        let v1 = tri[1]
+        let v2 = tri[2]
+        if v0 < n and v1 < n and v2 < n {
+            final_triangles.push(tri)
+        }
+        fi = fi + 1
+    }
+
+    return final_triangles
+}
+
+// -------------------------------------------------------------------
+// Smoke tests and Golden Test Vectors
+// -------------------------------------------------------------------
+
+pub fn test_delaunay_single_triangle() -> bool {
+    let pts = [[0, 0], [10, 0], [0, 10]]
+    let tris = delaunay_triangulate(pts)
+    if tris.len() != 1 {
+        return false
+    }
+    return true
+}
+
+pub fn test_delaunay_convex_quad() -> bool {
+    // 4 corners of a square:
+    // 0: [0, 0], 1: [10, 0], 2: [10, 10], 3: [0, 10]
+    let pts = [[0, 0], [10, 0], [10, 10], [0, 10]]
+    let tris = delaunay_triangulate(pts)
+
+    // A convex quadrilateral must be split into exactly 2 triangles
+    if tris.len() != 2 {
+        return false
+    }
+
+    // Verify circumcircle emptiness across all vertices
+    let mut ti = 0
+    while ti < tris.len() {
+        let tri = tris[ti]
+        let a = pts[tri[0]]
+        let b = pts[tri[1]]
+        let c = pts[tri[2]]
+
+        let mut pi = 0
+        while pi < pts.len() {
+            if pi != tri[0] and pi != tri[1] and pi != tri[2] {
+                let p = pts[pi]
+                // Test point must NOT be inside the circumcircle
+                if in_circumcircle(a[0], a[1], b[0], b[1], c[0], c[1], p[0], p[1]) {
+                    return false
+                }
+            }
+            pi = pi + 1
+        }
+        ti = ti + 1
+    }
+    return true
+}
+
+pub fn test_delaunay_pentagon() -> bool {
+    // 5 points forming a regular pentagonal cluster
+    let pts = [[0, 0], [20, 0], [25, 15], [10, 25], [-5, 15]]
+    let tris = delaunay_triangulate(pts)
+
+    // 5 convex points form exactly 3 Delaunay triangles
+    if tris.len() != 3 {
+        return false
+    }
+    return true
+}
