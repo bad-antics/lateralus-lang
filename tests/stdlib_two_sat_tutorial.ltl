@@ -1,0 +1,235 @@
+// ===================================================================
+// tests/stdlib_two_sat_tutorial.ltl
+// -------------------------------------------------------------------
+// Complete test suite for 2-SAT Solver in Lateralus.
+// Features implication graph construction, Tarjan strongly connected
+// components (SCC), and linear-time truth assignment.
+// Bengt Aspvall, Michael F. Plass, and Robert E. Tarjan (1979).
+// ===================================================================
+
+pub fn two_sat_create(n: int) -> dict {
+    let mut ts = {}
+    ts["n"] = n
+
+    let mut adj = []
+    let total_nodes = 2 * n + 2
+    let mut i = 0
+    while i < total_nodes {
+        adj.push([])
+        i = i + 1
+    }
+
+    ts["adj"] = adj
+    return ts
+}
+
+pub fn two_sat_add_clause(ts: dict, u: int, u_val: bool, v: int, v_val: bool) {
+    let mut adj = ts["adj"]
+
+    // Literal nodes: 2i for x_i = true, 2i+1 for x_i = false
+    let mut u_node = 2 * u
+    let mut not_u = 2 * u + 1
+    if not u_val {
+        u_node = 2 * u + 1
+        not_u = 2 * u
+    }
+
+    let mut v_node = 2 * v
+    let mut not_v = 2 * v + 1
+    if not v_val {
+        v_node = 2 * v + 1
+        not_v = 2 * v
+    }
+
+    // (u or v) <=> (not u => v) and (not v => u)
+    let mut not_u_edges = adj[not_u]
+    not_u_edges.push(v_node)
+    adj[not_u] = not_u_edges
+
+    let mut not_v_edges = adj[not_v]
+    not_v_edges.push(u_node)
+    adj[not_v] = not_v_edges
+}
+
+pub fn tarjan_dfs(u: int, adj: list, dfn: list, low: list, in_stack: list, stack: list, scc_id: list, state: dict) {
+    let mut timer = state["timer"]
+    timer = timer + 1
+    state["timer"] = timer
+
+    dfn[u] = timer
+    low[u] = timer
+    stack.push(u)
+    in_stack[u] = true
+
+    let u_edges = adj[u]
+    let n_edges = u_edges.len()
+    let mut i = 0
+    while i < n_edges {
+        let v = u_edges[i]
+        if dfn[v] == 0 {
+            tarjan_dfs(v, adj, dfn, low, in_stack, stack, scc_id, state)
+            if low[v] < low[u] {
+                low[u] = low[v]
+            }
+        } else {
+            if in_stack[v] {
+                if dfn[v] < low[u] {
+                    low[u] = dfn[v]
+                }
+            }
+        }
+        i = i + 1
+    }
+
+    if dfn[u] == low[u] {
+        let mut scc_count = state["scc_count"]
+        scc_count = scc_count + 1
+        state["scc_count"] = scc_count
+
+        let mut done = false
+        while not done {
+            let last_idx = stack.len() - 1
+            let top_node = stack[last_idx]
+            let _ = stack.pop()
+            in_stack[top_node] = false
+            scc_id[top_node] = scc_count
+            if top_node == u {
+                done = true
+            }
+        }
+    }
+}
+
+pub fn two_sat_solve(ts: dict) -> dict {
+    let n = ts["n"]
+    let adj = ts["adj"]
+    let total_nodes = 2 * n + 2
+
+    let mut dfn = []
+    let mut low = []
+    let mut in_stack = []
+    let mut scc_id = []
+    let mut stack = []
+
+    let mut i = 0
+    while i < total_nodes {
+        dfn.push(0)
+        low.push(0)
+        in_stack.push(false)
+        scc_id.push(0)
+        i = i + 1
+    }
+
+    let mut state = {}
+    state["timer"] = 0
+    state["scc_count"] = 0
+
+    let mut node = 2
+    while node < total_nodes {
+        if dfn[node] == 0 {
+            tarjan_dfs(node, adj, dfn, low, in_stack, stack, scc_id, state)
+        }
+        node = node + 1
+    }
+
+    // Check satisfiability condition
+    let mut satisfiable = true
+    let mut assignment = [false] // 1-based indexing, index 0 dummy
+
+    let mut var_idx = 1
+    while var_idx <= n {
+        let pos_scc = scc_id[2 * var_idx]
+        let neg_scc = scc_id[2 * var_idx + 1]
+
+        if pos_scc == neg_scc {
+            satisfiable = false
+        }
+
+        // Variable is true if its positive node has smaller SCC id (topologically later)
+        let is_true = (pos_scc < neg_scc)
+        assignment.push(is_true)
+        var_idx = var_idx + 1
+    }
+
+    let mut res = {}
+    res["satisfiable"] = satisfiable
+    res["assignment"] = assignment
+    return res
+}
+
+// -------------------------------------------------------------------
+// Smoke tests and Golden Test Vectors
+// -------------------------------------------------------------------
+
+pub fn test_two_sat_satisfiable_case() -> bool {
+    // Formula: (x1 or x2) and (not x1 or x2) and (x1 or not x2)
+    // Satisfiable by x1 = true, x2 = true
+    let ts = two_sat_create(2)
+    two_sat_add_clause(ts, 1, true, 2, true)
+    two_sat_add_clause(ts, 1, false, 2, true)
+    two_sat_add_clause(ts, 1, true, 2, false)
+
+    let sol = two_sat_solve(ts)
+    if not sol["satisfiable"] {
+        return false
+    }
+
+    let assign = sol["assignment"]
+    let x1 = assign[1]
+    let x2 = assign[2]
+
+    // Verify all clauses evaluate to true
+    if not (x1 or x2) {
+        return false
+    }
+    if not ((not x1) or x2) {
+        return false
+    }
+    if not (x1 or (not x2)) {
+        return false
+    }
+    return true
+}
+
+pub fn test_two_sat_unsatisfiable_case() -> bool {
+    // Formula: (x1 or x1) and (not x1 or not x1)
+    // Contradiction: x1 must be true AND false
+    let ts = two_sat_create(1)
+    two_sat_add_clause(ts, 1, true, 1, true)
+    two_sat_add_clause(ts, 1, false, 1, false)
+
+    let sol = two_sat_solve(ts)
+    if sol["satisfiable"] {
+        return false
+    }
+    return true
+}
+
+pub fn test_two_sat_chain_implication() -> bool {
+    // 3 variables: (x1 or x2) and (not x2 or x3) and (not x3 or not x1)
+    let ts = two_sat_create(3)
+    two_sat_add_clause(ts, 1, true, 2, true)
+    two_sat_add_clause(ts, 2, false, 3, true)
+    two_sat_add_clause(ts, 3, false, 1, false)
+
+    let sol = two_sat_solve(ts)
+    if not sol["satisfiable"] {
+        return false
+    }
+
+    let assign = sol["assignment"]
+    let x1 = assign[1]
+    let x2 = assign[2]
+    let x3 = assign[3]
+
+    if not (x1 or x2) {
+        return false
+    }
+    if not ((not x2) or x3) {
+        return false
+    }
+    if not ((not x3) or (not x1)) {
+        return false
+    }
+    return true
+}
