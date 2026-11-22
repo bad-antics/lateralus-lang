@@ -1,0 +1,213 @@
+// ===================================================================
+// examples/suffix_tree_tutorial.ltl
+// -------------------------------------------------------------------
+// Demonstration of Suffix Tree in Lateralus.
+// Linear-time compressed trie for substring query and genomic indexing.
+// ===================================================================
+
+pub fn st_create(text: str) -> dict {
+    let mut tree = {}
+    let n = text.len()
+
+    let mut start = [0, 0]
+    let mut end = [0, 0]
+    let mut link = [0, 1]
+    let mut children = [{}, {}]
+
+    tree["start"] = start
+    tree["end"] = end
+    tree["link"] = link
+    tree["children"] = children
+    tree["text"] = text
+    tree["root"] = 1
+
+    let mut i = 0
+    while i < n {
+        let mut curr_node = 1
+        let mut j = i
+        while j < n {
+            let ch = text[j]
+            let mut node_children = children[curr_node]
+
+            if contains(node_children, ch) {
+                let child_id = node_children[ch]
+                let e_start = start[child_id]
+                let e_end = end[child_id]
+                let edge_len = e_end - e_start
+
+                let mut match_len = 0
+                let mut edge_pos = e_start
+                let mut text_pos = j
+
+                while edge_pos < e_end and text_pos < n and text[edge_pos] == text[text_pos] {
+                    match_len = match_len + 1
+                    edge_pos = edge_pos + 1
+                    text_pos = text_pos + 1
+                }
+
+                if match_len == edge_len {
+                    curr_node = child_id
+                    j = j + match_len
+                } else {
+                    let split_node = start.len()
+                    start.push(e_start)
+                    end.push(e_start + match_len)
+                    link.push(1)
+
+                    let mut split_children = {}
+                    let old_branch_ch = text[e_start + match_len]
+                    split_children[old_branch_ch] = child_id
+
+                    start[child_id] = e_start + match_len
+
+                    let new_leaf = start.len()
+                    start.push(j + match_len)
+                    end.push(n)
+                    link.push(1)
+                    children.push({})
+
+                    let new_branch_ch = text[j + match_len]
+                    split_children[new_branch_ch] = new_leaf
+                    children.push(split_children)
+
+                    node_children[ch] = split_node
+                    children[curr_node] = node_children
+                    j = n
+                }
+            } else {
+                let new_leaf = start.len()
+                start.push(j)
+                end.push(n)
+                link.push(1)
+                children.push({})
+
+                node_children[ch] = new_leaf
+                children[curr_node] = node_children
+                j = n
+            }
+        }
+        i = i + 1
+    }
+
+    tree["start"] = start
+    tree["end"] = end
+    tree["link"] = link
+    tree["children"] = children
+    return tree
+}
+
+pub fn st_contains(tree: dict, pattern: str) -> bool {
+    let text = tree["text"]
+    let start = tree["start"]
+    let end = tree["end"]
+    let children = tree["children"]
+
+    let m = pattern.len()
+    if m == 0 {
+        return true
+    }
+
+    let mut curr_node = 1
+    let mut p_idx = 0
+
+    while p_idx < m {
+        let ch = pattern[p_idx]
+        let node_children = children[curr_node]
+
+        if not contains(node_children, ch) {
+            return false
+        }
+
+        let child_id = node_children[ch]
+        let e_start = start[child_id]
+        let e_end = end[child_id]
+
+        let mut edge_pos = e_start
+        while edge_pos < e_end and p_idx < m {
+            if text[edge_pos] != pattern[p_idx] {
+                return false
+            }
+            edge_pos = edge_pos + 1
+            p_idx = p_idx + 1
+        }
+        curr_node = child_id
+    }
+
+    return true
+}
+
+pub fn st_count_leaves(tree: dict, node: int) -> int {
+    let children = tree["children"]
+    let node_children = children[node]
+
+    let mut count = 0
+    let mut has_child = false
+    for ch in keys(node_children) {
+        has_child = true
+        let child_id = node_children[ch]
+        count = count + st_count_leaves(tree, child_id)
+    }
+
+    if not has_child {
+        return 1
+    }
+    return count
+}
+
+pub fn st_count_occurrences(tree: dict, pattern: str) -> int {
+    let text = tree["text"]
+    let start = tree["start"]
+    let end = tree["end"]
+    let children = tree["children"]
+
+    let m = pattern.len()
+    if m == 0 {
+        return 0
+    }
+
+    let mut curr_node = 1
+    let mut p_idx = 0
+
+    while p_idx < m {
+        let ch = pattern[p_idx]
+        let node_children = children[curr_node]
+
+        if not contains(node_children, ch) {
+            return 0
+        }
+
+        let child_id = node_children[ch]
+        let e_start = start[child_id]
+        let e_end = end[child_id]
+
+        let mut edge_pos = e_start
+        while edge_pos < e_end and p_idx < m {
+            if text[edge_pos] != pattern[p_idx] {
+                return 0
+            }
+            edge_pos = edge_pos + 1
+            p_idx = p_idx + 1
+        }
+        curr_node = child_id
+    }
+
+    return st_count_leaves(tree, curr_node)
+}
+
+fn main() {
+    let genome = "ATCGATCGAACTGATCG$"
+    let tree = st_create(genome)
+
+    let primer = "ATCG"
+    let exists = st_contains(tree, primer)
+    let freq = st_count_occurrences(tree, primer)
+
+    print("Target Primer: ")
+    print(primer)
+    print(" | Found: ")
+    print(exists)
+    print(" | Occurrences: ")
+    print(freq)
+}
+
+main()
