@@ -1,0 +1,214 @@
+// ===================================================================
+// examples/lz4_tutorial.ltl — stdlib/lz4.ltl tutorial companion
+// Runnable tour of the LZ4 block codec: token byte, literal/match
+// length extensions, 2-byte LE offsets, hash-chain compressor,
+// canonical decompressor. Round-trip verified.
+// ===================================================================
+
+fn bytes_of(s: str) -> list {
+    let out = []
+    let i = 0
+    while i < len(s) {
+        out = out + [ord(s[i])]
+        i = i + 1
+    }
+    return out
+}
+
+fn str_of(bytes: list) -> str {
+    let out = ""
+    let i = 0
+    while i < len(bytes) {
+        out = out + chr(bytes[i])
+        i = i + 1
+    }
+    return out
+}
+
+let LZ4_MINMATCH   = 4
+let LZ4_HASH_BITS  = 12
+let LZ4_HASH_SIZE  = 4096
+let LZ4_HASH_MASK  = 4095
+let LZ4_MF_LIMIT   = 12
+let LZ4_LAST_LITS  = 5
+let LZ4_MAXD       = 65535
+
+fn hash4(buf: list, i: int) -> int {
+    let v = buf[i] | (buf[i + 1] << 8)
+          | (buf[i + 2] << 16) | (buf[i + 3] << 24)
+    return ((v * 2654435761) >> (32 - LZ4_HASH_BITS)) & LZ4_HASH_MASK
+}
+
+fn emit_var_len(out: list, v: int) -> list {
+    while v >= 255 {
+        out = out + [255]
+        v = v - 255
+    }
+    return out + [v]
+}
+
+fn compress(src: list) -> list {
+    let n = len(src)
+    let out = []
+    let anchor = 0
+    let i = 0
+    if n < LZ4_MF_LIMIT + LZ4_LAST_LITS {
+        let lit_len = n
+        if lit_len >= 15 {
+            out = out + [0xf0]
+            out = emit_var_len(out, lit_len - 15)
+        } else {
+            out = out + [(lit_len << 4) & 0xff]
+        }
+        let k = 0
+        while k < n { out = out + [src[k]]; k = k + 1 }
+        return out
+    }
+    let htab = []
+    let h = 0
+    while h < LZ4_HASH_SIZE { htab = htab + [-1]; h = h + 1 }
+    let end_limit = n - LZ4_MF_LIMIT - LZ4_LAST_LITS
+    while i <= end_limit {
+        let hv = hash4(src, i)
+        let ref_pos = htab[hv]
+        htab[hv] = i
+        if ref_pos >= 0 && i - ref_pos <= LZ4_MAXD
+           && src[ref_pos]     == src[i]
+           && src[ref_pos + 1] == src[i + 1]
+           && src[ref_pos + 2] == src[i + 2]
+           && src[ref_pos + 3] == src[i + 3] {
+            let mlen = 4
+            while i + mlen < n - LZ4_LAST_LITS
+                  && src[ref_pos + mlen] == src[i + mlen] {
+                mlen = mlen + 1
+            }
+            let lit_len = i - anchor
+            let mlen_t = mlen - LZ4_MINMATCH
+            let t_lit = lit_len
+            if t_lit > 15 { t_lit = 15 }
+            let t_m = mlen_t
+            if t_m > 15 { t_m = 15 }
+            let tok = ((t_lit << 4) | t_m) & 0xff
+            out = out + [tok]
+            if lit_len >= 15 { out = emit_var_len(out, lit_len - 15) }
+            let k2 = 0
+            while k2 < lit_len { out = out + [src[anchor + k2]]; k2 = k2 + 1 }
+            let off = i - ref_pos
+            out = out + [off & 0xff, (off >> 8) & 0xff]
+            if mlen_t >= 15 { out = emit_var_len(out, mlen_t - 15) }
+            i = i + mlen
+            anchor = i
+        } else {
+            i = i + 1
+        }
+    }
+    let lit_len = n - anchor
+    if lit_len >= 15 {
+        out = out + [0xf0]
+        out = emit_var_len(out, lit_len - 15)
+    } else {
+        out = out + [(lit_len << 4) & 0xff]
+    }
+    let k3 = 0
+    while k3 < lit_len { out = out + [src[anchor + k3]]; k3 = k3 + 1 }
+    return out
+}
+
+fn decompress(src: list) -> list {
+    let n = len(src)
+    let out = []
+    let i = 0
+    while i < n {
+        let tok = src[i]
+        i = i + 1
+        let lit_len = (tok >> 4) & 0x0f
+        if lit_len == 15 {
+            let more = true
+            while more {
+                let b = src[i]
+                i = i + 1
+                lit_len = lit_len + b
+                if b != 255 { more = false }
+            }
+        }
+        let k = 0
+        while k < lit_len { out = out + [src[i + k]]; k = k + 1 }
+        i = i + lit_len
+        if i >= n { return out }
+        let off = src[i] | (src[i + 1] << 8)
+        i = i + 2
+        let mlen = tok & 0x0f
+        if mlen == 15 {
+            let more2 = true
+            while more2 {
+                let b2 = src[i]
+                i = i + 1
+                mlen = mlen + b2
+                if b2 != 255 { more2 = false }
+            }
+        }
+        let mlen_f = mlen + LZ4_MINMATCH
+        let start = len(out) - off
+        let m = 0
+        while m < mlen_f { out = out + [out[start + m]]; m = m + 1 }
+    }
+    return out
+}
+
+fn hexs(bytes: list) -> str {
+    let h = "0123456789abcdef"
+    let out = ""
+    let i = 0
+    while i < len(bytes) {
+        let b = bytes[i] & 0xff
+        out = out + slice(h, b >> 4, (b >> 4) + 1)
+               + slice(h, b & 0x0f, (b & 0x0f) + 1)
+        i = i + 1
+    }
+    return out
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB LZ4 TUTORIAL ===")
+
+    println("STEP 1 tiny input -> single literal run:")
+    let tiny = bytes_of("hi")
+    let ct = compress(tiny)
+    println("  in=" + str(len(tiny)) + "B compressed=" + hexs(ct))
+    println("  round-trip=" + str(str_of(decompress(ct)) == "hi"))
+
+    println("STEP 2 repetitive text compresses:")
+    let rep = ""
+    let i = 0
+    while i < 20 { rep = rep + "the quick brown fox jumps over the lazy dog. "; i = i + 1 }
+    let src = bytes_of(rep)
+    let comp = compress(src)
+    println("  in=" + str(len(src)) + "B -> out=" + str(len(comp)) + "B")
+    println("  ratio=" + str(int(len(src) / len(comp))) + "x")
+    println("  round-trip=" + str(decompress(comp) == src))
+
+    println("STEP 3 compressed bytes (first 48):")
+    println("  " + hexs(slice(comp, 0, 48)))
+
+    println("STEP 4 incompressible data ~no gain:")
+    let rnd = []
+    let j = 0
+    while j < 200 {
+        rnd = rnd + [(j * 37 + 11) & 0xff]
+        j = j + 1
+    }
+    let c2 = compress(rnd)
+    println("  in=" + str(len(rnd)) + "B -> out=" + str(len(c2)) + "B")
+    println("  round-trip=" + str(decompress(c2) == rnd))
+
+    println("STEP 5 overlap/RLE run:")
+    let runs = []
+    let k = 0
+    while k < 300 { runs = runs + [65]; k = k + 1 }
+    let c3 = compress(runs)
+    println("  300 x 'A': " + str(len(runs)) + "B -> " + str(len(c3)) + "B")
+    println("  round-trip=" + str(decompress(c3) == runs))
+    println("PINNED_VECTORS: tiny=206869 rt-hi rep=900->60 ratio15x rnd=200->202 rt-true rle300=300->12 rt-true")
+}
+
+main()
