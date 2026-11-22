@@ -1,0 +1,164 @@
+// ===================================================================
+// tests/stdlib_matrix_exponentiation_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for Matrix Binary Exponentiation, O(k^3 log n) linear
+// recurrence acceleration, graph path walk counting, and modular arithmetic.
+// ===================================================================
+
+pub fn identity_matrix(k) {
+    let I = dict()
+    let i = 0
+    while i < k {
+        let row = dict()
+        let j = 0
+        while j < k {
+            if i == j {
+                row[j] = 1
+            } else {
+                row[j] = 0
+            }
+            j = j + 1
+        }
+        I[i] = row
+        i = i + 1
+    }
+    return I
+}
+
+pub fn matrix_multiply(A, B, k, mod_val) {
+    let C = dict()
+    let i = 0
+    while i < k {
+        let row = dict()
+        let j = 0
+        while j < k {
+            let sum = 0
+            let p = 0
+            while p < k {
+                let term = (A[i][p] * B[p][j]) % mod_val
+                sum = (sum + term) % mod_val
+                p = p + 1
+            }
+            row[j] = sum
+            j = j + 1
+        }
+        C[i] = row
+        i = i + 1
+    }
+    return C
+}
+
+pub fn matrix_power(A, power, k, mod_val) {
+    let res = identity_matrix(k)
+    let base = dict()
+    let i = 0
+    while i < k {
+        let row = dict()
+        let j = 0
+        while j < k {
+            row[j] = A[i][j] % mod_val
+            j = j + 1
+        }
+        base[i] = row
+        i = i + 1
+    }
+
+    let p = power
+    while p > 0 {
+        if p % 2 != 0 {
+            res = matrix_multiply(res, base, k, mod_val)
+        }
+        base = matrix_multiply(base, base, k, mod_val)
+        p = p / 2
+    }
+
+    return res
+}
+
+pub fn fibonacci_fast(n, mod_val) {
+    if n <= 0 {
+        return 0
+    }
+    if n == 1 {
+        return 1
+    }
+
+    let T = dict()
+    let r0 = dict()
+    r0[0] = 1
+    r0[1] = 1
+    T[0] = r0
+
+    let r1 = dict()
+    r1[0] = 1
+    r1[1] = 0
+    T[1] = r1
+
+    let Tn = matrix_power(T, n - 1, 2, mod_val)
+    return Tn[0][0]
+}
+
+// -------------------------------------------------------------------
+// Verification Tests
+// -------------------------------------------------------------------
+
+pub fn test_identity_and_zero_power() {
+    let A = dict()
+    let r0 = dict()
+    r0[0] = 5
+    r0[1] = 7
+    A[0] = r0
+    let r1 = dict()
+    r1[0] = 2
+    r1[1] = 3
+    A[1] = r1
+
+    let mod_val = 1000000007
+    let A0 = matrix_power(A, 0, 2, mod_val)
+    assert(A0[0][0] == 1, "A^0 (0,0) must be 1")
+    assert(A0[0][1] == 0, "A^0 (0,1) must be 0")
+    assert(A0[1][0] == 0, "A^0 (1,0) must be 0")
+    assert(A0[1][1] == 1, "A^0 (1,1) must be 1")
+
+    let A1 = matrix_power(A, 1, 2, mod_val)
+    assert(A1[0][0] == 5, "A^1 (0,0) must be 5")
+    assert(A1[0][1] == 7, "A^1 (0,1) must be 7")
+}
+
+pub fn test_fibonacci_sequence_vectors() {
+    let mod_val = 1000000007
+
+    assert(fibonacci_fast(1, mod_val) == 1, "F(1) = 1")
+    assert(fibonacci_fast(2, mod_val) == 1, "F(2) = 1")
+    assert(fibonacci_fast(3, mod_val) == 2, "F(3) = 2")
+    assert(fibonacci_fast(4, mod_val) == 3, "F(4) = 3")
+    assert(fibonacci_fast(5, mod_val) == 5, "F(5) = 5")
+    assert(fibonacci_fast(6, mod_val) == 8, "F(6) = 8")
+    assert(fibonacci_fast(10, mod_val) == 55, "F(10) = 55")
+    assert(fibonacci_fast(20, mod_val) == 6765, "F(20) = 6765")
+}
+
+pub fn test_three_by_three_graph_walks() {
+    // Triangle graph: 0 -> 1, 1 -> 2, 2 -> 0
+    let adj = dict()
+    let r0 = dict()
+    r0[0] = 0; r0[1] = 1; r0[2] = 0; adj[0] = r0
+    let r1 = dict()
+    r1[0] = 0; r1[1] = 0; r1[2] = 1; adj[1] = r1
+    let r2 = dict()
+    r2[0] = 1; r2[1] = 0; r2[2] = 0; adj[2] = r2
+
+    let mod_val = 1000000007
+    // After 3 steps, 0 must return to 0 (cycle of length 3)
+    let walks_3 = matrix_power(adj, 3, 3, mod_val)
+    assert(walks_3[0][0] == 1, "Exactly 1 walk of length 3 from 0 to 0")
+    assert(walks_3[0][1] == 0, "No walk of length 3 from 0 to 1")
+    assert(walks_3[0][2] == 0, "No walk of length 3 from 0 to 2")
+}
+
+pub fn main() {
+    test_identity_and_zero_power()
+    test_fibonacci_sequence_vectors()
+    test_three_by_three_graph_walks()
+    print("All Matrix Exponentiation verification tests passed successfully!")
+}
