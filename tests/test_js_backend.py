@@ -614,3 +614,16 @@ main()"""
         assert "function greet" in result
         assert "function main" in result
         assert "for (const" in result
+
+
+class TestUnaryParenthesization:
+    """Issue #243: unary ops must be parenthesized so they bind tighter
+    than ** / cannot produce invalid JS."""
+
+    def test_unary_minus_before_pow(self):
+        result = transpile_to_js("println((-2) ** 2)", include_runtime=False)
+        assert "(-2) ** 2" in result
+
+    def test_bang_unary_parenthesized(self):
+        result = transpile_to_js("let b = !flag", include_runtime=False)
+        assert "(!flag)" in result

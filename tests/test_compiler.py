@@ -172,3 +172,21 @@ class TestCompileResult:
     def test_result_error_list_empty_on_success(self):
         r = check("fn f() { }")
         assert r.errors == [] or all(e.severity.value == "warning" for e in r.errors)
+
+
+class TestUnaryParenthesization:
+    """Issue #243: Python backend must parenthesize unary ops so
+    `(-2) ** 2` isn't re-associated as `-(2 ** 2)`."""
+
+    def test_unary_minus_before_pow(self):
+        import contextlib
+        import io
+        src = ("println((-2) ** 2)\n"
+               "println((-2) ** 3)\n"
+               "println((~2) ** 2)\n")
+        r = check(src)
+        assert r.ok
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            exec(r.python_src, {})
+        assert buf.getvalue().split() == ["4", "-8", "9"]
