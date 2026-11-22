@@ -1,0 +1,333 @@
+#!/usr/bin/env lateralus
+-- examples/json_tutorial.ltl
+-- Runnable companion example for stdlib.json tutorial
+
+import "json"
+
+-- ============================================================
+-- Example 1: Basic parsing and serialization
+-- ============================================================
+
+fn example_basic() {
+    print("=== Example 1: Basic Parsing & Serialization ===")
+
+    -- Parse JSON
+    let data = json.parse('{"user": {"name": "Alice", "age": 30}, "tags": ["admin", "user"]}')
+    print("Parsed: " + json.stringify(data))
+
+    -- Pretty print
+    print("Pretty:")
+    print(json.pretty(data, 2))
+
+    -- Compact
+    print("Compact: " + json.stringify(data))
+
+    -- Error handling
+    try {
+        json.parse('{"broken": true,}')
+    } catch e {
+        print("Parse error caught: " + e.message)
+    }
+
+    -- Safe parsing
+    let ok = json.try_parse('{"valid": true}')
+    print("try_parse valid: " + json.stringify(ok))
+
+    let bad = json.try_parse('{"broken": }')
+    print("try_parse invalid: " + str(bad))  -- None
+}
+
+-- ============================================================
+-- Example 2: Path access
+-- ============================================================
+
+fn example_path_access() {
+    print("\n=== Example 2: Path Access ===")
+
+    let config = {
+        "server": {
+            "host": "localhost",
+            "ports": {"http": 80, "https": 443},
+            "workers": [{"id": 1}, {"id": 2}]
+        },
+        "features": ["auth", "cache", "metrics"]
+    }
+
+    print("get_path(config, 'server.host'): " + json.get_path(config, "server.host"))
+    print("get_path(config, 'server.ports.https'): " + str(json.get_path(config, "server.ports.https")))
+    print("get_path(config, 'server.workers.0.id'): " + str(json.get_path(config, "server.workers.0.id")))
+    print("get_path(config, 'features.1'): " + json.get_path(config, "features.1"))
+    print("get_path(config, 'missing.key'): " + str(json.get_path(config, "missing.key")))
+
+    -- set_path (immutable)
+    let updated = json.set_path(config, "server.port", 8443)
+    print("set_path server.port=8443: " + str(json.get_path(updated, "server.port")))
+    print("Original unchanged: " + str(json.get_path(config, "server.port")))
+
+    -- Create nested
+    let new_config = json.set_path({}, "database.host", "localhost")
+    print("set_path on empty: " + json.stringify(new_config))
+
+    -- delete_path
+    let data = {"user": {"name": "Alice", "temp": "remove_me"}}
+    let cleaned = json.delete_path(data, "user.temp")
+    print("Original: " + json.stringify(data))
+    print("After delete_path: " + json.stringify(cleaned))
+}
+
+-- ============================================================
+-- Example 3: Transformation
+-- ============================================================
+
+fn example_transform() {
+    print("\n=== Example 3: Transformation ===")
+
+    -- flatten
+    let nested = {
+        "user": {
+            "name": "Alice",
+            "address": {"city": "NYC", "zip": "10001"}
+        },
+        "tags": ["admin", "user"]
+    }
+
+    let flat = json.flatten(nested)
+    print("flatten: " + json.pretty(flat))
+
+    -- With prefix
+    let prefixed = json.flatten(nested, "root")
+    print("flatten with prefix: " + json.stringify(prefixed))
+
+    -- unflatten (roundtrip)
+    let restored = json.unflatten(flat)
+    print("unflatten: " + json.pretty(restored))
+    assert(restored["user"]["name"] == "Alice")
+
+    -- merge
+    let base = {
+        "server": {"host": "localhost", "port": 8080},
+        "features": ["auth"],
+        "debug": true
+    }
+    let overlay = {
+        "server": {"port": 8443, "tls": true},
+        "features": ["cache", "metrics"],
+        "debug": false
+    }
+    let merged = json.merge(base, overlay)
+    print("merge: " + json.pretty(merged))
+    assert(base["debug"] == true)  -- original unchanged
+}
+
+-- ============================================================
+-- Example 4: Schema validation
+-- ============================================================
+
+fn example_validation() {
+    print("\n=== Example 4: Schema Validation ===")
+
+    let schema = {
+        "name": "str",
+        "age": "int",
+        "email": "str",
+        "settings": {
+            "notifications": "bool",
+            "theme": "str"
+        },
+        "tags": ["str"]
+    }
+
+    -- Valid data
+    let valid = {
+        "name": "Alice",
+        "age": 30,
+        "email": "alice@example.com",
+        "settings": {"notifications": true, "theme": "dark"},
+        "tags": ["admin", "user"]
+    }
+    let errors = json.validate_schema(valid, schema)
+    print("Valid data errors: " + str(errors))  -- []
+
+    -- Invalid data
+    let invalid = {
+        "name": 123,
+        "age": "thirty",
+        "settings": {"theme": 123}
+    }
+    let errors = json.validate_schema(invalid, schema)
+    print("Invalid errors: " + str(errors))
+}
+
+-- ============================================================
+-- Example 5: Utilities
+-- ============================================================
+
+fn example_utilities() {
+    print("\n=== Example 5: Utilities ===")
+
+    -- count_keys
+    let data = {"a": 1, "b": {"c": 2, "d": {"e": 3}}}
+    print("count_keys: " + str(json.count_keys(data)))  -- 4
+
+    -- pluck_deep
+    let deep_data = {
+        "users": [
+            {"id": 1, "name": "Alice"},
+            {"id": 2, "name": "Bob"}
+        ],
+        "admin": {"id": 99, "name": "Admin"}
+    }
+    let names = json.pluck_deep(deep_data, "name")
+    print("pluck_deep 'name': " + json.stringify(names))  -- ["Alice", "Bob", "Admin"]
+
+    let ids = json.pluck_deep(deep_data, "id")
+    print("pluck_deep 'id': " + json.stringify(ids))  -- [1, 2, 99]
+
+    -- parse_and
+    fn extract_names(json_str: str) -> list[str] {
+        let d = json.parse(json_str)
+        return json.pluck_deep(d, "name")
+    }
+    let json_input = '{"users": [{"name": "Alice"}, {"name": "Bob"}]}'
+    let names = json.parse_and(json_input, extract_names)
+    print("parse_and extract names: " + json.stringify(names))
+}
+
+-- ============================================================
+-- Example 6: File I/O
+-- ============================================================
+
+fn example_file_io() {
+    print("\n=== Example 6: File I/O ===")
+
+    -- Save and load
+    json.save_file("test_config.json", {"env": "prod", "port": 443})
+    let config = json.load_file("test_config.json")
+    print("Loaded config port: " + str(config["port"]))
+
+    -- Different indents
+    json.save_file("compact.json", {"a": 1}, 0)
+    json.save_file("pretty.json", {"a": 1}, 4)
+
+    let c1 = json.load_file("compact.json")
+    let c2 = json.load_file("pretty.json")
+    print("Compact: " + json.stringify(c1))
+    print("Pretty: " + json.stringify(c2))
+
+    -- Error handling
+    try {
+        json.load_file("missing.json")
+    } catch e {
+        print("File error caught: " + e.message)
+    }
+}
+
+-- ============================================================
+-- Example 7: Configuration Manager (complete pattern)
+-- ============================================================
+
+struct ConfigManager {
+    path: str,
+    defaults: any,
+    data: any
+}
+
+impl ConfigManager {
+    fn new(path: str, defaults: any) -> ConfigManager {
+        let mgr = ConfigManager {path: path, defaults: defaults, data: {}}
+        mgr.load()
+        return mgr
+    }
+
+    fn load(self) {
+        match json.try_parse_file(self.path) {
+            Some(d) => self.data = json.merge(self.defaults, d),
+            None => self.data = self.defaults
+        }
+    }
+
+    fn save(self) {
+        json.save_file(self.path, self.data)
+    }
+
+    fn get(self, path: str) -> any {
+        return json.get_path(self.data, path)
+    }
+
+    fn set(self, path: str, value: any) {
+        self.data = json.set_path(self.data, path, value)
+        self.save()
+    }
+}
+
+fn example_config_manager() {
+    print("\n=== Example 7: Configuration Manager ===")
+
+    let defaults = {
+        "server": {"host": "0.0.0.0", "port": 8080},
+        "database": {"url": "sqlite:///app.db"},
+        "features": {"cache": true, "metrics": false}
+    }
+
+    let config = ConfigManager.new("app_config.json", defaults)
+    print("Initial port: " + str(config.get("server.port")))
+
+    config.set("server.port", 8443)
+    config.set("features.cache", false)
+    print("Updated port: " + str(config.get("server.port")))
+    print("Cache enabled: " + str(config.get("features.cache")))
+}
+
+-- ============================================================
+-- Example 8: Error handling patterns
+-- ============================================================
+
+fn example_error_handling() {
+    print("\n=== Example 8: Error Handling Patterns ===")
+
+    fn safe_json_operation(input: str) -> any {
+        match json.try_parse(input) {
+            Some(data) => Ok(data),
+            None => Err("Invalid JSON: " + input)
+        }
+    }
+
+    fn load_config_or_default(path: str, default: any) -> any {
+        match json.try_parse_file(path) {
+            Some(config) => config,
+            None => default
+        }
+    }
+
+    -- Test
+    let result = safe_json_operation('{"valid": true}')
+    match result {
+        Ok(data) => print("OK: " + json.stringify(data)),
+        Err(e) => print("Error: " + e)
+    }
+
+    let config = load_config_or_default("missing.json", {"fallback": true})
+    print("Fallback config: " + json.stringify(config))
+}
+
+-- ============================================================
+-- Main
+-- ============================================================
+
+fn main() {
+    print("stdlib.json Tutorial Examples")
+    print("==============================\n")
+
+    example_basic()
+    example_path_access()
+    example_transform()
+    example_validation()
+    example_utilities()
+    example_file_io()
+    example_config_manager()
+    example_error_handling()
+
+    print("\nAll examples completed successfully!")
+}
+
+main()

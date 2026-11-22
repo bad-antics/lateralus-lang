@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>stdlib-influx-line-tutorial</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "stdlib.influx_line Tutorial"
+author: IVANLI2412 (CHAIN HUNTER agent)
+date: 2026-11-22
+abstract: Complete tutorial for the LATERALUS stdlib.influx_line module. Covers InfluxDB Line Protocol serialization, escaping, field formatting, line building, and parsing with practical examples.
+
+# stdlib.influx_line Tutorial
+
+The `stdlib.influx_line` module provides a complete implementation of the **InfluxDB Line Protocol** for serializing and parsing time-series data points. This tutorial covers:
+
+- Escaping mechanics for measurements, tags, and fields
+- Typed field encoding (strings, integers, floats, booleans)
+- Line building with measurements, tags, fields, and timestamps
+- Single-pass streaming tokenizer and line parser
+- Roundtrip demonstration (serialize → parse → verify)
+
+## Prerequisites
+
+- LATERALUS 1.5.0 or later
+- Basic understanding of InfluxDB Line Protocol format
+
+## Quick Start
+
+```lateralus
+import "influx_line"
+
+-- Build a simple CPU metric line
+let measurement = "cpu"
+let tags = [["host", "server01"], ["region", "us-west"]]
+let fields = [
+    ["usage_user", influx_line.field_float("12.5")],
+    ["usage_system", influx_line.field_float("5.2")],
+    ["usage_idle", influx_line.field_float("82.3")]
+]
+let line = influx_line.line(measurement, tags, fields, 1699900000000000000)
+print(line)
+-- Output: cpu,host=server01,region=us-west usage_user=12.5,usage_system=5.2,usage_idle=82.3 1699900000000000000
+
+-- Parse it back
+let parsed = influx_line.parse_line(line)
+print(parsed["measurement"])  -- "cpu"
+print(parsed["tags"])         -- [["host", "server01"], ["region", "us-west"]]
+print(parsed["fields"])       -- [["usage_user", "12.5"], ["usage_system", "5.2"], ["usage_idle", "82.3"]]
+print(parsed["timestamp"])    -- 1699900000000000000
+```
+
+---
+
+## InfluxDB Line Protocol Overview
+
+The line protocol format is:
+
+```
+measurement[,tag=val,...] field=val[,field=val,...] [timestamp]
+```
+
+Key rules:
+- **Measurement**: Required, escaped for commas and spaces
+- **Tags**: Optional key-value pairs, escaped for commas, equals, spaces
+- **Fields**: Required, typed values (string, int with `i` suffix, float, bool)
+- **Timestamp**: Optional nanosecond-precision Unix timestamp
+
+---
+
+## Escaping Functions
+
+The module provides three escaping functions for different contexts:
+
+### `escape_ident(s: str) -> str`
+
+Escapes tag keys, tag values, and field keys. Escapes: `,`, `=`, space.
+
+```lateralus
+import "influx_line"
+
+let tag_key = influx_line.escape_ident("host,name")    -- "host\,name"
+let tag_val = influx_line.escape_ident("server 01")    -- "server\ 01"
+let field_k = influx_line.escape_ident("cpu.usage")    -- "cpu\.usage"
+```
+
+### `escape_measurement(s: str) -> str`
+
+Escapes measurement names. Escapes: `,`, space.
+
+```lateralus
+let m = influx_line.escape_measurement("cpu,load")     -- "cpu\,load"
+let m2 = influx_line.escape_measurement("disk usage")  -- "disk\ usage"
+```
+
+### `escape_string_field(s: str) -> str`
+
+Escapes string field values. Escapes: `"`, `\`.
+
+```lateralus
+let s = influx_line.escape_string_field('He said "hi"') -- 'He said \"hi\"'
+let s2 = influx_line.escape_string_field("path\\to")    -- "path\\to"
+```
+
+---
+
+## Field Value Formatting
+
+Fields must be typed correctly for InfluxDB. The module provides helpers:
+
+### `field_string(v: str) -> str`
+
+Returns a quoted, escaped string field value.
+
+```lateralus
+let f = influx_line.field_string("hello world")  -- "\"hello world\""
+let f2 = influx_line.field_string('a "quote"')   -- "\"a \"quote\"\"" 
+```
+
+### `field_int(v: int) -> str`
+
+Integer fields are suffixed with `i`.
+
+```lateralus
+let f = influx_line.field_int(42)      -- "42i"
+let f2 = influx_line.field_int(-100)   -- "-100i"
+```
+
+### `field_float(v: str) -> str`
+
+Float fields are passed through as-is (caller formats).
+
+```lateralus
+let f = influx_line.field_float("12.5")    -- "12.5"
+let f2 = influx_line.field_float("-0.001")  -- "-0.001"
+```
+
+### `field_bool(v: bool) -> str`
+
+Boolean fields become `true` or `false`.
+
+```lateralus
+let f = influx_line.field_bool(true)   -- "true"
+let f2 = influx_line.field_bool(false) -- "false"
+```
+
+---
+
+## Building Lines
+
+### `line(measurement: str, tags: list, fields: list, timestamp_ns: int) -> str`
+
+Builds a complete line protocol line.
+
+- `measurement`: Measurement name (will be escaped)
+- `tags`: List of `[key, value]` pairs (sorted by key for performance)
+- `fields`: List of `[key, value]` where value is pre-formatted
+- `timestamp_ns`: Nanosecond timestamp (<= 0 to omit)
+
+```lateralus
+let measurement = "sensor_data"
+let tags = [
+    ["device_id", "sensor-001"],
+    ["location", "warehouse_a"],
+    ["firmware", "v2.1.0"]
+]
+let fields = [
+    ["temperature", influx_line.field_float("23.45")],
+    ["humidity", influx_line.field_float("65.2")],
+    ["pressure", influx_line.field_float("1013.25")],
+    ["status", influx_line.field_string("ok")],
+    ["battery", influx_line.field_int(87)]
+]
+let ts = 1699900800000000000  -- 2023-11-13 12:00:00 UTC in nanoseconds
+
+let line = influx_line.line(measurement, tags, fields, ts)
+print(line)
+-- Output:
+-- sensor_data,device_id=sensor-001,firmware=v2.1.0,location=warehouse_a humidity=65.2,pressure=1013.25,status="ok",temperature=23.45,battery=87i 1699900800000000000
+```
+
+### Complete Telemetry Exporter Example
+
+```lateralus
+import "influx_line"
+import "time"
+import "random"
+
+fn export_cpu_metrics(host: str, cpu_pct: float, mem_pct: float) -> str {
+    let tags = [
+        ["host", host],
+        ["service", "monitoring-agent"]
+    ]
+    let fields = [
+        ["cpu_usage", influx_line.field_float(str(cpu_pct))],
+        ["mem_usage", influx_line.field_float(str(mem_pct))],
+        ["load_avg", influx_line.field_float(str(random.random() * 2.0))]
+    ]
+    return influx_line.line("system_metrics", tags, fields, time.now_ns())
+}
+
+-- Generate sample data
+for i in range(5) {
+    let cpu = random.random() * 100.0
+    let mem = random.random() * 100.0
+    let line = export_cpu_metrics("server-01", cpu, mem)
+    print(line)
+}
+```
+
+---
+
+## Parsing Lines
+
+### `parse_line(line: str) -> map`
+
+Parses a single line protocol string. Returns a map with:
+- `measurement`: string
+- `tags`: list of `[key, value]` pairs (strings)
+- `fields`: list of `[key, raw_value_string]` pairs
+- `timestamp`: int (nanoseconds, 0 if absent)
+
+```lateralus
+let raw = 'cpu,host=server01,region=us-west usage_user=12.5,usage_system=5.2,usage_idle=82.3 1699900000000000000'
+let parsed = influx_line.parse_line(raw)
+
+if parsed == nil {
+    print("Parse failed!")
+} else {
+    print("Measurement: " + parsed["measurement"])
+    print("Tags: " + str(parsed["tags"]))
+    print("Fields: " + str(parsed["fields"]))
+    print("Timestamp: " + str(parsed["timestamp"]))
+}
+```
+
+Output:
+```
+Measurement: cpu
+Tags: [["host", "server01"], ["region", "us-west"]]
+Fields: [["usage_user", "12.5"], ["usage_system", "5.2"], ["usage_idle", "82.3"]]
+Timestamp: 1699900000000000000
+```
+
+### Interpreting Parsed Field Values
+
+The parser returns raw field values. You must interpret them based on the protocol:
+
+```lateralus
+fn interpret_field(raw_value: str) -> any {
+    if raw_value.ends_with("i") {
+        return int(raw_value[:-1])  -- integer
+    } else if raw_value == "true" {
+        return true
+    } else if raw_value == "false" {
+        return false
+    } else if raw_value.starts_with("\"") and raw_value.ends_with("\"") {
+        -- unescape string field
+        return raw_value[1:-1].replace("\\\"", "\"").replace("\\\\", "\\")
+    } else {
+        return float(raw_value)  -- float
+    }
+}
+
+let parsed = influx_line.parse_line(line)
+for field in parsed["fields"] {
+    let name = field[0]
+    let raw = field[1]
+    let value = interpret_field(raw)
+    print(name + " = " + str(value) + " (" + @type(value) + ")")
+}
+```
+
+---
+
+## Roundtrip Demonstration
+
+```lateralus
+import "influx_line"
+
+fn roundtrip_test() {
+    -- Build
+    let tags = [["host", "test-server"], ["env", "prod"]]
+    let fields = [
+        ["cpu", influx_line.field_float("45.5")],
+        ["active", influx_line.field_bool(true)]
+    ]
+    let ts = 1699900000000000000
+    let original = influx_line.line("test_metric", tags, fields, ts)
+    
+    -- Parse
+    let parsed = influx_line.parse_line(original)
+    if parsed == nil {
+        print("FAIL: Parse returned nil")
+        return false
+    }
+    
+    -- Verify measurement
+    if parsed["measurement"] != "test_metric" {
+        print("FAIL: measurement mismatch")
+        return false
+    }
+    
+    -- Verify tags
+    let tags_ok = true
+    for tag in parsed["tags"] {
+        if not (tag[0] == "host" and tag[1] == "test-server") and
+           not (tag[0] == "env" and tag[1] == "prod") {
+            tags_ok = false
+        }
+    }
+    if not tags_ok {
+        print("FAIL: tags mismatch")
+        return false
+    }
+    
+    -- Verify fields (raw comparison)
+    let fields_ok = true
+    for field in parsed["fields"] {
+        if not (field[0] == "value" and field[1] == "1.5") and
+           not (field[0] == "active" and field[1] == "true") {
+            fields_ok = false
+        }
+    }
+    if not fields_ok {
+        print("FAIL: fields mismatch")
+        return false
+    }
+    
+    -- Verify timestamp
+    if parsed["timestamp"] != 1699900000000000000 {
+        print("FAIL: timestamp mismatch")
+        return false
+    }
+    
+    print("SUCCESS: Roundtrip verified!")
+    return true
+}
+
+assert(roundtrip_test())
+print("All roundtrip tests passed!")
+```
+
+---
+
+## Error Handling
+
+The parser returns `nil` for malformed lines:
+
+```lateralus
+let bad_lines = [
+    "",                           -- empty
+    "measurement",                -- no fields
+    "m f=v",                      -- missing space before fields
+    "m,tag=, f=1",                -- empty tag value
+    "m f=",                       -- empty field value
+]
+
+for line in bad_lines {
+    let result = influx_line.parse_line(line)
+    if result == nil {
+        print("Correctly rejected: '" + line + "'")
+    } else {
+        print("ERROR: Should have rejected: '" + line + "'")
+    }
+}
+```
+
+---
+
+## Best Practices
+
+1. **Sort tags by key** for best query performance in InfluxDB
+2. **Use integer timestamps** in nanoseconds for precision
+3. **Batch multiple points** in a single HTTP request for efficiency
+4. **Reuse tag sets** across measurements to save bandwidth
+5. **Avoid high-cardinality tags** (e.g., request IDs, user emails)
+
+---
+
+## Summary
+
+| Function | Purpose |
+|----------|---------|
+| `escape_ident` | Escape tag keys/values, field keys |
+| `escape_measurement` | Escape measurement names |
+| `escape_string_field` | Escape string field values |
+| `field_string` | Format string field value |
+| `field_int` | Format integer field (suffix `i`) |
+| `field_float` | Format float field |
+| `field_bool` | Format boolean field |
+| `line` | Build complete line protocol line |
+| `parse_line` | Parse line into structured data |
+
+---
+
+## References
+
+- [InfluxDB Line Protocol Specification](https://docs.influxdata.com/influxdb/latest/reference/syntax/line-protocol/)
+- LATERALUS stdlib source: `stdlib/influx_line.ltl`
+- LSP hover: Hover over `influx_line.*` functions for inline documentation
+
+---
+
+*Generated by CHAIN HUNTER agent for Lateralus #664*
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>

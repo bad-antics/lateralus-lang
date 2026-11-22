@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>stdlib-json-tutorial</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "stdlib.json Tutorial"
+author: IVANLI2412 (CHAIN HUNTER agent)
+date: 2026-11-22
+abstract: Complete tutorial for the LATERALUS stdlib.json module. Covers parsing, serialization, path access (get/set/delete), transformation (flatten/unflatten/merge), schema validation, and file I/O with practical examples.
+
+# stdlib.json Tutorial
+
+The `stdlib.json` module provides a complete toolkit for working with JSON data in LATERALUS. This tutorial covers:
+
+- **Parsing**: `parse`, `try_parse`
+- **Serialization**: `stringify`, `pretty`
+- **Path Access**: `get_path`, `set_path`, `delete_path`
+- **Transformation**: `flatten`, `unflatten`, `merge`
+- **Schema Validation**: `validate_schema`
+- **Utilities**: `count_keys`, `pluck_deep`, `parse_and`
+- **File I/O**: `load_file`, `save_file`
+
+## Prerequisites
+
+- LATERALUS 1.5.0 or later
+
+## Quick Start
+
+```lateralus
+import "json"
+
+-- Parse JSON
+let data = json.parse('{"user": {"name": "Alice", "age": 30}, "tags": ["admin", "user"]}')
+print(json.stringify(data))
+-- {"user":{"name":"Alice","age":30},"tags":["admin","user"]}
+
+-- Pretty print
+print(json.pretty(data, 2))
+-- {
+--   "user": {
+--     "name": "Alice",
+--     "age": 30
+--   },
+--   "tags": ["admin", "user"]
+-- }
+
+-- Access nested values
+print(json.get_path(data, "user.name"))     -- "Alice"
+print(json.get_path(data, "tags.0"))        -- "admin"
+
+-- Modify nested values
+let updated = json.set_path(data, "user.age", 31)
+print(json.get_path(updated, "user.age"))   -- 31
+```
+
+---
+
+## Types
+
+```lateralus
+type JsonValue = int | float | str | bool | None | list[JsonValue] | dict[str, JsonValue]
+
+struct JsonError {
+    message: str
+    position: int
+}
+```
+
+---
+
+## Parsing
+
+### `parse(text: str) -> any`
+
+Parses a JSON string. Raises `RuntimeError` on invalid JSON.
+
+```lateralus
+import "json"
+
+let valid = json.parse('{"name": "Bob", "score": 95}')
+print(valid)  -- {"name": "Bob", "score": 95}
+
+-- Error handling with try-catch
+try {
+    json.parse('{"broken": true,}')
+} catch e {
+    print("Parse error: " + e.message)
+    -- Parse error: JSON parse error at 15: Expected property name or '}'
+}
+```
+
+### `try_parse(text: str) -> any`
+
+Parses JSON, returns `None` on error instead of raising.
+
+```lateralus
+let ok = json.try_parse('{"valid": true}')
+print(ok)  -- {"valid": true}
+
+let bad = json.try_parse('{"broken": }')
+print(bad)  -- None
+
+-- Safe pattern
+let input = get_user_input()
+match json.try_parse(input) {
+    Some(data) => process(data),
+    None => print("Invalid JSON input")
+}
+```
+
+---
+
+## Serialization
+
+### `stringify(value: any) -> str`
+
+Converts a LATERALUS value to a compact JSON string (no whitespace).
+
+```lateralus
+let data = {"name": "Alice", "scores": [90, 85, 95], "active": true}
+let compact = json.stringify(data)
+print(compact)
+-- {"name":"Alice","scores":[90,85,95],"active":true}
+
+-- Works with all JSON types
+json.stringify(42)           -- "42"
+json.stringify(3.14)         -- "3.14"
+json.stringify("hello")      -- "\"hello\""
+json.stringify(true)         -- "true"
+json.stringify(None)         -- "null"
+json.stringify([1, 2, 3])    -- "[1,2,3]"
+json.stringify({"a": 1})     -- "{\"a\":1}"
+```
+
+### `pretty(value: any, indent: int = 2) -> str`
+
+Pretty-prints JSON with indentation.
+
+```lateralus
+let data = {"users": [{"name": "Alice", "age": 30}, {"name": "Bob", "age": 25}]}
+
+print(json.pretty(data))
+-- {
+--   "users": [
+--     {
+--       "name": "Alice",
+--       "age": 30
+--     },
+--     {
+--       "name": "Bob",
+--       "age": 25
+--     }
+--   ]
+-- }
+
+print(json.pretty(data, 4))  -- 4-space indent
+```
+
+---
+
+## Path Access
+
+Path access uses dot-notation for nested keys: `"user.address.city"` or `"tags.0"` for array indices.
+
+### `get_path(obj: any, path: str) -> any`
+
+Access a nested value by dot-notation path. Returns `None` if path doesn't exist.
+
+```lateralus
+let config = {
+    "server": {
+        "host": "localhost",
+        "ports": {"http": 80, "https": 443},
+        "workers": [{"id": 1}, {"id": 2}]
+    },
+    "features": ["auth", "cache", "metrics"]
+}
+
+print(json.get_path(config, "server.host"))           -- "localhost"
+print(json.get_path(config, "server.ports.https"))    -- 443
+print(json.get_path(config, "server.workers.0.id"))   -- 1
+print(json.get_path(config, "features.1"))            -- "cache"
+print(json.get_path(config, "missing.key"))           -- None
+```
+
+### `set_path(obj: any, path: str, value: any) -> any`
+
+Set a value at a nested path, returning a **new** object (immutable).
+
+```lateralus
+let config = {"server": {"port": 8080}}
+
+let updated = json.set_path(config, "server.port", 8443)
+print(json.get_path(updated, "server.port"))  -- 8443
+print(json.get_path(config, "server.port"))   -- 8080 (original unchanged)
+
+-- Creates nested structure if missing
+let new_config = json.set_path({}, "database.host", "localhost")
+print(new_config)  -- {"database": {"host": "localhost"}}
+```
+
+### `delete_path(obj: any, path: str) -> any`
+
+Delete a key at a nested path, returning a new object.
+
+```lateralus
+let data = {"user": {"name": "Alice", "temp": "remove_me"}}
+
+let cleaned = json.delete_path(data, "user.temp")
+print(data)      -- {"user": {"name": "Alice", "temp": "remove_me"}}
+print(cleaned)   -- {"user": {"name": "Alice"}}
+
+-- Delete top-level key
+let cleaned2 = json.delete_path(data, "user")
+print(cleaned2)  -- {}
+```
+
+---
+
+## Transformation
+
+### `flatten(obj: any, prefix: str = "") -> dict`
+
+Flattens a nested JSON object to a flat dict with dot-notation keys.
+
+```lateralus
+let nested = {
+    "user": {
+        "name": "Alice",
+        "address": {"city": "NYC", "zip": "10001"}
+    },
+    "tags": ["admin", "user"]
+}
+
+let flat = json.flatten(nested)
+print(json.pretty(flat))
+-- {
+--   "user.name": "Alice",
+--   "user.address.city": "NYC",
+--   "user.address.zip": "10001",
+--   "tags.0": "admin",
+--   "tags.1": "user"
+-- }
+
+-- With prefix
+let prefixed = json.flatten(nested, "root")
+print(json.pretty(prefixed))
+-- {"root.user.name": "Alice", "root.user.address.city": "NYC", ...}
+```
+
+### `unflatten(flat: dict) -> dict`
+
+Unflattens a flat dot-notation dict back to nested structure.
+
+```lateralus
+let flat = {
+    "user.name": "Alice",
+    "user.address.city": "NYC",
+    "user.address.zip": "10001",
+    "tags.0": "admin",
+    "tags.1": "user"
+}
+
+let nested = json.unflatten(flat)
+print(json.pretty(nested))
+-- {
+--   "user": {
+--     "name": "Alice",
+--     "address": {"city": "NYC", "zip": "10001"}
+--   },
+--   "tags": ["admin", "user"]
+-- }
+
+-- Roundtrip
+let original = {"a": {"b": {"c": 1}}}
+let flat = json.flatten(original)
+let restored = json.unflatten(flat)
+assert(restored == original)
+```
+
+### `merge(base: any, overlay: any) -> any`
+
+Deep merge two JSON objects (overlay wins on conflict).
+
+```lateralus
+let base = {
+    "server": {"host": "localhost", "port": 8080},
+    "features": ["auth"],
+    "debug": true
+}
+
+let overlay = {
+    "server": {"port": 8443, "tls": true},
+    "features": ["cache", "metrics"],
+    "debug": false
+}
+
+let merged = json.merge(base, overlay)
+print(json.pretty(merged))
+-- {
+--   "server": {"host": "localhost", "port": 8443, "tls": true},
+--   "features": ["cache", "metrics"],
+--   "debug": false
+-- }
+
+-- Original unchanged
+assert(base.debug == true)
+```
+
+---
+
+## Schema Validation
+
+### `validate_schema(value: any, schema: any) -> list[str]`
+
+Validates a JSON value against a schema. Returns list of error messages (empty = valid).
+
+**Schema format:**
+- `"type"` → expected type (`int`, `float`, `str`, `bool`, `number`, `any`)
+- `{"field": "type"}` → dict with typed fields
+- `{"field": {"nested": "type"}}` → nested dict
+- `{"list_field": ["type"]}` → list with typed elements
+
+```lateralus
+let schema = {
+    "name": "str",
+    "age": "int",
+    "email": "str",
+    "settings": {
+        "notifications": "bool",
+        "theme": "str"
+    },
+    "tags": ["str"]
+}
+
+-- Valid data
+let valid = {
+    "name": "Alice",
+    "age": 30,
+    "email": "alice@example.com",
+    "settings": {"notifications": true, "theme": "dark"},
+    "tags": ["admin", "user"]
+}
+let errors = json.validate_schema(valid, schema)
+print(errors)  -- []
+
+-- Invalid data
+let invalid = {
+    "name": 123,              -- should be string
+    "age": "thirty",          -- should be int
+    "settings": {"theme": 123} -- nested type mismatch
+}
+let errors = json.validate_schema(invalid, schema)
+print(errors)
+-- ["Expected str, got int", "Expected int, got str", "Expected bool, got int"]
+```
+
+---
+
+## Utilities
+
+### `count_keys(obj: any) -> int`
+
+Count keys at all levels of a nested JSON object.
+
+```lateralus
+let data = {"a": 1, "b": {"c": 2, "d": {"e": 3}}}
+print(json.count_keys(data))  -- 4 (a, c, d, e)
+```
+
+### `pluck_deep(obj: any, key: str) -> list`
+
+Extract all values at a given key from nested structures.
+
+```lateralus
+let data = {
+    "users": [
+        {"id": 1, "name": "Alice"},
+        {"id": 2, "name": "Bob"}
+    ],
+    "admin": {"id": 99, "name": "Admin"}
+}
+
+let names = json.pluck_deep(data, "name")
+print(names)  -- ["Alice", "Bob", "Admin"]
+
+let ids = json.pluck_deep(data, "id")
+print(ids)  -- [1, 2, 99]
+```
+
+### `parse_and(text: str, transform: fn) -> any`
+
+Parse JSON then apply a pipeline function.
+
+```lateralus
+fn extract_names(json_str: str) -> list[str] {
+    let data = json.parse(json_str)
+    return json.pluck_deep(data, "name")
+}
+
+let json_input = '{"users": [{"name": "Alice"}, {"name": "Bob"}]}'
+let names = json.parse_and(json_input, extract_names)
+print(names)  -- ["Alice", "Bob"]
+```
+
+---
+
+## File I/O
+
+### `load_file(path: str) -> any`
+
+Load and parse a JSON file.
+
+```lateralus
+-- Save example
+json.save_file("config.json", {"env": "prod", "port": 443})
+
+-- Load it back
+let config = json.load_file("config.json")
+print(config["port"])  -- 443
+
+-- Error handling
+try {
+    json.load_file("missing.json")
+} catch e {
+    print("File not found: " + e.message)
+}
+```
+
+### `save_file(path: str, value: any, indent: int = 2) -> None`
+
+Save a value to a JSON file. Creates parent directories if needed.
+
+```lateralus
+let data = {"version": "1.0", "build": 42}
+
+json.save_file("build.json", data)           -- indent=2
+json.save_file("build.min.json", data, 0)    -- compact
+json.save_file("build.pretty.json", data, 4) -- 4-space indent
+
+-- Verify
+let loaded = json.load_file("build.json")
+assert(loaded["version"] == "1.0")
+```
+
+---
+
+## Complete Example: Configuration Manager
+
+```lateralus
+import "json"
+
+struct ConfigManager {
+    path: str,
+    defaults: any,
+    data: any
+}
+
+impl ConfigManager {
+    fn new(path: str, defaults: any) -> ConfigManager {
+        let mgr = ConfigManager {path: path, defaults: defaults, data: {}}
+        mgr.load()
+        return mgr
+    }
+
+    fn load(self) {
+        match json.try_parse_file(self.path) {
+            Some(d) => self.data = json.merge(self.defaults, d),
+            None => self.data = self.defaults
+        }
+    }
+
+    fn save(self) {
+        json.save_file(self.path, self.data)
+    }
+
+    fn get(self, path: str) -> any {
+        return json.get_path(self.data, path)
+    }
+
+    fn set(self, path: str, value: any) {
+        self.data = json.set_path(self.data, path, value)
+        self.save()
+    }
+}
+
+-- Usage
+let defaults = {
+    "server": {"host": "0.0.0.0", "port": 8080},
+    "database": {"url": "sqlite:///app.db"},
+    "features": {"cache": true, "metrics": false}
+}
+
+let config = ConfigManager.new("app_config.json", defaults)
+print(config.get("server.port"))  -- 8080
+
+config.set("server.port", 8443)
+config.set("features.cache", false)
+print(config.get("server.port"))  -- 8443
+```
+
+---
+
+## Error Handling Patterns
+
+```lateralus
+fn safe_json_operation(input: str) -> Result {
+    match json.try_parse(input) {
+        Some(data) => Ok(data),
+        None => Err("Invalid JSON: " + input)
+    }
+}
+
+fn load_config_or_default(path: str, default: any) -> any {
+    match json.try_parse_file(path) {
+        Some(config) => config,
+        None => default
+    }
+}
+```
+
+---
+
+## Performance Notes
+
+- `stringify` uses compact output (fastest for transmission)
+- `pretty` adds overhead for readability
+- `flatten`/`unflatten` create new objects (immutable)
+- `validate_schema` is not a full JSON Schema validator — use for simple structural checks
+- File I/O uses Python's `json` module under the hood (fast, reliable)
+
+---
+
+## Summary
+
+| Category | Functions |
+|----------|-----------|
+| **Parsing** | `parse`, `try_parse` |
+| **Serialization** | `stringify`, `pretty` |
+| **Path Access** | `get_path`, `set_path`, `delete_path` |
+| **Transformation** | `flatten`, `unflatten`, `merge` |
+| **Validation** | `validate_schema` |
+| **Utilities** | `count_keys`, `pluck_deep`, `parse_and` |
+| **File I/O** | `load_file`, `save_file` |
+
+---
+
+## References
+
+- LATERALUS stdlib source: `stdlib/json.ltl`
+- LSP hover: Hover over `json.*` functions for inline documentation
+- InfluxDB Line Protocol tutorial: `stdlib-influx-line-tutorial.ltlml`
+
+---
+
+*Generated by CHAIN HUNTER agent for Lateralus #545*
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>
