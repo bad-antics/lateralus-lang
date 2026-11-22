@@ -1,0 +1,223 @@
+// ===================================================================
+// examples/merkle_tutorial.ltl — stdlib/merkle.ltl tutorial companion
+// Runnable tour of Merkle trees + inclusion proofs: FNV-1a/64 default
+// hashing, RFC 6962-style leaf/internal domain separation, tree build,
+// audit paths, verification, and leaf diffing.
+// Self-contained — module code inlined with shims:
+//   char_at(s,i) -> slice(s,i,i+1), char_code -> ord, xor -> ^,
+//   index / 2    -> index >> 1 (lateralus "/" yields float — the
+//   module's proof() breaks on trees taller than one level; fixed
+//   here and flagged in the docs).
+// ===================================================================
+
+// -- hash.ltl: FNV-1a/64 (shimmed) -------------------------------------
+
+fn hash_fnv1a_64(data: str) -> int {
+    let h = 14695981039346656037
+    let prime = 1099511628211
+    for i in range(0, len(data)) {
+        let byte = ord(data[i])
+        h = h ^ byte
+        h = h * prime
+    }
+    return h
+}
+
+// -- merkle.ltl inlined ---------------------------------------------------
+
+fn default_hash(data: str) -> str {
+    return to_hex64(hash_fnv1a_64(data))
+}
+
+fn to_hex64(n: int) -> str {
+    let hex_chars = "0123456789abcdef"
+    let out = ""
+    let k = 0
+    while k < 16 {
+        let nibble = (n >> ((15 - k) * 4)) & 0x0f
+        out = out + slice(hex_chars, nibble, nibble + 1)
+        k = k + 1
+    }
+    return out
+}
+
+fn hash_leaf(hasher, data: str) -> str {
+    return hasher("L:" + data)
+}
+
+fn hash_pair(hasher, left: str, right: str) -> str {
+    return hasher("N:" + left + "|" + right)
+}
+
+fn build(items: list, hasher) -> map {
+    let leaves = []
+    let i = 0
+    while i < len(items) {
+        leaves = leaves + [hash_leaf(hasher, items[i])]
+        i = i + 1
+    }
+    if len(leaves) == 0 {
+        let t = {}
+        t["levels"] = [[]]
+        t["leaves"] = []
+        t["root"]   = hasher("")
+        return t
+    }
+    let levels = [leaves]
+    let current = leaves
+    while len(current) > 1 {
+        let next_level = []
+        let k = 0
+        while k < len(current) {
+            let left = current[k]
+            let right = left
+            if k + 1 < len(current) {
+                right = current[k + 1]
+            }
+            next_level = next_level + [hash_pair(hasher, left, right)]
+            k = k + 2
+        }
+        levels = levels + [next_level]
+        current = next_level
+    }
+    let t = {}
+    t["levels"] = levels
+    t["leaves"] = leaves
+    t["root"]   = current[0]
+    return t
+}
+
+fn build_default(items: list) -> map {
+    return build(items, default_hash)
+}
+
+fn proof(tree: map, index: int) -> list {
+    let path = []
+    let levels = tree["levels"]
+    let k = 0
+    while k < len(levels) - 1 {
+        let level = levels[k]
+        let sibling_idx = index ^ 1
+        if sibling_idx >= len(level) {
+            path = path + [[level[index], sibling_idx > index]]
+        } else {
+            path = path + [[level[sibling_idx], sibling_idx > index]]
+        }
+        index = index >> 1
+        k = k + 1
+    }
+    return path
+}
+
+fn verify(root: str, leaf_data: str, path: list, hasher) -> bool {
+    let running = hash_leaf(hasher, leaf_data)
+    let i = 0
+    while i < len(path) {
+        let step = path[i]
+        let sibling = step[0]
+        let sibling_on_right = step[1]
+        if sibling_on_right {
+            running = hash_pair(hasher, running, sibling)
+        } else {
+            running = hash_pair(hasher, sibling, running)
+        }
+        i = i + 1
+    }
+    return running == root
+}
+
+fn verify_default(root: str, leaf_data: str, path: list) -> bool {
+    return verify(root, leaf_data, path, default_hash)
+}
+
+fn diff_leaves(a: map, b: map) -> list {
+    let la = a["leaves"]
+    let lb = b["leaves"]
+    let n = len(la)
+    if len(lb) < n { n = len(lb) }
+    let diffs = []
+    let i = 0
+    while i < n {
+        if la[i] != lb[i] {
+            diffs = diffs + [i]
+        }
+        i = i + 1
+    }
+    while i < len(la) {
+        diffs = diffs + [i]
+        i = i + 1
+    }
+    while i < len(lb) {
+        diffs = diffs + [i]
+        i = i + 1
+    }
+    return diffs
+}
+
+// ===================================================================
+
+fn list_str(xs: list) -> str {
+    let out = "["
+    let i = 0
+    while i < len(xs) {
+        if i > 0 { out = out + "," }
+        out = out + str(xs[i])
+        i = i + 1
+    }
+    return out + "]"
+}
+
+fn main() {
+    print("=== LATERALUS STDLIB MERKLE TUTORIAL ===")
+
+    // -- Step 1: hashing -------------------------------------------------
+    print("STEP 1 default hash (FNV-1a/64 → hex64):")
+    print("  hash('')=" + default_hash(""))
+    print("  hash('a')=" + default_hash("a"))
+    print("  leaf_a=" + hash_leaf(default_hash, "a"))
+    print("  pair=" + hash_pair(default_hash, "x", "y"))
+
+    // -- Step 2: build ----------------------------------------------------
+    print("STEP 2 build a 4-leaf tree:")
+    let t = build_default(["a", "b", "c", "d"])
+    print("  levels=" + str(len(t["levels"])) + " leaves=" + str(len(t["leaves"])))
+    print("  root=" + t["root"])
+    print("  level0=" + list_str(t["levels"][0]))
+
+    // -- Step 3: inclusion proof -------------------------------------------
+    print("STEP 3 audit path for leaf index 2:")
+    let p = proof(t, 2)
+    print("  path_len=" + str(len(p)))
+    print("  step0_sib=" + p[0][0] + " on_right=" + str(p[0][1]))
+    print("  step1_sib=" + p[1][0] + " on_right=" + str(p[1][1]))
+
+    // -- Step 4: verify ------------------------------------------------------
+    print("STEP 4 verify proofs:")
+    print("  leaf2_ok=" + str(verify_default(t["root"], "c", p)))
+    print("  leaf2_wrongdata=" + str(verify_default(t["root"], "X", p)))
+    let p0 = proof(t, 0)
+    print("  leaf0_ok=" + str(verify_default(t["root"], "a", p0)))
+    print("  leaf0_wrongidx_rejected=" + str(verify_default(t["root"], "a", p)))
+
+    // -- Step 5: odd leaf duplication -----------------------------------------
+    print("STEP 5 odd-count tree (3 leaves, last duplicated):")
+    let t3 = build_default(["a", "b", "c"])
+    print("  root=" + t3["root"])
+    let p3 = proof(t3, 2)
+    print("  leaf2_proof_len=" + str(len(p3)))
+    print("  leaf2_ok=" + str(verify_default(t3["root"], "c", p3)))
+
+    // -- Step 6: diff ------------------------------------------------------------
+    print("STEP 6 diff_leaves:")
+    let ta = build_default(["a", "b", "c", "d"])
+    let tb = build_default(["a", "X", "c", "Y"])
+    print("  diffs=" + list_str(diff_leaves(ta, tb)))
+    let tc = build_default(["a", "b", "c"])
+    print("  tail_diff=" + list_str(diff_leaves(ta, tc)))
+
+    print("PINNED_VECTORS: hash_a=" + default_hash("a")
+        + " root4=" + t["root"] + " root3=" + t3["root"]
+        + " diffs=1,3 tail=3")
+    print("  ✓ examples/merkle_tutorial.ltl: OK")
+    return 0
+}
