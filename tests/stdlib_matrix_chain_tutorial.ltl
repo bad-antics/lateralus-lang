@@ -1,0 +1,101 @@
+// Standard Library Matrix Chain Multiplication Verification Suite
+// Validates interval dynamic programming, minimum scalar multiplications, and optimal parenthesization tree reconstruction.
+
+fn build_parens(s: list, i: int, j: int) -> str {
+    if i == j {
+        return "A" + to_str(i);
+    }
+    let split = s[i][j];
+    let left_str = build_parens(s, i, split);
+    let right_str = build_parens(s, split + 1, j);
+    return "(" + left_str + " " + right_str + ")";
+}
+
+fn matrix_chain_order(dims: list) -> dict {
+    let num_dims = len(dims);
+    let mut result = {};
+
+    if num_dims <= 1 {
+        result["min_cost"] = 0;
+        result["parens"] = "";
+        return result;
+    }
+
+    let n = num_dims - 1;
+    let INF = 1000000000;
+
+    let mut m = [];
+    let mut s = [];
+    let mut i = 0;
+    while i <= n {
+        let mut row_m = [];
+        let mut row_s = [];
+        let mut j = 0;
+        while j <= n {
+            row_m = row_m + [0];
+            row_s = row_s + [0];
+            j = j + 1;
+        }
+        m = m + [row_m];
+        s = s + [row_s];
+        i = i + 1;
+    }
+
+    let mut l = 2;
+    while l <= n {
+        let mut row = 1;
+        while row <= (n - l + 1) {
+            let col = row + l - 1;
+            m[row][col] = INF;
+            let mut k = row;
+            while k < col {
+                let cost = m[row][k] + m[k + 1][col] + dims[row - 1] * dims[k] * dims[col];
+                if cost < m[row][col] {
+                    m[row][col] = cost;
+                    s[row][col] = k;
+                }
+                k = k + 1;
+            }
+            row = row + 1;
+        }
+        l = l + 1;
+    }
+
+    result["min_cost"] = m[1][n];
+    result["parens"] = build_parens(s, 1, n);
+    return result;
+}
+
+fn main() -> int {
+    // 1. Classical 4-Matrix Instance: [10, 20, 30, 40, 30]
+    // A1: 10x20, A2: 20x30, A3: 30x40, A4: 40x30
+    // Optimal cost is 30,000 with parens "(((A1 A2) A3) A4)"
+    let dims1 = [10, 20, 30, 40, 30];
+    let res1 = matrix_chain_order(dims1);
+    assert(res1["min_cost"] == 30000);
+    assert(res1["parens"] == "(((A1 A2) A3) A4)");
+
+    // 2. Textbook 6-Matrix Instance: [30, 35, 15, 5, 10, 20, 25]
+    // Optimal scalar multiplication cost is 15,125
+    // Optimal parenthesization: "((A1 (A2 A3)) ((A4 A5) A6))"
+    let dims2 = [30, 35, 15, 5, 10, 20, 25];
+    let res2 = matrix_chain_order(dims2);
+    assert(res2["min_cost"] == 15125);
+    assert(res2["parens"] == "((A1 (A2 A3)) ((A4 A5) A6))");
+
+    // 3. Two Matrices: [10, 50, 20]
+    // Single product A1(10x50) * A2(50x20)
+    // Cost = 10 * 50 * 20 = 10,000
+    let dims3 = [10, 50, 20];
+    let res3 = matrix_chain_order(dims3);
+    assert(res3["min_cost"] == 10000);
+    assert(res3["parens"] == "(A1 A2)");
+
+    // 4. Single Matrix Base Case: [10, 20] (No multiplication needed)
+    let dims4 = [10, 20];
+    let res4 = matrix_chain_order(dims4);
+    assert(res4["min_cost"] == 0);
+    assert(res4["parens"] == "A1");
+
+    return 0;
+}

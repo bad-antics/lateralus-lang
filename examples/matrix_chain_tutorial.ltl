@@ -1,0 +1,93 @@
+// Lateralus Standard Library Example: Matrix Chain Multiplication (MCM)
+// Demonstrates interval dynamic programming for optimal tensor execution scheduling.
+
+fn build_parens(s: list, i: int, j: int) -> str {
+    if i == j {
+        return "A" + to_str(i);
+    }
+    let split = s[i][j];
+    let left_str = build_parens(s, i, split);
+    let right_str = build_parens(s, split + 1, j);
+    return "(" + left_str + " " + right_str + ")";
+}
+
+fn matrix_chain_order(dims: list) -> dict {
+    let num_dims = len(dims);
+    let mut result = {};
+
+    if num_dims <= 1 {
+        result["min_cost"] = 0;
+        result["parens"] = "";
+        return result;
+    }
+
+    let n = num_dims - 1;
+    let INF = 1000000000;
+
+    let mut m = [];
+    let mut s = [];
+    let mut i = 0;
+    while i <= n {
+        let mut row_m = [];
+        let mut row_s = [];
+        let mut j = 0;
+        while j <= n {
+            row_m = row_m + [0];
+            row_s = row_s + [0];
+            j = j + 1;
+        }
+        m = m + [row_m];
+        s = s + [row_s];
+        i = i + 1;
+    }
+
+    let mut l = 2;
+    while l <= n {
+        let mut row = 1;
+        while row <= (n - l + 1) {
+            let col = row + l - 1;
+            m[row][col] = INF;
+            let mut k = row;
+            while k < col {
+                let cost = m[row][k] + m[k + 1][col] + dims[row - 1] * dims[k] * dims[col];
+                if cost < m[row][col] {
+                    m[row][col] = cost;
+                    s[row][col] = k;
+                }
+                k = k + 1;
+            }
+            row = row + 1;
+        }
+        l = l + 1;
+    }
+
+    result["min_cost"] = m[1][n];
+    result["parens"] = build_parens(s, 1, n);
+    return result;
+}
+
+fn main() -> int {
+    println("=== Matrix Chain Multiplication Optimizer Example ===");
+
+    // Machine Learning inference tensor layers:
+    // A1: 30x35 (Batch input projection)
+    // A2: 35x15 (Feed-forward layer 1)
+    // A3: 15x5  (Bottleneck dimension)
+    // A4: 5x10  (Hidden expansion)
+    // A5: 10x20 (Attention intermediate)
+    // A6: 20x25 (Final classifier logits)
+    let tensor_dims = [30, 35, 15, 5, 10, 20, 25];
+
+    let opt = matrix_chain_order(tensor_dims);
+    let min_scalar_mults = opt["min_cost"];
+    let schedule = opt["parens"];
+
+    println("Minimum required scalar multiplications:");
+    println(min_scalar_mults); // 15,125 operations
+
+    println("Optimal bracketed execution schedule:");
+    println(schedule); // ((A1 (A2 A3)) ((A4 A5) A6))
+
+    println("Matrix chain optimization completed successfully.");
+    return 0;
+}
