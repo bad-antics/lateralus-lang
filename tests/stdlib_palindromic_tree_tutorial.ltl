@@ -1,0 +1,175 @@
+// ===================================================================
+// tests/stdlib_palindromic_tree_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for Rubinchik-Shur Palindromic Tree (PAM)
+// supporting linear O(n) palindromic substring indexing and
+// RNA stem-loop secondary structure identification.
+// ===================================================================
+
+pub fn new_pam() {
+    let pam = dict()
+    pam["nodes"] = dict()
+    pam["sz"] = 2
+    pam["n"] = 0
+    pam["last"] = 0
+    pam["s"] = dict()
+
+    let even_root = dict()
+    even_root["len"] = 0
+    even_root["link"] = 1
+    even_root["next"] = dict()
+    pam["nodes"][0] = even_root
+
+    let odd_root = dict()
+    odd_root["len"] = 0 - 1
+    odd_root["link"] = 1
+    odd_root["next"] = dict()
+    pam["nodes"][1] = odd_root
+
+    return pam
+}
+
+pub fn pam_get_link(pam, p) {
+    let n = pam["n"]
+    while true {
+        let p_state = pam["nodes"][p]
+        let p_len = p_state["len"]
+        let target_idx = n - p_len - 1
+        if target_idx >= 0 {
+            if pam["s"][target_idx] == pam["s"][n] {
+                return p
+            }
+        }
+        if p == 1 {
+            return 1
+        }
+        p = p_state["link"]
+    }
+    return 1
+}
+
+pub fn pam_add(pam, ch) {
+    let n = pam["n"]
+    pam["s"][n] = ch
+
+    let p = pam_get_link(pam, pam["last"])
+    let p_state = pam["nodes"][p]
+
+    if p_state["next"][ch] != nil {
+        pam["last"] = p_state["next"][ch]
+        pam["n"] = n + 1
+        return pam["last"]
+    }
+
+    let cur = pam["sz"]
+    pam["sz"] = cur + 1
+
+    let cur_state = dict()
+    cur_state["len"] = p_state["len"] + 2
+    cur_state["next"] = dict()
+
+    if cur_state["len"] == 1 {
+        cur_state["link"] = 0
+    } else {
+        let link_p = pam_get_link(pam, p_state["link"])
+        cur_state["link"] = pam["nodes"][link_p]["next"][ch]
+    }
+
+    p_state["next"][ch] = cur
+    pam["nodes"][cur] = cur_state
+    pam["last"] = cur
+    pam["n"] = n + 1
+    return cur
+}
+
+pub fn pam_distinct_count(pam) {
+    return pam["sz"] - 2
+}
+
+pub fn pam_longest_palindrome_len(pam) {
+    let max_len = 0
+    let sz = pam["sz"]
+    let u = 2
+    while u < sz {
+        let l = pam["nodes"][u]["len"]
+        if l > max_len {
+            max_len = l
+        }
+        u = u + 1
+    }
+    return max_len
+}
+
+// -------------------------------------------------------------------
+// Verification Tests
+// -------------------------------------------------------------------
+
+pub fn test_pam_empty() -> bool {
+    let pam = new_pam()
+    if pam_distinct_count(pam) != 0 {
+        return false
+    }
+    if pam["nodes"][0]["len"] != 0 {
+        return false
+    }
+    if pam["nodes"][1]["len"] != 0 - 1 {
+        return false
+    }
+    return true
+}
+
+pub fn test_pam_abacaba() -> bool {
+    let pam = new_pam()
+    // Feed "a", "b", "a", "c", "a", "b", "a"
+    pam_add(pam, "a")
+    pam_add(pam, "b")
+    pam_add(pam, "a")
+    pam_add(pam, "c")
+    pam_add(pam, "a")
+    pam_add(pam, "b")
+    pam_add(pam, "a")
+
+    // Distinct palindromes in "abacaba":
+    // "a", "b", "c", "aba", "bacab", "abacaba" -> exactly 6
+    if pam_distinct_count(pam) != 6 {
+        return false
+    }
+
+    // Longest palindrome length is 7 ("abacaba")
+    if pam_longest_palindrome_len(pam) != 7 {
+        return false
+    }
+
+    return true
+}
+
+pub fn test_pam_homogeneous() -> bool {
+    let pam = new_pam()
+    // Feed "aaaa"
+    pam_add(pam, "a")
+    pam_add(pam, "a")
+    pam_add(pam, "a")
+    pam_add(pam, "a")
+
+    // Distinct palindromes: "a", "aa", "aaa", "aaaa" -> 4
+    if pam_distinct_count(pam) != 4 {
+        return false
+    }
+    if pam_longest_palindrome_len(pam) != 4 {
+        return false
+    }
+    return true
+}
+
+pub fn run_all_pam_tests() -> bool {
+    if not test_pam_empty() {
+        return false
+    }
+    if not test_pam_abacaba() {
+        return false
+    }
+    if not test_pam_homogeneous() {
+        return false
+    }
+    return true
+}
