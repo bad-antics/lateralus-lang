@@ -1,0 +1,196 @@
+// ===================================================================
+// tests/stdlib_kosaraju_scc_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for the Kosaraju-Sharir Strongly Connected
+// Components (SCC) algorithm, transposed graph DFS, and finishing order.
+// ===================================================================
+
+fn init_adj(n) {
+    let adj = dict()
+    let i = 0
+    while i < n {
+        adj[i] = []
+        i = i + 1
+    }
+    return adj
+}
+
+fn add_edge(adj, u, v) {
+    adj[u] = push(adj[u], v)
+}
+
+fn dfs1(u, adj, visited, order_ref) {
+    visited[u] = true
+    let neighbors = adj[u]
+    let i = 0
+    while i < len(neighbors) {
+        let v = neighbors[i]
+        if not visited[v] {
+            dfs1(v, adj, visited, order_ref)
+        }
+        i = i + 1
+    }
+    order_ref["stack"] = push(order_ref["stack"], u)
+}
+
+fn dfs2(u, rev_adj, visited, comp_ref) {
+    visited[u] = true
+    comp_ref["nodes"] = push(comp_ref["nodes"], u)
+    let neighbors = rev_adj[u]
+    let i = 0
+    while i < len(neighbors) {
+        let v = neighbors[i]
+        if not visited[v] {
+            dfs2(v, rev_adj, visited, comp_ref)
+        }
+        i = i + 1
+    }
+}
+
+pub fn kosaraju_scc(n, adj) {
+    let visited1 = dict()
+    let i = 0
+    while i < n {
+        visited1[i] = false
+        i = i + 1
+    }
+
+    let order_ref = dict()
+    order_ref["stack"] = []
+
+    let u = 0
+    while u < n {
+        if not visited1[u] {
+            dfs1(u, adj, visited1, order_ref)
+        }
+        u = u + 1
+    }
+
+    // Build transposed graph G^T
+    let rev_adj = init_adj(n)
+    let src = 0
+    while src < n {
+        let neighbors = adj[src]
+        let j = 0
+        while j < len(neighbors) {
+            let dst = neighbors[j]
+            rev_adj[dst] = push(rev_adj[dst], src)
+            j = j + 1
+        }
+        src = src + 1
+    }
+
+    let visited2 = dict()
+    let k = 0
+    while k < n {
+        visited2[k] = false
+        k = k + 1
+    }
+
+    let sccs = []
+    let stack_idx = len(order_ref["stack"]) - 1
+    while stack_idx >= 0 {
+        let node = order_ref["stack"][stack_idx]
+        if not visited2[node] {
+            let comp_ref = dict()
+            comp_ref["nodes"] = []
+            dfs2(node, rev_adj, visited2, comp_ref)
+            sccs = push(sccs, comp_ref["nodes"])
+        }
+        stack_idx = stack_idx - 1
+    }
+
+    return sccs
+}
+
+pub fn test_kosaraju_two_cycles() -> bool {
+    let n = 5
+    let adj = init_adj(n)
+    add_edge(adj, 0, 1)
+    add_edge(adj, 1, 2)
+    add_edge(adj, 2, 0)
+    add_edge(adj, 2, 3)
+    add_edge(adj, 3, 4)
+    add_edge(adj, 4, 3)
+
+    let sccs = kosaraju_scc(n, adj)
+    if len(sccs) != 2 {
+        return false
+    }
+
+    let c0_len = len(sccs[0])
+    let c1_len = len(sccs[1])
+    if (c0_len == 3 and c1_len == 2) or (c0_len == 2 and c1_len == 3) {
+        return true
+    }
+
+    return false
+}
+
+pub fn test_kosaraju_dag_linear() -> bool {
+    let n = 4
+    let adj = init_adj(n)
+    add_edge(adj, 0, 1)
+    add_edge(adj, 1, 2)
+    add_edge(adj, 2, 3)
+
+    let sccs = kosaraju_scc(n, adj)
+    if len(sccs) != 4 {
+        return false
+    }
+
+    let i = 0
+    while i < 4 {
+        if len(sccs[i]) != 1 {
+            return false
+        }
+        i = i + 1
+    }
+
+    return true
+}
+
+pub fn test_kosaraju_disconnected() -> bool {
+    let n = 5
+    let adj = init_adj(n)
+    add_edge(adj, 0, 1)
+    add_edge(adj, 1, 0)
+    add_edge(adj, 2, 3)
+    add_edge(adj, 3, 2)
+
+    let sccs = kosaraju_scc(n, adj)
+    if len(sccs) != 3 {
+        return false
+    }
+
+    return true
+}
+
+pub fn test_kosaraju_self_loop() -> bool {
+    let n = 2
+    let adj = init_adj(n)
+    add_edge(adj, 0, 0)
+    add_edge(adj, 0, 1)
+
+    let sccs = kosaraju_scc(n, adj)
+    if len(sccs) != 2 {
+        return false
+    }
+
+    return true
+}
+
+pub fn test_kosaraju_single_vertex() -> bool {
+    let n = 1
+    let adj = init_adj(n)
+
+    let sccs = kosaraju_scc(n, adj)
+    if len(sccs) != 1 {
+        return false
+    }
+    if len(sccs[0]) != 1 {
+        return false
+    }
+
+    return true
+}

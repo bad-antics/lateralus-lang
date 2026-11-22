@@ -1,0 +1,146 @@
+// ===================================================================
+// examples/kosaraju_scc_tutorial.ltl
+// -------------------------------------------------------------------
+// Practical example demonstrating Kosaraju-Sharir Strongly Connected
+// Components (SCC) algorithm for detecting mutual social network communities
+// and web link authority clusters.
+// ===================================================================
+
+fn init_adj(n) {
+    let adj = dict()
+    let i = 0
+    while i < n {
+        adj[i] = []
+        i = i + 1
+    }
+    return adj
+}
+
+fn add_edge(adj, u, v) {
+    adj[u] = push(adj[u], v)
+}
+
+fn dfs1(u, adj, visited, order_ref) {
+    visited[u] = true
+    let neighbors = adj[u]
+    let i = 0
+    while i < len(neighbors) {
+        let v = neighbors[i]
+        if not visited[v] {
+            dfs1(v, adj, visited, order_ref)
+        }
+        i = i + 1
+    }
+    order_ref["stack"] = push(order_ref["stack"], u)
+}
+
+fn dfs2(u, rev_adj, visited, comp_ref) {
+    visited[u] = true
+    comp_ref["nodes"] = push(comp_ref["nodes"], u)
+    let neighbors = rev_adj[u]
+    let i = 0
+    while i < len(neighbors) {
+        let v = neighbors[i]
+        if not visited[v] {
+            dfs2(v, rev_adj, visited, comp_ref)
+        }
+        i = i + 1
+    }
+}
+
+pub fn kosaraju_scc(n, adj) {
+    let visited1 = dict()
+    let i = 0
+    while i < n {
+        visited1[i] = false
+        i = i + 1
+    }
+
+    let order_ref = dict()
+    order_ref["stack"] = []
+
+    let u = 0
+    while u < n {
+        if not visited1[u] {
+            dfs1(u, adj, visited1, order_ref)
+        }
+        u = u + 1
+    }
+
+    let rev_adj = init_adj(n)
+    let src = 0
+    while src < n {
+        let neighbors = adj[src]
+        let j = 0
+        while j < len(neighbors) {
+            let dst = neighbors[j]
+            rev_adj[dst] = push(rev_adj[dst], src)
+            j = j + 1
+        }
+        src = src + 1
+    }
+
+    let visited2 = dict()
+    let k = 0
+    while k < n {
+        visited2[k] = false
+        k = k + 1
+    }
+
+    let sccs = []
+    let stack_idx = len(order_ref["stack"]) - 1
+    while stack_idx >= 0 {
+        let node = order_ref["stack"][stack_idx]
+        if not visited2[node] {
+            let comp_ref = dict()
+            comp_ref["nodes"] = []
+            dfs2(node, rev_adj, visited2, comp_ref)
+            sccs = push(sccs, comp_ref["nodes"])
+        }
+        stack_idx = stack_idx - 1
+    }
+
+    return sccs
+}
+
+pub fn main() {
+    print("=== Kosaraju-Sharir Strongly Connected Components (SCC) ===")
+    print("Analyzing web graph and social follower network for mutual communities...")
+
+    // 6 Web Node IDs:
+    // 0: Tech Hub Portal
+    // 1: Developer Documentation
+    // 2: Open Source Repository (0, 1, 2 form mutual cluster 1)
+    // 3: Cloud Infrastructure Gateway
+    // 4: Container Registry
+    // 5: Monitoring Dashboard (3, 4, 5 form mutual cluster 2)
+
+    let n = 6
+    let adj = init_adj(n)
+
+    // Cluster 1 (0 -> 1 -> 2 -> 0)
+    add_edge(adj, 0, 1)
+    add_edge(adj, 1, 2)
+    add_edge(adj, 2, 0)
+
+    // Inter-cluster link (2 -> 3)
+    add_edge(adj, 2, 3)
+
+    // Cluster 2 (3 -> 4 -> 5 -> 3)
+    add_edge(adj, 3, 4)
+    add_edge(adj, 4, 5)
+    add_edge(adj, 5, 3)
+
+    let sccs = kosaraju_scc(n, adj)
+
+    print("Discovered Strongly Connected Components Count:")
+    print(len(sccs))
+
+    let i = 0
+    while i < len(sccs) {
+        let comp = sccs[i]
+        print("Community Cluster:")
+        print(comp)
+        i = i + 1
+    }
+}
