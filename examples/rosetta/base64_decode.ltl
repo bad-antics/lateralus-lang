@@ -1,0 +1,126 @@
+// Rosetta Code · Base64 decode data · Lateralus
+// https://rosettacode.org/wiki/Base64_decode_data
+//
+// RFC 4648 Base64 decoder working on byte lists. Accepts padded input,
+// ignores embedded whitespace / line breaks, and rejects characters outside
+// the alphabet. A matching encoder is included so every fixture can be
+// round-tripped byte-for-byte.
+
+let ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+fn b64_value(c: str) -> int {
+    let i = 0
+    while i < 64 {
+        if slice(ALPHABET, i, i + 1) == c { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn b64_decode(text: str) -> list {
+    let out = []
+    let acc = 0
+    let bits = 0
+    let i = 0
+    while i < len(text) {
+        let c = slice(text, i, i + 1)
+        i = i + 1
+        if c == "=" { break }
+        if c == " " || c == "\n" || c == "\r" || c == "\t" { continue }
+        let v = b64_value(c)
+        if v < 0 { throw DomainError("invalid base64 character: " + c) }
+        acc = (acc << 6) | v
+        bits = bits + 6
+        if bits >= 8 {
+            bits = bits - 8
+            out = out + [(acc >> bits) & 0xFF]
+        }
+        acc = acc & ((1 << bits) - 1)
+    }
+    return out
+}
+
+fn b64_encode(data: list) -> str {
+    let out = ""
+    let i = 0
+    while i < len(data) {
+        let n = len(data) - i
+        let b0 = data[i]
+        let b1 = 0
+        let b2 = 0
+        if n > 1 { b1 = data[i + 1] }
+        if n > 2 { b2 = data[i + 2] }
+        let triple = (b0 << 16) | (b1 << 8) | b2
+        out = out + slice(ALPHABET, (triple >> 18) & 63, ((triple >> 18) & 63) + 1)
+        out = out + slice(ALPHABET, (triple >> 12) & 63, ((triple >> 12) & 63) + 1)
+        if n > 1 { out = out + slice(ALPHABET, (triple >> 6) & 63, ((triple >> 6) & 63) + 1) }
+        else     { out = out + "=" }
+        if n > 2 { out = out + slice(ALPHABET, triple & 63, (triple & 63) + 1) }
+        else     { out = out + "=" }
+        i = i + 3
+    }
+    return out
+}
+
+fn bytes_to_ascii(data: list) -> str {
+    let out = ""
+    let i = 0
+    while i < len(data) {
+        out = out + chr(data[i])
+        i = i + 1
+    }
+    return out
+}
+
+fn ascii_to_bytes(s: str) -> list {
+    let out = []
+    let i = 0
+    while i < len(s) {
+        out = out + [ord(slice(s, i, i + 1))]
+        i = i + 1
+    }
+    return out
+}
+
+fn main() {
+    // The Rosetta task's encoded quotation.
+    let encoded = "VG8gZXJyIGlzIGh1bWFuLCBidXQgdG8gcmVhbGx5IGZvdWwgdGhpbmdzIHVwIHlvdSBuZWVkIGEgY29tcHV0ZXIuCiAgICAtLSBQYXVsIFIuIEVocmxpY2g="
+    let decoded = bytes_to_ascii(b64_decode(encoded))
+    print(decoded)
+    assert_eq(decoded, "To err is human, but to really foul things up you need a computer.\n    -- Paul R. Ehrlich")
+    assert_eq(b64_encode(b64_decode(encoded)), encoded)
+
+    // RFC 4648 section 10 vectors exercise every padding length.
+    let rfc = [
+        ["", ""], ["f", "Zg=="], ["fo", "Zm8="], ["foo", "Zm9v"],
+        ["foob", "Zm9vYg=="], ["fooba", "Zm9vYmE="], ["foobar", "Zm9vYmFy"]
+    ]
+    let i = 0
+    while i < len(rfc) {
+        assert_eq(bytes_to_ascii(b64_decode(rfc[i][1])), rfc[i][0])
+        assert_eq(b64_encode(ascii_to_bytes(rfc[i][0])), rfc[i][1])
+        i = i + 1
+    }
+    print("RFC 4648 vectors: " + str(len(rfc)) + " ok")
+
+    // Binary bytes (including 0x00 and 0xFF) and MIME-style line breaks.
+    let binary = [0, 1, 2, 127, 128, 254, 255]
+    assert_eq(b64_decode(b64_encode(binary)), binary)
+    assert_eq(bytes_to_ascii(b64_decode("Zm9v\nYmFy")), "foobar")
+    print("binary round trip: " + str(b64_decode(b64_encode(binary))))
+
+    // Characters outside the alphabet are rejected.
+    assert_true(decode_rejects("Zm9v!"))
+    print("invalid input rejected")
+}
+
+fn decode_rejects(text: str) -> bool {
+    try {
+        b64_decode(text)
+    } recover DomainError(e) {
+        return true
+    }
+    return false
+}
+
+main()

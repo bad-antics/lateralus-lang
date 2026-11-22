@@ -1,0 +1,138 @@
+// Rosetta Code · SHA-1 · Lateralus
+// https://rosettacode.org/wiki/SHA-1
+//
+// From-scratch FIPS 180-4 SHA-1. Big-endian words, an 80-entry message
+// schedule and four 20-step rounds. Masked to 32 bits throughout.
+
+let MASK32 = 0xFFFFFFFF
+let HEX = "0123456789abcdef"
+
+fn utf8_bytes(s: str) -> list {
+    let out = []
+    let i = 0
+    while i < len(s) {
+        let cp = ord(slice(s, i, i + 1))
+        if cp < 0x80 {
+            out = out + [cp]
+        } else if cp < 0x800 {
+            out = out + [0xC0 | (cp >> 6), 0x80 | (cp & 0x3F)]
+        } else if cp < 0x10000 {
+            out = out + [0xE0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F)]
+        } else {
+            out = out + [0xF0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3F),
+                         0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F)]
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn rotl(x: int, n: int) -> int {
+    return ((x << n) | (x >> (32 - n))) & MASK32
+}
+
+fn hex_word(w: int) -> str {
+    let out = ""
+    let shift = 28
+    while shift >= 0 {
+        let nib = (w >> shift) & 15
+        out = out + slice(HEX, nib, nib + 1)
+        shift = shift - 4
+    }
+    return out
+}
+
+fn sha1_bytes(msg: list) -> str {
+    let bit_len = len(msg) * 8
+    let data = msg + [0x80]
+    while len(data) % 64 != 56 { data = data + [0] }
+    // Length is appended big-endian as a 64-bit value.
+    let i = 7
+    while i >= 0 {
+        data = data + [(bit_len >> (8 * i)) & 0xFF]
+        i = i - 1
+    }
+
+    let h0 = 0x67452301
+    let h1 = 0xEFCDAB89
+    let h2 = 0x98BADCFE
+    let h3 = 0x10325476
+    let h4 = 0xC3D2E1F0
+
+    let off = 0
+    while off < len(data) {
+        let w = []
+        let t = 0
+        while t < 16 {
+            let p = off + 4 * t
+            w = w + [(data[p] << 24) | (data[p + 1] << 16) | (data[p + 2] << 8) | data[p + 3]]
+            t = t + 1
+        }
+        while t < 80 {
+            w = w + [rotl(w[t - 3] ^ w[t - 8] ^ w[t - 14] ^ w[t - 16], 1)]
+            t = t + 1
+        }
+
+        let a = h0
+        let b = h1
+        let c = h2
+        let d = h3
+        let e = h4
+        t = 0
+        while t < 80 {
+            let f = 0
+            let k = 0
+            if t < 20 {
+                f = (b & c) | ((~b) & d)
+                k = 0x5A827999
+            } else if t < 40 {
+                f = b ^ c ^ d
+                k = 0x6ED9EBA1
+            } else if t < 60 {
+                f = (b & c) | (b & d) | (c & d)
+                k = 0x8F1BBCDC
+            } else {
+                f = b ^ c ^ d
+                k = 0xCA62C1D6
+            }
+            let temp = (rotl(a, 5) + f + e + k + w[t]) & MASK32
+            e = d
+            d = c
+            c = rotl(b, 30)
+            b = a
+            a = temp
+            t = t + 1
+        }
+        h0 = (h0 + a) & MASK32
+        h1 = (h1 + b) & MASK32
+        h2 = (h2 + c) & MASK32
+        h3 = (h3 + d) & MASK32
+        h4 = (h4 + e) & MASK32
+        off = off + 64
+    }
+    return hex_word(h0) + hex_word(h1) + hex_word(h2) + hex_word(h3) + hex_word(h4)
+}
+
+fn sha1(s: str) -> str {
+    return sha1_bytes(utf8_bytes(s))
+}
+
+fn main() {
+    // Rosetta task string, then FIPS 180 / RFC 3174 vectors.
+    let cases = [
+        ["Rosetta Code", "48c98f7e5a6e736d790ab740dfc3f51a61abe2b5"],
+        ["", "da39a3ee5e6b4b0d3255bfef95601890afd80709"],
+        ["abc", "a9993e364706816aba3e25717850c26c9cd0d89d"],
+        ["abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+         "84983e441c3bd26ebaae4aa1f95129e5e54670f1"]
+    ]
+    let i = 0
+    while i < len(cases) {
+        let got = sha1(cases[i][0])
+        print(got + "  \"" + cases[i][0] + "\"")
+        assert_eq(got, cases[i][1])
+        i = i + 1
+    }
+}
+
+main()

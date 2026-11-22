@@ -1,0 +1,90 @@
+// Rosetta Code · Burrows–Wheeler transform · Lateralus
+// https://rosettacode.org/wiki/Burrows%E2%80%93Wheeler_transform
+//
+// Forward transform: wrap the input in STX (\x02) / ETX (\x03) markers,
+// sort every rotation, and take the last column. Inverse transform: build
+// the sorted rotation table column by column and pick the row ending in
+// ETX. Markers are shown as ^ and | when printing.
+
+let STX = chr(2)
+let ETX = chr(3)
+
+fn bwt(s: str) -> str {
+    if str_contains(s, STX) || str_contains(s, ETX) {
+        throw DomainError("input must not contain STX or ETX")
+    }
+    let t = STX + s + ETX
+    let rotations = []
+    let i = 0
+    while i < len(t) {
+        rotations = rotations + [slice(t, i, len(t)) + slice(t, 0, i)]
+        i = i + 1
+    }
+    let rows = sort(rotations)
+    let out = ""
+    i = 0
+    while i < len(rows) {
+        out = out + slice(rows[i], len(t) - 1, len(t))
+        i = i + 1
+    }
+    return out
+}
+
+fn ibwt(r: str) -> str {
+    let n = len(r)
+    let table = []
+    let i = 0
+    while i < n {
+        table = table + [""]
+        i = i + 1
+    }
+    // Prepend the transformed column and re-sort, n times.
+    let step = 0
+    while step < n {
+        let next = []
+        i = 0
+        while i < n {
+            next = next + [slice(r, i, i + 1) + table[i]]
+            i = i + 1
+        }
+        table = sort(next)
+        step = step + 1
+    }
+    i = 0
+    while i < n {
+        if str_ends_with(table[i], ETX) {
+            return slice(table[i], 1, n - 1)
+        }
+        i = i + 1
+    }
+    throw DomainError("no row ends with ETX")
+}
+
+fn show(s: str) -> str {
+    return str_replace(str_replace(s, STX, "^"), ETX, "|")
+}
+
+fn main() {
+    // The Rosetta task's test strings and their transforms.
+    let cases = [
+        ["banana", "|annb^aa"],
+        ["appellee", "|e^elplepa"],
+        ["dogwood", "|do^oodwg"],
+        ["TO BE OR NOT TO BE OR WANT TO BE OR NOT?", "|?OOORREEETTRTW   BBB  ATTT   NNOOONOO^   "],
+        ["SIX.MIXED.PIXIES.SIFT.SIXTY.PIXIE.DUST.BOXES", "|STEXYDST.E.IXXIIXXSSMPPS.B..EE.^.USFXDIIOIIIT"]
+    ]
+    let i = 0
+    while i < len(cases) {
+        let s = cases[i][0]
+        let t = bwt(s)
+        let back = ibwt(t)
+        print(s)
+        print("  --> " + show(t))
+        print("  --> " + back)
+        assert_eq(show(t), cases[i][1])
+        assert_eq(back, s)
+        i = i + 1
+    }
+}
+
+main()

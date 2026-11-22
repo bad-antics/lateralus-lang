@@ -1,0 +1,103 @@
+// Rosetta Code · LZW compression · Lateralus
+// https://rosettacode.org/wiki/LZW_compression
+//
+// Lempel-Ziv-Welch with an unbounded dictionary seeded with the 256
+// single-byte strings. The compressor emits integer codes; the decompressor
+// rebuilds the same dictionary on the fly, including the tricky
+// "code not yet in dictionary" (cScSc) case.
+
+fn lzw_compress(text: str) -> list {
+    let dict = map_new()
+    let i = 0
+    while i < 256 {
+        dict = map_set(dict, chr(i), i)
+        i = i + 1
+    }
+    let next_code = 256
+    let w = ""
+    let out = []
+    i = 0
+    while i < len(text) {
+        let c = slice(text, i, i + 1)
+        let wc = w + c
+        if map_has(dict, wc) {
+            w = wc
+        } else {
+            out = out + [map_get(dict, w)]
+            dict = map_set(dict, wc, next_code)
+            next_code = next_code + 1
+            w = c
+        }
+        i = i + 1
+    }
+    if len(w) > 0 { out = out + [map_get(dict, w)] }
+    return out
+}
+
+fn lzw_decompress(codes: list) -> str {
+    if len(codes) == 0 { return "" }
+    let dict = []
+    let i = 0
+    while i < 256 {
+        dict = dict + [chr(i)]
+        i = i + 1
+    }
+    let w = dict[codes[0]]
+    let out = w
+    i = 1
+    while i < len(codes) {
+        let k = codes[i]
+        let entry = ""
+        if k < len(dict) {
+            entry = dict[k]
+        } else if k == len(dict) {
+            // The code being defined right now: w + first char of w.
+            entry = w + slice(w, 0, 1)
+        } else {
+            throw DomainError("bad LZW code: " + str(k))
+        }
+        out = out + entry
+        dict = dict + [w + slice(entry, 0, 1)]
+        w = entry
+        i = i + 1
+    }
+    return out
+}
+
+fn main() {
+    // The Rosetta task string and its well-known code sequence.
+    let text = "TOBEORNOTTOBEORTOBEORNOT"
+    let codes = lzw_compress(text)
+    print("compressed:   " + str(codes))
+    assert_eq(codes, [84, 79, 66, 69, 79, 82, 78, 79, 84, 256, 258, 260, 265, 259, 261, 263])
+    let back = lzw_decompress(codes)
+    print("decompressed: " + back)
+    assert_eq(back, text)
+
+    // Repeated patterns hit the cScSc case where a code is used the moment
+    // it is created.
+    assert_eq(lzw_compress("ABABABABABABABAB"), [65, 66, 256, 258, 257, 260, 259])
+    assert_eq(lzw_compress("aaaaaaa"), [97, 256, 257, 97])
+    let samples = ["", "a", "ABABABABABABABAB", "aaaaaaa", "the rain in spain stays mainly in the plain"]
+    let i = 0
+    while i < len(samples) {
+        assert_eq(lzw_decompress(lzw_compress(samples[i])), samples[i])
+        i = i + 1
+    }
+    print("round trips:  " + str(len(samples)) + " ok")
+
+    // A code that skips ahead of the dictionary is corrupt input.
+    assert_true(decompress_rejects([65, 300]))
+    print("corrupt stream rejected")
+}
+
+fn decompress_rejects(codes: list) -> bool {
+    try {
+        lzw_decompress(codes)
+    } recover DomainError(e) {
+        return true
+    }
+    return false
+}
+
+main()

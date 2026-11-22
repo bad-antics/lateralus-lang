@@ -1,0 +1,89 @@
+// Rosetta Code · Variable-length quantity · Lateralus
+// https://rosettacode.org/wiki/Variable-length_quantity
+//
+// MIDI-style VLQ: 7 bits per byte, most significant group first, the high
+// bit set on every byte except the last.
+
+let HEX = "0123456789abcdef"
+
+fn vlq_encode(n: int) -> list {
+    if n < 0 { throw DomainError("VLQ is defined for non-negative integers") }
+    let out = [n & 0x7F]
+    n = n >> 7
+    while n > 0 {
+        out = [(n & 0x7F) | 0x80] + out
+        n = n >> 7
+    }
+    return out
+}
+
+fn vlq_decode(bytes: list) -> int {
+    let n = 0
+    let i = 0
+    while i < len(bytes) {
+        n = (n << 7) | (bytes[i] & 0x7F)
+        if (bytes[i] & 0x80) == 0 {
+            if i != len(bytes) - 1 { throw DomainError("trailing bytes after final octet") }
+            return n
+        }
+        i = i + 1
+    }
+    throw DomainError("truncated VLQ: last byte has the continuation bit set")
+}
+
+fn hex2(b: int) -> str {
+    return slice(HEX, b >> 4, (b >> 4) + 1) + slice(HEX, b & 15, (b & 15) + 1)
+}
+
+fn show_bytes(bytes: list) -> str {
+    let parts = []
+    let i = 0
+    while i < len(bytes) {
+        parts = parts + [hex2(bytes[i])]
+        i = i + 1
+    }
+    return str_join(parts, " ")
+}
+
+fn main() {
+    // The task asks for 0x200000 and 0x1fffff; the rest are the boundary
+    // values from the MIDI specification's VLQ table.
+    let cases = [
+        [0x200000, [0x81, 0x80, 0x80, 0x00]],
+        [0x1FFFFF, [0xFF, 0xFF, 0x7F]],
+        [0x0, [0x00]],
+        [0x7F, [0x7F]],
+        [0x80, [0x81, 0x00]],
+        [0x2000, [0xC0, 0x00]],
+        [0x3FFF, [0xFF, 0x7F]],
+        [0x4000, [0x81, 0x80, 0x00]],
+        [0x8000000, [0xC0, 0x80, 0x80, 0x00]],
+        [0xFFFFFFF, [0xFF, 0xFF, 0xFF, 0x7F]]
+    ]
+    let i = 0
+    while i < len(cases) {
+        let n = cases[i][0]
+        let enc = vlq_encode(n)
+        print(pad_left(hex(n), 10) + " -> " + show_bytes(enc) + " -> " + hex(vlq_decode(enc)))
+        assert_eq(enc, cases[i][1])
+        assert_eq(vlq_decode(enc), n)
+        i = i + 1
+    }
+
+    // A sequence that never terminates, or carries bytes after the final
+    // octet, is rejected.
+    assert_true(decode_rejects([0x81, 0x80]))
+    assert_true(decode_rejects([0x7F, 0x00]))
+    print("malformed sequences rejected")
+}
+
+fn decode_rejects(bytes: list) -> bool {
+    try {
+        vlq_decode(bytes)
+    } recover DomainError(e) {
+        return true
+    }
+    return false
+}
+
+main()
