@@ -1,0 +1,146 @@
+// ===================================================================
+// examples/interval_tree_tutorial.ltl
+// -------------------------------------------------------------------
+// Practical Application: Enterprise Calendar Meeting Room Scheduling
+// and Reservation Collision Detection using Augmented Interval Trees.
+// ===================================================================
+
+pub fn new_interval_tree() {
+    let tree = dict()
+    tree["root"] = -1
+    tree["nodes"] = dict()
+    tree["count"] = 0
+    return tree
+}
+
+pub fn intervals_overlap(l1, h1, l2, h2) {
+    if l1 <= h2 && l2 <= h1 {
+        return 1
+    }
+    return 0
+}
+
+pub fn update_max_high(tree, node_id) {
+    let node = tree["nodes"][node_id]
+    let m = node["high"]
+
+    let l = node["left"]
+    if l != -1 {
+        let l_max = tree["nodes"][l]["max_high"]
+        if l_max > m {
+            m = l_max
+        }
+    }
+
+    let r = node["right"]
+    if r != -1 {
+        let r_max = tree["nodes"][r]["max_high"]
+        if r_max > m {
+            m = r_max
+        }
+    }
+
+    node["max_high"] = m
+}
+
+pub fn insert_node(tree, curr_id, new_id) {
+    if curr_id == -1 {
+        return new_id
+    }
+
+    let curr = tree["nodes"][curr_id]
+    let new_node = tree["nodes"][new_id]
+
+    if new_node["low"] < curr["low"] {
+        curr["left"] = insert_node(tree, curr["left"], new_id)
+    } else {
+        curr["right"] = insert_node(tree, curr["right"], new_id)
+    }
+
+    update_max_high(tree, curr_id)
+    return curr_id
+}
+
+pub fn insert_interval(tree, low, high) {
+    let id = tree["count"]
+    let node = dict()
+    node["id"] = id
+    node["low"] = low
+    node["high"] = high
+    node["max_high"] = high
+    node["left"] = -1
+    node["right"] = -1
+
+    tree["nodes"][id] = node
+    tree["count"] = id + 1
+
+    tree["root"] = insert_node(tree, tree["root"], id)
+    return id
+}
+
+pub fn search_overlap(tree, q_low, q_high) {
+    let curr_id = tree["root"]
+
+    while curr_id != -1 {
+        let node = tree["nodes"][curr_id]
+        if intervals_overlap(node["low"], node["high"], q_low, q_high) == 1 {
+            return curr_id
+        }
+
+        let l_id = node["left"]
+        if l_id != -1 && tree["nodes"][l_id]["max_high"] >= q_low {
+            curr_id = l_id
+        } else {
+            curr_id = node["right"]
+        }
+    }
+
+    return -1
+}
+
+pub fn main() {
+    print("=== Executive Conference Room Reservation Dispatcher ===")
+
+    // Schedule existing bookings for the day (represented as 24-hr minute offsets from 00:00):
+    // 1. Standup: 09:00 - 09:30 (540 - 570)
+    // 2. Client Demo: 10:00 - 11:30 (600 - 690)
+    // 3. Team Lunch: 12:00 - 13:00 (720 - 780)
+    // 4. Sprint Review: 14:00 - 15:30 (840 - 930)
+    // 5. Engineering Sync: 16:00 - 17:00 (960 - 1020)
+    let calendar = new_interval_tree()
+    insert_interval(calendar, 540, 570)
+    insert_interval(calendar, 600, 690)
+    insert_interval(calendar, 720, 780)
+    insert_interval(calendar, 840, 930)
+    insert_interval(calendar, 960, 1020)
+
+    print("5 confirmed room bookings populated into Interval Tree.")
+
+    // Incoming Request A: 11:00 - 12:00 (660 - 720)
+    // This collides with Client Demo (600 - 690)!
+    print("Checking Incoming Request A: 11:00 - 12:00 (660 - 720)...")
+    let conflict_a = search_overlap(calendar, 660, 720)
+    assert(conflict_a != -1, "Request A must trigger a scheduling collision")
+    let c_node = calendar["nodes"][conflict_a]
+    print("Collision detected with existing booking starting at minute:")
+    print(c_node["low"])
+    print("and ending at minute:")
+    print(c_node["high"])
+
+    // Incoming Request B: 13:15 - 13:45 (795 - 825)
+    // Between Lunch (ends 780) and Sprint Review (starts 840) -> Free slot!
+    print("Checking Incoming Request B: 13:15 - 13:45 (795 - 825)...")
+    let conflict_b = search_overlap(calendar, 795, 825)
+    assert(conflict_b == -1, "Request B is free from collisions")
+    print("Request B is conflict-free and approved!")
+
+    // Dynamically insert approved Request B into calendar
+    insert_interval(calendar, 795, 825)
+    print("Booking confirmed and indexed in O(log n) time.")
+
+    // Re-verify that 13:30 - 14:00 (810 - 840) now collides with the newly added booking!
+    let conflict_c = search_overlap(calendar, 810, 840)
+    assert(conflict_c != -1, "Re-verifying newly committed reservation detects collision")
+
+    print("Executive calendar scheduling collision system verified successfully!")
+}
