@@ -1,0 +1,144 @@
+// ===================================================================
+// tests/stdlib_fenwick_tree_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for Fenwick Tree (Binary Indexed Tree / BIT),
+// lowbit decomposition, O(log n) dynamic prefix sums, and point updates.
+// ===================================================================
+
+fn lowbit(x) {
+    let p = 1
+    while p <= x {
+        if (x / p) % 2 != 0 {
+            return p
+        }
+        p = p * 2
+    }
+    return 1
+}
+
+pub fn create_fenwick_tree(n) {
+    let ft = dict()
+    ft["n"] = n
+    let arr = []
+    let i = 0
+    while i <= n {
+        arr = push(arr, 0)
+        i = i + 1
+    }
+    ft["tree"] = arr
+    return ft
+}
+
+pub fn fenwick_add(ft, idx, delta) {
+    let n = ft["n"]
+    let arr = ft["tree"]
+    let i = idx
+    while i <= n {
+        arr[i] = arr[i] + delta
+        i = i + lowbit(i)
+    }
+    ft["tree"] = arr
+}
+
+pub fn fenwick_query(ft, idx) {
+    let arr = ft["tree"]
+    let sum = 0
+    let i = idx
+    while i > 0 {
+        sum = sum + arr[i]
+        i = i - lowbit(i)
+    }
+    return sum
+}
+
+pub fn fenwick_range_query(ft, left, right) {
+    if left > right {
+        return 0
+    }
+    if left <= 1 {
+        return fenwick_query(ft, right)
+    }
+    return fenwick_query(ft, right) - fenwick_query(ft, left - 1)
+}
+
+pub fn build_fenwick_from_array(values) {
+    let n = len(values)
+    let ft = create_fenwick_tree(n)
+    let i = 0
+    while i < n {
+        fenwick_add(ft, i + 1, values[i])
+        i = i + 1
+    }
+    return ft
+}
+
+// -------------------------------------------------------------------
+// Verification Tests
+// -------------------------------------------------------------------
+
+pub fn test_initial_prefix_sums() {
+    // 1-indexed values: [3, 2, -1, 6, 5, 4, -3, 3, 7, 2, 3]
+    let values = [3, 2, -1, 6, 5, 4, -3, 3, 7, 2, 3]
+    let ft = build_fenwick_from_array(values)
+
+    assert(fenwick_query(ft, 1) == 3, "query(1) should be 3")
+    assert(fenwick_query(ft, 2) == 5, "query(2) should be 3 + 2 = 5")
+    assert(fenwick_query(ft, 3) == 4, "query(3) should be 5 - 1 = 4")
+    assert(fenwick_query(ft, 4) == 10, "query(4) should be 4 + 6 = 10")
+    assert(fenwick_query(ft, 11) == 31, "Total prefix sum should be 31")
+
+    // Range queries
+    assert(fenwick_range_query(ft, 2, 5) == 12, "range_query(2, 5) = 2 - 1 + 6 + 5 = 12")
+    assert(fenwick_range_query(ft, 1, 4) == 10, "range_query(1, 4) = 10")
+    assert(fenwick_range_query(ft, 5, 5) == 5, "Single element range query")
+}
+
+pub fn test_dynamic_point_updates() {
+    let values = [10, 20, 30, 40, 50]
+    let ft = build_fenwick_from_array(values)
+
+    assert(fenwick_query(ft, 3) == 60, "Sum of first 3 is 60")
+    assert(fenwick_range_query(ft, 2, 4) == 90, "20 + 30 + 40 = 90")
+
+    // Add +15 to index 3 (value becomes 45)
+    fenwick_add(ft, 3, 15)
+
+    assert(fenwick_query(ft, 3) == 75, "Updated sum of first 3 is 75")
+    assert(fenwick_query(ft, 5) == 165, "Total sum should increase by 15 from 150 to 165")
+    assert(fenwick_range_query(ft, 2, 4) == 105, "Range query should increase by 15")
+
+    // Subtract 10 from index 1 (value becomes 0)
+    fenwick_add(ft, 1, -10)
+    assert(fenwick_query(ft, 1) == 0, "Index 1 prefix sum should now be 0")
+    assert(fenwick_query(ft, 5) == 155, "Total sum should be 155")
+}
+
+pub fn test_single_element_tree() {
+    let ft = create_fenwick_tree(1)
+    fenwick_add(ft, 1, 100)
+
+    assert(fenwick_query(ft, 1) == 100, "Single element query")
+    assert(fenwick_range_query(ft, 1, 1) == 100, "Single element range query")
+
+    fenwick_add(ft, 1, -25)
+    assert(fenwick_query(ft, 1) == 75, "After decrement")
+}
+
+pub fn test_lowbit_correctness() {
+    assert(lowbit(1) == 1, "lowbit(1) = 1")
+    assert(lowbit(2) == 2, "lowbit(2) = 2")
+    assert(lowbit(3) == 1, "lowbit(3) = 1")
+    assert(lowbit(4) == 4, "lowbit(4) = 4")
+    assert(lowbit(6) == 2, "lowbit(6) = 2")
+    assert(lowbit(8) == 8, "lowbit(8) = 8")
+    assert(lowbit(12) == 4, "lowbit(12) = 4")
+    assert(lowbit(16) == 16, "lowbit(16) = 16")
+}
+
+pub fn main() {
+    test_lowbit_correctness()
+    test_initial_prefix_sums()
+    test_dynamic_point_updates()
+    test_single_element_tree()
+    print("All Fenwick Tree verification tests passed successfully!")
+}
