@@ -1,0 +1,222 @@
+// ===================================================================
+// tests/stdlib_hyperloglog_tutorial.ltl
+// -------------------------------------------------------------------
+// Complete test suite for HyperLogLog (HLL) in Lateralus.
+// Sub-linear space probabilistic cardinality estimation (Count Distinct)
+// with harmonic mean and linear counting correction.
+// Flajolet, Fusy, Gandouet, & Meunier (2007).
+// ===================================================================
+
+pub fn hll_pow2(k: int) -> int {
+    let mut res = 1
+    let mut i = 0
+    while i < k {
+        res = res * 2
+        i = i + 1
+    }
+    return res
+}
+
+pub fn hll_create(p: int) -> dict {
+    let mut hll = {}
+    let m = hll_pow2(p)
+    let mut registers = []
+    let mut i = 0
+    while i < m {
+        registers.push(0)
+        i = i + 1
+    }
+
+    hll["p"] = p
+    hll["m"] = m
+    hll["registers"] = registers
+    return hll
+}
+
+pub fn hll_hash(key: int) -> int {
+    let p = 2147483647
+    let mut h = (key * 2654435761 + 1013904223) % p
+    if h < 0 {
+        h = 0 - h
+    }
+    return h
+}
+
+pub fn hll_clz(w: int) -> int {
+    let mut count = 1
+    let mut temp = w
+    if temp == 0 {
+        return 32
+    }
+    while temp > 0 and (temp % 2 == 0) {
+        count = count + 1
+        temp = temp / 2
+    }
+    return count
+}
+
+pub fn hll_add(hll: dict, key: int) -> bool {
+    let m = hll["m"]
+    let mut registers = hll["registers"]
+
+    let h = hll_hash(key)
+    let j = h % m
+    let w = h / m
+    let rank = hll_clz(w)
+
+    if rank > registers[j] {
+        registers[j] = rank
+        hll["registers"] = registers
+    }
+    return true
+}
+
+pub fn hll_count(hll: dict) -> int {
+    let m = hll["m"]
+    let registers = hll["registers"]
+
+    // Count zero registers for small-range Linear Counting correction
+    let mut zeros = 0
+    let mut i = 0
+    while i < m {
+        if registers[i] == 0 {
+            zeros = zeros + 1
+        }
+        i = i + 1
+    }
+
+    // If more than half registers are empty, use Linear Counting directly
+    if zeros > 0 and zeros >= (m / 2) {
+        // Approximate m * ln(m / zeros) using integer series:
+        // For small range, m * (m - zeros) / zeros gives an effective approximation
+        let active = m - zeros
+        let est_lc = (m * active) / zeros
+        if est_lc == 0 and active > 0 {
+            return 1
+        }
+        return est_lc
+    }
+
+    // Harmonic mean calculation
+    // Scale factor 1048576 (2^20) to compute 2^-M[j] in integer arithmetic
+    let scale = 1048576
+    let mut sum_scaled = 0
+    let mut j = 0
+    while j < m {
+        let r = registers[j]
+        let p2 = hll_pow2(r)
+        sum_scaled = sum_scaled + (scale / p2)
+        j = j + 1
+    }
+
+    if sum_scaled == 0 {
+        return 0
+    }
+
+    // alpha_m for m=64 is approx 0.709
+    // E = alpha * m^2 / sum(2^-R)
+    // Scaled formula: (709 * m * m * scale) / (1000 * sum_scaled)
+    let num = 709 * m * m
+    let est = (num / 1000) * (scale / sum_scaled)
+
+    if zeros > 0 and est < (m * 5 / 2) {
+        let active = m - zeros
+        return (m * active) / zeros
+    }
+
+    return est
+}
+
+pub fn hll_merge(h1: dict, h2: dict) -> dict {
+    let m = h1["m"]
+    let p = h1["p"]
+    let res = hll_create(p)
+
+    let r1 = h1["registers"]
+    let r2 = h2["registers"]
+    let mut r_res = res["registers"]
+
+    let mut i = 0
+    while i < m {
+        let v1 = r1[i]
+        let v2 = r2[i]
+        if v1 >= v2 {
+            r_res[i] = v1
+        } else {
+            r_res[i] = v2
+        }
+        i = i + 1
+    }
+    res["registers"] = r_res
+    return res
+}
+
+// -------------------------------------------------------------------
+// Smoke tests and Golden Test Vectors
+// -------------------------------------------------------------------
+
+pub fn test_hll_empty() -> bool {
+    let hll = hll_create(6) // m = 64
+    let cnt = hll_count(hll)
+    return cnt == 0
+}
+
+pub fn test_hll_distinct_counting() -> bool {
+    let hll = hll_create(6) // m = 64
+
+    // Insert 50 unique items
+    let mut i = 1
+    while i <= 50 {
+        hll_add(hll, i * 13)
+        i = i + 1
+    }
+
+    let est = hll_count(hll)
+    // For 50 items with m=64, estimate should comfortably fall within [30, 75]
+    if est < 30 or est > 75 {
+        return false
+    }
+
+    // Insert duplicates of the same 50 items multiple times
+    let mut d = 1
+    while d <= 50 {
+        hll_add(hll, d * 13)
+        hll_add(hll, d * 13)
+        d = d + 1
+    }
+
+    let est_after_dup = hll_count(hll)
+    // Duplicates should not blow up cardinality
+    if est_after_dup != est {
+        return false
+    }
+    return true
+}
+
+pub fn test_hll_merge() -> bool {
+    let hll1 = hll_create(6)
+    let hll2 = hll_create(6)
+
+    // Set A: 1..25
+    let mut i = 1
+    while i <= 25 {
+        hll_add(hll1, i * 7)
+        i = i + 1
+    }
+
+    // Set B: 26..50 (disjoint)
+    let mut j = 26
+    while j <= 50 {
+        hll_add(hll2, j * 7)
+        j = j + 1
+    }
+
+    let merged = hll_merge(hll1, hll2)
+    let est_merged = hll_count(merged)
+
+    // Merged set has 50 distinct elements, estimate should be in [30, 75]
+    if est_merged < 30 or est_merged > 75 {
+        return false
+    }
+    return true
+}
