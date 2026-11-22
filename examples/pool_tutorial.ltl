@@ -1,0 +1,171 @@
+// ===================================================================
+// examples/pool_tutorial.ltl — stdlib/pool.ltl tutorial companion
+// Runnable tour of the object pool: acquire/release with LIFO reuse,
+// max_size enforcement, bulk ops, stats. Self-contained.
+// ===================================================================
+
+fn new(max_size: int) -> map {
+    let pool = {}
+    pool["available"] = []
+    pool["in_use"] = []
+    pool["max_size"] = max_size
+    pool["total_created"] = 0
+    return pool
+}
+
+fn from_list(items: list, max_size: int) -> map {
+    let pool = new(max_size)
+    pool["available"] = items
+    pool["total_created"] = len(items)
+    return pool
+}
+
+fn acquire(pool: map) -> list {
+    let available = pool["available"]
+    if len(available) == 0 {
+        return [pool, nil]
+    }
+    let obj = available[len(available) - 1]
+    pool["available"] = slice(available, 0, len(available) - 1)
+    pool["in_use"] = pool["in_use"] + [obj]
+    return [pool, obj]
+}
+
+fn release(pool: map, obj) -> map {
+    let new_in_use = []
+    let found = false
+    for item in pool["in_use"] {
+        if item == obj and not found {
+            found = true
+        } else {
+            new_in_use = new_in_use + [item]
+        }
+    }
+    pool["in_use"] = new_in_use
+    let max = pool["max_size"]
+    let available = pool["available"]
+    if max == 0 or len(available) < max {
+        pool["available"] = available + [obj]
+    }
+    return pool
+}
+
+fn add(pool: map, obj) -> map {
+    let max = pool["max_size"]
+    let available = pool["available"]
+    if max > 0 and len(available) + len(pool["in_use"]) >= max {
+        return pool
+    }
+    pool["available"] = available + [obj]
+    pool["total_created"] = pool["total_created"] + 1
+    return pool
+}
+
+fn available_count(pool: map) -> int { return len(pool["available"]) }
+fn in_use_count(pool: map) -> int { return len(pool["in_use"]) }
+fn total_count(pool: map) -> int { return len(pool["available"]) + len(pool["in_use"]) }
+fn is_empty(pool: map) -> bool { return len(pool["available"]) == 0 }
+
+fn is_full(pool: map) -> bool {
+    let max = pool["max_size"]
+    if max == 0 {
+        return false
+    }
+    return total_count(pool) >= max
+}
+
+fn stats(pool: map) -> map {
+    let s = {}
+    s["available"] = available_count(pool)
+    s["in_use"] = in_use_count(pool)
+    s["total"] = total_count(pool)
+    s["max_size"] = pool["max_size"]
+    s["total_created"] = pool["total_created"]
+    return s
+}
+
+fn acquire_many(pool: map, count: int) -> list {
+    let objects = []
+    let i = 0
+    while i < count {
+        let result = acquire(pool)
+        pool = result[0]
+        objects = objects + [result[1]]
+        i = i + 1
+    }
+    return [pool, objects]
+}
+
+fn release_all(pool: map) -> map {
+    pool["available"] = pool["available"] + pool["in_use"]
+    pool["in_use"] = []
+    return pool
+}
+
+fn drain(pool: map) -> list {
+    let all = pool["available"] + pool["in_use"]
+    pool["available"] = []
+    pool["in_use"] = []
+    return all
+}
+
+fn shrink(pool: map, n: int) -> map {
+    let available = pool["available"]
+    if len(available) > n {
+        pool["available"] = slice(available, 0, n)
+    }
+    return pool
+}
+
+fn stat_line(pool: map) -> str {
+    let s = stats(pool)
+    return "avail=" + str(s["available"]) + " in_use=" + str(s["in_use"]) +
+        " total=" + str(s["total"]) + " max=" + str(s["max_size"]) +
+        " created=" + str(s["total_created"])
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB POOL TUTORIAL ===")
+    let pool = from_list([10, 20, 30], 0)
+
+    let r1 = acquire(pool)
+    pool = r1[0]
+    println("STEP 1 acquire -> " + str(r1[1]) + " (LIFO: last available first)")
+    let r2 = acquire(pool)
+    pool = r2[0]
+    println("STEP 1 acquire -> " + str(r2[1]))
+    println("STEP 1 stats: " + stat_line(pool))
+
+    pool = release(pool, r2[1])
+    let r3 = acquire(pool)
+    pool = r3[0]
+    println("STEP 2 release(" + str(r2[1]) + ") then acquire -> " + str(r3[1]) + " (most-recently-released wins)")
+
+    let pool2 = new(3)
+    pool2 = add(pool2, "conn-A")
+    pool2 = add(pool2, "conn-B")
+    pool2 = add(pool2, "conn-C")
+    println("STEP 3 max_size=3, add x3 -> " + stat_line(pool2))
+    pool2 = add(pool2, "conn-D")
+    println("STEP 3 add conn-D at max -> " + stat_line(pool2) + " (rejected)")
+    let r4 = acquire(pool2)
+    pool2 = r4[0]
+    println("STEP 3 acquire -> " + str(r4[1]) + ", stats: " + stat_line(pool2))
+
+    let r5 = acquire_many(pool, 5)
+    pool = r5[0]
+    println("STEP 4 acquire_many(5) -> [" + join(r5[1], ", ") + "]")
+    println("STEP 4 stats: " + stat_line(pool) + " is_empty=" + str(is_empty(pool)))
+
+    pool = release_all(pool)
+    println("STEP 5 release_all -> " + stat_line(pool))
+    let drained = drain(pool)
+    println("STEP 5 drain -> [" + join(drained, ", ") + "] then stats: " + stat_line(pool))
+
+    let pool3 = from_list([1, 2, 3, 4], 0)
+    pool3 = shrink(pool3, 2)
+    println("STEP 6 shrink to 2 -> avail=" + str(available_count(pool3)) + " created=" + str(stats(pool3)["total_created"]))
+    println("PINNED_VECTORS: lifo=30,20 reuse=20 max3_add4_rejected drain=30,20,10 shrink_avail=2")
+}
+
+main()
