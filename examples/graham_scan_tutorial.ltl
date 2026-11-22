@@ -1,0 +1,135 @@
+// ===================================================================
+// examples/graham_scan_tutorial.ltl
+// -------------------------------------------------------------------
+// Demonstration of Graham Scan 2D Convex Hull in Lateralus.
+//
+// Real-World Applications:
+// 1. Autonomous Robotics & Drones: Minimum collision enclosure around obstacles.
+// 2. Geographic Information Systems (GIS): Geofencing boundaries from GPS clusters.
+// 3. Computer Graphics & Game Dev: Bounding convex polyhedra for physics collision.
+// ===================================================================
+
+fn cross_product(o, a, b) {
+    return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+}
+
+fn dist_sq(p1, p2) {
+    let dx = p1[0] - p2[0]
+    let dy = p1[1] - p2[1]
+    return dx * dx + dy * dy
+}
+
+fn compare_polar(pivot, p1, p2) {
+    let cp = cross_product(pivot, p1, p2)
+    if cp > 0 {
+        return -1
+    }
+    if cp < 0 {
+        return 1
+    }
+    let d1 = dist_sq(pivot, p1)
+    let d2 = dist_sq(pivot, p2)
+    if d1 < d2 {
+        return -1
+    }
+    return 1
+}
+
+pub fn compute_enclosure_hull(points) {
+    let n = len(points)
+    if n <= 3 {
+        return points
+    }
+
+    let pivot_idx = 0
+    let i = 1
+    while i < n {
+        let pt = points[i]
+        let piv = points[pivot_idx]
+        if pt[1] < piv[1] or (pt[1] == piv[1] and pt[0] < piv[0]) {
+            pivot_idx = i
+        }
+        i = i + 1
+    }
+
+    let pivot = points[pivot_idx]
+
+    let others = []
+    let j = 0
+    while j < n {
+        if j != pivot_idx {
+            others = push(others, points[j])
+        }
+        j = j + 1
+    }
+
+    let m = len(others)
+    let a = 1
+    while a < m {
+        let key = others[a]
+        let b = a - 1
+        while b >= 0 {
+            let prev = others[b]
+            if compare_polar(pivot, prev, key) > 0 {
+                others[b + 1] = prev
+                b = b - 1
+            } else {
+                break
+            }
+        }
+        others[b + 1] = key
+        a = a + 1
+    }
+
+    let hull = [pivot, others[0]]
+    let k = 1
+    while k < m {
+        let pt = others[k]
+        while len(hull) >= 2 {
+            let h_len = len(hull)
+            let p1 = hull[h_len - 2]
+            let p2 = hull[h_len - 1]
+            if cross_product(p1, p2, pt) <= 0 {
+                let new_hull = []
+                let h_idx = 0
+                while h_idx < h_len - 1 {
+                    new_hull = push(new_hull, hull[h_idx])
+                    h_idx = h_idx + 1
+                }
+                hull = new_hull
+            } else {
+                break
+            }
+        }
+        hull = push(hull, pt)
+        k = k + 1
+    }
+
+    return hull
+}
+
+pub fn main() {
+    print("=================================================================")
+    print("   Lateralus Standard Library: Graham Scan Drone Geofence Demo   ")
+    print("=================================================================")
+
+    // Simulated GPS waypoint cluster from drone delivery zone (meters)
+    let waypoints = [
+        [10, 10], [50, 10], [80, 40], [70, 90], [20, 80],
+        [30, 30], [45, 50], [60, 35], [40, 70]
+    ]
+
+    print("Ingested " + str(len(waypoints)) + " waypoint telemetry points.")
+
+    let geofence = compute_enclosure_hull(waypoints)
+
+    print("Convex Geofence Perimeter Vertices (" + str(len(geofence)) + " outer bounds):")
+    let i = 0
+    while i < len(geofence) {
+        let v = geofence[i]
+        print("  [Vertex #" + str(i + 1) + "] -> (" + str(v[0]) + ", " + str(v[1]) + ")")
+        i = i + 1
+    }
+
+    print("Graham scan collision perimeter generation completed successfully.")
+}
