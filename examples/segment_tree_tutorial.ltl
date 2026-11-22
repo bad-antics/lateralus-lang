@@ -1,0 +1,94 @@
+// Lateralus Standard Library Example: Segment Tree for Range Minimum Queries
+// Demonstrates O(log n) RMQ queries, recursive tree build, and live sensor telemetry updates.
+
+fn seg_min(a: int, b: int) -> int {
+    if a < b {
+        return a;
+    }
+    return b;
+}
+
+fn seg_build(node: int, start: int, end: int, arr: list, tree: list) -> list {
+    let mut t = tree;
+    if start == end {
+        t[node] = arr[start];
+        return t;
+    }
+    let mid = (start + end) >> 1;
+    t = seg_build(2 * node, start, mid, arr, t);
+    t = seg_build(2 * node + 1, mid + 1, end, arr, t);
+    t[node] = seg_min(t[2 * node], t[2 * node + 1]);
+    return t;
+}
+
+fn seg_query(node: int, start: int, end: int, l: int, r: int, tree: list) -> int {
+    let INF = 1000000000;
+    if r < start || end < l {
+        return INF;
+    }
+    if l <= start && end <= r {
+        return tree[node];
+    }
+    let mid = (start + end) >> 1;
+    let left_min = seg_query(2 * node, start, mid, l, r, tree);
+    let right_min = seg_query(2 * node + 1, mid + 1, end, l, r, tree);
+    return seg_min(left_min, right_min);
+}
+
+fn seg_update(node: int, start: int, end: int, idx: int, val: int, tree: list) -> list {
+    let mut t = tree;
+    if start == end {
+        t[node] = val;
+        return t;
+    }
+    let mid = (start + end) >> 1;
+    if idx <= mid {
+        t = seg_update(2 * node, start, mid, idx, val, t);
+    } else {
+        t = seg_update(2 * node + 1, mid + 1, end, idx, val, t);
+    }
+    t[node] = seg_min(t[2 * node], t[2 * node + 1]);
+    return t;
+}
+
+fn create_empty_tree(n: int) -> list {
+    let INF = 1000000000;
+    let cap = 4 * n + 10;
+    let mut t = [];
+    let mut i = 0;
+    while i < cap {
+        t = t + [INF];
+        i = i + 1;
+    }
+    return t;
+}
+
+fn main() -> int {
+    println("=== Segment Tree (Range Minimum Query) Example ===");
+
+    // Server response latencies in milliseconds across 8 time windows (indices 0..7)
+    // Latencies: [55, 23, 91, 14, 78, 62, 85, 33]
+    let latencies = [55, 23, 91, 14, 78, 62, 85, 33];
+    let n = len(latencies);
+    let mut tree = create_empty_tree(n);
+    tree = seg_build(1, 0, n - 1, latencies, tree);
+
+    println("Overall minimum latency across all time windows (0..7):");
+    let global_min = seg_query(1, 0, n - 1, 0, 7, tree);
+    println(global_min); // 14 ms
+
+    println("Minimum latency during peak hours (windows 4..7):");
+    let peak_min = seg_query(1, 0, n - 1, 4, 7, tree);
+    println(peak_min); // 33 ms
+
+    // Server optimization applied at window 2 (latency drops from 91 ms to 9 ms)
+    println("Updating time window 2 with optimized latency 9 ms...");
+    tree = seg_update(1, 0, n - 1, 2, 9, tree);
+
+    println("New minimum latency in early windows (0..3):");
+    let new_early_min = seg_query(1, 0, n - 1, 0, 3, tree);
+    println(new_early_min); // 9 ms
+
+    println("Segment tree execution completed successfully.");
+    return 0;
+}
