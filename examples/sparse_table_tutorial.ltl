@@ -1,0 +1,136 @@
+// ===================================================================
+// examples/sparse_table_tutorial.ltl
+// -------------------------------------------------------------------
+// Demonstration of Sparse Table (ST Table) for O(1) Range Minimum/Maximum
+// Query (RMQ) in Lateralus.
+//
+// Real-World Applications:
+// 1. Quantitative Finance: High-frequency price bar intraday high/low volatility intervals.
+// 2. Algorithmic Trading: Constant-time maximum drawdown calculation across sliding windows.
+// 3. Lowest Common Ancestor (LCA): RMQ reduction of Euler tour tree depths.
+// ===================================================================
+
+fn min_val(a, b) {
+    if a < b {
+        return a
+    }
+    return b
+}
+
+fn max_val(a, b) {
+    if a > b {
+        return a
+    }
+    return b
+}
+
+fn compute_log2(val) {
+    let k = 0
+    let p = 1
+    while p * 2 <= val {
+        p = p * 2
+        k = k + 1
+    }
+    return k
+}
+
+pub fn build_sparse_table(arr, is_min) {
+    let n = len(arr)
+    let pow2 = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
+    let max_k = compute_log2(n) + 1
+
+    let st = dict()
+    let row0 = dict()
+    let j = 0
+    while j < n {
+        row0[j] = arr[j]
+        j = j + 1
+    }
+    st[0] = row0
+
+    let i = 1
+    while i < max_k {
+        let prev_row = st[i - 1]
+        let curr_row = dict()
+        let half_step = pow2[i - 1]
+        let full_step = pow2[i]
+
+        let c = 0
+        while c + full_step <= n {
+            let left_v = prev_row[c]
+            let right_v = prev_row[c + half_step]
+            if is_min {
+                curr_row[c] = min_val(left_v, right_v)
+            } else {
+                curr_row[c] = max_val(left_v, right_v)
+            }
+            c = c + 1
+        }
+        st[i] = curr_row
+        i = i + 1
+    }
+
+    let result = dict()
+    result["st"] = st
+    result["n"] = n
+    result["pow2"] = pow2
+    result["is_min"] = is_min
+    return result
+}
+
+pub fn query_sparse_table(st_data, left, right) {
+    let st = st_data["st"]
+    let pow2 = st_data["pow2"]
+    let is_min = st_data["is_min"]
+
+    let range_len = right - left + 1
+    let k = compute_log2(range_len)
+    let step = pow2[k]
+
+    let row = st[k]
+    let left_ans = row[left]
+    let right_ans = row[right - step + 1]
+
+    if is_min {
+        return min_val(left_ans, right_ans)
+    } else {
+        return max_val(left_ans, right_ans)
+    }
+}
+
+pub fn main() {
+    print("=================================================================")
+    print("   Lateralus Standard Library: Sparse Table RMQ Analytics Demo   ")
+    print("=================================================================")
+
+    // Intraday price ticks ($): [102, 105, 98, 110, 95, 115, 108, 101, 120, 112]
+    let prices = [102, 105, 98, 110, 95, 115, 108, 101, 120, 112]
+    let n = len(prices)
+
+    print("Sample intraday tick dataset size: " + str(n) + " observations.")
+
+    let st_min = build_sparse_table(prices, true)
+    let st_max = build_sparse_table(prices, false)
+
+    print("Sparse tables built in O(n log n). Ready for strict O(1) queries.")
+
+    // 1. Morning trading session (Ticks 0 to 4)
+    let morning_low = query_sparse_table(st_min, 0, 4)
+    let morning_high = query_sparse_table(st_max, 0, 4)
+    print("Morning Session [0..4] -> Min: $" + str(morning_low) + " | Max: $" + str(morning_high))
+
+    // 2. Midday volatility burst (Ticks 3 to 7)
+    let burst_low = query_sparse_table(st_min, 3, 7)
+    let burst_high = query_sparse_table(st_max, 3, 7)
+    print("Midday Volatility [3..7] -> Min: $" + str(burst_low) + " | Max: $" + str(burst_high))
+
+    // 3. Full trading day range (Ticks 0 to 9)
+    let day_low = query_sparse_table(st_min, 0, 9)
+    let day_high = query_sparse_table(st_max, 0, 9)
+    print("Full Trading Day [0..9] -> Day Low: $" + str(day_low) + " | Day High: $" + str(day_high))
+
+    let max_spread = day_high - day_low
+    print("Maximum Daily Spread: $" + str(max_spread))
+
+    print("Sparse Table demo completed with guaranteed O(1) online RMQ latency.")
+}
