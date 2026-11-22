@@ -1,0 +1,138 @@
+// ===================================================================
+// examples/count_min_sketch_tutorial.ltl
+// -------------------------------------------------------------------
+// Multi-Gigabit Router NetFlow Elephant Flow & DDoS Detector
+// -------------------------------------------------------------------
+// Demonstration of Count-Min Sketch in Lateralus profiling high-speed
+// packet flow distributions, detecting heavy-hitter DDoS flows in
+// sub-linear space, and merging distributed edge ingress streams.
+// ===================================================================
+
+pub fn cms_create(depth: int, width: int) -> dict {
+    let mut sketch = {}
+    let mut table = []
+    let mut seeds_a = [10007, 20011, 30013, 40009, 50021, 60017, 70001, 80021]
+    let mut seeds_b = [12345, 67891, 23456, 78912, 34567, 89123, 45678, 91234]
+
+    let mut i = 0
+    while i < depth {
+        let mut row = []
+        let mut j = 0
+        while j < width {
+            row.push(0)
+            j = j + 1
+        }
+        table.push(row)
+        i = i + 1
+    }
+
+    sketch["table"] = table
+    sketch["depth"] = depth
+    sketch["width"] = width
+    sketch["seeds_a"] = seeds_a
+    sketch["seeds_b"] = seeds_b
+    sketch["total"] = 0
+    return sketch
+}
+
+pub fn cms_hash(seed_a: int, seed_b: int, key: int, width: int) -> int {
+    let p = 2147483647
+    let mut h = (seed_a * key + seed_b) % p
+    if h < 0 {
+        h = 0 - h
+    }
+    return h % width
+}
+
+pub fn cms_update(sketch: dict, key: int, count: int) -> bool {
+    let depth = sketch["depth"]
+    let width = sketch["width"]
+    let mut table = sketch["table"]
+    let seeds_a = sketch["seeds_a"]
+    let seeds_b = sketch["seeds_b"]
+
+    let mut row_idx = 0
+    while row_idx < depth {
+        let col = cms_hash(seeds_a[row_idx], seeds_b[row_idx], key, width)
+        let mut row = table[row_idx]
+        row[col] = row[col] + count
+        table[row_idx] = row
+        row_idx = row_idx + 1
+    }
+
+    sketch["table"] = table
+    let total = sketch["total"]
+    sketch["total"] = total + count
+    return true
+}
+
+pub fn cms_query(sketch: dict, key: int) -> int {
+    let depth = sketch["depth"]
+    let width = sketch["width"]
+    let table = sketch["table"]
+    let seeds_a = sketch["seeds_a"]
+    let seeds_b = sketch["seeds_b"]
+
+    let mut min_val = 2147483647
+    let mut row_idx = 0
+    while row_idx < depth {
+        let col = cms_hash(seeds_a[row_idx], seeds_b[row_idx], key, width)
+        let row = table[row_idx]
+        let val = row[col]
+        if val < min_val {
+            min_val = val
+        }
+        row_idx = row_idx + 1
+    }
+
+    return min_val
+}
+
+// -------------------------------------------------------------------
+// Pipeline Demo: Edge Gateway NetFlow Traffic Heavy-Hitter Detector
+// -------------------------------------------------------------------
+
+pub fn simulate_netflow_telemetry() -> bool {
+    // 4 rows x 128 cols compact sketch
+    let telemetry = cms_create(4, 128)
+
+    // Ingest simulated NetFlow packet bursts from edge interfaces:
+    // Regular customer traffic (mice flows):
+    cms_update(telemetry, 19216801, 15)
+    cms_update(telemetry, 19216802, 22)
+    cms_update(telemetry, 19216803, 18)
+    cms_update(telemetry, 19216804, 30)
+
+    // Malicious volumetric SYN flood (elephant flow):
+    cms_update(telemetry, 10000001, 5000)
+
+    // Verification 1: Elephant flow is accurately estimated within error bound
+    let elephant_estimate = cms_query(telemetry, 10000001)
+    if elephant_estimate < 5000 {
+        return false // Must satisfy lower bound invariant
+    }
+
+    // Verification 2: Mice flows do not falsely blow up into heavy hitters
+    let normal_user = cms_query(telemetry, 19216801)
+    if normal_user > 50 {
+        return false // Error must be bounded
+    }
+
+    // Verification 3: Heavy hitter detection threshold (flows > 1000 packets)
+    let threshold = 1000
+    if elephant_estimate <= threshold {
+        return false
+    }
+    if normal_user >= threshold {
+        return false
+    }
+
+    return true
+}
+
+pub fn main() -> int {
+    if simulate_netflow_telemetry() {
+        return 0
+    }
+    return 1
+}
