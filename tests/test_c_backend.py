@@ -746,3 +746,22 @@ class TestTypeAlias:
         c_src = check_c("type Score = int")
         assert "typedef" in c_src
         assert "Score" in c_src
+
+
+class TestCStringCoercionAndListTypes:
+    """Regression tests for str(x) concatenation, len(x), and list type annotations."""
+
+    def test_str_concat_does_not_double_wrap_value_to_str(self):
+        c_src = check_c('fn main() {\n    let n = 42\n    println("n = " + str(n))\n}\n')
+        assert "ltl_str_concat(ltl_str_new(\"n = \"), ltl_int_to_str(n))" in c_src
+        assert "ltl_value_to_str(ltl_int_to_str(" not in c_src
+
+    def test_list_param_and_return_type_maps_to_ltl_list_ptr(self):
+        c_src = check_c("fn id_list(xs: list) -> list {\n    return xs\n}\n")
+        assert "static ltl_list_t* id_list(ltl_list_t* xs)" in c_src
+
+    def test_len_on_list_and_string_emits_field_access(self):
+        c_src = check_c('fn count(xs: list, s: str) -> int {\n    return len(xs) + len(s)\n}\n')
+        assert "((xs)->len)" in c_src
+        assert "((s)->len)" in c_src
+

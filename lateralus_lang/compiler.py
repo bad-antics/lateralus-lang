@@ -354,9 +354,15 @@ class Compiler:
             f.write(src)
             tmp_path = f.name
         try:
+            import os as _os
+            env = _os.environ.copy()
+            pkg_root = str(pathlib.Path(__file__).resolve().parent.parent)
+            existing_pp = env.get("PYTHONPATH", "")
+            env["PYTHONPATH"] = f"{pkg_root}{_os.pathsep}{existing_pp}" if existing_pp else pkg_root
             proc = _sp.run(
                 [_sys.executable, tmp_path],
                 timeout=60,
+                env=env,
             )
             result.exit_code = proc.returncode
             if proc.returncode != 0:

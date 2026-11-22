@@ -197,6 +197,7 @@ _TYPE_MAP: Dict[str, str] = {
     "i64":    "int64_t",
     "usize":  "size_t",
     "isize":  "int64_t",
+    "list":   "ltl_list_t*",
     # Function type → function pointer (generic)
     "fn":     "void*",
     "Fn":     "void*",
@@ -691,8 +692,12 @@ class CTranspiler(ASTVisitor):
                 if "ltl_string_t*" in (lt, rt): return "ltl_string_t*"
                 if "double" in (lt, rt):         return "double"
                 if lt == "int64_t" and rt == "int64_t": return "int64_t"
-            if op in ("==", "!=", "<", ">", "<=", ">=", "and", "or", "not"):
+            if op in ("==", "!=", "<", ">", "<=", ">=", "and", "or", "not", "&&", "||"):
                 return "bool"
+        if isinstance(node, UnaryOp):
+            if getattr(node, "op", "") in ("not", "!"):
+                return "bool"
+            return self._infer_ctype_from_expr(node.operand)
         if isinstance(node, CastExpr):
             tname = getattr(node.target, "name", None) if node.target else None
             if tname == "str":   return "ltl_string_t*"
@@ -702,7 +707,17 @@ class CTranspiler(ASTVisitor):
             return _c_type(node.target, "ltl_value_t")
         if isinstance(node, CallExpr):
             if isinstance(node.callee, Ident):
-                nm = self._mangle(node.callee.name)
+                raw_name = node.callee.name
+                if len(node.args) == 1:
+                    if raw_name == "str":
+                        return "ltl_string_t*"
+                    if raw_name in ("int", "len"):
+                        return "int64_t"
+                    if raw_name == "float":
+                        return "double"
+                    if raw_name == "bool":
+                        return "bool"
+                nm = self._mangle(raw_name)
                 if nm in ("ltl_int_to_str", "ltl_float_to_str",
                           "ltl_bool_to_str", "ltl_str_new", "ltl_str_concat"):
                     return "ltl_string_t*"
@@ -851,6 +866,8 @@ class CTranspiler(ASTVisitor):
         w.block_open(f"static {ret} {name}({params})")
         if node.body:
             self._visit_block(node.body)
+        if node.ret_type is None and ret == "ltl_value_t":
+            w.line("return (ltl_value_t){.tag = LTL_NIL};")
         w.block_close()
         w.line()
         self._in_fn = False
@@ -1283,7 +1300,13 @@ class CTranspiler(ASTVisitor):
                 if ctype == "ltl_string_t*":
                     helper = "ltl_io_println" if name == "println" else "ltl_io_print"
                     return f"{helper}({arg})"
-            # Builtin type-coercion calls: int(x), float(x), bool(x), str(x).
+            # Builtin type-coercion and length calls: int(x), float(x), bool(x), str(x), len(x).
+            if name == "len" and len(node.args) == 1:
+                arg_node = node.args[0]
+                arg = self._visit_expr(arg_node)
+                src = self._infer_ctype_from_expr(arg_node)
+                if src in ("ltl_list_t*", "ltl_string_t*"):
+                    return f"(({arg})->len)"
             if name in ("int", "float", "bool", "str") and len(node.args) == 1:
                 arg_node = node.args[0]
                 arg = self._visit_expr(arg_node)
