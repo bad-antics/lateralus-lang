@@ -1,0 +1,140 @@
+// ===================================================================
+// tests/stdlib_fractional_knapsack_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for Fractional Knapsack greedy optimization,
+// cross-product density sorting, and continuous relaxation packing.
+// ===================================================================
+
+fn compare_density(item1, item2) {
+    let v1 = item1[0]
+    let w1 = item1[1]
+    let v2 = item2[0]
+    let w2 = item2[1]
+    let cross1 = v1 * w2
+    let cross2 = v2 * w1
+    if cross1 > cross2 {
+        return -1
+    }
+    if cross1 < cross2 {
+        return 1
+    }
+    return 0
+}
+
+pub fn fractional_knapsack_scaled(items_in, capacity) {
+    let n = len(items_in)
+    let items = []
+    let c = 0
+    while c < n {
+        items = push(items, items_in[c])
+        c = c + 1
+    }
+
+    let a = 1
+    while a < n {
+        let key = items[a]
+        let b = a - 1
+        while b >= 0 {
+            let prev = items[b]
+            if compare_density(prev, key) > 0 {
+                items[b + 1] = prev
+                b = b - 1
+            } else {
+                break
+            }
+        }
+        items[b + 1] = key
+        a = a + 1
+    }
+
+    let remaining_cap = capacity
+    let total_val_scaled = 0
+    let fractions = []
+    let i = 0
+
+    while i < n and remaining_cap > 0 {
+        let item = items[i]
+        let v = item[0]
+        let w = item[1]
+
+        if w <= remaining_cap {
+            remaining_cap = remaining_cap - w
+            total_val_scaled = total_val_scaled + v * 1000
+            fractions = push(fractions, [item[2], 1000])
+        } else {
+            let fraction_permille = (remaining_cap * 1000) / w
+            total_val_scaled = total_val_scaled + (v * fraction_permille)
+            fractions = push(fractions, [item[2], fraction_permille])
+            remaining_cap = 0
+        }
+        i = i + 1
+    }
+
+    let res = dict()
+    res["total_val_scaled"] = total_val_scaled
+    res["fractions"] = fractions
+    return res
+}
+
+// -------------------------------------------------------------------
+// Verification Tests
+// -------------------------------------------------------------------
+
+pub fn test_classic_three_items() {
+    // Items: [value, weight, id]
+    // Item 1: (60, 10, 1) -> density 6.0
+    // Item 2: (100, 20, 2) -> density 5.0
+    // Item 3: (120, 30, 3) -> density 4.0
+    let items = [
+        [60, 10, 1],
+        [100, 20, 2],
+        [120, 30, 3]
+    ]
+    let capacity = 50
+
+    let result = fractional_knapsack_scaled(items, capacity)
+
+    // Expected value: 60 + 100 + (2/3 * 120 = 80) = 240
+    // Scaled by 1000 -> 240000
+    assert(result["total_val_scaled"] == 240000, "Classic 50kg knapsack must yield exact 240.000 value")
+
+    let fractions = result["fractions"]
+    assert(len(fractions) == 3, "All three items should be touched")
+}
+
+pub fn test_capacity_exceeds_total_weight() {
+    let items = [
+        [50, 10, 1],
+        [30, 10, 2]
+    ]
+    let capacity = 50  // Total weight is 20
+    let result = fractional_knapsack_scaled(items, capacity)
+
+    assert(result["total_val_scaled"] == 80000, "Full capacity takes all items (50 + 30 = 80)")
+}
+
+pub fn test_single_item_fraction() {
+    let items = [
+        [50, 10, 1]
+    ]
+    let capacity = 5  // Half of item 1
+    let result = fractional_knapsack_scaled(items, capacity)
+
+    assert(result["total_val_scaled"] == 25000, "Half item yields half value 25.000")
+}
+
+pub fn test_zero_capacity() {
+    let items = [
+        [100, 20, 1]
+    ]
+    let result = fractional_knapsack_scaled(items, 0)
+    assert(result["total_val_scaled"] == 0, "Zero capacity yields zero value")
+}
+
+pub fn main() {
+    test_classic_three_items()
+    test_capacity_exceeds_total_weight()
+    test_single_item_fraction()
+    test_zero_capacity()
+    print("All Fractional Knapsack verification tests passed successfully!")
+}
