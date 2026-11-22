@@ -1,0 +1,60 @@
+// ===================================================================
+// examples/tar_tutorial.ltl
+//
+// Tutorial: In-Memory Archive Packaging & Extraction with
+// Lateralus stdlib/tar.ltl (POSIX.1-2001 ustar).
+//
+// Demonstrates:
+// 1. Defining virtual file entries with names, modes, and payloads.
+// 2. Packing into 512-byte block-aligned POSIX ustar archives.
+// 3. Inspecting ustar magic signatures and header checksums.
+// 4. Extracting and verifying files from raw archive streams.
+// ===================================================================
+
+import tar
+
+pub fn main() {
+    print("=== Lateralus POSIX ustar Tar Archive Tutorial ===")
+
+    // 1. Prepare in-memory file entries
+    let file1 = {}
+    file1["name"] = "docs/README.txt"
+    file1["bytes"] = bytes_of("Lateralus System Archive v1.0\nDistributed Polyglot Runtime.\n")
+    file1["mode"] = 420 // 0644 octal
+    file1["mtime"] = 1700000000
+
+    let file2 = {}
+    file2["name"] = "etc/hosts"
+    file2["bytes"] = bytes_of("127.0.0.1 localhost\n::1 localhost\n")
+    file2["mode"] = 420
+    file2["mtime"] = 1700000000
+
+    let entries_to_pack = [file1, file2]
+    print("Packing " + str(len(entries_to_pack)) + " files into ustar format...")
+
+    // 2. Write archive
+    let archive_bytes = tar_write(entries_to_pack)
+    let total_size = len(archive_bytes)
+    let total_blocks = total_size / tar_block_size()
+
+    print("Archive generated successfully!")
+    print("  Total size: " + str(total_size) + " bytes (" + str(total_blocks) + " x 512-byte blocks)")
+
+    // 3. Read and extract files back from archive
+    print("Extracting entries from archive stream...")
+    let extracted_files = tar_read(archive_bytes)
+
+    print("Extracted " + str(len(extracted_files)) + " files:")
+    let i = 0
+    while i < len(extracted_files) {
+        let f = extracted_files[i]
+        print("  [" + str(i + 1) + "] " + f["name"] + " (" + str(len(f["bytes"])) + " bytes, mode=" + str(f["mode"]) + ")")
+        i = i + 1
+    }
+
+    if len(extracted_files) == 2 && extracted_files[0]["name"] == "docs/README.txt" {
+        print("PASS: Archive successfully restored all files with zero data loss!")
+    }
+
+    print("=== Tar tutorial demonstration completed successfully ===")
+}

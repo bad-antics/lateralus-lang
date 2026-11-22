@@ -1,0 +1,58 @@
+// Pinned test vectors for stdlib/tar tutorial (POSIX ustar format).
+
+import tar
+
+pub fn test_tar_archive_roundtrip() -> bool {
+    // 1. Create in-memory file entry
+    let e = {}
+    e["name"] = "manifest.json"
+    e["bytes"] = bytes_of("{\"status\":\"ready\",\"code\":200}\n")
+    e["mode"] = 420 // 0644 octal
+    e["mtime"] = 1700000000
+
+    // 2. Serialize to ustar archive
+    let archive_bytes = tar_write([e])
+
+    // Must be aligned to 512-byte blocks
+    if len(archive_bytes) % 512 != 0 { return false }
+
+    // Must end with at least two 512-byte zero blocks (1024 bytes)
+    if len(archive_bytes) < 1536 { return false }
+
+    // Magic bytes at offset 257 must be "ustar" (117, 115, 116, 97, 114)
+    if archive_bytes[257] != 117 { return false }
+    if archive_bytes[258] != 115 { return false }
+    if archive_bytes[259] != 116 { return false }
+    if archive_bytes[260] != 97 { return false }
+    if archive_bytes[261] != 114 { return false }
+
+    // 3. Decompress / parse archive
+    let extracted_entries = tar_read(archive_bytes)
+    if len(extracted_entries) != 1 { return false }
+
+    let extracted = extracted_entries[0]
+    if extracted["name"] != "manifest.json" { return false }
+    if extracted["mode"] != 420 { return false }
+    if extracted["mtime"] != 1700000000 { return false }
+
+    let original_bytes = e["bytes"]
+    let got_bytes = extracted["bytes"]
+    if len(got_bytes) != len(original_bytes) { return false }
+
+    let i = 0
+    while i < len(got_bytes) {
+        if got_bytes[i] != original_bytes[i] { return false }
+        i = i + 1
+    }
+
+    return true
+}
+
+pub fn test_tar_block_size_and_constants() -> bool {
+    if tar_block_size() != 512 { return false }
+    if tar_type_regular() != "0" { return false }
+    if tar_type_link() != "1" { return false }
+    if tar_type_symlink() != "2" { return false }
+    if tar_type_dir() != "5" { return false }
+    return true
+}
