@@ -327,3 +327,30 @@ class TestWasmIntegration:
         assert "i64.store" in wat
         assert "i64.load" in wat
         assert "(memory" in wat
+
+
+class TestFloorDivisionWasm:
+    """#407: i64 div must floor like the VM, via $ltl_floordiv."""
+
+    def _div_module(self):
+        c = WasmCompiler()
+        ir = [
+            {"op": "fn_begin", "name": "main", "params": [],
+             "return_type": "int", "exported": True},
+            {"op": "const", "dest": "a", "value": -7, "wasm_type": "i64"},
+            {"op": "const", "dest": "b", "value": 2, "wasm_type": "i64"},
+            {"op": "div", "dest": "d", "left": "a", "right": "b",
+             "wasm_type": "i64"},
+            {"op": "return", "value": "d"},
+            {"op": "fn_end"},
+        ]
+        return c.compile_ir(ir).to_wat()
+
+    def test_floordiv_helper_defined(self):
+        wat = self._div_module()
+        assert "(func $ltl_floordiv" in wat
+        assert "i64.div_s" in wat and "i64.rem_s" in wat
+
+    def test_div_calls_floordiv(self):
+        wat = self._div_module()
+        assert "call $ltl_floordiv" in wat

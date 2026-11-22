@@ -746,3 +746,25 @@ class TestTypeAlias:
         c_src = check_c("type Score = int")
         assert "typedef" in c_src
         assert "Score" in c_src
+
+
+class TestFloorDivision:
+    """#407: int64 / and % must floor like the VM (Python // and %), not C truncation."""
+
+    def test_negative_division_uses_floor_helper(self):
+        c_src = check_c("fn main() -> int {\n    return -7 / 2\n}\n")
+        assert "ltl_idiv_floor((-7), 2)" in c_src
+
+    def test_positive_division_also_floor(self):
+        c_src = check_c("fn main() -> int {\n    return 7 / 2\n}\n")
+        assert "ltl_idiv_floor(7, 2)" in c_src
+
+    def test_negative_modulo_uses_floor_helper(self):
+        c_src = check_c("fn main() -> int {\n    return -7 % 2\n}\n")
+        assert "ltl_imod_floor((-7), 2)" in c_src
+
+    def test_float_division_unchanged(self):
+        # Prelude always defines the helpers; a float division must not call them.
+        c_src = check_c("fn main() -> float {\n    return -7.0 / 2\n}\n")
+        assert c_src.count("ltl_idiv_floor") == 1
+        assert "ltl_imod_floor" in c_src  # prelude definition only
