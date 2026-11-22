@@ -1,0 +1,96 @@
+// ===================================================================
+// tests/stdlib_influx_line_tutorial.ltl
+// Pinned test vectors for the stdlib/influx_line tutorial.
+// ===================================================================
+
+import influx_line
+
+pub fn test_line_basic_serialization() -> bool {
+    let tags = [["host", "server01"], ["region", "us-east"]]
+    let fields = [
+        ["cpu", influx_line.field_float("82.4")],
+        ["cores", influx_line.field_int(16)]
+    ]
+    let res = influx_line.line("cpu_usage", tags, fields, 1600000000000000000)
+    let expected = "cpu_usage,host=server01,region=us-east cpu=82.4,cores=16i 1600000000000000000"
+    return res == expected
+}
+
+pub fn test_field_type_formatting() -> bool {
+    if influx_line.field_int(42) != "42i" { return false }
+    if influx_line.field_int(-10) != "-10i" { return false }
+    if influx_line.field_bool(true) != "true" { return false }
+    if influx_line.field_bool(false) != "false" { return false }
+    if influx_line.field_float("3.14159") != "3.14159" { return false }
+    if influx_line.field_string("simple") != "\"simple\"" { return false }
+    if influx_line.field_string("hello \"world\"") != "\"hello \\\"world\\\"\"" { return false }
+    return true
+}
+
+pub fn test_escaping_mechanics() -> bool {
+    // Measurement escapes comma and space
+    let m = "weather, station nyc"
+    // Tag key & value escape comma, equals, and space
+    let tags = [["sensor=id", "loc, 1=A"]]
+    // Field key escapes comma, equals, space. String value escapes quotes and backslashes
+    let fields = [
+        ["field=key", influx_line.field_string("val with \\ and \"quote\"")]
+    ]
+    let res = influx_line.line(m, tags, fields, 0)
+    
+    // Expected:
+    // Measurement: weather\, station\ nyc
+    // Tag: sensor\=id=loc\,\ 1\=A
+    // Field: field\=key="val with \\ and \"quote\""
+    let expected = "weather\\, station\\ nyc,sensor\\=id=loc\\,\\ 1\\=A field\\=key=\"val with \\\\ and \\\"quote\\\"\""
+    return res == expected
+}
+
+pub fn test_parse_line_roundtrip() -> bool {
+    let raw = "mem_stat,node=worker-01,env=prod total=16384i,used=8192i,cached=\"ok\" 1700000000000000000"
+    let parsed = influx_line.parse_line(raw)
+    if parsed == nil { return false }
+
+    if parsed["measurement"] != "mem_stat" { return false }
+    if parsed["timestamp"] != 1700000000000000000 { return false }
+
+    let tags = parsed["tags"]
+    if len(tags) != 2 { return false }
+    if tags[0][0] != "node" || tags[0][1] != "worker-01" { return false }
+    if tags[1][0] != "env" || tags[1][1] != "prod" { return false }
+
+    let fields = parsed["fields"]
+    if len(fields) != 3 { return false }
+    if fields[0][0] != "total" || fields[0][1] != "16384i" { return false }
+    if fields[1][0] != "used" || fields[1][1] != "8192i" { return false }
+    if fields[2][0] != "cached" || fields[2][1] != "\"ok\"" { return false }
+
+    return true
+}
+
+pub fn test_omit_timestamp_and_malformed() -> bool {
+    // Timestamp <= 0 omits timestamp
+    let line_no_ts = influx_line.line("disk", [["mount", "/var"]], [["free", influx_line.field_int(500)]], 0)
+    if line_no_ts != "disk,mount=/var free=500i" { return false }
+
+    let parsed = influx_line.parse_line(line_no_ts)
+    if parsed == nil { return false }
+    if parsed["timestamp"] != 0 { return false }
+
+    // Malformed line checks (missing field separator or empty)
+    if influx_line.parse_line("") != nil { return false }
+    if influx_line.parse_line("only_measurement_no_fields") != nil { return false }
+    if influx_line.parse_line("measurement,tag=val_no_space") != nil { return false }
+
+    return true
+}
+
+pub fn main() {
+    print("Running stdlib/influx_line tutorial test suite...")
+    if not test_line_basic_serialization() { print("FAIL: test_line_basic_serialization"); return }
+    if not test_field_type_formatting() { print("FAIL: test_field_type_formatting"); return }
+    if not test_escaping_mechanics() { print("FAIL: test_escaping_mechanics"); return }
+    if not test_parse_line_roundtrip() { print("FAIL: test_parse_line_roundtrip"); return }
+    if not test_omit_timestamp_and_malformed() { print("FAIL: test_omit_timestamp_and_malformed"); return }
+    print("ALL 5 PINNED TEST VECTOR SUITES PASSED! [100% OK]")
+}
