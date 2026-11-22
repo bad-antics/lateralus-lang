@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>High-Speed Hashing and Keyed MACs with Lateralus stdlib/blake2s</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "High-Speed Cryptographic Hashing and Keyed MACs with stdlib/blake2s"
+author: romanfjose
+date: 2026-11-15
+abstract: A hands-on guide to RFC 7693 BLAKE2s in Lateralus using stdlib/blake2s.ltl, covering unkeyed 256-bit digests, variable-length outputs, keyed message authentication codes (MACs), and pinned RFC 7693 test vectors.
+---
+
+# Introduction
+
+Cryptographic hashing underpins content-addressable storage, wire-protocol authentication, and key derivation. While SHA-256 remains widespread, **BLAKE2s (RFC 7693)** delivers significantly higher throughput on 32-bit and embedded architectures, immune to length-extension attacks out of the box, with built-in support for keyed Message Authentication Codes (MACs) and variable digest lengths (1 to 32 bytes) without needing an external HMAC wrapper.
+
+Lateralus includes a zero-dependency RFC 7693 implementation in `stdlib/blake2s.ltl`, used in protocols ranging from WireGuard to content-addressed package verification.
+
+In this tutorial, we cover:
+1. How the BLAKE2s ARX (Add-Rotate-XOR) compression function works.
+2. Computing 256-bit unkeyed digests with `hash256` and `hash256_str`.
+3. Generating keyed MACs and truncated digests with `hash(msg, key, digest_len)`.
+4. Verifying our outputs against pinned RFC 7693 test vectors.
+
+---
+
+# Architecture: RFC 7693 Parameter Block & ARX Rounds
+
+BLAKE2s initializes an 8-word (32-bit little-endian) state vector from the same fractional square-root constants (`B2S_IV`) as SHA-256, then XORs word `h[0]` with the parameter block:
+
+$$h_0 \leftarrow h_0 \oplus \text{0x01010000} \oplus (\text{key\_len} \ll 8) \oplus \text{digest\_len}$$
+
+When a key is supplied (`key_len > 0`), RFC 7693 Section 2.8 specifies that the key is zero-padded to a full 64-byte block and compressed first (`t = 64`), followed by the message blocks (`t = 64 + msg_len` on the final block when `msg_len > 0`). Each 64-byte block undergoes 10 rounds of the `G` mixing function across column and diagonal words using rotations of `16, 12, 8, 7` bits.
+
+---
+
+# Runnable Example: Unkeyed Digest & Keyed MAC
+
+Below is a complete, runnable Lateralus program that computes:
+1. The RFC 7693 Appendix A unkeyed BLAKE2s-256 digest of `"abc"`.
+2. A 32-byte keyed BLAKE2s MAC over `"abc"` using a 32-byte key (`0x00..0x1f`).
+3. A compact 16-byte (128-bit) fingerprint for content indexing.
+
+```ltl
+// examples/blake2s_demo.ltl
+// Run with: lateralus run examples/blake2s_demo.ltl
+
+import blake2s
+
+fn to_hex(bytes: list) -> str {
+    let digits = "0123456789abcdef"
+    let out = ""
+    let i = 0
+    while i < len(bytes) {
+        let b = bytes[i] & 0xff
+        out = out + digits[(b >> 4) & 0x0f] + digits[b & 0x0f]
+        i = i + 1
+    }
+    return out
+}
+
+// 1. Unkeyed 256-bit digest of "abc" (RFC 7693 Appendix A test vector)
+let abc_digest = hash256_str("abc")
+let abc_hex = to_hex(abc_digest)
+println("BLAKE2s-256('abc') = " + abc_hex)
+assert(abc_hex == "508c5e8c327c14e2e1a72ba34eeb452f37458b209ed63a294d999b4c86675982")
+
+// 2. Keyed 256-bit MAC of "abc" with 32-byte sequential key 0x00..0x1f
+let key = []
+let k = 0
+while k < 32 {
+    key = key + [k]
+    k = k + 1
+}
+let mac_digest = hash(bytes_of("abc"), key, 32)
+let mac_hex = to_hex(mac_digest)
+println("BLAKE2s-MAC('abc') = " + mac_hex)
+assert(mac_hex == "a281f725754969a702f6fe36fc591b7def866e4b70173ece402fc01c064d6b65")
+
+// 3. Variable-length 16-byte (128-bit) unkeyed digest
+let short_digest = hash(bytes_of("abc"), [], 16)
+let short_hex = to_hex(short_digest)
+println("BLAKE2s-128('abc') = " + short_hex)
+assert(short_hex == "aa4938119b1dc7b87cbad0ffd200d0ae")
+```
+
+---
+
+# Pinned RFC 7693 Test Vectors
+
+| Mode | Input | Key (`hex`) | `digest_len` | Expected Digest (`hex`) |
+|---|---|---|---|---|
+| Unkeyed | `""` (empty) | `[]` | `32` | `69217a3079908094e11121d042354a7c1f55b6482ca1a51e1b250dfd1ed0eef9` |
+| Unkeyed | `"abc"` | `[]` | `32` | `508c5e8c327c14e2e1a72ba34eeb452f37458b209ed63a294d999b4c86675982` |
+| Unkeyed | `"abc"` | `[]` | `16` | `aa4938119b1dc7b87cbad0ffd200d0ae` |
+| Keyed MAC | `""` (empty) | `0001..1f` (32B) | `32` | `40f1bd01c223f5236f33551a32a570c6931f5f06e621f48e208b63007f5719d0` |
+| Keyed MAC | `"abc"` | `0001..1f` (32B) | `32` | `a281f725754969a702f6fe36fc591b7def866e4b70173ece402fc01c064d6b65` |
+
+All five vectors are verified in `tests/test_stdlib_blake2s.py` against Python's `hashlib.blake2s` and the official RFC 7693 specification.
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>
