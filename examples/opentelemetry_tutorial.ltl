@@ -1,0 +1,277 @@
+// ===================================================================
+// examples/opentelemetry_tutorial.ltl — stdlib/opentelemetry.ltl
+// tutorial companion. Builds OTLP/JSON-shaped trace, metric and log
+// payloads as plain maps — exactly what you'd POST to an OTLP/HTTP
+// collector. Self-contained.
+// ===================================================================
+
+fn status_unset() -> int { return 0 }
+fn status_ok()    -> int { return 1 }
+fn status_error() -> int { return 2 }
+
+fn kind_internal() -> int { return 1 }
+fn kind_server()   -> int { return 2 }
+fn kind_client()   -> int { return 3 }
+fn kind_producer() -> int { return 4 }
+fn kind_consumer() -> int { return 5 }
+
+fn attr_string(key: str, value: str) -> map {
+    let v = {}
+    v["stringValue"] = value
+    let a = {}
+    a["key"] = key
+    a["value"] = v
+    return a
+}
+
+fn attr_int(key: str, value: int) -> map {
+    let v = {}
+    v["intValue"] = str(value)
+    let a = {}
+    a["key"] = key
+    a["value"] = v
+    return a
+}
+
+fn attr_bool(key: str, value: bool) -> map {
+    let v = {}
+    v["boolValue"] = value
+    let a = {}
+    a["key"] = key
+    a["value"] = v
+    return a
+}
+
+fn attr_double(key: str, value: str) -> map {
+    let v = {}
+    v["doubleValue"] = value
+    let a = {}
+    a["key"] = key
+    a["value"] = v
+    return a
+}
+
+fn resource(attrs: list) -> map {
+    let r = {}
+    r["attributes"] = attrs
+    return r
+}
+
+fn instrumentation_scope(name: str, version: str) -> map {
+    let s = {}
+    s["name"] = name
+    s["version"] = version
+    return s
+}
+
+fn span(trace_id_hex: str, span_id_hex: str, parent_id_hex: str,
+         name: str, kind: int, start_ns: int, end_ns: int,
+         attrs: list, status_code: int, status_msg: str) -> map {
+    let st = {}
+    st["code"] = status_code
+    if status_msg != "" { st["message"] = status_msg }
+    let s = {}
+    s["traceId"]           = trace_id_hex
+    s["spanId"]            = span_id_hex
+    if parent_id_hex != "" { s["parentSpanId"] = parent_id_hex }
+    s["name"]              = name
+    s["kind"]              = kind
+    s["startTimeUnixNano"] = str(start_ns)
+    s["endTimeUnixNano"]   = str(end_ns)
+    s["attributes"]        = attrs
+    s["status"]            = st
+    return s
+}
+
+fn scope_spans(scope: map, spans: list) -> map {
+    let s = {}
+    s["scope"] = scope
+    s["spans"] = spans
+    return s
+}
+
+fn resource_spans(res: map, scope_list: list) -> map {
+    let r = {}
+    r["resource"]   = res
+    r["scopeSpans"] = scope_list
+    return r
+}
+
+fn trace_request(resource_spans_list: list) -> map {
+    let m = {}
+    m["resourceSpans"] = resource_spans_list
+    return m
+}
+
+fn number_data_point(attrs: list, start_ns: int, time_ns: int,
+                      value_str: str) -> map {
+    let p = {}
+    p["attributes"]        = attrs
+    p["startTimeUnixNano"] = str(start_ns)
+    p["timeUnixNano"]      = str(time_ns)
+    p["asDouble"]          = value_str
+    return p
+}
+
+fn gauge(name: str, description: str, unit: str,
+          points: list) -> map {
+    let body = {}
+    body["dataPoints"] = points
+    let m = {}
+    m["name"]        = name
+    m["description"] = description
+    m["unit"]        = unit
+    m["gauge"]       = body
+    return m
+}
+
+fn sum_metric(name: str, description: str, unit: str,
+               points: list, is_monotonic: bool,
+               aggregation_temporality: int) -> map {
+    let body = {}
+    body["dataPoints"]             = points
+    body["isMonotonic"]            = is_monotonic
+    body["aggregationTemporality"] = aggregation_temporality
+    let m = {}
+    m["name"]        = name
+    m["description"] = description
+    m["unit"]        = unit
+    m["sum"]         = body
+    return m
+}
+
+fn scope_metrics(scope: map, metrics: list) -> map {
+    let s = {}
+    s["scope"]   = scope
+    s["metrics"] = metrics
+    return s
+}
+
+fn resource_metrics(res: map, scope_list: list) -> map {
+    let r = {}
+    r["resource"]     = res
+    r["scopeMetrics"] = scope_list
+    return r
+}
+
+fn metrics_request(resource_metrics_list: list) -> map {
+    let m = {}
+    m["resourceMetrics"] = resource_metrics_list
+    return m
+}
+
+fn log_record(time_ns: int, severity_number: int, severity_text: str,
+               body: str, attrs: list, trace_id_hex: str,
+               span_id_hex: str) -> map {
+    let body_v = {}
+    body_v["stringValue"] = body
+    let r = {}
+    r["timeUnixNano"]   = str(time_ns)
+    r["severityNumber"] = severity_number
+    r["severityText"]   = severity_text
+    r["body"]           = body_v
+    r["attributes"]     = attrs
+    if trace_id_hex != "" { r["traceId"] = trace_id_hex }
+    if span_id_hex != ""  { r["spanId"]  = span_id_hex }
+    return r
+}
+
+fn scope_logs(scope: map, records: list) -> map {
+    let s = {}
+    s["scope"]      = scope
+    s["logRecords"] = records
+    return s
+}
+
+fn resource_logs(res: map, scope_list: list) -> map {
+    let r = {}
+    r["resource"]  = res
+    r["scopeLogs"] = scope_list
+    return r
+}
+
+fn logs_request(resource_logs_list: list) -> map {
+    let m = {}
+    m["resourceLogs"] = resource_logs_list
+    return m
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB OPENTELEMETRY TUTORIAL ===")
+
+    println("STEP 1 attributes + resource:")
+    let res_attrs = [attr_string("service.name", "checkout"),
+                     attr_string("service.version", "1.4.2"),
+                     attr_string("deployment.environment", "prod")]
+    let res = resource(res_attrs)
+    println("  resource attrs=" + str(len(res["attributes"]))
+            + " first=" + str(res["attributes"][0]["key"]))
+
+    println("STEP 2 spans -> trace request:")
+    let scope = instrumentation_scope("checkout-api", "1.4.2")
+    let root_attrs = [attr_string("http.method", "POST"),
+                      attr_string("http.route", "/pay"),
+                      attr_int("http.status_code", 200)]
+    let root = span("4bf92f3577b34da6a3ce929d0e0e4736",
+                    "00f067aa0ba902b7", "",
+                    "POST /pay", kind_server(),
+                    1700000000000000000, 1700000000500000000,
+                    root_attrs, status_ok(), "")
+    let child = span("4bf92f3577b34da6a3ce929d0e0e4736",
+                     "00f067aa0ba902b8", "00f067aa0ba902b7",
+                     "db.query", kind_client(),
+                     1700000000100000000, 1700000000400000000,
+                     [attr_string("db.system", "postgres")],
+                     status_ok(), "")
+    let spans = [root, child]
+    let ss = scope_spans(scope, spans)
+    let rs = resource_spans(res, [ss])
+    let treq = trace_request([rs])
+    println("  spans=" + str(len(ss["spans"]))
+            + " root=" + str(ss["spans"][0]["name"])
+            + " child_parent=" + str(ss["spans"][1]["parentSpanId"]))
+    println("  request keys=" + str(treq["resourceSpans"][0]["scopeSpans"][0]["scope"]["name"]))
+
+    println("STEP 3 error span status:")
+    let bad = span("aa", "bb", "",
+                   "charge", kind_internal(),
+                   1700000001000000000, 1700000002000000000,
+                   [], status_error(), "card declined")
+    println("  status.code=" + str(bad["status"]["code"])
+            + " msg=" + str(bad["status"]["message"]))
+
+    println("STEP 4 metrics -> metrics request:")
+    let pts = [number_data_point([attr_string("route", "/pay")],
+                                 1700000000000000000, 1700000001000000000, "12.5"),
+               number_data_point([attr_string("route", "/pay")],
+                                 1700000001000000000, 1700000002000000000, "18.0")]
+    let g = gauge("request_latency_seconds", "Request latency", "s", pts)
+    let ssum = sum_metric("requests_total", "Total requests", chr(123)+"request"+chr(125),
+                          pts, true, 2)
+    let sm = scope_metrics(scope, [g, ssum])
+    let rm = resource_metrics(res, [sm])
+    let mreq = metrics_request([rm])
+    let first_metric = mreq["resourceMetrics"][0]["scopeMetrics"][0]["metrics"][0]
+    println("  gauge=" + str(first_metric["name"])
+            + " points=" + str(len(first_metric["gauge"]["dataPoints"]))
+            + " asDouble=" + str(first_metric["gauge"]["dataPoints"][0]["asDouble"]))
+    let sum_m = mreq["resourceMetrics"][0]["scopeMetrics"][0]["metrics"][1]
+    println("  sum=" + str(sum_m["name"]) + " monotonic=" + str(sum_m["sum"]["isMonotonic"]))
+
+    println("STEP 5 logs -> logs request:")
+    let lr = log_record(1700000003000000000, 9, "INFO",
+                        "payment captured", 
+                        [attr_string("order.id", "ord-9")],
+                        "4bf92f3577b34da6a3ce929d0e0e4736",
+                        "00f067aa0ba902b7")
+    let lsc = scope_logs(scope, [lr])
+    let rl = resource_logs(res, [lsc])
+    let lreq = logs_request([rl])
+    let rec = lreq["resourceLogs"][0]["scopeLogs"][0]["logRecords"][0]
+    println("  sev=" + str(rec["severityNumber"]) + "/" + str(rec["severityText"])
+            + " body=" + str(rec["body"]["stringValue"])
+            + " trace=" + str(rec["traceId"]))
+    println("PINNED_VECTORS: res=3attrs spans=2 child_parent=00f067aa0ba902b7 err=2+card-declined gauge=12.5+18.0 sum=monotonic log=9-INFO-payment-captured")
+}
+
+main()
