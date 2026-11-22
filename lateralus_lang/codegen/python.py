@@ -313,6 +313,9 @@ class PythonTranspiler(ASTVisitor):
         self._w += "def drop(lst, n):          return lst[n:]"
         self._w += "def first(lst):            return lst[0] if lst else None"
         self._w += "def last(lst):             return lst[-1] if lst else None"
+        # Match VM Op.DIV semantics: int/int -> floor division, else true division.
+        self._w += "def _ltl_div(a, b):"
+        self._w += "    return a // b if isinstance(a, int) and isinstance(b, int) else a / b"
         self._w += "def group_by(lst, key):   d={}; [d.setdefault(key(x), []).append(x) for x in lst]; return d"
         self._w += "def assert_eq(a, b, msg=None):"
         self._w += "    if a != b: raise AssertionError(msg or f'assert_eq failed: {a!r} != {b!r}')"
@@ -1089,7 +1092,11 @@ class PythonTranspiler(ASTVisitor):
     def visit_AssignStmt(self, node: AssignStmt):
         val = self._expr(node.value)
         self._flush_hoisted_lambdas()
-        self._w += f"{self._expr(node.target)} {node.op} {val}"
+        target = self._expr(node.target)
+        if node.op == "/=":
+            self._w += f"{target} = _ltl_div({target}, {val})"
+        else:
+            self._w += f"{target} {node.op} {val}"
 
     def visit_IfStmt(self, node: IfStmt):
         self._w += f"if {self._expr(node.condition)}:"
@@ -1500,6 +1507,8 @@ class PythonTranspiler(ASTVisitor):
                     all_args = ", ".join([tmp] + rest + kw)
                     return f"(({tmp} := {left}) is not None and {fn}({all_args}) or None)"
                 return f"(({tmp} := {left}) is not None and {self._expr(node.right)}({tmp}) or None)"
+            if node.op == "/":
+                return f"_ltl_div({self._expr(node.left)}, {self._expr(node.right)})"
             py_op = {"&&": "and", "||": "or", "**": "**",
                      "and": "and", "or": "or"}.get(node.op, node.op)
             return f"({self._expr(node.left)} {py_op} {self._expr(node.right)})"
