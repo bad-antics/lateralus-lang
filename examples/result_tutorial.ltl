@@ -8,8 +8,8 @@
 //     version; Results/Options are built by imperative map writes.
 //   * `"_tag" in v` membership is unsupported; keys()+contains() is
 //     used in is_result/is_option instead.
-//   * try_call/try_call_with are omitted: try/catch transpiles to
-//     invalid Python on the `run` backend (bare `catch` token).
+//   * try/catch is not the language syntax — try/recover is;
+//     try_call/try_call_with use recover * (e) and are demoed below.
 // ===================================================================
 
 // -- Result constructors -----------------------------------------------------
@@ -168,6 +168,30 @@ fn is_option(v) -> bool {
         && (v["_tag"] == "Some" || v["_tag"] == "None")
 }
 
+// -- Try/recover wrapper ------------------------------------------------------
+
+fn try_call(f) -> map {
+    try {
+        let value = f()
+        return ok(value)
+    } recover * (e) {
+        return err(to_str(e))
+    }
+}
+
+fn try_call_with(f, arg) -> map {
+    try {
+        let value = f(arg)
+        return ok(value)
+    } recover * (e) {
+        return err(to_str(e))
+    }
+}
+
+fn boom() {
+    throw ValueError("bang")
+}
+
 // -- Collection helpers -------------------------------------------------------
 
 fn collect_results(results: list) -> map {
@@ -239,6 +263,15 @@ fn demo() {
     println("option_to_result=" + to_str(unwrap_err(r_from_o)))
     let o_from_r = result_to_option(good)
     println("result_to_option=" + to_str(unwrap_option(o_from_r)))
+
+    // Try/recover wrappers
+    let tc = try_call(boom)
+    println("try_call_is_err=" + to_str(is_err(tc)))
+    println("try_call_err=" + to_str(unwrap_err(tc)))
+    let good_call = try_call(fn() { return 11 })
+    println("try_call_ok=" + to_str(unwrap(good_call)))
+    let tcw = try_call_with(fn(x) { return x / 0 }, 1)
+    println("try_call_with_is_err=" + to_str(is_err(tcw)))
 
     // Collections
     let results = [ok(1), ok(2), ok(3)]

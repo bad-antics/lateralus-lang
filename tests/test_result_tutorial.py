@@ -45,6 +45,10 @@ def test_result_tutorial_execution():
     assert "is_option(s)=True" in out
     assert "option_to_result=missing" in out
     assert "result_to_option=21" in out
+    assert "try_call_is_err=True" in out
+    assert "try_call_err=bang" in out
+    assert "try_call_ok=11" in out
+    assert "try_call_with_is_err=True" in out
     assert "collect_results=[1, 2, 3]" in out
     assert "partition_oks=[1, 3]" in out
     assert "partition_errs=['e1']" in out

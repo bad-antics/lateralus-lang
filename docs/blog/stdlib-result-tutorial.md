@@ -59,6 +59,6 @@ the current toolchain:
    `is_option` use `contains(keys(v), "_tag")`.
 3. **`type_of`/`typeof` don't yield comparable names** — the guard is
    dropped; tag checks alone discriminate.
-4. **`try_call`/`try_call_with` can't run** — `try/catch` transpiles
-   to invalid Python on the `run` backend, so they are documented but
-   not demoed.
+4. **`catch` is not the syntax** — the grammar is `try { } recover
+   * (e) { }`; `try_call`/`try_call_with` use `recover` and stringify
+   the caught error with `to_str`.
