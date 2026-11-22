@@ -1,0 +1,69 @@
+// ===================================================================
+// tests/stdlib_fsm_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for stdlib/fsm.ltl: deterministic transition
+// dispatch, boolean guard enforcement, and illegal transition blocking.
+// ===================================================================
+
+pub fn add_transition(table, idx, from_st, ev_code, to_st, guard_ok) {
+    let tr = dict()
+    tr["from"] = from_st
+    tr["event"] = ev_code
+    tr["to"] = to_st
+    tr["guard"] = guard_ok
+    table[idx] = tr
+    return idx + 1
+}
+
+pub fn dispatch_event(table, num_rules, cur_state, ev_code) {
+    let i = 0
+    while i < num_rules {
+        let tr = table[i]
+        if (tr["from"] == cur_state) && (tr["event"] == ev_code) && (tr["guard"] == 1) {
+            return tr["to"]
+        }
+        i = i + 1
+    }
+    return cur_state
+}
+
+pub fn test_valid_lifecycle_sequence() {
+    let rules = dict()
+    let n = 0
+    n = add_transition(rules, n, 0, 1, 1, 1)
+    n = add_transition(rules, n, 1, 2, 2, 1)
+    n = add_transition(rules, n, 2, 3, 3, 1)
+
+    let st = 0
+    st = dispatch_event(rules, n, st, 1)
+    assert(st == 1, "State 0 -> 1")
+    st = dispatch_event(rules, n, st, 2)
+    assert(st == 2, "State 1 -> 2")
+    st = dispatch_event(rules, n, st, 3)
+    assert(st == 3, "State 2 -> 3")
+}
+
+pub fn test_guard_blocking_and_invalid_events() {
+    let rules = dict()
+    let n = 0
+    // Guard is 0 (disabled) for event 10
+    n = add_transition(rules, n, 0, 10, 1, 0)
+    // Guard is 1 (enabled) for event 20
+    n = add_transition(rules, n, 0, 20, 2, 1)
+
+    let st = 0
+    st = dispatch_event(rules, n, st, 10)
+    assert(st == 0, "Disabled guard must block transition")
+
+    st = dispatch_event(rules, n, st, 99)
+    assert(st == 0, "Unregistered event code must leave state unchanged")
+
+    st = dispatch_event(rules, n, st, 20)
+    assert(st == 2, "Enabled guard transitions 0 -> 2")
+}
+
+pub fn main() {
+    test_valid_lifecycle_sequence()
+    test_guard_blocking_and_invalid_events()
+    print("All stdlib/fsm.ltl verification tests passed!")
+}

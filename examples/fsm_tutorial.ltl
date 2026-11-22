@@ -1,0 +1,57 @@
+// ===================================================================
+// examples/fsm_tutorial.ltl
+// -------------------------------------------------------------------
+// Practical Application: Escrow Payment Settlement Automaton with
+// Guarded State Transitions (stdlib/fsm.ltl)
+// ===================================================================
+
+pub fn add_transition(table, idx, from_st, ev_code, to_st, guard_ok) {
+    let tr = dict()
+    tr["from"] = from_st
+    tr["event"] = ev_code
+    tr["to"] = to_st
+    tr["guard"] = guard_ok
+    table[idx] = tr
+    return idx + 1
+}
+
+pub fn dispatch_event(table, num_rules, cur_state, ev_code) {
+    let i = 0
+    while i < num_rules {
+        let tr = table[i]
+        if (tr["from"] == cur_state) && (tr["event"] == ev_code) && (tr["guard"] == 1) {
+            return tr["to"]
+        }
+        i = i + 1
+    }
+    return cur_state
+}
+
+pub fn main() {
+    print("=== Guarded Escrow Settlement Finite State Machine ===")
+
+    // States: 0=CREATED, 1=FUNDED, 2=REVIEW, 3=RELEASED, 4=REFUNDED
+    // Events: 10=FUND, 20=SUBMIT_PR, 30=APPROVE, 40=DISPUTE_REFUND
+    let rules = dict()
+    let n = 0
+    n = add_transition(rules, n, 0, 10, 1, 1)
+    n = add_transition(rules, n, 1, 20, 2, 1)
+    n = add_transition(rules, n, 2, 30, 3, 1)
+    n = add_transition(rules, n, 1, 40, 4, 1)
+
+    let st = 0
+    // Attempt illegal premature release from CREATED -> stays in 0
+    st = dispatch_event(rules, n, st, 30)
+    assert(st == 0, "Premature release from CREATED must be blocked")
+
+    st = dispatch_event(rules, n, st, 10)
+    assert(st == 1, "Transition CREATED -> FUNDED")
+
+    st = dispatch_event(rules, n, st, 20)
+    assert(st == 2, "Transition FUNDED -> REVIEW")
+
+    st = dispatch_event(rules, n, st, 30)
+    assert(st == 3, "Transition REVIEW -> RELEASED")
+
+    print("Escrow FSM transitioned cleanly to terminal state 3 (RELEASED)!")
+}
