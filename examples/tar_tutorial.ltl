@@ -1,0 +1,301 @@
+// ===================================================================
+// examples/tar_tutorial.ltl — stdlib/tar.ltl tutorial companion
+// Runnable tour of the ustar tar codec: 512-byte headers, octal
+// fields, checksum, entry read/write round-trip. Self-contained.
+// NOTE: bytes_of/parse_int_base/itoa_base inlined; pad_left shimmed.
+// ===================================================================
+
+fn char_at(s: str, i: int) -> str { return s[i] }
+
+fn bytes_of(s: str) -> list {
+    let out = []
+    let i = 0
+    while i < len(s) {
+        out = out + [ord(s[i])]
+        i = i + 1
+    }
+    return out
+}
+
+fn block_size() -> int { return 512 }
+fn type_regular() -> str { return "0" }
+fn type_link()    -> str { return "1" }
+fn type_symlink() -> str { return "2" }
+fn type_dir()     -> str { return "5" }
+
+fn itoa_base(v: int, base: int) -> str {
+    if v == 0 { return "0" }
+    let digs = "0123456789"
+    let out = ""
+    let n = v
+    while n > 0 {
+        out = char_at(digs, n % base) + out
+        n = int(n / base)
+    }
+    return out
+}
+
+fn parse_int_base(s: str, base: int) -> int {
+    let n = 0
+    let i = 0
+    while i < len(s) {
+        let c = s[i]
+        let d = 0 - 1
+        let k = 0
+        while k < 36 {
+            if char_at("0123456789abcdefghijklmnopqrstuvwxyz", k) == c { d = k }
+            k = k + 1
+        }
+        if d >= 0 { n = n * base + d }
+        i = i + 1
+    }
+    return n
+}
+
+fn pad_left(s: str, n: int, c: str) -> str {
+    let out = s
+    while len(out) < n { out = c + out }
+    return out
+}
+
+fn make_zeros(n: int) -> list {
+    let out = []
+    let i = 0
+    while i < n {
+        out = out + [0]
+        i = i + 1
+    }
+    return out
+}
+
+fn all_zero(b: list) -> bool {
+    for x in b {
+        if x != 0 {
+            return false
+        }
+    }
+    return true
+}
+
+fn bytes_to_str(b: list) -> str {
+    let s = ""
+    for x in b {
+        s = s + chr(x)
+    }
+    return s
+}
+
+fn cstr(b: list, off: int, n: int) -> str {
+    let real_end = off
+    while real_end < off + n {
+        if b[real_end] == 0 {
+            return bytes_to_str(slice(b, off, real_end))
+        }
+        real_end = real_end + 1
+    }
+    return bytes_to_str(slice(b, off, off + n))
+}
+
+fn octal(b: list, off: int, n: int) -> int {
+    let s = ""
+    let i = off
+    while i < off + n {
+        let c = b[i]
+        if c >= 48 {
+            if c <= 55 {
+                s = s + chr(c)
+            }
+        }
+        i = i + 1
+    }
+    if len(s) == 0 {
+        return 0
+    }
+    return parse_int_base(s, 8)
+}
+
+fn put_str(buf: list, off: int, n: int, s: str) -> list {
+    let bs = bytes_of(s)
+    let i = 0
+    while i < n {
+        if i < len(bs) {
+            buf[off + i] = bs[i]
+        } else {
+            buf[off + i] = 0
+        }
+        i = i + 1
+    }
+    return buf
+}
+
+fn put_oct(buf: list, off: int, n: int, v: int) -> list {
+    let body = itoa_base(v, 8)
+    let padded = pad_left(body, n - 1, "0") + " "
+    return put_str(buf, off, n, padded)
+}
+
+fn read(archive: list) -> list {
+    let out = []
+    let bs = block_size()
+    let i = 0
+    while i + bs <= len(archive) {
+        let hdr = slice(archive, i, i + bs)
+        if all_zero(hdr) {
+            return out
+        }
+        let entry = {}
+        let name   = cstr(hdr, 0, 100)
+        let prefix = cstr(hdr, 345, 155)
+        if len(prefix) > 0 {
+            entry["name"] = prefix + "/" + name
+        } else {
+            entry["name"] = name
+        }
+        entry["mode"]  = octal(hdr, 100, 8)
+        entry["uid"]   = octal(hdr, 108, 8)
+        entry["gid"]   = octal(hdr, 116, 8)
+        entry["size"]  = octal(hdr, 124, 12)
+        entry["mtime"] = octal(hdr, 136, 12)
+        entry["type"]  = cstr(hdr, 156, 1)
+        entry["link"]  = cstr(hdr, 157, 100)
+        let data_start = i + bs
+        let data_end = data_start + entry["size"]
+        entry["bytes"] = slice(archive, data_start, data_end)
+        out = out + [entry]
+        i = data_end
+        let rem = entry["size"] % bs
+        if rem != 0 {
+            i = i + (bs - rem)
+        }
+    }
+    return out
+}
+
+fn write(entries: list) -> list {
+    let out = []
+    for e in entries {
+        out = out + write_entry(e)
+    }
+    let bs = block_size()
+    let tail = []
+    let pad = 0
+    while pad < bs * 2 {
+        tail = tail + [0]
+        pad = pad + 1
+    }
+    return out + tail
+}
+
+fn write_entry(e: map) -> list {
+    let bs = block_size()
+    let name = e["name"]
+    let data = []
+    if contains(keys(e), "bytes") {
+        data = e["bytes"]
+    }
+    let size = len(data)
+    let type_ = type_regular()
+    if contains(keys(e), "type") {
+        type_ = e["type"]
+    }
+    let mode = 420
+    if contains(keys(e), "mode") {
+        mode = e["mode"]
+    }
+    let mtime = 0
+    if contains(keys(e), "mtime") {
+        mtime = e["mtime"]
+    }
+    let link = ""
+    if contains(keys(e), "link") {
+        link = e["link"]
+    }
+    let hdr = make_zeros(bs)
+    hdr = put_str(hdr, 0,   100, name)
+    hdr = put_oct(hdr, 100, 8,   mode)
+    hdr = put_oct(hdr, 108, 8,   0)
+    hdr = put_oct(hdr, 116, 8,   0)
+    hdr = put_oct(hdr, 124, 12,  size)
+    hdr = put_oct(hdr, 136, 12,  mtime)
+    hdr = put_str(hdr, 148, 8,   "        ")
+    hdr = put_str(hdr, 156, 1,   type_)
+    hdr = put_str(hdr, 157, 100, link)
+    hdr = put_str(hdr, 257, 6,   "ustar")
+    hdr = put_str(hdr, 263, 2,   "00")
+    let sum = 0
+    for b in hdr {
+        sum = sum + b
+    }
+    hdr = put_oct(hdr, 148, 7, sum)
+    hdr[155] = 32
+    let result = hdr
+    if size > 0 {
+        result = result + data
+        let rem = size % bs
+        if rem != 0 {
+            let zpad = make_zeros(bs - rem)
+            result = result + zpad
+        }
+    }
+    return result
+}
+
+fn hexs(bytes: list) -> str {
+    let h = "0123456789abcdef"
+    let out = ""
+    let i = 0
+    while i < len(bytes) {
+        let b = bytes[i] & 0xff
+        out = out + slice(h, b >> 4, (b >> 4) + 1)
+               + slice(h, b & 0x0f, (b & 0x0f) + 1)
+        i = i + 1
+    }
+    return out
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB TAR TUTORIAL ===")
+
+    println("STEP 1 build a 3-entry archive:")
+    let e1 = {}
+    e1["name"] = "hello.txt"
+    e1["bytes"] = bytes_of("hi tar")
+    e1["mode"] = 420
+    e1["mtime"] = 1700000000
+    let e2 = {}
+    e2["name"] = "docs/"
+    e2["type"] = type_dir()
+    e2["mode"] = 493
+    e2["mtime"] = 1700000001
+    let e3 = {}
+    e3["name"] = "latest"
+    e3["type"] = type_symlink()
+    e3["link"] = "hello.txt"
+    e3["mtime"] = 1700000002
+    let archive = write([e1, e2, e3])
+    println("  archive bytes=" + str(len(archive)))
+    println("  hdr[0:32] hex=" + hexs(slice(archive, 0, 32)))
+    println("  magic@257=" + bytes_to_str(slice(archive, 257, 263))
+            + " ver=" + bytes_to_str(slice(archive, 263, 265)))
+    println("  chksum field@148=" + bytes_to_str(slice(archive, 148, 156)))
+
+    println("STEP 2 read back:")
+    let entries = read(archive)
+    println("  entries=" + str(len(entries)))
+    let r1 = entries[0]
+    println("  e1 name=" + str(r1["name"]) + " size=" + str(r1["size"])
+            + " mode(oct)=" + str(r1["mode"]) + " mtime=" + str(r1["mtime"]))
+    println("  e1 bytes=" + bytes_to_str(r1["bytes"]))
+    let r2 = entries[1]
+    println("  e2 name=" + str(r2["name"]) + " type=" + str(r2["type"]))
+    let r3 = entries[2]
+    println("  e3 name=" + str(r3["name"]) + " type=" + str(r3["type"])
+            + " link=" + str(r3["link"]))
+
+    println("STEP 3 padding + end blocks:")
+    println("  data padded to 512; archive ends with 1024 zero bytes")
+    println("  total=" + str(len(archive)) + " (3 headers + data pad + 2x512 zeros)")
+    println("PINNED_VECTORS: entries=3 e1=hello.txt-6B-0644 e2=docs/-dir5 e3=latest-symlink magic=ustar00 chksum-field=8sp+octal+sp total=3072")
+}
+
+main()
