@@ -552,7 +552,8 @@ class Lexer:
                     if depth > 0: expr_src += c
                     self._advance()
                 parts.append(("expr", expr_src))
-            elif ch == "{{":
+            elif ch == "{":
+                # "{{" is a literal "{" (the branch above took every other "{")
                 buf += "{"; self._advance(); self._advance()
             else:
                 buf += self._advance()
