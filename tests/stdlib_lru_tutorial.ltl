@@ -1,0 +1,92 @@
+// Standard Library LRU Cache Tutorial Verification Suite
+// Validates recency promotion, deterministic oldest-key eviction, and capacity bounds.
+
+fn lru_promote(keys: list, target_key: string) -> list {
+    let mut updated = [];
+    let mut i = 0;
+    while i < len(keys) {
+        let k = keys[i];
+        if k != target_key {
+            updated.append(k);
+        }
+        i = i + 1;
+    }
+    updated.append(target_key);
+    return updated;
+}
+
+fn lru_get_oldest(keys: list) -> string {
+    if len(keys) > 0 {
+        return keys[0];
+    }
+    return "";
+}
+
+fn lru_evict_oldest(keys: list) -> list {
+    let mut remaining = [];
+    let mut i = 1; // skip index 0 (oldest)
+    while i < len(keys) {
+        remaining.append(keys[i]);
+        i = i + 1;
+    }
+    return remaining;
+}
+
+fn main() -> int {
+    let cap = 2;
+    let mut keys = [];
+    let mut cache = {};
+
+    // 1. Put key "A"
+    cache["A"] = "valA";
+    keys = lru_promote(keys, "A");
+    assert(len(keys) == 1);
+    assert(cache["A"] == "valA");
+
+    // 2. Put key "B"
+    cache["B"] = "valB";
+    keys = lru_promote(keys, "B");
+    assert(len(keys) == 2);
+    assert(keys[0] == "A"); // A is older than B
+    assert(keys[1] == "B");
+
+    // 3. Read key "A" -> Promotes "A" to newest!
+    keys = lru_promote(keys, "A");
+    assert(keys[0] == "B"); // B is now the oldest!
+    assert(keys[1] == "A"); // A is now newest!
+
+    // 4. Put key "C" -> Exceeds capacity 2, evicts oldest ("B")!
+    let oldest = lru_get_oldest(keys);
+    assert(oldest == "B");
+    keys = lru_evict_oldest(keys);
+    cache["B"] = ""; // evicted
+
+    cache["C"] = "valC";
+    keys = lru_promote(keys, "C");
+
+    assert(len(keys) == 2);
+    assert(keys[0] == "A"); // A is oldest now
+    assert(keys[1] == "C"); // C is newest
+
+    // Verify presence: B is evicted, A and C exist
+    assert(cache["B"] == "");
+    assert(cache["A"] == "valA");
+    assert(cache["C"] == "valC");
+
+    // 5. Put key "D" -> Evicts "A", leaves "C" and "D"
+    let next_oldest = lru_get_oldest(keys);
+    assert(next_oldest == "A");
+    keys = lru_evict_oldest(keys);
+    cache["A"] = "";
+
+    cache["D"] = "valD";
+    keys = lru_promote(keys, "D");
+
+    assert(len(keys) == 2);
+    assert(keys[0] == "C");
+    assert(keys[1] == "D");
+    assert(cache["C"] == "valC");
+    assert(cache["D"] == "valD");
+
+    return 0;
+}
