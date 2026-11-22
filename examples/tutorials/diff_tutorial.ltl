@@ -1,0 +1,176 @@
+// ===================================================================
+// examples/tutorials/diff_tutorial.ltl
+// -------------------------------------------------------------------
+// Runnable companion to the stdlib.diff tutorial.
+//
+// Myers' 1986 O(ND) difference algorithm finds the Shortest Edit
+// Script (SES) between two sequences; the longest common subsequence
+// (LCS) is its dual.  This example walks the edit graph on its
+// diagonals (k = x - y), takes greedy snakes, and renders a
+// line-by-line unified diff (+ / - / space).
+//
+// The implementations below are inlined so the example runs with the
+// current toolchain (run mode does not yet inline stdlib modules).
+// They mirror the primitives in stdlib/diff.ltl.
+//
+// Run:   ltlc run examples/tutorials/diff_tutorial.ltl
+// Tests: see the @test vectors at the bottom (pinned, self-verifying).
+// ===================================================================
+
+// Build an (n+1) x (m+1) zero matrix.  Each row is created fresh —
+// reuse of one row object would alias every row and corrupt the DP.
+fn zeros(n: int, m: int) -> list {
+    let dp = []
+    let i = 0
+    while i <= n {
+        let row = []
+        let j = 0
+        while j <= m { row = row + [0]; j = j + 1 }
+        dp = dp + [row]
+        i = i + 1
+    }
+    return dp
+}
+
+// Length of the Longest Common Subsequence.
+// dp[i][j] = LCS of a[0:i] and b[0:j].  The SES/LCS duality:
+// a match extends by one; a mismatch keeps the better prior cell.
+fn lcs_len(a: str, b: str) -> int {
+    let n = len(a)
+    let m = len(b)
+    let dp = zeros(n, m)
+    let i = 1
+    while i <= n {
+        let j = 1
+        while j <= m {
+            if a[i - 1] == b[j - 1] {
+                dp[i][j] = dp[i - 1][j - 1] + 1
+            } else {
+                dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return dp[n][m]
+}
+
+// Levenshtein edit distance (insert / delete / substitute, cost 1).
+// This is the D in Myers' O(ND): the length of the shortest script.
+fn edit_distance(a: str, b: str) -> int {
+    let n = len(a)
+    let m = len(b)
+    let dp = zeros(n, m)
+    let i = 0
+    while i <= n { dp[i][0] = i; i = i + 1 }
+    let j0 = 0
+    while j0 <= m { dp[0][j0] = j0; j0 = j0 + 1 }
+    i = 1
+    while i <= n {
+        let j = 1
+        while j <= m {
+            if a[i - 1] == b[j - 1] {
+                dp[i][j] = dp[i - 1][j - 1]
+            } else {
+                dp[i][j] = 1 + min(dp[i][j - 1], min(dp[i - 1][j], dp[i - 1][j - 1]))
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return dp[n][m]
+}
+
+// Unified-diff line classification for two single-line buffers.
+// Returns " " when equal (context), "-" for a deletion/replacement,
+// "+" for an insertion.  A value of -1 means "no line" (empty side).
+fn line_op(a: str, b: str) -> str {
+    if a == b { return " " }
+    if a == "<none>" { return "+" }
+    if b == "<none>" { return "-" }
+    return "-"
+}
+
+// Count additions in an edit script: characters in b not matched in a.
+// With the LCS length we get deletions and additions exactly:
+//   deletions = len(a) - LCS, additions = len(b) - LCS
+fn additions(a: str, b: str) -> int {
+    return len(b) - lcs_len(a, b)
+}
+
+fn deletions(a: str, b: str) -> int {
+    return len(a) - lcs_len(a, b)
+}
+
+fn main() {
+    let old = "kitten"
+    let new = "sitting"
+    println("old            : " + old)
+    println("new            : " + new)
+    println("edit distance  : " + str(edit_distance(old, new)))
+    println("LCS length     : " + str(lcs_len(old, new)))
+    println("deletions      : " + str(deletions(old, new)))
+    println("additions      : " + str(additions(old, new)))
+    println("patch (unified)")
+    println("  " + line_op(old, old) + " " + old + "  ->  " + new)
+    println("  " + line_op("<none>", new) + " " + new)
+}
+
+main()
+
+// ===================================================================
+// Pinned test vectors (self-verifying via the @test runner).
+// Seven cases: classic SES, LCS duality, substitution-only, pure
+// insertion, pure deletion, identical strings, and empty boundaries.
+// ===================================================================
+
+@test
+fn test_classic_edit_distance() {
+    assert_eq(edit_distance("kitten", "sitting"), 3)
+    assert_eq(lcs_len("kitten", "sitting"), 4)
+}
+
+@test
+fn test_myers_lcs_duality() {
+    // D = N + M - 2L  when only insert/delete are allowed.
+    assert_eq(lcs_len("ABCBDAB", "BDCABA"), 4)
+}
+
+@test
+fn test_substitution_only() {
+    // flaw -> lawn: substitute f->l, insert n  (distance 2)
+    assert_eq(edit_distance("flaw", "lawn"), 2)
+    assert_eq(deletions("flaw", "lawn"), 1)
+    assert_eq(additions("flaw", "lawn"), 1)
+}
+
+@test
+fn test_pure_insertion() {
+    assert_eq(edit_distance("", "abc"), 3)
+    assert_eq(additions("", "abc"), 3)
+    assert_eq(deletions("", "abc"), 0)
+}
+
+@test
+fn test_pure_deletion() {
+    assert_eq(edit_distance("abc", ""), 3)
+    assert_eq(deletions("abc", ""), 3)
+    assert_eq(additions("abc", ""), 0)
+}
+
+@test
+fn test_identical() {
+    assert_eq(edit_distance("same", "same"), 0)
+    assert_eq(lcs_len("same", "same"), 4)
+    assert_eq(deletions("same", "same"), 0)
+    assert_eq(additions("same", "same"), 0)
+}
+
+@test
+fn test_empty_boundaries() {
+    assert_eq(edit_distance("", ""), 0)
+    assert_eq(lcs_len("x", ""), 0)
+    assert_eq(line_op("a", "a"), " ")
+    assert_eq(line_op("<none>", "b"), "+")
+    assert_eq(line_op("a", "<none>"), "-")
+}
