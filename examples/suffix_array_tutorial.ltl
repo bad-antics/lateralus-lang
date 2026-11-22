@@ -1,0 +1,138 @@
+// ===================================================================
+// examples/suffix_array_tutorial.ltl
+// -------------------------------------------------------------------
+// Demonstration of Suffix Array (SA) Substring Search in Lateralus.
+//
+// Real-World Applications:
+// 1. Genomics & Bioinformatics: Fast indexing of chromosome DNA sequences (BLAST, Bowtie).
+// 2. Full-Text Document Search: Memory-compact substring indices (Burrows-Wheeler Transform).
+// 3. Data Compression: BWT pre-sorting for bzip2 and LZ4 pipeline stages.
+// ===================================================================
+
+fn compare_suffixes(text, n, i, j) {
+    let p = i
+    let q = j
+    while p < n and q < n {
+        let ch1 = text[p]
+        let ch2 = text[q]
+        if ch1 < ch2 {
+            return -1
+        }
+        if ch1 > ch2 {
+            return 1
+        }
+        p = p + 1
+        q = q + 1
+    }
+    if p == n and q == n {
+        return 0
+    }
+    if p == n {
+        return -1
+    }
+    return 1
+}
+
+pub fn build_suffix_array(text) {
+    let n = len(text)
+    let sa = []
+    let i = 0
+    while i < n {
+        sa = push(sa, i)
+        i = i + 1
+    }
+
+    let a = 1
+    while a < n {
+        let key = sa[a]
+        let b = a - 1
+        while b >= 0 {
+            let prev = sa[b]
+            if compare_suffixes(text, n, prev, key) > 0 {
+                sa[b + 1] = prev
+                b = b - 1
+            } else {
+                break
+            }
+        }
+        sa[b + 1] = key
+        a = a + 1
+    }
+
+    return sa
+}
+
+fn compare_prefix(text, n, start_idx, pattern, m) {
+    let i = 0
+    while i < m and (start_idx + i) < n {
+        let ch1 = text[start_idx + i]
+        let ch2 = pattern[i]
+        if ch1 < ch2 {
+            return -1
+        }
+        if ch1 > ch2 {
+            return 1
+        }
+        i = i + 1
+    }
+    if i == m {
+        return 0
+    }
+    return -1
+}
+
+pub fn sa_search(text, sa, pattern) {
+    let n = len(text)
+    let m = len(pattern)
+    if m == 0 or n == 0 {
+        return -1
+    }
+
+    let low = 0
+    let high = n - 1
+
+    while low <= high {
+        let mid = (low + high) / 2
+        let suffix_start = sa[mid]
+        let cmp = compare_prefix(text, n, suffix_start, pattern, m)
+
+        if cmp == 0 {
+            return suffix_start
+        }
+        if cmp < 0 {
+            low = mid + 1
+        } else {
+            high = mid - 1
+        }
+    }
+
+    return -1
+}
+
+pub fn main() {
+    print("=================================================================")
+    print("   Lateralus Standard Library: Suffix Array Genomics Index Demo  ")
+    print("=================================================================")
+
+    // Simulated Genome Segment: DNA nucleotide sequence
+    let genome = "ACGTACGTGACGTAGCTAGCTA"
+    print("Target DNA Sequence: " + genome)
+    print("Sequence length: " + str(len(genome)) + " base pairs.")
+
+    let sa = build_suffix_array(genome)
+    print("Suffix Array constructed with full lexicographical ordering.")
+
+    // Query 1: Find restriction enzyme binding motif "ACGT"
+    let pos_acgt = sa_search(genome, sa, "ACGT")
+    print("Query motif 'ACGT' located at index: " + str(pos_acgt))
+
+    // Query 2: Find motif "TAGC"
+    let pos_tagc = sa_search(genome, sa, "TAGC")
+    print("Query motif 'TAGC' located at index: " + str(pos_tagc))
+
+    // Query 3: Search absent motif "TTTT"
+    let pos_absent = sa_search(genome, sa, "TTTT")
+    print("Query motif 'TTTT' (Absent) result: " + str(pos_absent))
+
+    print("Suffix array binary search executed in O(m log n) time.")
+}
