@@ -1,0 +1,416 @@
+// ===================================================================
+// tests/stdlib_link_cut_tree_tutorial.ltl
+// -------------------------------------------------------------------
+// Complete test suite for Link-Cut Tree (LCT) in Lateralus.
+// Sleator-Tarjan dynamic forest maintaining dynamic connectivity and
+// path aggregates in amortized O(log n) time per operation.
+// ===================================================================
+
+pub fn lct_create(n: int) -> dict {
+    let mut tree = {}
+    let mut parent = []
+    let mut ch0 = []
+    let mut ch1 = []
+    let mut val = []
+    let mut sum = []
+    let mut rev = []
+
+    let mut i = 0
+    while i <= n {
+        parent.push(0)
+        ch0.push(0)
+        ch1.push(0)
+        val.push(0)
+        sum.push(0)
+        rev.push(0)
+        i = i + 1
+    }
+
+    tree["parent"] = parent
+    tree["ch0"] = ch0
+    tree["ch1"] = ch1
+    tree["val"] = val
+    tree["sum"] = sum
+    tree["rev"] = rev
+    tree["size"] = n
+    return tree
+}
+
+pub fn lct_set_val(tree: dict, u: int, v: int) -> bool {
+    let mut val = tree["val"]
+    let mut sum = tree["sum"]
+    val[u] = v
+    sum[u] = v
+    tree["val"] = val
+    tree["sum"] = sum
+    return true
+}
+
+pub fn lct_is_root(tree: dict, u: int) -> bool {
+    let parent = tree["parent"]
+    let p = parent[u]
+    if p == 0 {
+        return true
+    }
+    let ch0 = tree["ch0"]
+    let ch1 = tree["ch1"]
+    if ch0[p] != u and ch1[p] != u {
+        return true
+    }
+    return false
+}
+
+pub fn lct_push_up(tree: dict, u: int) -> bool {
+    if u == 0 {
+        return false
+    }
+    let ch0 = tree["ch0"]
+    let ch1 = tree["ch1"]
+    let val = tree["val"]
+    let mut sum = tree["sum"]
+
+    let left = ch0[u]
+    let right = ch1[u]
+    let mut total = val[u]
+    if left != 0 {
+        total = total + sum[left]
+    }
+    if right != 0 {
+        total = total + sum[right]
+    }
+    sum[u] = total
+    tree["sum"] = sum
+    return true
+}
+
+pub fn lct_push_down(tree: dict, u: int) -> bool {
+    if u == 0 {
+        return false
+    }
+    let mut rev = tree["rev"]
+    if rev[u] != 0 {
+        let mut ch0 = tree["ch0"]
+        let mut ch1 = tree["ch1"]
+        let l = ch0[u]
+        let r = ch1[u]
+        ch0[u] = r
+        ch1[u] = l
+        tree["ch0"] = ch0
+        tree["ch1"] = ch1
+
+        if l != 0 {
+            if rev[l] == 0 {
+                rev[l] = 1
+            } else {
+                rev[l] = 0
+            }
+        }
+        if r != 0 {
+            if rev[r] == 0 {
+                rev[r] = 1
+            } else {
+                rev[r] = 0
+            }
+        }
+        rev[u] = 0
+        tree["rev"] = rev
+    }
+    return true
+}
+
+pub fn lct_rotate(tree: dict, x: int) -> bool {
+    let mut parent = tree["parent"]
+    let mut ch0 = tree["ch0"]
+    let mut ch1 = tree["ch1"]
+
+    let y = parent[x]
+    let z = parent[y]
+    let k = ch1[y] == x
+
+    if not lct_is_root(tree, y) {
+        if ch1[z] == y {
+            ch1[z] = x
+        } else {
+            ch0[z] = x
+        }
+    }
+    parent[x] = z
+
+    if k {
+        ch1[y] = ch0[x]
+        if ch0[x] != 0 {
+            parent[ch0[x]] = y
+        }
+        ch0[x] = y
+    } else {
+        ch0[y] = ch1[x]
+        if ch1[x] != 0 {
+            parent[ch1[x]] = y
+        }
+        ch1[x] = y
+    }
+    parent[y] = x
+
+    tree["parent"] = parent
+    tree["ch0"] = ch0
+    tree["ch1"] = ch1
+
+    lct_push_up(tree, y)
+    lct_push_up(tree, x)
+    return true
+}
+
+pub fn lct_splay(tree: dict, x: int) -> bool {
+    // Collect ancestors to push down tags
+    let mut stack = []
+    let mut curr = x
+    stack.push(curr)
+    while not lct_is_root(tree, curr) {
+        let parent = tree["parent"]
+        curr = parent[curr]
+        stack.push(curr)
+    }
+
+    let mut idx = stack.len() - 1
+    while idx >= 0 {
+        let node = stack[idx]
+        lct_push_down(tree, node)
+        idx = idx - 1
+    }
+
+    while not lct_is_root(tree, x) {
+        let parent = tree["parent"]
+        let y = parent[x]
+        let z = parent[y]
+        if not lct_is_root(tree, y) {
+            let ch1 = tree["ch1"]
+            if (ch1[y] == x) == (ch1[z] == y) {
+                lct_rotate(tree, y)
+            } else {
+                lct_rotate(tree, x)
+            }
+        }
+        lct_rotate(tree, x)
+    }
+    return true
+}
+
+pub fn lct_access(tree: dict, u: int) -> bool {
+    let mut curr = u
+    let mut last = 0
+    while curr != 0 {
+        lct_splay(tree, curr)
+        let mut ch1 = tree["ch1"]
+        ch1[curr] = last
+        tree["ch1"] = ch1
+        lct_push_up(tree, curr)
+        last = curr
+        let parent = tree["parent"]
+        curr = parent[curr]
+    }
+    return true
+}
+
+pub fn lct_make_root(tree: dict, u: int) -> bool {
+    lct_access(tree, u)
+    lct_splay(tree, u)
+    let mut rev = tree["rev"]
+    if rev[u] == 0 {
+        rev[u] = 1
+    } else {
+        rev[u] = 0
+    }
+    tree["rev"] = rev
+    lct_push_down(tree, u)
+    return true
+}
+
+pub fn lct_find_root(tree: dict, u: int) -> int {
+    lct_access(tree, u)
+    lct_splay(tree, u)
+    lct_push_down(tree, u)
+    let ch0 = tree["ch0"]
+    let mut curr = u
+    while ch0[curr] != 0 {
+        curr = ch0[curr]
+        lct_push_down(tree, curr)
+    }
+    lct_splay(tree, curr)
+    return curr
+}
+
+pub fn lct_connected(tree: dict, u: int, v: int) -> bool {
+    if u == v {
+        return true
+    }
+    let r1 = lct_find_root(tree, u)
+    let r2 = lct_find_root(tree, v)
+    return r1 == r2
+}
+
+pub fn lct_link(tree: dict, u: int, v: int) -> bool {
+    lct_make_root(tree, u)
+    if lct_find_root(tree, v) == u {
+        return false // Already connected, prevent cycle
+    }
+    let mut parent = tree["parent"]
+    parent[u] = v
+    tree["parent"] = parent
+    return true
+}
+
+pub fn lct_cut(tree: dict, u: int, v: int) -> bool {
+    lct_make_root(tree, u)
+    if lct_find_root(tree, v) != u {
+        return false // Not in same tree
+    }
+    let parent = tree["parent"]
+    if parent[v] != u {
+        return false
+    }
+    let ch0 = tree["ch0"]
+    if ch0[v] != 0 {
+        return false
+    }
+
+    let mut p = tree["parent"]
+    let mut c1 = tree["ch1"]
+    p[v] = 0
+    c1[u] = 0
+    tree["parent"] = p
+    tree["ch1"] = c1
+    lct_push_up(tree, u)
+    return true
+}
+
+pub fn lct_query_path(tree: dict, u: int, v: int) -> int {
+    lct_make_root(tree, u)
+    lct_access(tree, v)
+    lct_splay(tree, v)
+    let sum = tree["sum"]
+    return sum[v]
+}
+
+// -------------------------------------------------------------------
+// Smoke tests and Golden Test Vectors
+// -------------------------------------------------------------------
+
+pub fn test_lct_initialization() -> bool {
+    let tree = lct_create(5)
+    let size = tree["size"]
+    if size != 5 {
+        return false
+    }
+    let mut i = 1
+    while i <= 5 {
+        if lct_find_root(tree, i) != i {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+pub fn test_lct_link_and_connectivity() -> bool {
+    let tree = lct_create(6)
+    // Connect 1 - 2 - 3
+    lct_link(tree, 1, 2)
+    lct_link(tree, 2, 3)
+
+    // Connect 4 - 5
+    lct_link(tree, 4, 5)
+
+    if not lct_connected(tree, 1, 3) {
+        return false
+    }
+    if not lct_connected(tree, 2, 3) {
+        return false
+    }
+    if not lct_connected(tree, 4, 5) {
+        return false
+    }
+    if lct_connected(tree, 1, 4) {
+        return false
+    }
+    if lct_connected(tree, 3, 5) {
+        return false
+    }
+
+    // Connect bridge 3 - 4
+    lct_link(tree, 3, 4)
+    if not lct_connected(tree, 1, 5) {
+        return false
+    }
+    return true
+}
+
+pub fn test_lct_path_query_and_update() -> bool {
+    let tree = lct_create(4)
+    lct_set_val(tree, 1, 10)
+    lct_set_val(tree, 2, 20)
+    lct_set_val(tree, 3, 30)
+    lct_set_val(tree, 4, 40)
+
+    lct_link(tree, 1, 2)
+    lct_link(tree, 2, 3)
+    lct_link(tree, 3, 4)
+
+    // Path 1 -> 4: 10 + 20 + 30 + 40 = 100
+    let q1 = lct_query_path(tree, 1, 4)
+    if q1 != 100 {
+        return false
+    }
+
+    // Path 2 -> 3: 20 + 30 = 50
+    let q2 = lct_query_path(tree, 2, 3)
+    if q2 != 50 {
+        return false
+    }
+
+    // Update node 2 weight to 50
+    lct_splay(tree, 2)
+    lct_set_val(tree, 2, 50)
+    lct_push_up(tree, 2)
+
+    // Path 1 -> 4: 10 + 50 + 30 + 40 = 130
+    let q3 = lct_query_path(tree, 1, 4)
+    if q3 != 130 {
+        return false
+    }
+    return true
+}
+
+pub fn test_lct_cut_and_disconnect() -> bool {
+    let tree = lct_create(5)
+    lct_link(tree, 1, 2)
+    lct_link(tree, 2, 3)
+    lct_link(tree, 3, 4)
+    lct_link(tree, 4, 5)
+
+    if not lct_connected(tree, 1, 5) {
+        return false
+    }
+
+    // Sever link (2, 3)
+    let ok = lct_cut(tree, 2, 3)
+    if not ok {
+        return false
+    }
+
+    if lct_connected(tree, 1, 5) {
+        return false
+    }
+    if not lct_connected(tree, 1, 2) {
+        return false
+    }
+    if not lct_connected(tree, 3, 5) {
+        return false
+    }
+
+    // Re-link 2 to 5 directly
+    lct_link(tree, 2, 5)
+    if not lct_connected(tree, 1, 3) {
+        return false
+    }
+    return true
+}
