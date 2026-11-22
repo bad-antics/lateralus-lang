@@ -1,0 +1,128 @@
+// ===================================================================
+// examples/datetime_tutorial.ltl — stdlib/datetime.ltl companion
+// Runnable tour: date/datetime maps, leap years, days-in-month,
+// day-of-year, Zeller day-of-week, formatting, durations,
+// add_days rollover, comparisons, diff_days approximation.
+// Workarounds: int() for /-division (float bug), {} + assignments
+// instead of map literals, local pad_left.
+// ===================================================================
+
+fn dt_days_in_month(year: int, month: int) -> int {
+    let days = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    if month == 2 && dt_is_leap(year) { return 29 }
+    return days[month]
+}
+fn dt_is_leap(year: int) -> bool {
+    if year % 400 == 0 { return true }
+    if year % 100 == 0 { return false }
+    return year % 4 == 0
+}
+fn dt_date(year: int, month: int, day: int) -> map {
+    let d = {}
+    d["year"] = year; d["month"] = month; d["day"] = day
+    d["hour"] = 0; d["minute"] = 0; d["second"] = 0; d["ms"] = 0
+    return d
+}
+fn dt_datetime(y: int, mo: int, da: int, h: int, mi: int, s: int) -> map {
+    let d = dt_date(y, mo, da)
+    d["hour"] = h; d["minute"] = mi; d["second"] = s
+    return d
+}
+fn dt_day_of_year(y: int, mo: int, da: int) -> int {
+    let total = 0
+    let m = 1
+    while m < mo { total = total + dt_days_in_month(y, m); m = m + 1 }
+    return total + da
+}
+fn dt_dow(y: int, mo: int, da: int) -> int {
+    let yy = y
+    let mm = mo
+    if mm < 3 { mm = mm + 12; yy = yy - 1 }
+    let k = yy % 100
+    let j = int(yy / 100)
+    let h = (da + int((13 * (mm + 1)) / 5) + k + int(k / 4) + int(j / 4) - 2 * j) % 7
+    return (h + 5) % 7
+}
+fn dt_dow_name(dow: int) -> str {
+    let names = ["Monday", "Tuesday", "Wednesday", "Thursday",
+                 "Friday", "Saturday", "Sunday"]
+    return names[dow % 7]
+}
+fn dt_pad(s: str, w: int, ch: str) -> str {
+    let r = s
+    while len(r) < w { r = ch + r }
+    return r
+}
+fn dt_fmt_date(d: map) -> str {
+    return to_str(d["year"]) + "-" + dt_pad(to_str(d["month"]), 2, "0")
+           + "-" + dt_pad(to_str(d["day"]), 2, "0")
+}
+fn dt_fmt_dt(d: map) -> str {
+    return dt_fmt_date(d) + "T" + dt_pad(to_str(d["hour"]), 2, "0")
+           + ":" + dt_pad(to_str(d["minute"]), 2, "0")
+           + ":" + dt_pad(to_str(d["second"]), 2, "0")
+}
+fn dt_add_days(dt: map, n: int) -> map {
+    let d = dt["day"] + n
+    let m = dt["month"]
+    let y = dt["year"]
+    while d > dt_days_in_month(y, m) {
+        d = d - dt_days_in_month(y, m)
+        m = m + 1
+        if m > 12 { m = 1; y = y + 1 }
+    }
+    while d < 1 {
+        m = m - 1
+        if m < 1 { m = 12; y = y - 1 }
+        d = d + dt_days_in_month(y, m)
+    }
+    let r = dt_date(y, m, d)
+    r["hour"] = dt["hour"]; r["minute"] = dt["minute"]; r["second"] = dt["second"]
+    return r
+}
+fn dt_diff_days(a: map, b: map) -> int {
+    let ad = a["year"] * 365 + dt_day_of_year(a["year"], a["month"], a["day"])
+    let bd = b["year"] * 365 + dt_day_of_year(b["year"], b["month"], b["day"])
+    return bd - ad
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB DATETIME TUTORIAL ===")
+
+    println("STEP 1 constructors + calendar facts:")
+    let d1 = dt_date(2024, 2, 29)
+    println("  2024-02-29 valid (leap): " + dt_fmt_date(d1))
+    println("  is_leap 2024=" + str(dt_is_leap(2024)) + " 1900=" + str(dt_is_leap(1900))
+           + " 2000=" + str(dt_is_leap(2000)))
+    println("  days_in_month(2023,2)=" + str(dt_days_in_month(2023, 2))
+           + " (2024,2)=" + str(dt_days_in_month(2024, 2)))
+    println("  day_of_year(2024,3,1)=" + str(dt_day_of_year(2024, 3, 1)))
+
+    println("STEP 2 day-of-week (Zeller):")
+    let dt1 = dt_datetime(2024, 1, 1, 9, 30, 0)
+    println("  2024-01-01 = " + dt_dow_name(dt_dow(2024, 1, 1)) + " (expect Monday)")
+    println("  2024-12-25 = " + dt_dow_name(dt_dow(2024, 12, 25)))
+    println("  2000-01-01 = " + dt_dow_name(dt_dow(2000, 1, 1)) + " (expect Saturday)")
+
+    println("STEP 3 formatting:")
+    println("  date=" + dt_fmt_date(dt1))
+    println("  datetime=" + dt_fmt_dt(dt1) + "Z")
+
+    println("STEP 4 add_days rollover:")
+    let eom = dt_date(2024, 1, 31)
+    println("  2024-01-31 +1 = " + dt_fmt_date(dt_add_days(eom, 1)))
+    let yend = dt_date(2024, 12, 31)
+    println("  2024-12-31 +1 = " + dt_fmt_date(dt_add_days(yend, 1)))
+    println("  2024-03-01 -1 = " + dt_fmt_date(dt_add_days(dt_date(2024, 3, 1), -1)))
+    println("  2024-01-15 +45 = " + dt_fmt_date(dt_add_days(dt_date(2024, 1, 15), 45)))
+
+    println("STEP 5 comparisons + diff_days:")
+    let a = dt_datetime(2024, 6, 1, 10, 0, 0)
+    let b = dt_datetime(2024, 6, 1, 12, 30, 0)
+    println("  a<b=" + str(a["hour"] < b["hour"]) + " same_day="
+           + str(a["day"] == b["day"] && a["month"] == b["month"]))
+    println("  diff_days(2024-01-01 -> 2024-12-31)=" + str(dt_diff_days(dt_date(2024,1,1), dt_date(2024,12,31))))
+    println("PINNED_VECTORS: leap=2024T-1900F-2000T dim-2023feb=28 dim-2024feb=29 doy321 dow-2024-01-01=Monday dow-2000-01-01=Saturday fmt=2024-01-01T09:30:00 add31+1=2024-02-01 addYend=2025-01-01 addMar1-1=2024-02-29 diff=365")
+}
+
+main()

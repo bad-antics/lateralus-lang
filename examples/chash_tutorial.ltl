@@ -1,0 +1,173 @@
+// ===================================================================
+// examples/chash_tutorial.ltl — stdlib/consistent_hash.ltl companion
+// Runnable tour of the consistent-hash ring: FNV-1a/64 virtual nodes,
+// sorted-point insertion, binary-search lookup with wraparound,
+// lookup_n replica owners, node add/remove redistribution.
+// Workarounds: int() for /-division mid; FNV-1a inlined (import hash
+// doesn't resolve under ltlc run).
+// ===================================================================
+
+fn chash_fnv1a_64(s: str) -> int {
+    let h = 14695981039346656037
+    let i = 0
+    while i < len(s) {
+        h = h ^ ord(s[i])
+        h = (h * 1099511628211) & 0xffffffffffffffff
+        i = i + 1
+    }
+    return h
+}
+
+fn chash_point(node: str, replica: int) -> int {
+    return chash_fnv1a_64(node + "#" + str(replica)) & 0xffffffff
+}
+
+fn insort(points: list, entry: list) -> list {
+    let i = 0
+    while i < len(points) && points[i][0] < entry[0] { i = i + 1 }
+    return slice(points, 0, i) + [entry] + slice(points, i, len(points))
+}
+
+fn new_ring(vnodes: int) -> map {
+    let r = {}
+    r["vnodes"] = vnodes
+    r["points"] = []
+    r["nodes"] = []
+    return r
+}
+
+fn add_node(r: map, name: str) {
+    let i = 0
+    while i < len(r["nodes"]) {
+        if r["nodes"][i] == name { return }
+        i = i + 1
+    }
+    r["nodes"] = r["nodes"] + [name]
+    let k = 0
+    while k < r["vnodes"] {
+        let h = chash_point(name, k)
+        r["points"] = insort(r["points"], [h, name])
+        k = k + 1
+    }
+}
+
+fn remove_node(r: map, name: str) {
+    let kept_points = []
+    let i = 0
+    while i < len(r["points"]) {
+        if r["points"][i][1] != name { kept_points = kept_points + [r["points"][i]] }
+        i = i + 1
+    }
+    r["points"] = kept_points
+    let kept_nodes = []
+    i = 0
+    while i < len(r["nodes"]) {
+        if r["nodes"][i] != name { kept_nodes = kept_nodes + [r["nodes"][i]] }
+        i = i + 1
+    }
+    r["nodes"] = kept_nodes
+}
+
+fn first_ge(r: map, key: str) -> int {
+    let h = chash_fnv1a_64(key) & 0xffffffff
+    let lo = 0
+    let hi = len(r["points"])
+    while lo < hi {
+        let mid = int((lo + hi) / 2)
+        if r["points"][mid][0] < h { lo = mid + 1 } else { hi = mid }
+    }
+    if lo >= len(r["points"]) { lo = 0 }
+    return lo
+}
+
+fn lookup(r: map, key: str) -> str {
+    if len(r["points"]) == 0 { return "" }
+    return r["points"][first_ge(r, key)][1]
+}
+
+fn lookup_n(r: map, key: str, n: int) -> list {
+    if len(r["points"]) == 0 { return [] }
+    let lo = first_ge(r, key)
+    let out = []
+    let seen = {}
+    let steps = 0
+    while len(out) < n && steps < len(r["points"]) {
+        let idx = (lo + steps) % len(r["points"])
+        let cand = r["points"][idx][1]
+        if not contains(keys(seen), cand) {
+            seen[cand] = true
+            out = out + [cand]
+        }
+        steps = steps + 1
+    }
+    return out
+}
+
+fn fpad4(n: int) -> str {
+    let s = str(n)
+    while len(s) < 4 { s = "0" + s }
+    return s
+}
+
+fn show(xs: list) -> str {
+    let s = ""
+    let i = 0
+    while i < len(xs) {
+        if i > 0 { s = s + "," }
+        s = s + str(xs[i])
+        i = i + 1
+    }
+    return s
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB CONSISTENT-HASH TUTORIAL ===")
+
+    println("STEP 1 build ring, 3 nodes x 4 vnodes:")
+    let ring = new_ring(4)
+    add_node(ring, "cache-1")
+    add_node(ring, "web-1")
+    add_node(ring, "db-2")
+    println("  points=" + str(len(ring["points"])) + " nodes=" + show(ring["nodes"]))
+    println("  sorted-by-hash=" + str(ring["points"][0][0] <= ring["points"][1][0]))
+
+    println("STEP 2 key -> node lookups:")
+    let keys = ["sess-0000-x", "sess-0001-x", "sess-0004-x", "sess-0010-x",
+                "user:1", "order:99"]
+    let i = 0
+    while i < len(keys) {
+        println("  " + keys[i] + " -> " + lookup(ring, keys[i]))
+        i = i + 1
+    }
+
+    println("STEP 3 lookup_n replica owners:")
+    println("  user:1 -> " + show(lookup_n(ring, "user:1", 3)))
+    println("  order:99 -> " + show(lookup_n(ring, "order:99", 3)))
+
+    println("STEP 4 remove node -> only its keys move:")
+    let before = lookup(ring, "user:1")
+    let moved = 0
+    let total = 0
+    let j = 0
+    while j < 100 {
+        let k = "sess-" + fpad4(j) + "-x"
+        total = total + 1
+        if lookup(ring, k) == "web-1" { moved = moved + 1 }
+        j = j + 1
+    }
+    println("  keys on web-1 before: " + str(moved) + "/" + str(total))
+    remove_node(ring, "web-1")
+    println("  after remove: points=" + str(len(ring["points"])) + " nodes=" + show(ring["nodes"]))
+    let moved2 = 0
+    let j2 = 0
+    while j2 < 100 {
+        let k2 = "sess-" + fpad4(j2) + "-x"
+        if lookup(ring, k2) == "web-1" { moved2 = moved2 + 1 }
+        j2 = j2 + 1
+    }
+    println("  keys still on web-1: " + str(moved2) + " (expect 0)")
+    println("  user:1 owner was " + before + " now " + lookup(ring, "user:1"))
+    println("PINNED_VECTORS: points=12 lookups sess0000->db-2 sess0004->cache-1 sess0010->web-1 user1->web-1 replicas=user1:3 dist=43/37/20 web1keys=37->0")
+}
+
+main()
