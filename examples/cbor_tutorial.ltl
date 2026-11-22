@@ -1,0 +1,77 @@
+// Lateralus Standard Library Example: CBOR (RFC 8949) Compact Serialization
+// Demonstrates encoding IoT telemetry into binary hex payloads without serialization bloat.
+
+fn hex_nibble(n: int) -> string {
+    if n == 0 { return "0"; }
+    if n == 1 { return "1"; }
+    if n == 2 { return "2"; }
+    if n == 3 { return "3"; }
+    if n == 4 { return "4"; }
+    if n == 5 { return "5"; }
+    if n == 6 { return "6"; }
+    if n == 7 { return "7"; }
+    if n == 8 { return "8"; }
+    if n == 9 { return "9"; }
+    if n == 10 { return "a"; }
+    if n == 11 { return "b"; }
+    if n == 12 { return "c"; }
+    if n == 13 { return "d"; }
+    if n == 14 { return "e"; }
+    if n == 15 { return "f"; }
+    return "0";
+}
+
+fn byte_to_hex(val: int) -> string {
+    return hex_nibble(val / 16) + hex_nibble(val % 16);
+}
+
+fn encode_cbor_uint(val: int) -> string {
+    if val >= 0 && val <= 23 {
+        return byte_to_hex(val);
+    }
+    // For 24..255: 0x18 prefix
+    if val >= 24 && val <= 255 {
+        return "18" + byte_to_hex(val);
+    }
+    return "00";
+}
+
+fn encode_cbor_nint(val: int) -> string {
+    let pos = -1 - val;
+    if pos >= 0 && pos <= 23 {
+        return byte_to_hex(32 + pos);
+    }
+    return "20";
+}
+
+fn encode_cbor_bool(flag: bool) -> string {
+    if flag {
+        return "f5";
+    }
+    return "f4";
+}
+
+fn main() -> int {
+    println("=== Lateralus RFC 8949 CBOR Telemetry Demo ===");
+
+    // Simulate sensor readings:
+    // device_id: 12 (uint)
+    // subzero_temp_celsius: -5 (nint)
+    // alert_active: true (bool)
+    let dev_id_hex = encode_cbor_uint(12);
+    let temp_hex = encode_cbor_nint(-5);
+    let alert_hex = encode_cbor_bool(true);
+
+    println("Device ID (12) CBOR Hex: " + dev_id_hex);
+    println("Subzero Temp (-5) CBOR Hex: " + temp_hex);
+    println("Alert Active (true) CBOR Hex: " + alert_hex);
+
+    // Array of 3 items header: 0x80 | 3 = 0x83
+    let packet = "83" + dev_id_hex + temp_hex + alert_hex;
+    println("Full CBOR Packet (Array of 3 items): " + packet);
+
+    assert(packet == "830c24f5");
+    println("Packet matches RFC 8949 binary standard: 830c24f5 (4 bytes vs ~45 bytes JSON!)");
+
+    return 0;
+}
