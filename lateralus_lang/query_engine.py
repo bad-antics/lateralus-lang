@@ -698,9 +698,12 @@ def lql(query_string: str, context: Optional[dict[str, Collection]] = None) -> C
         q = q.limit(stmt.limit)
 
     if stmt.columns and stmt.columns != ["*"]:
-        plain_cols = [c for c in stmt.columns if not re.search(r'\(', c)]
-        if plain_cols:
-            q = q.select(*plain_cols)
+        output_cols = []
+        for col in stmt.columns:
+            aggregate = re.match(r'(\w+)\((\w+|\*)\)\s+AS\s+(\w+)', col, re.IGNORECASE)
+            output_cols.append(aggregate.group(3) if aggregate else col)
+        if output_cols:
+            q = q.select(*output_cols)
 
     return q.execute()
 

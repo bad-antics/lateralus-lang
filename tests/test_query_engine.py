@@ -301,6 +301,24 @@ class TestLQLParser:
         result = lql("SELECT * FROM nonexistent", context)
         assert result == []
 
+    def test_lql_grouped_select_preserves_aggregate_aliases(self):
+        sales = [
+            {"dept": "eng", "amount": 10},
+            {"dept": "eng", "amount": 20},
+            {"dept": "sales", "amount": 5},
+        ]
+        result = lql("SELECT dept, SUM(amount) AS total FROM sales GROUP BY dept ORDER BY dept", {"sales": sales})
+        assert result == [{"dept": "eng", "total": 30}, {"dept": "sales", "total": 5}]
+
+    def test_lql_grouped_count_preserves_alias(self):
+        sales = [
+            {"dept": "eng", "amount": 10},
+            {"dept": "eng", "amount": 20},
+            {"dept": "sales", "amount": 5},
+        ]
+        result = lql("SELECT dept, COUNT(*) AS n FROM sales GROUP BY dept ORDER BY dept", {"sales": sales})
+        assert result == [{"dept": "eng", "n": 2}, {"dept": "sales", "n": 1}]
+
 
 # ---------------------------------------------------------------------------
 # Aggregation functions
