@@ -267,6 +267,237 @@ LATERALUS_SNIPPETS = {
 }
 
 
+# --- Stdlib signature index (parsed from stdlib/*.ltl at startup) ------
+#
+# The bounty asks that hovering a stdlib function name shows its signature
+# plus the first docstring line.  Rather than ship a hand-maintained data
+# file (which would drift from the real source), we parse the ``stdlib/*.ltl``
+# modules once, lazily, and cache the result.  Each ``pub fn`` / ``pub async
+# fn`` definition is indexed by its bare name and by ``<module>.<name>`` so a
+# hover on either ``encode`` or ``base64.encode`` resolves.
+
+import os as _os
+import pathlib as _pathlib
+
+# Matches a function header.  The stdlib uses three definition forms:
+#   ``pub fn name(...)``, ``export fn name(...)`` and a bare ``fn name(...)``
+# (the latter two appear in ``algorithms.ltl`` / ``aho_corasick.ltl`` /
+# ``mime.ltl``).  All three are public, hoverable stdlib functions, so we accept
+# an optional ``pub`` / ``export`` visibility prefix.  The signature may span
+# multiple physical lines, so we capture everything up to the opening brace.
+_RE_STDLIB_FN = re.compile(
+    r"^[ \t]*(?:pub|export)?[ \t]*(?:async[ \t]+)?fn[ \t]+(\w+)[ \t]*\((.*?)\)"
+    r"[ \t]*(?:->[ \t]*([^\{]+?))?[ \t]*\{",
+    re.DOTALL,
+)
+# Matches a ``module <name>`` declaration (``module foo`` or ``module foo { ``).
+_RE_STDLIB_MODULE = re.compile(r"^[ \t]*module[ \t]+(\w+)")
+
+
+class StdlibSignature:
+    """A single stdlib function signature extracted from a ``.ltl`` source."""
+
+    __slots__ = ("module", "name", "params", "ret", "doc", "detail")
+
+    def __init__(self, module: str, name: str, params: str, ret: Optional[str],
+                 doc: Optional[str]):
+        self.module = module
+        self.name = name
+        self.params = params.strip()
+        self.ret = (ret or "").strip()
+        self.doc = doc
+        self.detail = self._build_detail()
+
+    def _build_detail(self) -> str:
+        sig = f"fn {self.name}({self.params})"
+        if self.ret:
+            sig += f" -> {self.ret}"
+        return sig
+
+    def hover_markdown(self) -> str:
+        """Render the hover value: fenced signature + first docstring line."""
+        value = f"```lateralus\n{self.detail}\n```"
+        if self.doc:
+            value += f"\n\n{value_doc(self.doc)}"
+        return value
+
+
+def value_doc(doc: str) -> str:
+    """Return the first line of a docstring (already stripped)."""
+    first = doc.strip().splitlines()[0].strip() if doc.strip() else ""
+    return first
+
+
+def _stdlib_dirs() -> list[_pathlib.Path]:
+    """Candidate directories that may hold the ``stdlib/*.ltl`` modules."""
+    here = _pathlib.Path(__file__).resolve()
+    candidates = [
+        here.parent.parent / "stdlib",          # repo checkout (src layout)
+        here.parent / "stdlib",                  # installed next to package
+        _pathlib.Path.cwd() / "stdlib",          # invoked from repo root
+    ]
+    # Deduplicate while preserving order.
+    seen: set[str] = set()
+    out: list[_pathlib.Path] = []
+    for c in candidates:
+        key = str(c)
+        if key not in seen:
+            seen.add(key)
+            out.append(c)
+    return out
+
+
+def _parse_stdlib_file(path: _pathlib.Path,
+                       index: dict[str, StdlibSignature]) -> None:
+    """Parse one ``.ltl`` file, adding its public functions to ``index``."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return
+
+    module = path.stem
+
+    # Determine the module name from an explicit ``module`` declaration, if any.
+    m = _RE_STDLIB_MODULE.search(text)
+    if m:
+        module = m.group(1)
+
+    # Walk the file line by line, tracking the most recent contiguous ``///``
+    # docstring block.  When we hit a ``pub fn`` header we may need to consume
+    # subsequent physical lines until the parameter list's closing paren and
+    # the trailing ``{`` (signatures can span multiple lines).
+    lines = text.splitlines()
+    pending_doc: list[str] = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        stripped = lines[i].strip()
+
+        if stripped.startswith("///"):
+            pending_doc.append(stripped[3:].strip())
+            i += 1
+            continue
+
+        # ``--`` is an alternate doc-comment convention used by several stdlib
+        # modules (mime.ltl, json.ltl, graph.ltl, ...).  Treat a ``--`` line as
+        # a doc line only when it is NOT a decrement operator (i.e. not preceded
+        # by an identifier/paren and not followed by one).  In practice stdlib
+        # ``--`` lines are always full-line comments, so a leading ``--`` after
+        # stripping is unambiguously a comment.
+        if stripped.startswith("--"):
+            pending_doc.append(stripped[2:].strip())
+            i += 1
+            continue
+
+        if stripped.startswith("//"):
+            pending_doc = []
+            i += 1
+            continue
+
+        header = _RE_STDLIB_FN.match(lines[i])
+        if not header:
+            # Try a multi-line header: a ``pub fn`` line whose parens don't
+            # close on the same line.
+            if _RE_STDLIB_FN_START.match(lines[i]):
+                header, i = _consume_multiline_header(lines, i)
+            if not header:
+                pending_doc = []
+                i += 1
+                continue
+
+        name = header.group(1)
+        params = header.group(2)
+        ret = header.group(3)
+        doc = pending_doc[0] if pending_doc else None
+        sig = StdlibSignature(module, name, params, ret, doc)
+        index.setdefault(name, sig)
+        index.setdefault(f"{module}.{name}", sig)
+        pending_doc = []
+        i += 1
+
+    return
+
+
+# Matches the start of a function header (used to detect multi-line sigs).
+# Accepts the same ``pub`` / ``export`` / bare forms as ``_RE_STDLIB_FN``.
+_RE_STDLIB_FN_START = re.compile(
+    r"^[ \t]*(?:pub|export)?[ \t]*(?:async[ \t]+)?fn[ \t]+\w+[ \t]*\("
+)
+
+
+def _consume_multiline_header(lines: list[str], start: int
+                              ) -> tuple[Optional[re.Match], int]:
+    """Join physical lines from ``start`` until the param list closes.
+
+    Returns ``(match, next_index)`` where ``match`` is a regex match against the
+    joined header text (with the same group layout as ``_RE_STDLIB_FN``), or
+    ``(None, start)`` if no complete header could be assembled.
+    """
+    buf = lines[start]
+    j = start
+    # Accumulate until parentheses balance and we see the opening brace.
+    # ``buf`` is the joined header text so far; we test the brace against the
+    # whole buffer (not a slice indexed by the line number, which would be a
+    # meaningless string/​int mix-up).
+    while j < len(lines):
+        if "(" in buf and ")" in buf and buf.count(")") >= buf.count("(") \
+                and "{" in buf:
+            break
+        j += 1
+        if j >= len(lines):
+            break
+        buf = buf + " " + lines[j].strip()
+    # Collapse runs of whitespace so the regex (which uses \s / literal spaces)
+    # matches the joined single-line form.
+    joined = re.sub(r"\s+", " ", buf).strip()
+    m = _RE_STDLIB_FN.match(joined)
+    if m:
+        return m, j
+    return None, start
+
+
+class StdlibSignatureIndex:
+    """Lazy, cached index of stdlib function signatures."""
+
+    def __init__(self) -> None:
+        self._index: Optional[dict[str, StdlibSignature]] = None
+
+    def _ensure(self) -> dict[str, StdlibSignature]:
+        if self._index is not None:
+            return self._index
+        index: dict[str, StdlibSignature] = {}
+        for d in _stdlib_dirs():
+            if d.is_dir():
+                for ltl in sorted(d.glob("*.ltl")):
+                    _parse_stdlib_file(ltl, index)
+                if index:
+                    break
+        self._index = index
+        return index
+
+    def lookup(self, word: str, module: Optional[str] = None
+               ) -> Optional[StdlibSignature]:
+        """Look up a signature by bare name, optionally qualified by module."""
+        index = self._ensure()
+        if module:
+            qualified = index.get(f"{module}.{word}")
+            if qualified is not None:
+                return qualified
+        return index.get(word)
+
+    def module_of(self, word: str) -> Optional[str]:
+        """Return the module that defines ``word`` (for qualified lookups)."""
+        sig = self.lookup(word)
+        return sig.module if sig else None
+
+    def __len__(self) -> int:
+        return len(self._ensure())
+
+
+# Module-level singleton — parsed once on first hover.
+STDLIB_SIGNATURES = StdlibSignatureIndex()
+
+
 def collect_diagnostics(doc: TextDocument) -> list[dict]:
     """Analyze document using the full LATERALUS compiler pipeline.
 
@@ -398,6 +629,37 @@ def get_completions(doc: TextDocument, line: int, character: int) -> list[dict]:
     return items
 
 
+def _word_with_module(doc: TextDocument, line: int, character: int) -> tuple[str, Optional[str]]:
+    """Return ``(word, module)`` for the token under the cursor.
+
+    Handles module-qualified references such as ``base64.encode`` so that a
+    hover anywhere on the dotted name resolves to the stdlib function.  The
+    returned ``module`` is the qualifier to the left of the dot (or ``None``).
+    """
+    text = doc.get_line(line)
+    if not text or character > len(text):
+        return doc.get_word_at(line, character), None
+
+    # Expand left/right over identifier characters and a single dot.
+    start = character
+    while start > 0 and (text[start - 1].isalnum() or text[start - 1] in "_."):
+        start -= 1
+    end = character
+    while end < len(text) and (text[end].isalnum() or text[end] in "_."):
+        end += 1
+    token = text[start:end]
+
+    if "." in token:
+        # Strip a trailing dot (e.g. hovering right after "base64.").
+        token = token.rstrip(".")
+        if "." in token:
+            module, _, word = token.rpartition(".")
+            if word:
+                return word, module
+    # Fallback: bare word (also trims a leading dot).
+    return token.lstrip("."), None
+
+
 def get_hover(doc: TextDocument, line: int, character: int) -> Optional[dict]:
     """Get hover information at position."""
     word = doc.get_word_at(line, character)
@@ -413,6 +675,21 @@ def get_hover(doc: TextDocument, line: int, character: int) -> Optional[dict]:
                 "value": f"```lateralus\n{info['detail']}\n```\n\n{info['doc']}",
             },
         }
+
+    # Check stdlib function signatures (parsed from stdlib/*.ltl at startup).
+    # Prefer a module-qualified match when the cursor is on ``module.word``.
+    qual_word, qual_module = _word_with_module(doc, line, character)
+    if qual_word:
+        sig = STDLIB_SIGNATURES.lookup(qual_word, module=qual_module)
+        if sig is not None:
+            header = f"`{sig.module}.{sig.name}`" if sig.module else sig.name
+            value = sig.hover_markdown()
+            return {
+                "contents": {
+                    "kind": "markdown",
+                    "value": f"**{header}**\n\n{value}",
+                },
+            }
 
     # Check keywords
     keyword_docs = {
