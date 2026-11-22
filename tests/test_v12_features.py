@@ -479,6 +479,16 @@ class TestInterpolatedStrTranspiler:
         # f-string should contain the expression
         assert "x + 1" in r.python_src or "(x + 1)" in r.python_src
 
+    def test_lone_open_brace_is_literal(self):
+        r = check('fn f() -> str { return "{" }')
+        assert r.ok
+        assert "return '{'" in r.python_src
+
+    def test_brace_concat_is_not_fstring(self):
+        r = check('fn f(x: str) -> str { return "{" + x + "}" }')
+        assert r.ok
+        assert "return (('{' + x) + '}')" in r.python_src
+
 
 class TestYieldTranspiler:
     def test_yield_becomes_python_yield(self):

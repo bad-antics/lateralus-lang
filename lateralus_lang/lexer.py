@@ -521,6 +521,25 @@ class Lexer:
         else:
             self._emit(TK.INT, int(raw), line, col)
 
+    def _find_interp_end(self, start: int) -> int:
+        depth = 1
+        i = start
+        while i < len(self._src):
+            c = self._src[i]
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                return -1
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    return i
+            i += 1
+        return -1
+
     def _read_string(self, line: int, col: int) -> None:
         self._advance()   # opening "
         parts: list = []
@@ -534,7 +553,7 @@ class Lexer:
                 esc = self._advance()
                 buf += {"n": "\n", "t": "\t", "r": "\r", "\\": "\\",
                         '"': '"', "0": "\0"}.get(esc, esc)
-            elif ch == "{" and self._peek() != "{":
+            elif ch == "{" and self._peek() != "{" and self._find_interp_end(self._pos + 1) != -1:
                 # interpolation
                 parts.append(("str", buf)); buf = ""
                 self._advance()
@@ -554,6 +573,8 @@ class Lexer:
                 parts.append(("expr", expr_src))
             elif ch == "{{":
                 buf += "{"; self._advance(); self._advance()
+            elif ch == "{":
+                buf += "{"; self._advance()
             else:
                 buf += self._advance()
         parts.append(("str", buf))
