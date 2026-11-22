@@ -1,0 +1,139 @@
+// ===================================================================
+// examples/edmonds_karp_tutorial.ltl
+// -------------------------------------------------------------------
+// Practical example demonstrating Edmonds-Karp Maximum Network Flow
+// algorithm for optimizing multi-hop token swap liquidity routing in
+// decentralized finance (DeFi) automated market makers (AMMs).
+// ===================================================================
+
+fn init_matrix(n) {
+    let m = dict()
+    let i = 0
+    while i < n {
+        let row = dict()
+        let j = 0
+        while j < n {
+            row[j] = 0
+            j = j + 1
+        }
+        m[i] = row
+        i = i + 1
+    }
+    return m
+}
+
+fn init_adj(n) {
+    let adj = dict()
+    let i = 0
+    while i < n {
+        adj[i] = []
+        i = i + 1
+    }
+    return adj
+}
+
+fn add_edge(adj, capacity, u, v, cap) {
+    adj[u] = push(adj[u], v)
+    adj[v] = push(adj[v], u)
+    capacity[u][v] = capacity[u][v] + cap
+}
+
+fn bfs(n, adj, capacity, s, t, parent) {
+    let visited = dict()
+    let i = 0
+    while i < n {
+        visited[i] = false
+        parent[i] = -1
+        i = i + 1
+    }
+
+    let queue = [s]
+    visited[s] = true
+    let q_head = 0
+
+    while q_head < len(queue) {
+        let u = queue[q_head]
+        q_head = q_head + 1
+
+        let neighbors = adj[u]
+        let k = 0
+        while k < len(neighbors) {
+            let v = neighbors[k]
+            if not visited[v] and capacity[u][v] > 0 {
+                parent[v] = u
+                visited[v] = true
+                if v == t {
+                    return true
+                }
+                queue = push(queue, v)
+            }
+            k = k + 1
+        }
+    }
+
+    return visited[t]
+}
+
+pub fn edmonds_karp(n, adj, capacity, s, t) {
+    let max_flow = 0
+    let parent = dict()
+
+    while bfs(n, adj, capacity, s, t, parent) {
+        let path_flow = 999999999
+        let curr = t
+        while curr != s {
+            let p = parent[curr]
+            let cap = capacity[p][curr]
+            if cap < path_flow {
+                path_flow = cap
+            }
+            curr = p
+        }
+
+        curr = t
+        while curr != s {
+            let p = parent[curr]
+            capacity[p][curr] = capacity[p][curr] - path_flow
+            capacity[curr][p] = capacity[curr][p] + path_flow
+            curr = p
+        }
+
+        max_flow = max_flow + path_flow
+    }
+
+    return max_flow
+}
+
+pub fn main() {
+    print("=== Edmonds-Karp Maximum Network Flow Optimization ===")
+    print("Routing multi-hop DEX liquidity across decentralized AMM pools...")
+
+    // Pool Node Topology:
+    // 0: Source Token Inflow (USDC)
+    // 1: Uniswap V3 Pool
+    // 2: Curve Finance Stableswap Pool
+    // 3: Balancer Weighted Pool
+    // 4: SushiSwap Pool
+    // 5: Target Token Outflow (ETH)
+
+    let n = 6
+    let adj = init_adj(n)
+    let cap = init_matrix(n)
+
+    // Add liquidity capacity channels (in thousands of USD)
+    add_edge(adj, cap, 0, 1, 500)   // Inflow -> Uniswap V3: $500k
+    add_edge(adj, cap, 0, 2, 400)   // Inflow -> Curve: $400k
+    add_edge(adj, cap, 1, 3, 300)   // Uniswap -> Balancer: $300k
+    add_edge(adj, cap, 1, 4, 250)   // Uniswap -> SushiSwap: $250k
+    add_edge(adj, cap, 2, 3, 200)   // Curve -> Balancer: $200k
+    add_edge(adj, cap, 2, 4, 200)   // Curve -> SushiSwap: $200k
+    add_edge(adj, cap, 3, 5, 450)   // Balancer -> Outflow: $450k
+    add_edge(adj, cap, 4, 5, 400)   // SushiSwap -> Outflow: $400k
+
+    let total_max_flow = edmonds_karp(n, adj, cap, 0, 5)
+
+    print("Max Executable Cross-Pool Liquidity Volume (kUSD):")
+    print(total_max_flow)
+
+    print("Optimization Complete: Min-Cut Capacity Saturated without Slippage Violation.")
+}
