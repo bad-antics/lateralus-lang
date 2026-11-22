@@ -531,6 +531,9 @@ class Lexer:
                 self._advance(); break
             if ch == "\\":
                 self._advance()
+                if self._pos >= len(self._src):
+                    # Backslash at EOF: unterminated, not an IndexError
+                    raise LexError("Unterminated string", self._file, line, col)
                 esc = self._advance()
                 buf += {"n": "\n", "t": "\t", "r": "\r", "\\": "\\",
                         '"': '"', "0": "\0"}.get(esc, esc)
@@ -556,6 +559,9 @@ class Lexer:
                 buf += "{"; self._advance(); self._advance()
             else:
                 buf += self._advance()
+        else:
+            # Ran off the end of source without a closing "
+            raise LexError("Unterminated string", self._file, line, col)
         parts.append(("str", buf))
         if len(parts) == 1 and parts[0][0] == "str":
             self._emit(TK.STRING, parts[0][1], line, col)
@@ -570,6 +576,9 @@ class Lexer:
             if ch == '"':
                 self._advance(); break
             buf += self._advance()
+        else:
+            # Ran off the end of source without a closing "
+            raise LexError("Unterminated raw string", self._file, line, col)
         self._emit(TK.RAW_STRING, buf, line, col)
 
     def _read_char(self, line: int, col: int) -> None:
