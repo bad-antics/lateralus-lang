@@ -1,0 +1,285 @@
+// ===================================================================
+// examples/mqtt5_tutorial.ltl — stdlib/mqtt5.ltl tutorial companion
+// Runnable tour of the MQTT 5.0 codec: remaining-length varint,
+// u16-length UTF-8 strings, property encoders, packet builders
+// (CONNECT/PUBLISH/SUBSCRIBE/PING/DISCONNECT), and parse_packet.
+// Self-contained.
+// NOTE: bytes_of shim missing -> local ord-based helper.
+// ===================================================================
+
+fn bytes_of(s: str) -> list {
+    let out = []
+    let i = 0
+    while i < len(s) {
+        out = out + [ord(s[i])]
+        i = i + 1
+    }
+    return out
+}
+
+fn str_of(bytes: list) -> str {
+    let out = ""
+    let i = 0
+    while i < len(bytes) {
+        out = out + chr(bytes[i])
+        i = i + 1
+    }
+    return out
+}
+
+fn pkt_connect()     -> int { return 1 }
+fn pkt_connack()     -> int { return 2 }
+fn pkt_publish()     -> int { return 3 }
+fn pkt_puback()      -> int { return 4 }
+fn pkt_pubrec()      -> int { return 5 }
+fn pkt_pubrel()      -> int { return 6 }
+fn pkt_pubcomp()     -> int { return 7 }
+fn pkt_subscribe()   -> int { return 8 }
+fn pkt_suback()      -> int { return 9 }
+fn pkt_unsubscribe() -> int { return 10 }
+fn pkt_unsuback()    -> int { return 11 }
+fn pkt_pingreq()     -> int { return 12 }
+fn pkt_pingresp()    -> int { return 13 }
+fn pkt_disconnect()  -> int { return 14 }
+fn pkt_auth()        -> int { return 15 }
+
+fn pi_payload_format()   -> int { return 0x01 }
+fn pi_message_expiry()   -> int { return 0x02 }
+fn pi_content_type()     -> int { return 0x03 }
+fn pi_response_topic()   -> int { return 0x08 }
+fn pi_correlation_data() -> int { return 0x09 }
+fn pi_sub_id()           -> int { return 0x0B }
+fn pi_session_expiry()   -> int { return 0x11 }
+fn pi_receive_max()      -> int { return 0x21 }
+fn pi_topic_alias_max()  -> int { return 0x22 }
+fn pi_user_property()    -> int { return 0x26 }
+
+fn enc_varint(v: int) -> list {
+    let out = []
+    let go = true
+    while go {
+        let b = v & 0x7f
+        v = v >> 7
+        if v > 0 {
+            b = b | 0x80
+        } else {
+            go = false
+        }
+        out = out + [b]
+    }
+    return out
+}
+
+fn dec_varint(buf: list, i: int) -> list {
+    let result = 0
+    let mult = 1
+    let go = true
+    while go {
+        let b = buf[i]
+        i = i + 1
+        result = result + ((b & 0x7f) * mult)
+        mult = mult * 128
+        if (b & 0x80) == 0 { go = false }
+    }
+    return [result, i]
+}
+
+fn enc_u8(v: int)  -> list { return [v & 0xff] }
+fn enc_u16(v: int) -> list { return [(v >> 8) & 0xff, v & 0xff] }
+fn enc_u32(v: int) -> list {
+    return [(v >> 24) & 0xff, (v >> 16) & 0xff,
+            (v >> 8)  & 0xff,  v        & 0xff]
+}
+
+fn dec_u16(buf: list, i: int) -> list {
+    return [(buf[i] << 8) | buf[i + 1], i + 2]
+}
+fn dec_u32(buf: list, i: int) -> list {
+    let v = (buf[i] << 24) | (buf[i + 1] << 16) | (buf[i + 2] << 8) | buf[i + 3]
+    return [v, i + 4]
+}
+
+fn enc_utf8(s: str) -> list {
+    let bytes = bytes_of(s)
+    return enc_u16(len(bytes)) + bytes
+}
+
+fn dec_utf8(buf: list, i: int) -> list {
+    let n = dec_u16(buf, i)
+    i = n[1]
+    let s = ""
+    let k = 0
+    while k < n[0] {
+        s = s + chr(buf[i + k])
+        k = k + 1
+    }
+    return [s, i + n[0]]
+}
+
+fn enc_binary(bytes: list) -> list {
+    return enc_u16(len(bytes)) + bytes
+}
+
+fn prop_u8(pi: int, v: int) -> list {
+    return enc_varint(pi) + [v & 0xff]
+}
+fn prop_u16(pi: int, v: int) -> list {
+    return enc_varint(pi) + enc_u16(v)
+}
+fn prop_u32(pi: int, v: int) -> list {
+    return enc_varint(pi) + enc_u32(v)
+}
+fn prop_utf8(pi: int, s: str) -> list {
+    return enc_varint(pi) + enc_utf8(s)
+}
+fn prop_binary(pi: int, bytes: list) -> list {
+    return enc_varint(pi) + enc_binary(bytes)
+}
+fn prop_user(key: str, value: str) -> list {
+    return enc_varint(pi_user_property()) + enc_utf8(key) + enc_utf8(value)
+}
+
+fn props_block(props: list) -> list {
+    return enc_varint(len(props)) + props
+}
+
+fn build_packet(packet_type: int, flags: int, variable_header: list,
+                 payload: list) -> list {
+    let first = ((packet_type & 0x0f) << 4) | (flags & 0x0f)
+    let remaining = variable_header + payload
+    return [first] + enc_varint(len(remaining)) + remaining
+}
+
+fn connect(client_id: str, keepalive: int, clean_start: bool,
+            username: str, password: str, props: list) -> list {
+    let proto_name = enc_utf8("MQTT")
+    let proto_level = [5]
+    let flags = 0
+    if clean_start     { flags = flags | 0x02 }
+    if username != ""  { flags = flags | 0x80 }
+    if password != ""  { flags = flags | 0x40 }
+    let variable = proto_name + proto_level + [flags] + enc_u16(keepalive)
+                 + props_block(props)
+    let payload = enc_utf8(client_id)
+    if username != "" { payload = payload + enc_utf8(username) }
+    if password != "" { payload = payload + enc_utf8(password) }
+    return build_packet(pkt_connect(), 0, variable, payload)
+}
+
+fn publish(topic: str, qos: int, retain: bool, dup: bool,
+            packet_id: int, props: list, body: list) -> list {
+    let flags = 0
+    if dup    { flags = flags | 0x08 }
+    flags = flags | ((qos & 0x03) << 1)
+    if retain { flags = flags | 0x01 }
+    let variable = enc_utf8(topic)
+    if qos > 0 {
+        variable = variable + enc_u16(packet_id)
+    }
+    variable = variable + props_block(props)
+    return build_packet(pkt_publish(), flags, variable, body)
+}
+
+fn subscribe(packet_id: int, filters: list) -> list {
+    let variable = enc_u16(packet_id) + props_block([])
+    let payload = []
+    let i = 0
+    while i < len(filters) {
+        let f = filters[i]
+        payload = payload + enc_utf8(f[0]) + [f[1] & 0xff]
+        i = i + 1
+    }
+    return build_packet(pkt_subscribe(), 0x02, variable, payload)
+}
+
+fn pingreq()  -> list { return [0xC0, 0x00] }
+fn pingresp() -> list { return [0xD0, 0x00] }
+
+fn disconnect(reason_code: int) -> list {
+    return build_packet(pkt_disconnect(), 0,
+                        [reason_code & 0xff] + props_block([]),
+                        [])
+}
+
+fn parse_packet(buf: list, i: int) -> map {
+    if i >= len(buf) { return nil }
+    let first = buf[i]
+    let r = dec_varint(buf, i + 1)
+    let rem = r[0]
+    let body_start = r[1]
+    if len(buf) < body_start + rem { return nil }
+    let m = {}
+    m["type"]      = (first >> 4) & 0x0f
+    m["flags"]     = first & 0x0f
+    m["remaining"] = rem
+    m["body"]      = slice(buf, body_start, body_start + rem)
+    m["consumed"]  = body_start + rem - i
+    return m
+}
+
+fn hexs(bytes: list) -> str {
+    let h = "0123456789abcdef"
+    let out = ""
+    let i = 0
+    while i < len(bytes) {
+        let b = bytes[i] & 0xff
+        out = out + slice(h, b >> 4, (b >> 4) + 1)
+               + slice(h, b & 0x0f, (b & 0x0f) + 1)
+        i = i + 1
+    }
+    return out
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB MQTT5 TUTORIAL ===")
+
+    println("STEP 1 varint remaining length:")
+    println("  0 -> " + hexs(enc_varint(0)))
+    println("  127 -> " + hexs(enc_varint(127)))
+    println("  128 -> " + hexs(enc_varint(128)))
+    println("  16383 -> " + hexs(enc_varint(16383)))
+    println("  2097151 -> " + hexs(enc_varint(2097151)))
+    let dv = dec_varint(enc_varint(300) + [0x00], 0)
+    println("  dec(300)=" + str(dv[0]) + " next=" + str(dv[1]))
+
+    println("STEP 2 string/binary encoders:")
+    println("  utf8(\"MQTT\")=" + hexs(enc_utf8("MQTT")))
+    let us = dec_utf8(enc_utf8("sensors/temp") + [0x00], 0)
+    println("  dec_utf8=" + str(us[0]) + " next=" + str(us[1]))
+    println("  binary(3B)=" + hexs(enc_binary([1, 2, 3])))
+
+    println("STEP 3 property encoders:")
+    println("  prop_u8(session-expiry,30)=" + hexs(prop_u8(pi_session_expiry(), 30)))
+    println("  prop_utf8(content-type,json)=" + hexs(prop_utf8(pi_content_type(), "json")))
+    println("  prop_user(tenant,acme)=" + hexs(prop_user("tenant", "acme")))
+
+    println("STEP 4 CONNECT packet:")
+    let props = prop_u8(pi_receive_max(), 10) + prop_utf8(pi_content_type(), "json")
+    let conn = connect("dev-01", 60, true, "alice", "s3cret", props)
+    println("  len=" + str(len(conn)) + " hex=" + hexs(conn))
+
+    println("STEP 5 PUBLISH QoS1 + props:")
+    let pprops = prop_utf8(pi_content_type(), "text/plain")
+    let pubf = publish("home/livingroom/temp", 1, false, false, 42, pprops,
+                      bytes_of("21.5"))
+    println("  hex=" + hexs(pubf))
+
+    println("STEP 6 SUBSCRIBE + PING + DISCONNECT:")
+    let sub = subscribe(7, [["home/+/temp", 0x01], ["alerts/#", 0x02]])
+    println("  sub hex=" + hexs(sub))
+    println("  pingreq=" + hexs(pingreq()))
+    println("  disconnect(0x00)=" + hexs(disconnect(0)))
+
+    println("STEP 7 parse packets back:")
+    let wire = pingreq() + pubf
+    let p1 = parse_packet(wire, 0)
+    println("  pkt1 type=" + str(p1["type"]) + " consumed=" + str(p1["consumed"]))
+    let p2 = parse_packet(wire, p1["consumed"])
+    println("  pkt2 type=" + str(p2["type"]) + " flags=" + str(p2["flags"])
+            + " remaining=" + str(p2["remaining"]) + " body=" + str_of(p2["body"]))
+    let trunc = parse_packet(slice(pubf, 0, 5), 0)
+    println("  truncated -> " + str(trunc == nil))
+    println("PINNED_VECTORS: vi128=8001 vi16383=ff7f utf8MQTT=00044d515454 conn=10+varint+MQTT5 pub=32+topic+pid+props+body sub=82+pid+filters ping=c000 disc=e000+00")
+}
+
+main()
