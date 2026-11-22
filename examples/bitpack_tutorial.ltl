@@ -1,0 +1,57 @@
+// ===================================================================
+// examples/bitpack_tutorial.ltl
+// -------------------------------------------------------------------
+// Practical Application: High-Density Sensor Delta Compression using
+// 4-Lane Word Bitpacking and ZigZag Signed Encoding (stdlib/bitpack.ltl)
+// ===================================================================
+
+pub fn zigzag_encode(v) {
+    if v >= 0 {
+        return v * 2
+    }
+    return (-v * 2) - 1
+}
+
+pub fn zigzag_decode(z) {
+    if (z % 2) == 0 {
+        return z / 2
+    }
+    return -((z + 1) / 2)
+}
+
+pub fn pack_u8x4(b0, b1, b2, b3) {
+    return (b0 % 256) + ((b1 % 256) * 256) + ((b2 % 256) * 65536) + ((b3 % 256) * 16777216)
+}
+
+pub fn unpack_u8_lane(word, lane) {
+    let shift = 1
+    let i = 0
+    while i < lane {
+        shift = shift * 256
+        i = i + 1
+    }
+    return (word / shift) % 256
+}
+
+pub fn main() {
+    print("=== Sub-Byte Telemetry Delta Bitpacking ===")
+
+    // 4 signed sensor deltas: [-1, 1, -15, 42]
+    let z0 = zigzag_encode(-1)
+    let z1 = zigzag_encode(1)
+    let z2 = zigzag_encode(-15)
+    let z3 = zigzag_encode(42)
+
+    assert(z0 == 1 && z1 == 2 && z2 == 29 && z3 == 84, "ZigZag unsigned mapping")
+
+    let packed_word = pack_u8x4(z0, z1, z2, z3)
+    print(packed_word)
+
+    let d0 = zigzag_decode(unpack_u8_lane(packed_word, 0))
+    let d1 = zigzag_decode(unpack_u8_lane(packed_word, 1))
+    let d2 = zigzag_decode(unpack_u8_lane(packed_word, 2))
+    let d3 = zigzag_decode(unpack_u8_lane(packed_word, 3))
+
+    assert(d0 == -1 && d1 == 1 && d2 == -15 && d3 == 42, "Lossless 4-lane signed delta unpack")
+    print("All 4 signed sensor deltas packed into a single 32-bit word and recovered losslessly!")
+}

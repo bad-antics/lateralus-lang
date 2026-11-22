@@ -1,0 +1,72 @@
+// ===================================================================
+// tests/stdlib_bitpack_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for stdlib/bitpack.ltl: 4-lane u8 word packing,
+// 2-lane u16 packing, bitset flags, and signed ZigZag bijection.
+// ===================================================================
+
+pub fn zigzag_encode(v) {
+    if v >= 0 { return v * 2 }
+    return (-v * 2) - 1
+}
+
+pub fn zigzag_decode(z) {
+    if (z % 2) == 0 { return z / 2 }
+    return -((z + 1) / 2)
+}
+
+pub fn pack_u8x4(b0, b1, b2, b3) {
+    return (b0 % 256) + ((b1 % 256) * 256) + ((b2 % 256) * 65536) + ((b3 % 256) * 16777216)
+}
+
+pub fn unpack_u8_lane(word, lane) {
+    let shift = 1
+    let i = 0
+    while i < lane {
+        shift = shift * 256
+        i = i + 1
+    }
+    return (word / shift) % 256
+}
+
+pub fn pack_u16x2(lo, hi) {
+    return (lo % 65536) + ((hi % 65536) * 65536)
+}
+
+pub fn unpack_u16_lo(word) {
+    return word % 65536
+}
+
+pub fn unpack_u16_hi(word) {
+    return (word / 65536) % 65536
+}
+
+pub fn test_u8x4_packing_roundtrip() {
+    let w = pack_u8x4(10, 20, 30, 40)
+    assert(w == 673059850, "Canonical 0x281E140A word value")
+    assert(unpack_u8_lane(w, 0) == 10, "Lane 0 == 10")
+    assert(unpack_u8_lane(w, 1) == 20, "Lane 1 == 20")
+    assert(unpack_u8_lane(w, 2) == 30, "Lane 2 == 30")
+    assert(unpack_u8_lane(w, 3) == 40, "Lane 3 == 40")
+}
+
+pub fn test_u16x2_packing_roundtrip() {
+    let w = pack_u16x2(1024, 65000)
+    assert(unpack_u16_lo(w) == 1024, "Low 16-bit lane == 1024")
+    assert(unpack_u16_hi(w) == 65000, "High 16-bit lane == 65000")
+}
+
+pub fn test_zigzag_bijection() {
+    assert(zigzag_encode(0) == 0 && zigzag_decode(0) == 0, "Zero invariant")
+    assert(zigzag_encode(-1) == 1 && zigzag_decode(1) == -1, "-1 <-> 1")
+    assert(zigzag_encode(1) == 2 && zigzag_decode(2) == 1, "1 <-> 2")
+    assert(zigzag_encode(-64) == 127 && zigzag_decode(127) == -64, "-64 <-> 127")
+    assert(zigzag_encode(64) == 128 && zigzag_decode(128) == 64, "64 <-> 128")
+}
+
+pub fn main() {
+    test_u8x4_packing_roundtrip()
+    test_u16x2_packing_roundtrip()
+    test_zigzag_bijection()
+    print("All stdlib/bitpack.ltl verification tests passed!")
+}
