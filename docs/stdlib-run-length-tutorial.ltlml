@@ -1,0 +1,84 @@
+# stdlib.run_length tutorial
+
+This tutorial shows how to use `stdlib/run_length.ltl` for run-length encoding (RLE) with pinned vectors for both representations.
+
+## What RLE does
+
+RLE compresses sequences by replacing runs of equal values with `(value, count)` pairs. **Only adjacent equal values share a run**: if the same value appears again later after a different value, it becomes a new run.
+
+## API
+
+- `encode_pairs(xs: list) -> list`: returns `[[value, count], ...]`
+- `decode_pairs(rle: list) -> list`: expands pair runs back to the original list
+- `encode_packed(xs: list) -> list`: returns alternating `[value, count, value, count, ...]` (compact int form)
+- `decode_packed(packed: list) -> list`: expands packed runs
+- `ratio_permille(orig_len: int, rle_pair_count: int) -> int`: returns encoded-size ratio in permille (‰), where `1000` means same size as original by pair units (`pairs * 2 / orig_len`)
+
+## Pinned example vectors
+
+### 1) Adjacent runs only
+
+Input:
+```lateralus
+let xs = ["A", "A", "B", "A", "A", "A"]
+```
+
+Pairs encoding:
+```lateralus
+encode_pairs(xs) == [["A", 2], ["B", 1], ["A", 3]]
+```
+
+The later `"A"` values form a new run because they are separated by `"B"` (not adjacent to the first `"A"` run).
+
+Round-trip:
+```lateralus
+decode_pairs([["A", 2], ["B", 1], ["A", 3]]) == ["A", "A", "B", "A", "A", "A"]
+```
+
+### 2) Packed encoding
+
+Input:
+```lateralus
+let ints = [7, 7, 7, 1, 1, 9]
+```
+
+Packed encoding:
+```lateralus
+encode_packed(ints) == [7, 3, 1, 2, 9, 1]
+```
+
+Round-trip:
+```lateralus
+decode_packed([7, 3, 1, 2, 9, 1]) == [7, 7, 7, 1, 1, 9]
+```
+
+### 3) `ratio_permille`
+
+For `xs` above, original length is `6` and pair count is `3`:
+
+```lateralus
+ratio_permille(6, 3) == 1000
+```
+
+`1000‰` means no size reduction in pair units (`3 runs * 2 = 6`). RLE can also add overhead when values do not repeat adjacently:
+
+```lateralus
+let noisy = [1, 2, 3]
+encode_pairs(noisy) == [[1,1], [2,1], [3,1]]
+ratio_permille(3, 3) == 2000
+```
+
+`2000‰` indicates the encoded representation is twice the original length in pair units.
+
+## Runnable example
+
+See `examples/stdlib_run_length_tutorial.ltl` for a self-checking script that verifies:
+- adjacency-only runs and pairs round-trip
+- packed encoding and packed round-trip
+- `ratio_permille` for neutral and overhead cases
+- prints `PINNED_VECTORS_OK` when all checks pass
+
+Run:
+```bash
+lateralus run examples/stdlib_run_length_tutorial.ltl
+```

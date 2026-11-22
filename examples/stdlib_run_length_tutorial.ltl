@@ -1,0 +1,77 @@
+// stdlib run_length tutorial example
+// Demonstrates encode_pairs/decode_pairs, encode_packed/decode_packed,
+// adjacency-only runs, round-trips, and ratio_permille.
+
+import stdlib.run_length
+
+fn assert_eq_list(actual: list, expected: list, label: str) {
+    if len(actual) != len(expected) {
+        print("[FAIL] " + label + " length mismatch")
+        return
+    }
+    let i = 0
+    while i < len(actual) {
+        if actual[i] != expected[i] {
+            print("[FAIL] " + label + " at " + str(i))
+            return
+        }
+        i = i + 1
+    }
+    print("[PASS] " + label)
+}
+
+fn assert_eq_pairs(actual: list, expected: list, label: str) {
+    if len(actual) != len(expected) {
+        print("[FAIL] " + label + " pair count mismatch")
+        return
+    }
+    let i = 0
+    while i < len(actual) {
+        let a = actual[i]
+        let b = expected[i]
+        if a[0] != b[0] || a[1] != b[1] {
+            print("[FAIL] " + label + " at pair " + str(i))
+            return
+        }
+        i = i + 1
+    }
+    print("[PASS] " + label)
+}
+
+pub fn main() {
+    // Only adjacent equal values form a run. The "A" values separated by "B"
+    // remain separate runs.
+    let xs = ["A", "A", "B", "A", "A", "A"]
+    let pairs = encode_pairs(xs)
+    let expected_pairs = [["A", 2], ["B", 1], ["A", 3]]
+    assert_eq_pairs(pairs, expected_pairs, "adjacent runs only")
+    assert_eq_list(decode_pairs(pairs), xs, "pairs round-trip")
+
+    // Packed encoding stores alternating value,count integers for compact int streams.
+    let ints = [7, 7, 7, 1, 1, 9]
+    let packed = encode_packed(ints)
+    let expected_packed = [7, 3, 1, 2, 9, 1]
+    assert_eq_list(packed, expected_packed, "packed encoding")
+    assert_eq_list(decode_packed(packed), ints, "packed round-trip")
+
+    // ratio_permille compares encoded size (2 units per run pair) to original length.
+    // 3 runs * 2 * 1000 / 6 original = 1000 permille (no size reduction here).
+    let ratio = ratio_permille(len(xs), len(pairs))
+    if ratio == 1000 {
+        print("[PASS] ratio_permille")
+    } else {
+        print("[FAIL] ratio_permille got " + str(ratio))
+    }
+
+    // A case with overhead: many non-adjacent/single values expand to 2000 permille.
+    let noisy = [1, 2, 3]
+    let noisy_pairs = encode_pairs(noisy)
+    let noisy_ratio = ratio_permille(len(noisy), len(noisy_pairs))
+    if noisy_ratio == 2000 {
+        print("[PASS] overhead ratio_permille")
+    } else {
+        print("[FAIL] overhead ratio_permille got " + str(noisy_ratio))
+    }
+
+    print("PINNED_VECTORS_OK")
+}
