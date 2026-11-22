@@ -380,12 +380,8 @@ class Lexer:
             self._read_char(line, col)
             return
 
-        # Numbers
-        if ch.isdigit() or (ch == "-" and self._peek().isdigit()
-                            and not self._tokens
-                            or ch == "0" and self._peek() in "xXbB"):
-            self._read_number(line, col)
-            return
+        # Numbers (hex/binary literals start with the digit 0). A leading
+        # "-" is always the MINUS operator; the parser handles negation.
         if ch.isdigit():
             self._read_number(line, col)
             return
