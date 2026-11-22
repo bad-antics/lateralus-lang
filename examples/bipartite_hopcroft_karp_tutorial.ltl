@@ -1,0 +1,199 @@
+// ===================================================================
+// examples/bipartite_hopcroft_karp_tutorial.ltl
+// -------------------------------------------------------------------
+// Practical Application: Cloud Cluster Microservice Compute Job to
+// Hardware Acceleration Node Assignment using Hopcroft-Karp.
+// ===================================================================
+
+pub fn new_bipartite_graph(nu) {
+    let adj = dict()
+    let i = 0
+    while i < nu {
+        let list = dict()
+        list["len"] = 0
+        adj[i] = list
+        i = i + 1
+    }
+    return adj
+}
+
+pub fn add_bipartite_edge(adj, u, v) {
+    let l_u = adj[u]
+    let sz = l_u["len"]
+    l_u[sz] = v
+    l_u["len"] = sz + 1
+}
+
+pub fn bfs_hopcroft(adj, nu, nv, pair_u, pair_v, dist_u, state) {
+    let inf = 1000000000
+    let queue = dict()
+    let head = 0
+    let tail = 0
+
+    let u = 0
+    while u < nu {
+        if pair_u[u] == -1 {
+            dist_u[u] = 0
+            queue[tail] = u
+            tail = tail + 1
+        } else {
+            dist_u[u] = inf
+        }
+        u = u + 1
+    }
+
+    state["dist_nil"] = inf
+
+    while head < tail {
+        u = queue[head]
+        head = head + 1
+
+        if dist_u[u] < state["dist_nil"] {
+            let neighbors = adj[u]
+            let deg = neighbors["len"]
+            let i = 0
+            while i < deg {
+                let v = neighbors[i]
+                let matched_u = pair_v[v]
+                if matched_u == -1 {
+                    state["dist_nil"] = dist_u[u] + 1
+                } else {
+                    if dist_u[matched_u] == inf {
+                        dist_u[matched_u] = dist_u[u] + 1
+                        queue[tail] = matched_u
+                        tail = tail + 1
+                    }
+                }
+                i = i + 1
+            }
+        }
+    }
+
+    if state["dist_nil"] != inf {
+        return 1
+    }
+    return 0
+}
+
+pub fn dfs_hopcroft(u, adj, pair_u, pair_v, dist_u, state) {
+    let inf = 1000000000
+    let neighbors = adj[u]
+    let deg = neighbors["len"]
+    let i = 0
+    while i < deg {
+        let v = neighbors[i]
+        let matched_u = pair_v[v]
+
+        if matched_u == -1 {
+            if state["dist_nil"] == dist_u[u] + 1 {
+                pair_v[v] = u
+                pair_u[u] = v
+                return 1
+            }
+        } else {
+            if dist_u[matched_u] == dist_u[u] + 1 {
+                if dfs_hopcroft(matched_u, adj, pair_u, pair_v, dist_u, state) == 1 {
+                    pair_v[v] = u
+                    pair_u[u] = v
+                    return 1
+                }
+            }
+        }
+        i = i + 1
+    }
+
+    dist_u[u] = inf
+    return 0
+}
+
+pub fn max_bipartite_matching(adj, nu, nv) {
+    let pair_u = dict()
+    let dist_u = dict()
+    let u = 0
+    while u < nu {
+        pair_u[u] = -1
+        dist_u[u] = 0
+        u = u + 1
+    }
+
+    let pair_v = dict()
+    let v = 0
+    while v < nv {
+        pair_v[v] = -1
+        v = v + 1
+    }
+
+    let state = dict()
+    state["dist_nil"] = 1000000000
+
+    let matching = 0
+    while bfs_hopcroft(adj, nu, nv, pair_u, pair_v, dist_u, state) == 1 {
+        u = 0
+        while u < nu {
+            if pair_u[u] == -1 {
+                if dfs_hopcroft(u, adj, pair_u, pair_v, dist_u, state) == 1 {
+                    matching = matching + 1
+                }
+            }
+            u = u + 1
+        }
+    }
+
+    let result = dict()
+    result["size"] = matching
+    result["pair_u"] = pair_u
+    result["pair_v"] = pair_v
+    return result
+}
+
+pub fn main() {
+    print("=== Kubernetes Cluster Workload Job Dispatcher ===")
+
+    // Left Partition: 5 AI/ML Jobs (Job 0: Vision, Job 1: NLP, Job 2: Graph, Job 3: Analytics, Job 4: Audio)
+    // Right Partition: 5 Cloud Worker Nodes (Node 0: H100 GPU, Node 1: A100 GPU, Node 2: TPU v5e, Node 3: HighMem, Node 4: ARM Compute)
+    let n_jobs = 5
+    let n_nodes = 5
+    let cluster = new_bipartite_graph(n_jobs)
+
+    // Job Compatibility constraints:
+    // Job 0 (Vision) can run on Node 0 (H100) or Node 1 (A100)
+    add_bipartite_edge(cluster, 0, 0)
+    add_bipartite_edge(cluster, 0, 1)
+
+    // Job 1 (NLP) can run on Node 0 (H100) or Node 2 (TPU)
+    add_bipartite_edge(cluster, 1, 0)
+    add_bipartite_edge(cluster, 1, 2)
+
+    // Job 2 (Graph) can run on Node 1 (A100) or Node 3 (HighMem)
+    add_bipartite_edge(cluster, 2, 1)
+    add_bipartite_edge(cluster, 2, 3)
+
+    // Job 3 (Analytics) can run on Node 3 (HighMem) or Node 4 (ARM)
+    add_bipartite_edge(cluster, 3, 3)
+    add_bipartite_edge(cluster, 3, 4)
+
+    // Job 4 (Audio) can run on Node 2 (TPU) or Node 4 (ARM)
+    add_bipartite_edge(cluster, 4, 2)
+    add_bipartite_edge(cluster, 4, 4)
+
+    print("Computing optimal non-conflicting bipartite schedule via Hopcroft-Karp...")
+    let allocation = max_bipartite_matching(cluster, n_jobs, n_nodes)
+    let total_scheduled = allocation["size"]
+
+    print("Total AI/ML compute jobs scheduled concurrently:")
+    print(total_scheduled)
+
+    let j = 0
+    while j < n_jobs {
+        let assigned_node = allocation["pair_u"][j]
+        print("Job allocated to Worker Node:")
+        print(j)
+        print(assigned_node)
+        j = j + 1
+    }
+
+    // Verify 100% capacity utilization: all 5 jobs scheduled without conflict
+    assert(total_scheduled == 5, "Perfect schedule achieves 5 job allocations")
+
+    print("Cloud cluster workload dispatch completed in optimal O(E sqrt(V)) time!")
+}
