@@ -23,7 +23,18 @@ standalone (add __main__ guard and import shims for the ltl stdlib).
 """
 from __future__ import annotations
 
+import keyword
 from typing import List, Optional
+
+_PY_KEYWORDS = set(keyword.kwlist) | {"type", "match", "case"}
+
+def _safe_ident(name: str) -> str:
+    if not name:
+        return name
+    if name in _PY_KEYWORDS:
+        return f"{name}_"
+    return name
+
 
 from ..ast_nodes import (
     AssignStmt,
@@ -924,7 +935,8 @@ class PythonTranspiler(ASTVisitor):
 
         params = self._render_params(node.params)
         kw = "async def" if node.is_async else "def"
-        self._w += f"{kw} {node.name}({params}):"
+        fn_name = _safe_ident(node.name)
+        self._w += f"{kw} {fn_name}({params}):"
         if node.body and node.body.stmts:
             with self._w.indent():
                 self._emit_fn_body(node.body)
@@ -1037,7 +1049,7 @@ class PythonTranspiler(ASTVisitor):
     def _render_params(self, params) -> str:
         parts = []
         for p in params:
-            s = ("*" if p.vararg else "") + p.name
+            s = ("*" if p.vararg else "") + _safe_ident(p.name)
             if p.type_:
                 s += f": {self._py_type(p.type_.name)}"
             if p.default:
@@ -1049,7 +1061,7 @@ class PythonTranspiler(ASTVisitor):
         """Render params for lambda expressions — no type annotations allowed in Python."""
         parts = []
         for p in params:
-            s = ("*" if p.vararg else "") + p.name
+            s = ("*" if p.vararg else "") + _safe_ident(p.name)
             if p.default:
                 s += f" = {self._expr(p.default)}"
             parts.append(s)
@@ -1059,10 +1071,11 @@ class PythonTranspiler(ASTVisitor):
         val = self._expr(node.value) if node.value else "None"
         # Flush hoisted block-lambdas before the variable that uses them
         self._flush_hoisted_lambdas()
+        name = _safe_ident(node.name)
         if node.type_:
-            self._w += f"{node.name}: {self._py_type(node.type_.name)} = {val}"
+            self._w += f"{name}: {self._py_type(node.type_.name)} = {val}"
         else:
-            self._w += f"{node.name} = {val}"
+            self._w += f"{name} = {val}"
 
     # ── statements ────────────────────────────────────────────────────────────
 
@@ -1147,7 +1160,7 @@ class PythonTranspiler(ASTVisitor):
             node.body.accept(self)
 
     def visit_ForStmt(self, node: ForStmt):
-        self._w += f"for {node.var} in {self._expr(node.iter)}:"
+        self._w += f"for {_safe_ident(node.var)} in {self._expr(node.iter)}:"
         with self._w.indent():
             node.body.accept(self)
 
@@ -1466,7 +1479,7 @@ class PythonTranspiler(ASTVisitor):
             if node.kind == "str":    return repr(node.value)
             return repr(node.value)
         if isinstance(node, Ident):
-            return node.name
+            return _safe_ident(node.name)
         if isinstance(node, BinOp):
             if node.op == "|>":
                 left = self._expr(node.left)
@@ -1656,7 +1669,7 @@ class PythonTranspiler(ASTVisitor):
         if isinstance(node, WildcardPattern):
             return "_"
         if isinstance(node, BindingPattern):
-            return node.name
+            return _safe_ident(node.name)
         if isinstance(node, LiteralPattern):
             return self._expr(node.value)
         if isinstance(node, EnumVariantPattern):
@@ -1891,7 +1904,7 @@ class PythonTranspiler(ASTVisitor):
 
     def visit_AsyncForStmt(self, node: AsyncForStmt):
         """async for x in stream { ... } → async for x in stream: ..."""
-        self._w += f"async for {node.var} in {self._expr(node.iter)}:"
+        self._w += f"async for {_safe_ident(node.var)} in {self._expr(node.iter)}:"
         with self._w.indent():
             if node.body:
                 node.body.accept(self)
