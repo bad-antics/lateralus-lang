@@ -1,0 +1,75 @@
+// ===================================================================
+// examples/dict_encoding_tutorial.ltl
+//
+// Tutorial: Columnar Dictionary Encoding with Lateralus
+// stdlib/dict_encoding.ltl.
+//
+// Demonstrates:
+// 1. Columnar deduplication of low-cardinality data (regions & statuses).
+// 2. Extracting distinct dictionary symbols in first-seen order.
+// 3. Bit-width estimation for compact index packing (Parquet/Arrow model).
+// 4. Memory footprint comparison (uncompressed strings vs. dictionary).
+// 5. Perfect lossless round-trip reconstruction via decode.
+// ===================================================================
+
+import dict_encoding
+
+pub fn main() {
+    print("=== Lateralus Columnar Dictionary Encoding Tutorial ===")
+
+    // 1. Sample telemetry dataset with low cardinality (Cloud Regions)
+    let regions = [
+        "us-east-1", "us-west-2", "eu-central-1", "us-east-1",
+        "us-west-2", "us-east-1", "ap-southeast-1", "eu-central-1",
+        "us-east-1", "us-east-1", "us-west-2", "ap-southeast-1"
+    ]
+    let total_rows = len(regions)
+    print("Total rows in column: " + str(total_rows))
+
+    // 2. Perform Dictionary Encoding
+    let enc = dict_encoding.encode(regions)
+    let dict_symbols = enc["dictionary"]
+    let indices = enc["indices"]
+
+    print("Dictionary entries (first-seen order):")
+    let d = 0
+    while d < len(dict_symbols) {
+        print("  [" + str(d) + "] -> " + str(dict_symbols[d]))
+        d = d + 1
+    }
+
+    print("Compact index stream:")
+    print("  " + str(indices))
+
+    // 3. Inspect cardinality and optimal bit-width
+    let card = dict_encoding.cardinality(enc)
+    let bit_width = dict_encoding.index_bit_width(enc)
+    print("Cardinality (unique symbols): " + str(card))
+    print("Index bit-width (ceil(log2(N))): " + str(bit_width) + " bits per row")
+
+    // 4. Footprint calculation:
+    // Raw strings: ~12 bytes average per string * 12 = 144 bytes
+    // Dictionary encoded: 4 strings (~48 bytes) + 12 indices @ 2 bits = ~48 bytes + 3 bytes = 51 bytes (~65% reduction)
+    print("Estimated index storage for " + str(total_rows) + " rows: " + str((total_rows * bit_width) / 8) + " bytes")
+
+    // 5. Lossless Decoding and verification
+    let decoded = dict_encoding.decode(enc)
+    print("Decoding verified: " + str(len(decoded) == total_rows))
+
+    let match_count = 0
+    let i = 0
+    while i < total_rows {
+        if regions[i] == decoded[i] {
+            match_count = match_count + 1
+        }
+        i = i + 1
+    }
+
+    if match_count == total_rows {
+        print("PASS: Lossless reconstruction 100% matches original dataset!")
+    } else {
+        print("FAIL: Mismatch during dictionary decode.")
+    }
+
+    print("=== Columnar dictionary encoding completed successfully ===")
+}
