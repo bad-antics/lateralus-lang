@@ -1,0 +1,56 @@
+// Lateralus Standard Library Example: ZeroMQ Z85 (RFC 32) Encoding
+// Demonstrates efficient 85-radix frame encoding with zero string escaping requirements.
+
+fn z85_alphabet() -> string {
+    return "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-:+=^!/*?&<>()[]{}@%$#";
+}
+
+fn z85_char(index: int) -> string {
+    let alpha = z85_alphabet();
+    if index >= 0 && index < 85 {
+        return slice(alpha, index, index + 1);
+    }
+    return "0";
+}
+
+// Encodes 32-bit unsigned word using base-85 division
+fn encode_word(val: int) -> string {
+    let mut v = val;
+    let c0 = v / 52200625;
+    v = v % 52200625;
+
+    let c1 = v / 614125;
+    v = v % 614125;
+
+    let c2 = v / 7225;
+    v = v % 7225;
+
+    let c3 = v / 85;
+    let c4 = v % 85;
+
+    return z85_char(c0) + z85_char(c1) + z85_char(c2) + z85_char(c3) + z85_char(c4);
+}
+
+fn main() -> int {
+    println("=== Lateralus ZeroMQ Z85 (RFC 32) Frame Demo ===");
+
+    // Example 1: Stream encoding an 8-byte buffer
+    // Block 1 (4 bytes): Decodes to "Hello"
+    // Block 2 (4 bytes): Decodes to "World"
+    let word1 = 2252868719; // 0x864FD26F
+    let word2 = 3042572123; // 0xB559F75B
+
+    let chunk1 = encode_word(word1);
+    let chunk2 = encode_word(word2);
+    let full_frame = chunk1 + chunk2;
+
+    println("Block 1 Encoded (5 chars): " + chunk1);
+    println("Block 2 Encoded (5 chars): " + chunk2);
+    println("Full Z85 Wire Frame: " + full_frame);
+
+    // Assert RFC 32 standard golden text
+    assert(full_frame == "HelloWorld");
+    println("Golden Vector Verified: 8 bytes compressed into 10 characters (25% expansion vs Base64 33.3%)!");
+
+    return 0;
+}
