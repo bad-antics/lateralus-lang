@@ -1,0 +1,141 @@
+// ===================================================================
+// examples/z_algorithm_tutorial.ltl
+// -------------------------------------------------------------------
+// Practical Application: Genomic DNA Tandem Repeat Detection &
+// Sub-linear Pattern Verification via Gusfield's Z-Algorithm.
+// ===================================================================
+
+pub fn compute_z(chars, n) {
+    let z = dict()
+    let idx = 0
+    while idx < n {
+        z[idx] = 0
+        idx = idx + 1
+    }
+    if n == 0 {
+        return z
+    }
+    z[0] = n
+
+    let l = 0
+    let r = 0
+    let i = 1
+    while i < n {
+        if i <= r {
+            let k = i - l
+            let remaining = r - i + 1
+            if z[k] < remaining {
+                z[i] = z[k]
+            } else {
+                l = i
+                while r < n {
+                    if chars[r] != chars[r - l] {
+                        break
+                    }
+                    r = r + 1
+                }
+                z[i] = r - l
+                r = r - 1
+            }
+        } else {
+            l = i
+            r = i
+            while r < n {
+                if chars[r] != chars[r - l] {
+                    break
+                }
+                r = r + 1
+            }
+            z[i] = r - l
+            r = r - 1
+        }
+        i = i + 1
+    }
+    return z
+}
+
+pub fn z_pattern_match(pattern, pat_len, text, text_len) {
+    let n = pat_len + 1 + text_len
+    let combined = dict()
+
+    let i = 0
+    while i < pat_len {
+        combined[i] = pattern[i]
+        i = i + 1
+    }
+    combined[pat_len] = "#"
+
+    let j = 0
+    while j < text_len {
+        combined[pat_len + 1 + j] = text[j]
+        j = j + 1
+    }
+
+    let z = compute_z(combined, n)
+    let matches = dict()
+    matches["count"] = 0
+
+    let k = pat_len + 1
+    while k < n {
+        if z[k] == pat_len {
+            let match_idx = k - (pat_len + 1)
+            let curr_cnt = matches["count"]
+            matches[curr_cnt] = match_idx
+            matches["count"] = curr_cnt + 1
+        }
+        k = k + 1
+    }
+    return matches
+}
+
+pub fn z_find_smallest_period(chars, n) {
+    if n <= 1 {
+        return n
+    }
+    let z = compute_z(chars, n)
+    let p = 1
+    while p < n {
+        if n % p == 0 {
+            if z[p] == n - p {
+                return p
+            }
+        }
+        p = p + 1
+    }
+    return n
+}
+
+pub fn run_dna_tandem_repeat_pipeline() {
+    // Genomic Microsatellite DNA: "CAGCAGCAGCAG" (length 12)
+    let dna = dict()
+    dna[0] = "C"
+    dna[1] = "A"
+    dna[2] = "G"
+    dna[3] = "C"
+    dna[4] = "A"
+    dna[5] = "G"
+    dna[6] = "C"
+    dna[7] = "A"
+    dna[8] = "G"
+    dna[9] = "C"
+    dna[10] = "A"
+    dna[11] = "G"
+
+    // Tandem repeat unit size (expected: 3 -> "CAG")
+    let tandem_unit_len = z_find_smallest_period(dna, 12)
+
+    // Search primer target "AGCA" in chromosome sequence
+    let primer = dict()
+    primer[0] = "A"
+    primer[1] = "G"
+    primer[2] = "C"
+    primer[3] = "A"
+
+    let primer_matches = z_pattern_match(primer, 4, dna, 12)
+
+    let report = dict()
+    report["tandem_unit_len"] = tandem_unit_len
+    report["primer_matches_count"] = primer_matches["count"]
+    report["first_match_idx"] = primer_matches[0]
+    return report
+}
