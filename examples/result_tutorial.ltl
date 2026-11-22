@@ -1,0 +1,256 @@
+// ===================================================================
+// examples/result_tutorial.ltl — stdlib/result.ltl tutorial companion.
+// Runnable tour of Result (Ok/Err) and Option (Some/None) types:
+// constructors, predicates, mapping, chaining, interop, and list
+// helpers (collect_results/partition_results).
+// Self-contained — module code inlined with documented fixes:
+//   * Map literals like {"_tag": "Ok", ...} do not parse in this
+//     version; Results/Options are built by imperative map writes.
+//   * `"_tag" in v` membership is unsupported; keys()+contains() is
+//     used in is_result/is_option instead.
+//   * try_call/try_call_with are omitted: try/catch transpiles to
+//     invalid Python on the `run` backend (bare `catch` token).
+// ===================================================================
+
+// -- Result constructors -----------------------------------------------------
+
+fn _result(tag: str, value, error) -> map {
+    let m = {}
+    m["_tag"] = tag
+    if tag == "Ok" {
+        m["value"] = value
+        m["is_ok"] = true
+        m["is_err"] = false
+    } else {
+        m["error"] = error
+        m["is_ok"] = false
+        m["is_err"] = true
+    }
+    return m
+}
+
+fn ok(value) -> map {
+    return _result("Ok", value, none)
+}
+
+fn err(error) -> map {
+    return _result("Err", none, error)
+}
+
+// -- Result operations --------------------------------------------------------
+
+fn is_ok(r: map) -> bool {
+    return r["_tag"] == "Ok"
+}
+
+fn is_err(r: map) -> bool {
+    return r["_tag"] == "Err"
+}
+
+fn unwrap(r: map) {
+    if r["_tag"] == "Ok" { return r["value"] }
+    throw ValueError("unwrap called on Err")
+}
+
+fn unwrap_or(r: map, default) {
+    if r["_tag"] == "Ok" { return r["value"] }
+    return default
+}
+
+fn unwrap_err(r: map) {
+    if r["_tag"] == "Err" { return r["error"] }
+    throw ValueError("unwrap_err called on Ok")
+}
+
+fn map_result(r: map, f) -> map {
+    if r["_tag"] == "Ok" { return ok(f(r["value"])) }
+    return r
+}
+
+fn map_err(r: map, f) -> map {
+    if r["_tag"] == "Err" { return err(f(r["error"])) }
+    return r
+}
+
+fn and_then(r: map, f) -> map {
+    if r["_tag"] == "Ok" { return f(r["value"]) }
+    return r
+}
+
+fn or_else(r: map, f) -> map {
+    if r["_tag"] == "Err" { return f(r["error"]) }
+    return r
+}
+
+fn flatten(r: map) -> map {
+    if r["_tag"] == "Ok" && r["value"]["_tag"] != none {
+        return r["value"]
+    }
+    return r
+}
+
+fn is_result(v) -> bool {
+    return contains(keys(v), "_tag")
+        && (v["_tag"] == "Ok" || v["_tag"] == "Err")
+}
+
+// -- Option constructors ------------------------------------------------------
+
+fn _option(tag: str, value) -> map {
+    let m = {}
+    m["_tag"] = tag
+    if tag == "Some" {
+        m["value"] = value
+        m["is_some"] = true
+        m["is_none"] = false
+    } else {
+        m["is_some"] = false
+        m["is_none"] = true
+    }
+    return m
+}
+
+fn some(value) -> map {
+    return _option("Some", value)
+}
+
+fn none_opt() -> map {
+    return _option("None", none)
+}
+
+// -- Option operations --------------------------------------------------------
+
+fn is_some(o: map) -> bool {
+    return o["_tag"] == "Some"
+}
+
+fn is_none_opt(o: map) -> bool {
+    return o["_tag"] == "None"
+}
+
+fn unwrap_option(o: map) {
+    if o["_tag"] == "Some" { return o["value"] }
+    throw ValueError("unwrap called on None")
+}
+
+fn unwrap_option_or(o: map, default) {
+    if o["_tag"] == "Some" { return o["value"] }
+    return default
+}
+
+fn map_option(o: map, f) -> map {
+    if o["_tag"] == "Some" { return some(f(o["value"])) }
+    return o
+}
+
+fn option_and_then(o: map, f) -> map {
+    if o["_tag"] == "Some" { return f(o["value"]) }
+    return o
+}
+
+fn option_or(o: map, alternative: map) -> map {
+    if o["_tag"] == "Some" { return o }
+    return alternative
+}
+
+fn option_to_result(o: map, error) -> map {
+    if o["_tag"] == "Some" { return ok(o["value"]) }
+    return err(error)
+}
+
+fn result_to_option(r: map) -> map {
+    if r["_tag"] == "Ok" { return some(r["value"]) }
+    return none_opt()
+}
+
+fn is_option(v) -> bool {
+    return contains(keys(v), "_tag")
+        && (v["_tag"] == "Some" || v["_tag"] == "None")
+}
+
+// -- Collection helpers -------------------------------------------------------
+
+fn collect_results(results: list) -> map {
+    let values = []
+    for r in results {
+        if r["_tag"] == "Err" { return r }
+        values = push(values, r["value"])
+    }
+    return ok(values)
+}
+
+fn partition_results(results: list) -> map {
+    let oks = []
+    let errs = []
+    for r in results {
+        if r["_tag"] == "Ok" {
+            oks = push(oks, r["value"])
+        } else {
+            errs = push(errs, r["error"])
+        }
+    }
+    let out = {}
+    out["oks"] = oks
+    out["errs"] = errs
+    return out
+}
+
+// ===================================================================
+// Demo — pinned vectors
+// ===================================================================
+
+fn demo() {
+    // Results
+    let good = ok(21)
+    let bad = err("div by zero")
+    println("is_ok(good)=" + to_str(is_ok(good)))
+    println("is_err(bad)=" + to_str(is_err(bad)))
+    println("unwrap(good)*2=" + to_str(unwrap(good) * 2))
+    println("unwrap_or(bad, -1)=" + to_str(unwrap_or(bad, -1)))
+    println("unwrap_err(bad)=" + to_str(unwrap_err(bad)))
+    println("is_result(good)=" + to_str(is_result(good)))
+    let plain = {}
+    plain["x"] = 1
+    println("is_result(plain_map)=" + to_str(is_result(plain)))
+
+    // Mapping & chaining
+    let doubled = map_result(good, fn(x) { return x * 2 })
+    println("map_result=" + to_str(unwrap(doubled)))
+    let healed = or_else(bad, fn(e) { return ok(to_str(e) + "!") })
+    println("or_else=" + to_str(unwrap(healed)))
+    let chained = ok(5) |> and_then(fn(x) { return ok(x + 1) }) |> and_then(fn(x) { return ok(x * 10) })
+    println("and_then_chain=" + to_str(unwrap(chained)))
+    let nested = ok(ok(7))
+    println("flatten=" + to_str(unwrap(flatten(nested))))
+
+    // Options
+    let s = some(99)
+    let n = none_opt()
+    println("is_some(s)=" + to_str(is_some(s)))
+    println("is_none(n)=" + to_str(is_none_opt(n)))
+    println("unwrap_option_or(n,0)=" + to_str(unwrap_option_or(n, 0)))
+    println("map_option=" + to_str(unwrap_option(map_option(s, fn(x) { return x + 1 }))))
+    println("option_and_then_none=" + to_str(is_none_opt(option_and_then(n, fn(x) { return some(x) }))))
+    println("option_or=" + to_str(unwrap_option(option_or(n, s))))
+    println("is_option(s)=" + to_str(is_option(s)))
+
+    // Interop
+    let r_from_o = option_to_result(n, "missing")
+    println("option_to_result=" + to_str(unwrap_err(r_from_o)))
+    let o_from_r = result_to_option(good)
+    println("result_to_option=" + to_str(unwrap_option(o_from_r)))
+
+    // Collections
+    let results = [ok(1), ok(2), ok(3)]
+    let collected = collect_results(results)
+    println("collect_results=" + to_str(unwrap(collected)))
+    let mixed = [ok(1), err("e1"), ok(3)]
+    let part = partition_results(mixed)
+    println("partition_oks=" + to_str(part["oks"]))
+    println("partition_errs=" + to_str(part["errs"]))
+
+    println("PINNED_VECTORS")
+    println("RESULT_DEMO_OK")
+}
+
+demo()
