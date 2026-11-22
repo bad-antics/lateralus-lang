@@ -1,0 +1,200 @@
+// ===================================================================
+// examples/pairing_heap_tutorial.ltl
+// -------------------------------------------------------------------
+// High-Throughput Event-Driven Microsecond Scheduler using Pairing Heap
+// -------------------------------------------------------------------
+// Demonstration of Pairing Heap prioritizing asynchronous microservice
+// task execution deadlines with O(1) job ingestion and amortized
+// O(log n) dispatching order.
+// ===================================================================
+
+pub fn pheap_create() -> dict {
+    let mut heap = {}
+    let mut val = []
+    let mut child = []
+    let mut sibling = []
+
+    val.push(0)
+    child.push(0)
+    sibling.push(0)
+
+    heap["val"] = val
+    heap["child"] = child
+    heap["sibling"] = sibling
+    heap["root"] = 0
+    heap["size"] = 0
+    return heap
+}
+
+pub fn pheap_is_empty(heap: dict) -> bool {
+    let root = heap["root"]
+    return root == 0
+}
+
+pub fn pheap_find_min(heap: dict) -> int {
+    let root = heap["root"]
+    if root == 0 {
+        return -1
+    }
+    let val = heap["val"]
+    return val[root]
+}
+
+pub fn pheap_meld_nodes(heap: dict, u: int, v: int) -> int {
+    if u == 0 {
+        return v
+    }
+    if v == 0 {
+        return u
+    }
+
+    let val = heap["val"]
+    let mut child = heap["child"]
+    let mut sibling = heap["sibling"]
+
+    if val[u] <= val[v] {
+        sibling[v] = child[u]
+        child[u] = v
+        sibling[u] = 0
+        heap["child"] = child
+        heap["sibling"] = sibling
+        return u
+    } else {
+        sibling[u] = child[v]
+        child[v] = u
+        sibling[v] = 0
+        heap["child"] = child
+        heap["sibling"] = sibling
+        return v
+    }
+}
+
+pub fn pheap_insert(heap: dict, key: int) -> int {
+    let mut val = heap["val"]
+    let mut child = heap["child"]
+    let mut sibling = heap["sibling"]
+
+    let node_idx = val.len()
+    val.push(key)
+    child.push(0)
+    sibling.push(0)
+
+    heap["val"] = val
+    heap["child"] = child
+    heap["sibling"] = sibling
+
+    let root = heap["root"]
+    let new_root = pheap_meld_nodes(heap, root, node_idx)
+    heap["root"] = new_root
+
+    let size = heap["size"]
+    heap["size"] = size + 1
+    return node_idx
+}
+
+pub fn pheap_delete_min(heap: dict) -> int {
+    let root = heap["root"]
+    if root == 0 {
+        return -1
+    }
+
+    let val = heap["val"]
+    let min_val = val[root]
+
+    let child = heap["child"]
+    let first_child = child[root]
+
+    if first_child == 0 {
+        heap["root"] = 0
+        let size = heap["size"]
+        heap["size"] = size - 1
+        return min_val
+    }
+
+    let mut children = []
+    let mut curr = first_child
+    let mut sibling = heap["sibling"]
+
+    while curr != 0 {
+        let nxt = sibling[curr]
+        sibling[curr] = 0
+        children.push(curr)
+        curr = nxt
+    }
+    heap["sibling"] = sibling
+
+    // Pass 1: Left-to-right pairwise meld
+    let mut paired = []
+    let num_children = children.len()
+    let mut i = 0
+    while i < num_children {
+        if i + 1 < num_children {
+            let m = pheap_meld_nodes(heap, children[i], children[i + 1])
+            paired.push(m)
+            i = i + 2
+        } else {
+            paired.push(children[i])
+            i = i + 1
+        }
+    }
+
+    // Pass 2: Right-to-left cascade accumulation
+    let num_paired = paired.len()
+    let mut new_root = paired[num_paired - 1]
+    let mut j = num_paired - 2
+    while j >= 0 {
+        new_root = pheap_meld_nodes(heap, paired[j], new_root)
+        j = j - 1
+    }
+
+    heap["root"] = new_root
+    let size = heap["size"]
+    heap["size"] = size - 1
+    return min_val
+}
+
+// -------------------------------------------------------------------
+// Pipeline Demo: Asynchronous Event Dispatcher Simulation
+// -------------------------------------------------------------------
+
+pub fn simulate_event_dispatcher() -> bool {
+    // Priority queue of scheduled cron execution offsets (in milliseconds)
+    let scheduler = pheap_create()
+
+    // Rapid batch ingestion of unsorted cron jobs (O(1) per task)
+    pheap_insert(scheduler, 500)   // DB replication sync
+    pheap_insert(scheduler, 120)   // Heartbeat probe
+    pheap_insert(scheduler, 1500)  // Metric flush
+    pheap_insert(scheduler, 50)    // Urgent packet retransmission
+    pheap_insert(scheduler, 300)   // Cache eviction pass
+    pheap_insert(scheduler, 50)    // High priority alarm check
+
+    // Earliest event should be 50ms
+    if pheap_find_min(scheduler) != 50 {
+        return false
+    }
+
+    // Dispatch loop verifying strictly monotonic chronological execution
+    let job1 = pheap_delete_min(scheduler) // 50ms
+    let job2 = pheap_delete_min(scheduler) // 50ms
+    let job3 = pheap_delete_min(scheduler) // 120ms
+    let job4 = pheap_delete_min(scheduler) // 300ms
+    let job5 = pheap_delete_min(scheduler) // 500ms
+    let job6 = pheap_delete_min(scheduler) // 1500ms
+
+    if job1 != 50 or job2 != 50 or job3 != 120 {
+        return false
+    }
+    if job4 != 300 or job5 != 500 or job6 != 1500 {
+        return false
+    }
+
+    return pheap_is_empty(scheduler)
+}
+
+pub fn main() -> int {
+    if simulate_event_dispatcher() {
+        return 0
+    }
+    return 1
+}
