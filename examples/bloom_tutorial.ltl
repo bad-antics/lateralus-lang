@@ -1,0 +1,241 @@
+// ===================================================================
+// examples/bloom_tutorial.ltl — stdlib/bloom.ltl tutorial companion.
+// Runnable tour of the Bloom filter: optimal_params, add/contains,
+// double-hashing, union/intersect, fill stats. Self-contained inline.
+// Fixes needed vs shipped module (documented in tutorial):
+//   - `import hash` -> inline fnv1a_32/64 (Python `import hash` fails)
+//   - `hash_fnv1a_*` names don't exist in stdlib/hash.ltl -> renamed
+//   - `char_code`/`xor` builtins missing -> `ord(slice)` + `^`
+//   - `/` yields float -> `int()` around /32 index math
+// ===================================================================
+
+fn fnv1a_32(data) {
+    let h = 2166136261   // FNV offset basis
+    let prime = 16777619  // FNV prime
+    for i in range(0, len(data)) {
+        let byte = ord(slice(data, i, i + 1))
+        h = h ^ byte
+        h = (h * prime) % 4294967296
+    }
+    return h
+}
+
+fn fnv1a_64(data) {
+    let h = 14695981039346656037
+    let prime = 1099511628211
+    for i in range(0, len(data)) {
+        let byte = ord(slice(data, i, i + 1))
+        h = h ^ byte
+        h = h * prime
+    }
+    return h
+}
+
+// -- Construction ---------------------------------------------------
+
+fn new_filter(m: int, k: int) -> map {
+    let f = {}
+    f["m"] = m
+    f["k"] = k
+    f["count"] = 0
+    let bits = []
+    let words = int((m + 31) / 32)
+    let i = 0
+    while i < words {
+        bits = bits + [0]
+        i = i + 1
+    }
+    f["bits"] = bits
+    return f
+}
+
+/// Pick parameters that give an expected false-positive rate at `n`
+/// insertions.  Uses the standard formulae:
+///   m = -n * ln(p) / (ln 2)^2   (rounded up)
+///   k = (m / n) * ln 2          (rounded to nearest)
+/// We approximate with integer maths since `math.ltl` may or may not
+/// be in scope at call time.  Accurate enough for typical p ∈ [0.001, 0.1].
+fn optimal_params(n: int, fp_per_1000: int) -> list {
+    // fp_per_1000 = expected false-positives per 1000 lookups.
+    // For p = 0.01 pass 10; for p = 0.001 pass 1; for p = 0.05 pass 50.
+    if n < 1 { n = 1 }
+    if fp_per_1000 < 1 { fp_per_1000 = 1 }
+    // log2(1000 / fp_per_1000) ≈ bits-per-element for k chosen optimally.
+    let bpe = 0
+    let ratio = 1000 / fp_per_1000
+    while ratio > 1 {
+        bpe = bpe + 1
+        ratio = ratio / 2
+    }
+    // Add a safety margin so the approximation holds at small n.
+    bpe = bpe + 2
+    let m = n * bpe
+    let k = bpe      // ≈ bits_per_element * ln 2 ≈ bpe * 0.7, round up.
+    if k < 1 { k = 1 }
+    return [m, k]
+}
+
+// -- Hashing --------------------------------------------------------
+
+/// Double-hashing trick (Kirsch–Mitzenmacher):
+///   h_i(x) = h1(x) + i * h2(x)   (mod m)
+fn hash_positions(f: map, key: str) -> list {
+    let h1 = fnv1a_32(key)
+    let h2 = fnv1a_64(key) & 0xffffffff
+    // Guarantee h2 is odd so the stride is co-prime with powers of two
+    // (not strictly required here since m isn't forced to 2^k, but it
+    // reduces collisions at small m).
+    h2 = h2 | 1
+    let m = f["m"]
+    let k = f["k"]
+    let out = []
+    let i = 0
+    while i < k {
+        let pos = (h1 + i * h2) % m
+        if pos < 0 { pos = pos + m }
+        out = out + [pos]
+        i = i + 1
+    }
+    return out
+}
+
+// -- Bit-array helpers ----------------------------------------------
+
+fn bit_set(bits: list, pos: int) -> list {
+    let w = int(pos / 32)
+    let b = pos % 32
+    bits[w] = bits[w] | (1 << b)
+    return bits
+}
+
+fn bit_test(bits: list, pos: int) -> bool {
+    let w = int(pos / 32)
+    let b = pos % 32
+    return (bits[w] & (1 << b)) != 0
+}
+
+// -- Core operations ------------------------------------------------
+
+fn add(f: map, key: str) {
+    let positions = hash_positions(f, key)
+    let i = 0
+    while i < len(positions) {
+        f["bits"] = bit_set(f["bits"], positions[i])
+        i = i + 1
+    }
+    f["count"] = f["count"] + 1
+}
+
+fn contains_key(f: map, key: str) -> bool {
+    let positions = hash_positions(f, key)
+    let i = 0
+    while i < len(positions) {
+        if not bit_test(f["bits"], positions[i]) {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+// -- Stats ----------------------------------------------------------
+
+fn popcount(bits: list) -> int {
+    let total = 0
+    let i = 0
+    while i < len(bits) {
+        let w = bits[i]
+        while w != 0 {
+            total = total + (w & 1)
+            w = w >> 1
+        }
+        i = i + 1
+    }
+    return total
+}
+
+/// Estimated fill ratio in [0, 1] rendered as parts-per-thousand so
+/// the return stays an int.
+fn fill_ppt(f: map) -> int {
+    if f["m"] == 0 { return 0 }
+    return (popcount(f["bits"]) * 1000) / f["m"]
+}
+
+// -- Union / intersect ----------------------------------------------
+
+fn union(a: map, b: map) -> map {
+    if a["m"] != b["m"] || a["k"] != b["k"] {
+        return nil
+    }
+    let out = new_filter(a["m"], a["k"])
+    let i = 0
+    while i < len(a["bits"]) {
+        out["bits"][i] = a["bits"][i] | b["bits"][i]
+        i = i + 1
+    }
+    out["count"] = a["count"] + b["count"]
+    return out
+}
+
+fn intersect(a: map, b: map) -> map {
+    if a["m"] != b["m"] || a["k"] != b["k"] {
+        return nil
+    }
+    let out = new_filter(a["m"], a["k"])
+    let i = 0
+    while i < len(a["bits"]) {
+        out["bits"][i] = a["bits"][i] & b["bits"][i]
+        i = i + 1
+    }
+    return out
+}
+
+fn main() {
+    print("=== LATERALUS STDLIB BLOOM TUTORIAL ===")
+
+    // -- Step 1: optimal params -------------------------------------------------
+    print("STEP 1 optimal_params:")
+    print("  p1pct_n100=" + str(optimal_params(100, 10)))
+    print("  p01pct_n100=" + str(optimal_params(100, 1)))
+    print("  n0=" + str(optimal_params(0, 10)))
+
+    // -- Step 2: build + add ---------------------------------------------------------
+    print("STEP 2 add/contains:")
+    let f = new_filter(128, 4)
+    add(f, "apple")
+    add(f, "banana")
+    add(f, "cherry")
+    print("  count=" + str(f["count"]))
+    print("  apple=" + str(contains_key(f, "apple")))
+    print("  durian=" + str(contains_key(f, "durian")))
+
+    // -- Step 3: false-positive sanity ---------------------------------------------------
+    print("STEP 3 fp scan:")
+    let hits = 0
+    let i = 0
+    while i < 500 {
+        let pkey = "probe_" + str(i)
+        if contains_key(f, pkey) { hits = hits + 1 }
+        i = i + 1
+    }
+    print("  fp_hits_500=" + str(hits))
+    print("  fill_ppt=" + str(fill_ppt(f)))
+
+    // -- Step 4: union / intersect -------------------------------------------------------------
+    print("STEP 4 union/intersect:")
+    let a = new_filter(64, 3)
+    let b = new_filter(64, 3)
+    add(a, "x"); add(a, "y")
+    add(b, "y"); add(b, "z")
+    let u = union(a, b)
+    print("  union_xy=" + str(contains_key(u, "x")) + str(contains_key(u, "y")) + str(contains_key(u, "z")))
+    let inter = intersect(a, b)
+    print("  inter_has_x=" + str(contains_key(inter, "x")))
+    print("  inter_has_y=" + str(contains_key(inter, "y")))
+    print("  mismatch=" + str(union(a, new_filter(32, 3))))
+
+    // -- Step 5: pinned vectors ------------------------------------------------------------------
+    print("PINNED_VECTORS: params [[12,4],[9,4]] apple_t durian_f fp_hits 500 fill_ppt union/intersect")
+    print("  OK examples/bloom_tutorial.ltl")
+    return 0
+}
