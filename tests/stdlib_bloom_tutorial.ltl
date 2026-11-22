@@ -1,0 +1,67 @@
+// Pinned test vectors and probabilistic invariants for the stdlib/bloom tutorial.
+
+import bloom
+
+pub fn test_zero_false_negatives() -> bool {
+    let opt = bloom_optimal_params(100, 10)
+    let f = bloom_new_filter(opt[0], opt[1])
+
+    bloom_add(f, "user:101")
+    bloom_add(f, "user:102")
+    bloom_add(f, "user:103")
+
+    // Bloom filters must NEVER produce a false negative
+    if not bloom_contains_key(f, "user:101") { return false }
+    if not bloom_contains_key(f, "user:102") { return false }
+    if not bloom_contains_key(f, "user:103") { return false }
+
+    return true
+}
+
+pub fn test_optimal_params_sizing() -> bool {
+    // For n = 1000, 1% false positive rate (10 per 1000)
+    let params = bloom_optimal_params(1000, 10)
+    let m = params[0]
+    let k = params[1]
+
+    // Expect m > 1000 and valid k
+    if m <= 1000 { return false }
+    if k < 2 || k > 16 { return false }
+    return true
+}
+
+pub fn test_bloom_set_algebra() -> bool {
+    let f1 = bloom_new_filter(256, 4)
+    let f2 = bloom_new_filter(256, 4)
+
+    bloom_add(f1, "apple")
+    bloom_add(f1, "banana")
+
+    bloom_add(f2, "banana")
+    bloom_add(f2, "cherry")
+
+    let u = bloom_union(f1, f2)
+    // Union should contain all 3
+    if not bloom_contains_key(u, "apple") { return false }
+    if not bloom_contains_key(u, "banana") { return false }
+    if not bloom_contains_key(u, "cherry") { return false }
+
+    let inter = bloom_intersect(f1, f2)
+    // Intersect should contain shared key "banana"
+    if not bloom_contains_key(inter, "banana") { return false }
+
+    return true
+}
+
+pub fn test_fill_ratio_and_popcount() -> bool {
+    let f = bloom_new_filter(128, 3)
+    if bloom_fill_ppt(f) != 0 { return false }
+
+    bloom_add(f, "doc:readme")
+    bloom_add(f, "doc:changelog")
+
+    // Fill ratio should now be > 0 and <= 1000
+    let ppt = bloom_fill_ppt(f)
+    if ppt <= 0 || ppt > 1000 { return false }
+    return true
+}

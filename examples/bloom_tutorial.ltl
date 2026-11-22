@@ -1,0 +1,76 @@
+// ===================================================================
+// examples/bloom_tutorial.ltl
+//
+// Tutorial: Probabilistic Set Membership & Deduplication using
+// Lateralus `stdlib/bloom.ltl`.
+//
+// Demonstrates:
+// 1. Parameter sizing (optimal bits & hash count for given n and p).
+// 2. High-throughput insertion and zero false negatives.
+// 3. Fast negative filtering (early exit for web crawling / DB lookups).
+// 4. Set algebra (merging partitions with union and intersection).
+// ===================================================================
+
+import bloom
+
+pub fn main() {
+    print("=== Lateralus Bloom Filter Tutorial ===")
+
+    // 1. Sizing: 10,000 expected keys with 1% (10 per 1000) false positive rate
+    let expected_items = 1000
+    let fp_rate = 10 // 10/1000 = 1%
+    let params = bloom_optimal_params(expected_items, fp_rate)
+    let m = params[0]
+    let k = params[1]
+
+    print("Target keys: " + str(expected_items))
+    print("Optimal bit array size (m): " + str(m))
+    print("Optimal hash function count (k): " + str(k))
+
+    // 2. Construct filter
+    let visited_urls = bloom_new_filter(m, k)
+
+    // 3. Populate with crawled pages
+    print("Inserting crawled endpoints...")
+    bloom_add(visited_urls, "https://lateralus.org/")
+    bloom_add(visited_urls, "https://lateralus.org/docs")
+    bloom_add(visited_urls, "https://lateralus.org/blog")
+    bloom_add(visited_urls, "https://lateralus.org/download")
+
+    // 4. Membership test
+    let test_url = "https://lateralus.org/docs"
+    if bloom_contains_key(visited_urls, test_url) {
+        print("PASS: Verified known URL exists in filter: " + test_url)
+    }
+
+    let unseen_url = "https://lateralus.org/admin-dashboard"
+    if not bloom_contains_key(visited_urls, unseen_url) {
+        print("PASS: Confirmed unseen URL quickly rejected without disk fetch: " + unseen_url)
+    }
+
+    // 5. Inspect fill ratio (parts per thousand)
+    let fill = bloom_fill_ppt(visited_urls)
+    print("Current filter fill density: " + str(fill) + "/1000 ppt")
+
+    // 6. Set algebra between partition shards
+    let shard_a = bloom_new_filter(512, 4)
+    let shard_b = bloom_new_filter(512, 4)
+
+    bloom_add(shard_a, "alpha")
+    bloom_add(shard_a, "beta")
+
+    bloom_add(shard_b, "beta")
+    bloom_add(shard_b, "gamma")
+
+    let cluster_union = bloom_union(shard_a, shard_b)
+    if bloom_contains_key(cluster_union, "alpha") && bloom_contains_key(cluster_union, "gamma") {
+        print("PASS: Union correctly spans both partition shards")
+    }
+
+    let cluster_intersect = bloom_intersect(shard_a, shard_b)
+    if bloom_contains_key(cluster_intersect, "beta") && not bloom_contains_key(cluster_intersect, "alpha") {
+        print("PASS: Intersection correctly isolates shared elements")
+    }
+
+    print("=== Bloom filter tutorial demonstration completed successfully ===")
+}
