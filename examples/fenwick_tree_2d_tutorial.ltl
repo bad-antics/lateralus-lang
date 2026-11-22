@@ -1,0 +1,117 @@
+// ===================================================================
+// examples/fenwick_tree_2d_tutorial.ltl
+// -------------------------------------------------------------------
+// Practical Application: Urban Grid Mobility Heatmap & Dynamic Sensor
+// Foot-Traffic Aggregation using Two-Dimensional Binary Indexed Tree.
+// ===================================================================
+
+pub fn new_fenwick2d(rows, cols) {
+    let tree = dict()
+    tree["rows"] = rows
+    tree["cols"] = cols
+    let grid = dict()
+    let r = 0
+    while r <= rows {
+        let row_dict = dict()
+        let c = 0
+        while c <= cols {
+            row_dict[c] = 0
+            c = c + 1
+        }
+        grid[r] = row_dict
+        r = r + 1
+    }
+    tree["tree"] = grid
+    return tree
+}
+
+pub fn fenwick2d_update(tree, r, c, delta) {
+    let rows = tree["rows"]
+    let cols = tree["cols"]
+    let mut_r = r
+    while mut_r <= rows {
+        let mut_c = c
+        while mut_c <= cols {
+            let curr = tree["tree"][mut_r][mut_c]
+            tree["tree"][mut_r][mut_c] = curr + delta
+            let low_c = mut_c & (0 - mut_c)
+            mut_c = mut_c + low_c
+        }
+        let low_r = mut_r & (0 - mut_r)
+        mut_r = mut_r + low_r
+    }
+    return true
+}
+
+pub fn fenwick2d_query(tree, r, c) {
+    if r <= 0 {
+        return 0
+    }
+    if c <= 0 {
+        return 0
+    }
+    let rows = tree["rows"]
+    let cols = tree["cols"]
+    if r > rows {
+        r = rows
+    }
+    if c > cols {
+        c = cols
+    }
+    let total = 0
+    let mut_r = r
+    while mut_r > 0 {
+        let mut_c = c
+        while mut_c > 0 {
+            let cell = tree["tree"][mut_r][mut_c]
+            total = total + cell
+            let low_c = mut_c & (0 - mut_c)
+            mut_c = mut_c - low_c
+        }
+        let low_r = mut_r & (0 - mut_r)
+        mut_r = mut_r - low_r
+    }
+    return total
+}
+
+pub fn fenwick2d_range_sum(tree, r1, c1, r2, c2) {
+    let s_all = fenwick2d_query(tree, r2, c2)
+    let s_top = fenwick2d_query(tree, r1 - 1, c2)
+    let s_left = fenwick2d_query(tree, r2, c1 - 1)
+    let s_corner = fenwick2d_query(tree, r1 - 1, c1 - 1)
+    return s_all - s_top - s_left + s_corner
+}
+
+pub fn run_urban_mobility_pipeline() {
+    // 5x5 District Sector Grid
+    let district = new_fenwick2d(5, 5)
+
+    // Baseline Morning Foot Traffic
+    fenwick2d_update(district, 1, 1, 120) // Airport Terminal 1
+    fenwick2d_update(district, 1, 2, 85)  // Airport Terminal 2
+    fenwick2d_update(district, 2, 2, 340) // Central Business District
+    fenwick2d_update(district, 2, 3, 290) // Tech Park West
+    fenwick2d_update(district, 3, 3, 510) // Grand Central Transit Hub
+    fenwick2d_update(district, 3, 4, 180) // Shopping District
+    fenwick2d_update(district, 4, 3, 220) // University Campus
+    fenwick2d_update(district, 5, 5, 95)  // Residential Harbor
+
+    // Query 1: Total Metro Area Population
+    let total_metro = fenwick2d_query(district, 5, 5)
+
+    // Query 2: Transit Corridor Density: Sector [2..3] x [2..4]
+    // Expected: 340 (2,2) + 290 (2,3) + 0 (2,4) + 0 (3,2) + 510 (3,3) + 180 (3,4) = 1320
+    let corridor_crowd = fenwick2d_range_sum(district, 2, 2, 3, 4)
+
+    // Dynamic Flash Event: Major Concert Concludes at Stadium Sector (4, 4) +850 attendees
+    fenwick2d_update(district, 4, 4, 850)
+
+    // Updated South Corridor Density: Sector [3..5] x [3..5]
+    let south_after_concert = fenwick2d_range_sum(district, 3, 3, 5, 5)
+
+    let report = dict()
+    report["total_metro"] = total_metro
+    report["corridor_crowd"] = corridor_crowd
+    report["south_after_concert"] = south_after_concert
+    return report
+}
