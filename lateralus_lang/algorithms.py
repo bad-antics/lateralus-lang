@@ -124,6 +124,8 @@ def rotate(arr: list, n: int) -> list:
 
 
 def sliding_window(arr: list, size: int) -> list:
+    if size <= 0:
+        raise ValueError("window size must be a positive integer")
     return [arr[i:i + size] for i in range(len(arr) - size + 1)]
 
 
@@ -170,6 +172,8 @@ def is_prime(n: int) -> bool:
 
 
 def primes_up_to(n: int) -> list:
+    if n < 2:
+        return []
     sieve = [True] * (n + 1)
     sieve[0] = sieve[1] = False
     for i in range(2, int(n ** 0.5) + 1):
