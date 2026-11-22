@@ -1497,9 +1497,18 @@ class PythonTranspiler(ASTVisitor):
                     fn   = self._expr(node.right.callee)
                     rest = [self._expr(a) for a in node.right.args]
                     kw   = [f"{k}={self._expr(v)}" for k, v in node.right.kwargs]
+                    fn_name = node.right.callee.name if isinstance(node.right.callee, Ident) else None
+                    is_impl_method = fn_name and any(
+                        fn_name == m.name
+                        for methods in self._impl_map.values()
+                        for m in methods
+                    )
+                    if is_impl_method:
+                        args_str = ", ".join(rest + kw)
+                        return f"({tmp}.{fn}({args_str}) if ({tmp} := {left}) is not None else None)"
                     all_args = ", ".join([tmp] + rest + kw)
-                    return f"(({tmp} := {left}) is not None and {fn}({all_args}) or None)"
-                return f"(({tmp} := {left}) is not None and {self._expr(node.right)}({tmp}) or None)"
+                    return f"({fn}({all_args}) if ({tmp} := {left}) is not None else None)"
+                return f"({self._expr(node.right)}({tmp}) if ({tmp} := {left}) is not None else None)"
             py_op = {"&&": "and", "||": "or", "**": "**",
                      "and": "and", "or": "or"}.get(node.op, node.op)
             return f"({self._expr(node.left)} {py_op} {self._expr(node.right)})"
