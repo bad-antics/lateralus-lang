@@ -1,0 +1,255 @@
+// ===================================================================
+// tests/stdlib_heavy_light_decomposition_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for Heavy-Light Decomposition (HLD), heavy-edge
+// chain partitioning, contiguous DFS ordering, and O(log^2 n) path ops.
+// ===================================================================
+
+pub fn new_tree(n) {
+    let adj = dict()
+    let i = 0
+    while i < n {
+        let list = dict()
+        list["len"] = 0
+        adj[i] = list
+        i = i + 1
+    }
+    return adj
+}
+
+pub fn add_edge(adj, u, v) {
+    let l_u = adj[u]
+    let sz_u = l_u["len"]
+    l_u[sz_u] = v
+    l_u["len"] = sz_u + 1
+
+    let l_v = adj[v]
+    let sz_v = l_v["len"]
+    l_v[sz_v] = u
+    l_v["len"] = sz_v + 1
+}
+
+pub fn dfs1(u, p, d, adj, parent, depth, sz, heavy_child) {
+    parent[u] = p
+    depth[u] = d
+    sz[u] = 1
+    heavy_child[u] = -1
+
+    let max_sub = 0
+    let neighbors = adj[u]
+    let deg = neighbors["len"]
+    let i = 0
+    while i < deg {
+        let v = neighbors[i]
+        if v != p {
+            dfs1(v, u, d + 1, adj, parent, depth, sz, heavy_child)
+            sz[u] = sz[u] + sz[v]
+            if sz[v] > max_sub {
+                max_sub = sz[v]
+                heavy_child[u] = v
+            }
+        }
+        i = i + 1
+    }
+}
+
+pub fn dfs2(u, chain_top, adj, parent, heavy_child, dfn, rnk, top, state) {
+    let t = state["timer"] + 1
+    state["timer"] = t
+    dfn[u] = t
+    rnk[t] = u
+    top[u] = chain_top
+
+    // 1. Traverse heavy child first so heavy chain indices remain contiguous
+    let hc = heavy_child[u]
+    if hc != -1 {
+        dfs2(hc, chain_top, adj, parent, heavy_child, dfn, rnk, top, state)
+    }
+
+    // 2. Traverse light children, each starting a new chain top
+    let neighbors = adj[u]
+    let deg = neighbors["len"]
+    let i = 0
+    while i < deg {
+        let v = neighbors[i]
+        if v != parent[u] && v != hc {
+            dfs2(v, v, adj, parent, heavy_child, dfn, rnk, top, state)
+        }
+        i = i + 1
+    }
+}
+
+pub fn build_hld(adj, n, root) {
+    let parent = dict()
+    let depth = dict()
+    let sz = dict()
+    let heavy_child = dict()
+    let dfn = dict()
+    let rnk = dict()
+    let top = dict()
+
+    dfs1(root, -1, 0, adj, parent, depth, sz, heavy_child)
+
+    let state = dict()
+    state["timer"] = 0
+    dfs2(root, root, adj, parent, heavy_child, dfn, rnk, top, state)
+
+    let hld = dict()
+    hld["parent"] = parent
+    hld["depth"] = depth
+    hld["sz"] = sz
+    hld["heavy_child"] = heavy_child
+    hld["dfn"] = dfn
+    hld["rnk"] = rnk
+    hld["top"] = top
+    hld["root"] = root
+    hld["n"] = n
+    return hld
+}
+
+pub fn get_lca(hld, u, v) {
+    let top = hld["top"]
+    let depth = hld["depth"]
+    let parent = hld["parent"]
+
+    let curr_u = u
+    let curr_v = v
+
+    while top[curr_u] != top[curr_v] {
+        if depth[top[curr_u]] < depth[top[curr_v]] {
+            let tmp = curr_u
+            curr_u = curr_v
+            curr_v = tmp
+        }
+        curr_u = parent[top[curr_u]]
+    }
+
+    if depth[curr_u] < depth[curr_v] {
+        return curr_u
+    }
+    return curr_v
+}
+
+pub fn decompose_path(hld, u, v) {
+    let top = hld["top"]
+    let depth = hld["depth"]
+    let parent = hld["parent"]
+    let dfn = hld["dfn"]
+
+    let segments = dict()
+    let count = 0
+
+    let curr_u = u
+    let curr_v = v
+
+    while top[curr_u] != top[curr_v] {
+        if depth[top[curr_u]] < depth[top[curr_v]] {
+            let tmp = curr_u
+            curr_u = curr_v
+            curr_v = tmp
+        }
+        let seg = dict()
+        seg["start"] = dfn[top[curr_u]]
+        seg["end"] = dfn[curr_u]
+        segments[count] = seg
+        count = count + 1
+
+        curr_u = parent[top[curr_u]]
+    }
+
+    let final_seg = dict()
+    if dfn[curr_u] <= dfn[curr_v] {
+        final_seg["start"] = dfn[curr_u]
+        final_seg["end"] = dfn[curr_v]
+    } else {
+        final_seg["start"] = dfn[curr_v]
+        final_seg["end"] = dfn[curr_u]
+    }
+    segments[count] = final_seg
+    count = count + 1
+
+    let res = dict()
+    res["count"] = count
+    res["segments"] = segments
+    return res
+}
+
+// -------------------------------------------------------------------
+// Verification Tests
+// -------------------------------------------------------------------
+
+pub fn test_classic_seven_node_tree() {
+    // Tree topology:
+    //         0
+    //       /   \
+    //      1     2
+    //    /   \     \
+    //   3     4     5
+    //        /
+    //       6
+    // Subtree sizes:
+    // sz[6] = 1, sz[3] = 1, sz[4] = 2, sz[1] = 4
+    // sz[5] = 1, sz[2] = 2
+    // sz[0] = 7
+    let n = 7
+    let t = new_tree(n)
+    add_edge(t, 0, 1)
+    add_edge(t, 0, 2)
+    add_edge(t, 1, 3)
+    add_edge(t, 1, 4)
+    add_edge(t, 4, 6)
+    add_edge(t, 2, 5)
+
+    let hld = build_hld(t, n, 0)
+
+    // Check subtree sizes
+    assert(hld["sz"][0] == 7, "Total tree size is 7")
+    assert(hld["sz"][1] == 4, "Subtree 1 size is 4")
+    assert(hld["sz"][4] == 2, "Subtree 4 size is 2")
+
+    // Check heavy children (node 0 heavy child must be 1 since 4 > 2)
+    assert(hld["heavy_child"][0] == 1, "0 heavy child is 1")
+    assert(hld["heavy_child"][1] == 4, "1 heavy child is 4 (size 2 > size 1)")
+    assert(hld["heavy_child"][4] == 6, "4 heavy child is 6")
+
+    // Check chain continuity: 0 -> 1 -> 4 -> 6 all belong to top 0!
+    assert(hld["top"][0] == 0, "Top of 0 is 0")
+    assert(hld["top"][1] == 0, "Top of 1 is 0")
+    assert(hld["top"][4] == 0, "Top of 4 is 0")
+    assert(hld["top"][6] == 0, "Top of 6 is 0")
+
+    // Check DFN continuity along heavy chain: dfn[0] < dfn[1] < dfn[4] < dfn[6]
+    assert(hld["dfn"][1] == hld["dfn"][0] + 1, "Contiguous dfn 0 -> 1")
+    assert(hld["dfn"][4] == hld["dfn"][1] + 1, "Contiguous dfn 1 -> 4")
+    assert(hld["dfn"][6] == hld["dfn"][4] + 1, "Contiguous dfn 4 -> 6")
+
+    // Check LCA queries
+    assert(get_lca(hld, 3, 6) == 1, "LCA(3, 6) is 1")
+    assert(get_lca(hld, 6, 5) == 0, "LCA(6, 5) is 0")
+    assert(get_lca(hld, 4, 6) == 4, "LCA(4, 6) is 4 (ancestor)")
+
+    // Check Path Decomposition from 3 to 6
+    let path_3_6 = decompose_path(hld, 3, 6)
+    // 3 is on light chain (top 3) -> jump 1 segment, then on chain 0 -> 1 segment
+    assert(path_3_6["count"] == 2, "Path(3, 6) decomposes into exactly 2 intervals")
+}
+
+pub fn test_line_tree() {
+    // 0 - 1 - 2 - 3 (single heavy chain)
+    let n = 4
+    let t = new_tree(n)
+    add_edge(t, 0, 1)
+    add_edge(t, 1, 2)
+    add_edge(t, 2, 3)
+
+    let hld = build_hld(t, n, 0)
+    assert(hld["top"][3] == 0, "All nodes in line tree share top 0")
+    let p = decompose_path(hld, 0, 3)
+    assert(p["count"] == 1, "Direct single interval along entire line")
+}
+
+pub fn main() {
+    test_classic_seven_node_tree()
+    test_line_tree()
+    print("All Heavy-Light Decomposition verification tests passed successfully!")
+}

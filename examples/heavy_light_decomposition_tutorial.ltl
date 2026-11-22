@@ -1,0 +1,217 @@
+// ===================================================================
+// examples/heavy_light_decomposition_tutorial.ltl
+// -------------------------------------------------------------------
+// Practical Application: Enterprise Corporate Reporting Hierarchy,
+// Approval Chain Delegation & Path Metric Aggregation using HLD.
+// ===================================================================
+
+pub fn new_tree(n) {
+    let adj = dict()
+    let i = 0
+    while i < n {
+        let list = dict()
+        list["len"] = 0
+        adj[i] = list
+        i = i + 1
+    }
+    return adj
+}
+
+pub fn add_edge(adj, u, v) {
+    let l_u = adj[u]
+    let sz_u = l_u["len"]
+    l_u[sz_u] = v
+    l_u["len"] = sz_u + 1
+
+    let l_v = adj[v]
+    let sz_v = l_v["len"]
+    l_v[sz_v] = u
+    l_v["len"] = sz_v + 1
+}
+
+pub fn dfs1(u, p, d, adj, parent, depth, sz, heavy_child) {
+    parent[u] = p
+    depth[u] = d
+    sz[u] = 1
+    heavy_child[u] = -1
+
+    let max_sub = 0
+    let neighbors = adj[u]
+    let deg = neighbors["len"]
+    let i = 0
+    while i < deg {
+        let v = neighbors[i]
+        if v != p {
+            dfs1(v, u, d + 1, adj, parent, depth, sz, heavy_child)
+            sz[u] = sz[u] + sz[v]
+            if sz[v] > max_sub {
+                max_sub = sz[v]
+                heavy_child[u] = v
+            }
+        }
+        i = i + 1
+    }
+}
+
+pub fn dfs2(u, chain_top, adj, parent, heavy_child, dfn, rnk, top, state) {
+    let t = state["timer"] + 1
+    state["timer"] = t
+    dfn[u] = t
+    rnk[t] = u
+    top[u] = chain_top
+
+    let hc = heavy_child[u]
+    if hc != -1 {
+        dfs2(hc, chain_top, adj, parent, heavy_child, dfn, rnk, top, state)
+    }
+
+    let neighbors = adj[u]
+    let deg = neighbors["len"]
+    let i = 0
+    while i < deg {
+        let v = neighbors[i]
+        if v != parent[u] && v != hc {
+            dfs2(v, v, adj, parent, heavy_child, dfn, rnk, top, state)
+        }
+        i = i + 1
+    }
+}
+
+pub fn build_hld(adj, n, root) {
+    let parent = dict()
+    let depth = dict()
+    let sz = dict()
+    let heavy_child = dict()
+    let dfn = dict()
+    let rnk = dict()
+    let top = dict()
+
+    dfs1(root, -1, 0, adj, parent, depth, sz, heavy_child)
+
+    let state = dict()
+    state["timer"] = 0
+    dfs2(root, root, adj, parent, heavy_child, dfn, rnk, top, state)
+
+    let hld = dict()
+    hld["parent"] = parent
+    hld["depth"] = depth
+    hld["sz"] = sz
+    hld["heavy_child"] = heavy_child
+    hld["dfn"] = dfn
+    hld["rnk"] = rnk
+    hld["top"] = top
+    hld["root"] = root
+    hld["n"] = n
+    return hld
+}
+
+pub fn get_lca(hld, u, v) {
+    let top = hld["top"]
+    let depth = hld["depth"]
+    let parent = hld["parent"]
+
+    let curr_u = u
+    let curr_v = v
+
+    while top[curr_u] != top[curr_v] {
+        if depth[top[curr_u]] < depth[top[curr_v]] {
+            let tmp = curr_u
+            curr_u = curr_v
+            curr_v = tmp
+        }
+        curr_u = parent[top[curr_u]]
+    }
+
+    if depth[curr_u] < depth[curr_v] {
+        return curr_u
+    }
+    return curr_v
+}
+
+pub fn decompose_path(hld, u, v) {
+    let top = hld["top"]
+    let depth = hld["depth"]
+    let parent = hld["parent"]
+    let dfn = hld["dfn"]
+
+    let segments = dict()
+    let count = 0
+
+    let curr_u = u
+    let curr_v = v
+
+    while top[curr_u] != top[curr_v] {
+        if depth[top[curr_u]] < depth[top[curr_v]] {
+            let tmp = curr_u
+            curr_u = curr_v
+            curr_v = tmp
+        }
+        let seg = dict()
+        seg["start"] = dfn[top[curr_u]]
+        seg["end"] = dfn[curr_u]
+        segments[count] = seg
+        count = count + 1
+
+        curr_u = parent[top[curr_u]]
+    }
+
+    let final_seg = dict()
+    if dfn[curr_u] <= dfn[curr_v] {
+        final_seg["start"] = dfn[curr_u]
+        final_seg["end"] = dfn[curr_v]
+    } else {
+        final_seg["start"] = dfn[curr_v]
+        final_seg["end"] = dfn[curr_u]
+    }
+    segments[count] = final_seg
+    count = count + 1
+
+    let res = dict()
+    res["count"] = count
+    res["segments"] = segments
+    return res
+}
+
+pub fn main() {
+    print("=== Enterprise Approval Chain Hierarchy Simulation ===")
+
+    // Org Hierarchy:
+    // 0: CEO
+    // 1: VP Engineering (manages 3, 4, 6)
+    // 2: VP Sales (manages 5)
+    // 3: Tech Lead Core
+    // 4: Tech Lead Cloud (manages 6)
+    // 5: Enterprise Account Exec
+    // 6: Senior Staff Infrastructure Engineer
+    let n = 7
+    let org = new_tree(n)
+    add_edge(org, 0, 1)
+    add_edge(org, 0, 2)
+    add_edge(org, 1, 3)
+    add_edge(org, 1, 4)
+    add_edge(org, 4, 6)
+    add_edge(org, 2, 5)
+
+    print("Synthesizing HLD decomposition for corporate hierarchy tree...")
+    let hld = build_hld(org, n, 0)
+
+    print("Evaluating common executive signing authority for Staff Eng (6) and Core Lead (3):")
+    let shared_vp = get_lca(hld, 6, 3)
+    print("Lowest Common Signing Executive Node:")
+    print(shared_vp)
+    assert(shared_vp == 1, "Common signing VP for Engineering staff is VP Eng (1)")
+
+    print("Evaluating cross-divisional conflict resolution for Staff Eng (6) and Sales Exec (5):")
+    let shared_c_level = get_lca(hld, 6, 5)
+    print("Lowest Common Escalation Executive Node:")
+    print(shared_c_level)
+    assert(shared_c_level == 0, "Cross-department escalation resolves at CEO (0)")
+
+    print("Decomposing multi-tier approval delegation path from Node 6 to Node 3:")
+    let path = decompose_path(hld, 6, 3)
+    print("Total contiguous segments for linear range updates/queries:")
+    print(path["count"])
+    assert(path["count"] == 2, "Path from 6 to 3 decomposes into 2 contiguous array spans")
+
+    print("Enterprise organizational HLD pipeline executed and verified successfully!")
+}
