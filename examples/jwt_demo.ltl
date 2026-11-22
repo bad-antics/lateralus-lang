@@ -1,0 +1,63 @@
+// Runnable demo and pinned test vectors for stdlib/jwt.ltl
+// Run: lateralus run examples/jwt_demo.ltl
+
+import base64
+import crypto
+import json
+import strings
+import time
+import jwt
+
+fn main() {
+    let key = bytes_of("top-secret-signing-key-32-bytes-long!")
+
+    // 1. Issue token with 3600s TTL and standard claims
+    let extra = {}
+    extra["aud"] = "service-orders"
+    extra["iss"] = "auth.lateralus.dev"
+    extra["tenant"] = "org-1337"
+
+    let token = issue("user:alexander", key, 3600, extra, "HS256")
+    assert(len(token) > 20)
+
+    // 2. Peek without verifying (diagnostic inspect)
+    let inspect = peek(token)
+    assert(inspect["header"]["alg"] == "HS256")
+    assert(inspect["claims"]["sub"] == "user:alexander")
+    assert(inspect["claims"]["tenant"] == "org-1337")
+
+    // 3. Verify valid token
+    let opts = {}
+    opts["audience"] = "service-orders"
+    opts["issuer"] = "auth.lateralus.dev"
+    opts["leeway_s"] = 0
+
+    let res = verify_hmac(token, key, "HS256", opts)
+    assert(res[0] == true)
+    let claims = res[1]
+    assert(claims["sub"] == "user:alexander")
+    assert(claims["tenant"] == "org-1337")
+
+    // 4. Bad signature rejected
+    let wrong_key = bytes_of("different-signing-key-32-bytes-long!")
+    let bad_sig = verify_hmac(token, wrong_key, "HS256", opts)
+    assert(bad_sig[0] == false)
+    assert(bad_sig[1] == "bad_signature")
+
+    // 5. Wrong audience rejected
+    let bad_aud_opts = {}
+    bad_aud_opts["audience"] = "service-billing"
+    let bad_aud = verify_hmac(token, key, "HS256", bad_aud_opts)
+    assert(bad_aud[0] == false)
+    assert(bad_aud[1] == "wrong_audience")
+
+    // 6. Expired token rejected
+    let expired_token = issue("user:alexander", key, -10, extra, "HS256")
+    let exp_res = verify_hmac(expired_token, key, "HS256", opts)
+    assert(exp_res[0] == false)
+    assert(exp_res[1] == "expired")
+
+    println("jwt_demo ok: sub=" + claims["sub"] + " alg=" + inspect["header"]["alg"])
+}
+
+main()
