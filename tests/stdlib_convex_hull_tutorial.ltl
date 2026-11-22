@@ -1,0 +1,154 @@
+// Standard Library Convex Hull (Monotone Chain) Verification Suite
+// Validates 2D cross-product orientation, lower/upper hull construction, and polygon area calculation.
+
+fn cross_product_2d(o: list, a: list, b: list) -> int {
+    return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+}
+
+fn sort_points(points: list) -> list {
+    let mut pts = points;
+    let n = len(pts);
+    let mut i = 0;
+    while i < n {
+        let mut j = i + 1;
+        while j < n {
+            let p_i = pts[i];
+            let p_j = pts[j];
+            let mut swap = false;
+            if p_j[0] < p_i[0] {
+                swap = true;
+            } else {
+                if p_j[0] == p_i[0] && p_j[1] < p_i[1] {
+                    swap = true;
+                }
+            }
+            if swap {
+                pts[i] = p_j;
+                pts[j] = p_i;
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    return pts;
+}
+
+fn convex_hull(points: list) -> list {
+    let n = len(points);
+    if n <= 2 {
+        return points;
+    }
+
+    let sorted = sort_points(points);
+
+    // Build lower hull
+    let mut lower = [];
+    let mut i = 0;
+    while i < n {
+        let p = sorted[i];
+        let mut can_pop = true;
+        while len(lower) >= 2 && can_pop {
+            let k = len(lower);
+            let o = lower[k - 2];
+            let a = lower[k - 1];
+            if cross_product_2d(o, a, p) <= 0 {
+                lower = slice(lower, 0, k - 1);
+            } else {
+                can_pop = false;
+            }
+        }
+        lower = lower + [p];
+        i = i + 1;
+    }
+
+    // Build upper hull
+    let mut upper = [];
+    let mut j = n - 1;
+    while j >= 0 {
+        let p = sorted[j];
+        let mut can_pop_up = true;
+        while len(upper) >= 2 && can_pop_up {
+            let k2 = len(upper);
+            let o2 = upper[k2 - 2];
+            let a2 = upper[k2 - 1];
+            if cross_product_2d(o2, a2, p) <= 0 {
+                upper = slice(upper, 0, k2 - 1);
+            } else {
+                can_pop_up = false;
+            }
+        }
+        upper = upper + [p];
+        j = j - 1;
+    }
+
+    let lower_trimmed = slice(lower, 0, len(lower) - 1);
+    let upper_trimmed = slice(upper, 0, len(upper) - 1);
+    return lower_trimmed + upper_trimmed;
+}
+
+fn polygon_2x_area(hull: list) -> int {
+    let k = len(hull);
+    if k < 3 {
+        return 0;
+    }
+    let mut area = 0;
+    let mut i = 0;
+    while i < k {
+        let j = (i + 1) % k;
+        area = area + (hull[i][0] * hull[j][1] - hull[j][0] * hull[i][1]);
+        i = i + 1;
+    }
+    if area < 0 {
+        area = 0 - area;
+    }
+    return area;
+}
+
+fn main() -> int {
+    // 1. Cross Product Orientation Invariants
+    let origin = [0, 0];
+    let right = [1, 0];
+    let up = [0, 1];
+    let down = [0, -1];
+    // Counter-clockwise turn (origin -> right -> up) > 0
+    assert(cross_product_2d(origin, right, up) == 1);
+    // Clockwise turn (origin -> right -> down) < 0
+    assert(cross_product_2d(origin, right, down) == -1);
+    // Collinear points = 0
+    assert(cross_product_2d(origin, right, [2, 0]) == 0);
+
+    // 2. Unit Square with Interior Points
+    // Corners: [0, 0], [10, 0], [10, 10], [0, 10]
+    // Interior points: [5, 5], [2, 3], [7, 8], [1, 9]
+    let cloud = [
+        [0, 0], [10, 0], [10, 10], [0, 10],
+        [5, 5], [2, 3], [7, 8], [1, 9]
+    ];
+    let hull = convex_hull(cloud);
+    // The convex hull of the unit square must contain exactly the 4 corner points
+    assert(len(hull) == 4);
+
+    // 2x Area of 10x10 square is 2 * 100 = 200
+    let area2x = polygon_2x_area(hull);
+    assert(area2x == 200);
+
+    // 3. Triangle with Center Point
+    let triangle = [
+        [0, 0],
+        [6, 0],
+        [3, 6],
+        [3, 2] // interior point
+    ];
+    let tri_hull = convex_hull(triangle);
+    assert(len(tri_hull) == 3);
+    // Base 6, height 6 -> area = 18, 2x area = 36
+    assert(polygon_2x_area(tri_hull) == 36);
+
+    // 4. Base Case: 2 points
+    let pair = [[1, 2], [3, 4]];
+    let pair_hull = convex_hull(pair);
+    assert(len(pair_hull) == 2);
+    assert(polygon_2x_area(pair_hull) == 0);
+
+    return 0;
+}
