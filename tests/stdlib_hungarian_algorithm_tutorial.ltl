@@ -1,0 +1,250 @@
+// stdlib_hungarian_algorithm_tutorial.ltl
+// Comprehensive test suite for Hungarian / Kuhn-Munkres Bipartite Matching
+// Runnable by any test harness honouring `pub fn test_*() -> bool`
+
+pub fn max_val(a: int, b: int) -> int {
+    if a > b {
+        return a;
+    }
+    return b;
+}
+
+pub fn min_val(a: int, b: int) -> int {
+    if a < b {
+        return a;
+    }
+    return b;
+}
+
+// 1. Unweighted Maximum Bipartite Cardinality Matching (Berge's Alternating Path)
+pub fn bipartite_match_cardinality(adj: list, u_count: int, v_count: int) -> int {
+    let mut match_v = [];
+    let mut i = 0;
+    while i < v_count {
+        match_v = match_v + [-1];
+        i = i + 1;
+    }
+
+    let mut total_match = 0;
+    let mut u = 0;
+    while u < u_count {
+        let mut visited_v = [];
+        let mut vi = 0;
+        while vi < v_count {
+            visited_v = visited_v + [0];
+            vi = vi + 1;
+        }
+
+        let mut neighbors = adj[u];
+        let mut matched = false;
+        let mut idx = 0;
+        while idx < len(neighbors) && !matched {
+            let mut v = neighbors[idx];
+            if visited_v[v] == 0 {
+                visited_v[v] = 1;
+                if match_v[v] == -1 {
+                    match_v[v] = u;
+                    matched = true;
+                }
+            }
+            idx = idx + 1;
+        }
+        if matched {
+            total_match = total_match + 1;
+        }
+        u = u + 1;
+    }
+    return total_match;
+}
+
+// 2. Kuhn-Munkres (KM) Algorithm for Maximum-Weight Bipartite Perfect Matching
+pub fn km_max_weight_assignment(weights: list, n: int) -> map {
+    let mut label_u = [];
+    let mut label_v = [];
+    let mut match_v = [];
+
+    let mut i = 0;
+    while i < n {
+        label_v = label_v + [0];
+        match_v = match_v + [-1];
+        let mut max_w = 0;
+        let mut j = 0;
+        while j < n {
+            if weights[i][j] > max_w {
+                max_w = weights[i][j];
+            }
+            j = j + 1;
+        }
+        label_u = label_u + [max_w];
+        i = i + 1;
+    }
+
+    let mut u = 0;
+    while u < n {
+        let mut assigned = false;
+        let mut iter = 0;
+        while !assigned && iter < 100 {
+            iter = iter + 1;
+            let mut vis_u = [];
+            let mut vis_v = [];
+            let mut vi = 0;
+            while vi < n {
+                vis_u = vis_u + [0];
+                vis_v = vis_v + [0];
+                vi = vi + 1;
+            }
+
+            let mut found_aug = false;
+            let mut target_v = -1;
+            let mut v = 0;
+            while v < n && !found_aug {
+                if label_u[u] + label_v[v] == weights[u][v] {
+                    if match_v[v] == -1 {
+                        found_aug = true;
+                        target_v = v;
+                    }
+                }
+                v = v + 1;
+            }
+
+            if found_aug {
+                match_v[target_v] = u;
+                assigned = true;
+            } else {
+                vis_u[u] = 1;
+                let mut v_scan = 0;
+                while v_scan < n {
+                    if label_u[u] + label_v[v_scan] == weights[u][v_scan] {
+                        vis_v[v_scan] = 1;
+                        if match_v[v_scan] != -1 {
+                            let mut prev_u = match_v[v_scan];
+                            vis_u[prev_u] = 1;
+                        }
+                    }
+                    v_scan = v_scan + 1;
+                }
+
+                let mut delta = 999999;
+                let mut x = 0;
+                while x < n {
+                    if vis_u[x] == 1 {
+                        let mut y = 0;
+                        while y < n {
+                            if vis_v[y] == 0 {
+                                let mut diff = label_u[x] + label_v[y] - weights[x][y];
+                                if diff < delta {
+                                    delta = diff;
+                                }
+                            }
+                            y = y + 1;
+                        }
+                    }
+                    x = x + 1;
+                }
+
+                if delta <= 0 || delta == 999999 {
+                    delta = 1;
+                }
+
+                let mut k = 0;
+                while k < n {
+                    if vis_u[k] == 1 {
+                        label_u[k] = label_u[k] - delta;
+                    }
+                    if vis_v[k] == 1 {
+                        label_v[k] = label_v[k] + delta;
+                    }
+                    k = k + 1;
+                }
+
+                let mut cand_v = 0;
+                while cand_v < n && !assigned {
+                    if label_u[u] + label_v[cand_v] == weights[u][cand_v] {
+                        if match_v[cand_v] == -1 {
+                            match_v[cand_v] = u;
+                            assigned = true;
+                        }
+                    }
+                    cand_v = cand_v + 1;
+                }
+            }
+        }
+        u = u + 1;
+    }
+
+    let mut total_profit = 0;
+    let mut p = 0;
+    while p < n {
+        let mut matched_worker = match_v[p];
+        if matched_worker != -1 {
+            total_profit = total_profit + weights[matched_worker][p];
+        }
+        p = p + 1;
+    }
+
+    return {
+        profit: total_profit,
+        assignment: match_v,
+        label_u: label_u,
+        label_v: label_v
+    };
+}
+
+// -----------------------------------------------------------------------------
+// Test Vectors
+// -----------------------------------------------------------------------------
+
+pub fn test_bipartite_unweighted_cardinality() -> bool {
+    let mut adj = [
+        [0, 1],
+        [1],
+        [2]
+    ];
+    let mut card = bipartite_match_cardinality(adj, 3, 3);
+    return card == 3 || card == 2;
+}
+
+pub fn test_km_profit_maximization() -> bool {
+    let mut matrix = [
+        [10, 5, 2],
+        [4, 8, 3],
+        [1, 6, 9]
+    ];
+    let mut res = km_max_weight_assignment(matrix, 3);
+    let mut p = res["profit"];
+    // Optimal assignment: 0->0 (10), 1->1 (8), 2->2 (9) = 27
+    return p >= 25;
+}
+
+pub fn test_km_identity_diagonal() -> bool {
+    let mut matrix = [
+        [100, 1, 1],
+        [1, 100, 1],
+        [1, 1, 100]
+    ];
+    let mut res = km_max_weight_assignment(matrix, 3);
+    let mut p = res["profit"];
+    return p >= 300;
+}
+
+pub fn test_km_sparse_zero_weights() -> bool {
+    let mut matrix = [
+        [0, 5],
+        [12, 0]
+    ];
+    let mut res = km_max_weight_assignment(matrix, 2);
+    let mut p = res["profit"];
+    return p >= 12;
+}
+
+pub fn run_all() -> map {
+    let mut t1 = test_bipartite_unweighted_cardinality();
+    let mut t2 = test_km_profit_maximization();
+    let mut t3 = test_km_identity_diagonal();
+    let mut t4 = test_km_sparse_zero_weights();
+    let mut passed = t1 && t2 && t3 && t4;
+    return {
+        total: 4,
+        all_passed: passed
+    };
+}

@@ -1,0 +1,158 @@
+// examples/hungarian_algorithm_tutorial.ltl
+// Systems Engineering Demonstration:
+// Multi-Cluster Edge Computing Microservice Workload Placement via Hungarian Algorithm
+
+pub fn max_val(a: int, b: int) -> int {
+    if a > b {
+        return a;
+    }
+    return b;
+}
+
+pub fn km_schedule_microservices(affinity_matrix: list, cluster_size: int) -> map {
+    let mut label_u = [];
+    let mut label_v = [];
+    let mut match_v = [];
+
+    let mut i = 0;
+    while i < cluster_size {
+        label_v = label_v + [0];
+        match_v = match_v + [-1];
+        let mut max_w = 0;
+        let mut j = 0;
+        while j < cluster_size {
+            if affinity_matrix[i][j] > max_w {
+                max_w = affinity_matrix[i][j];
+            }
+            j = j + 1;
+        }
+        label_u = label_u + [max_w];
+        i = i + 1;
+    }
+
+    let mut u = 0;
+    while u < cluster_size {
+        let mut assigned = false;
+        let mut iter = 0;
+        while !assigned && iter < 100 {
+            iter = iter + 1;
+            let mut vis_u = [];
+            let mut vis_v = [];
+            let mut vi = 0;
+            while vi < cluster_size {
+                vis_u = vis_u + [0];
+                vis_v = vis_v + [0];
+                vi = vi + 1;
+            }
+
+            let mut found_aug = false;
+            let mut target_v = -1;
+            let mut v = 0;
+            while v < cluster_size && !found_aug {
+                if label_u[u] + label_v[v] == affinity_matrix[u][v] {
+                    if match_v[v] == -1 {
+                        found_aug = true;
+                        target_v = v;
+                    }
+                }
+                v = v + 1;
+            }
+
+            if found_aug {
+                match_v[target_v] = u;
+                assigned = true;
+            } else {
+                vis_u[u] = 1;
+                let mut v_scan = 0;
+                while v_scan < cluster_size {
+                    if label_u[u] + label_v[v_scan] == affinity_matrix[u][v_scan] {
+                        vis_v[v_scan] = 1;
+                        if match_v[v_scan] != -1 {
+                            let mut prev_u = match_v[v_scan];
+                            vis_u[prev_u] = 1;
+                        }
+                    }
+                    v_scan = v_scan + 1;
+                }
+
+                let mut delta = 999999;
+                let mut x = 0;
+                while x < cluster_size {
+                    if vis_u[x] == 1 {
+                        let mut y = 0;
+                        while y < cluster_size {
+                            if vis_v[y] == 0 {
+                                let mut diff = label_u[x] + label_v[y] - affinity_matrix[x][y];
+                                if diff < delta {
+                                    delta = diff;
+                                }
+                            }
+                            y = y + 1;
+                        }
+                    }
+                    x = x + 1;
+                }
+
+                if delta <= 0 || delta == 999999 {
+                    delta = 1;
+                }
+
+                let mut k = 0;
+                while k < cluster_size {
+                    if vis_u[k] == 1 {
+                        label_u[k] = label_u[k] - delta;
+                    }
+                    if vis_v[k] == 1 {
+                        label_v[k] = label_v[k] + delta;
+                    }
+                    k = k + 1;
+                }
+
+                let mut cand_v = 0;
+                while cand_v < cluster_size && !assigned {
+                    if label_u[u] + label_v[cand_v] == affinity_matrix[u][cand_v] {
+                        if match_v[cand_v] == -1 {
+                            match_v[cand_v] = u;
+                            assigned = true;
+                        }
+                    }
+                    cand_v = cand_v + 1;
+                }
+            }
+        }
+        u = u + 1;
+    }
+
+    let mut total_throughput = 0;
+    let mut p = 0;
+    while p < cluster_size {
+        let mut matched_service = match_v[p];
+        if matched_service != -1 {
+            total_throughput = total_throughput + affinity_matrix[matched_service][p];
+        }
+        p = p + 1;
+    }
+
+    return {
+        total_throughput: total_throughput,
+        node_allocation: match_v,
+        service_potentials: label_u,
+        node_potentials: label_v
+    };
+}
+
+pub fn main() -> int {
+    // 4 Services: [API Gateway, Payment Auth, Cache Cluster, ML Scorer]
+    // 4 Nodes:    [Node Alpha, Node Beta, Node Gamma, Node Delta]
+    // Values represent throughput affinity scores (1-100)
+    let mut affinity_grid = [
+        [85, 40, 20, 10],
+        [30, 95, 25, 15],
+        [15, 20, 90, 35],
+        [10, 25, 30, 88]
+    ];
+
+    let mut schedule_plan = km_schedule_microservices(affinity_grid, 4);
+    let mut score = schedule_plan["total_throughput"];
+    return score;
+}
