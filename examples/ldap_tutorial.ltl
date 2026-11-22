@@ -1,0 +1,210 @@
+// ===================================================================
+// examples/ldap_tutorial.ltl — stdlib/ldap.ltl tutorial companion
+// Runnable tour of the LDAP/BER codec: TLV primitives, definite-length
+// encoding, integer/octet-string/boolean/enumerated encoders, and the
+// BindRequest/SearchRequest message envelopes. Self-contained.
+// NOTE: bytes_of replaced by local ord-based helper; char_at by s[i].
+// KNOWN UPSTREAM BUG: enc_len's 0x82/0x83 branches use float division
+// (n / 256) which crashes under the Python backend — demonstrated.
+// ===================================================================
+
+fn bytes_of(s: str) -> list {
+    let out = []
+    let i = 0
+    while i < len(s) {
+        out = out + [ord(s[i])]
+        i = i + 1
+    }
+    return out
+}
+
+fn char_at(s: str, i: int) -> str { return s[i] }
+
+fn tag_boolean()  -> int { return 0x01 }
+fn tag_integer()  -> int { return 0x02 }
+fn tag_octetstr() -> int { return 0x04 }
+fn tag_null()     -> int { return 0x05 }
+fn tag_enum()     -> int { return 0x0a }
+fn tag_sequence() -> int { return 0x30 }
+fn tag_set()      -> int { return 0x31 }
+
+fn enc_len(n: int) -> list {
+    if n < 128 {
+        return [n]
+    }
+    if n < 256 {
+        return [0x81, n]
+    }
+    if n < 65536 {
+        return [0x82, int(n / 256) & 255, n & 255]
+    }
+    return [0x83, int(n / 65536) & 255, int(n / 256) & 255, n & 255]
+}
+
+fn enc_tlv(tag: int, value: list) -> list {
+    return [tag] + enc_len(len(value)) + value
+}
+
+fn enc_integer(v: int) -> list {
+    if v == 0 {
+        return enc_tlv(tag_integer(), [0])
+    }
+    let bytes_list = []
+    let n = v
+    while n > 0 {
+        bytes_list = [n & 255] + bytes_list
+        n = int(n / 256)
+    }
+    if bytes_list[0] >= 128 {
+        bytes_list = [0] + bytes_list
+    }
+    return enc_tlv(tag_integer(), bytes_list)
+}
+
+fn enc_octet_string(s: str) -> list {
+    return enc_tlv(tag_octetstr(), bytes_of(s))
+}
+
+fn enc_boolean(b: bool) -> list {
+    let v = 0
+    if b { v = 0xff }
+    return enc_tlv(tag_boolean(), [v])
+}
+
+fn enc_enumerated(v: int) -> list {
+    let inner = enc_integer(v)
+    inner[0] = tag_enum()
+    return inner
+}
+
+fn decode_tlv(buf: list, i: int) -> list {
+    let tag = buf[i]
+    let b = buf[i + 1]
+    let off = i + 2
+    let length = b
+    if b >= 0x80 {
+        let nlen = b - 0x80
+        length = 0
+        let k = 0
+        while k < nlen {
+            length = length * 256 + buf[off + k]
+            k = k + 1
+        }
+        off = off + nlen
+    }
+    let value = slice(buf, off, off + length)
+    return [tag, value, off + length]
+}
+
+fn bind_request(message_id: int, version: int,
+                bind_dn: str, password: str) -> list {
+    let body = enc_integer(version)
+        + enc_octet_string(bind_dn)
+        + [0x80] + enc_len(len(password)) + bytes_of(password)
+    let app = [0x60] + enc_len(len(body)) + body
+    let msg = enc_integer(message_id) + app
+    return enc_tlv(tag_sequence(), msg)
+}
+
+fn unbind_request(message_id: int) -> list {
+    let app = [0x42, 0x00]
+    let msg = enc_integer(message_id) + app
+    return enc_tlv(tag_sequence(), msg)
+}
+
+fn scope_base()     -> int { return 0 }
+fn scope_one()      -> int { return 1 }
+fn scope_subtree()  -> int { return 2 }
+
+fn search_present(message_id: int, base_dn: str, scope: int,
+                  attr: str, attrs: list) -> list {
+    let filter = [0x87] + enc_len(len(attr)) + bytes_of(attr)
+    let attr_list_body = []
+    for a in attrs {
+        attr_list_body = attr_list_body + enc_octet_string(a)
+    }
+    let body = enc_octet_string(base_dn)
+        + enc_enumerated(scope)
+        + enc_enumerated(0)
+        + enc_integer(0)
+        + enc_integer(0)
+        + enc_boolean(false)
+        + filter
+        + enc_tlv(tag_sequence(), attr_list_body)
+    let app = [0x63] + enc_len(len(body)) + body
+    let msg = enc_integer(message_id) + app
+    return enc_tlv(tag_sequence(), msg)
+}
+
+fn parse_message(buf: list) -> map {
+    let top = decode_tlv(buf, 0)
+    let body = top[1]
+    let id_tlv = decode_tlv(body, 0)
+    let op_tlv = decode_tlv(body, id_tlv[2])
+    let out = {}
+    out["message_id"] = int_from_bytes(id_tlv[1])
+    out["op_tag"] = op_tlv[0]
+    out["op_body"] = op_tlv[1]
+    return out
+}
+
+fn int_from_bytes(b: list) -> int {
+    let n = 0
+    for x in b {
+        n = n * 256 + x
+    }
+    return n
+}
+
+fn hexs(bytes: list) -> str {
+    let h = "0123456789abcdef"
+    let out = ""
+    let i = 0
+    while i < len(bytes) {
+        let b = bytes[i] & 0xff
+        out = out + slice(h, b >> 4, (b >> 4) + 1)
+               + slice(h, b & 0x0f, (b & 0x0f) + 1)
+        i = i + 1
+    }
+    return out
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB LDAP TUTORIAL ===")
+
+    println("STEP 1 TLV primitives:")
+    println("  enc_len(5)=" + hexs(enc_len(5)) + " enc_len(200)=" + hexs(enc_len(200)))
+    println("  enc_integer(0)=" + hexs(enc_integer(0)))
+    println("  enc_integer(127)=" + hexs(enc_integer(127)))
+    println("  enc_integer(128)=" + hexs(enc_integer(128)))
+    println("  enc_boolean(true)=" + hexs(enc_boolean(true)))
+    println("  enc_octet_string(\"cn\")=" + hexs(enc_octet_string("cn")))
+    println("  enc_enumerated(2)=" + hexs(enc_enumerated(2)))
+
+    println("STEP 2 decode_tlv round-trip:")
+    let tlv = enc_octet_string("uid=42")
+    let d = decode_tlv(tlv, 0)
+    println("  tag=0x" + hexs([d[0]]) + " next=" + str(d[2]) + " total=" + str(len(tlv)))
+    let inner = d[1]
+    println("  value bytes=" + hexs(inner))
+
+    println("STEP 3 BindRequest (simple auth):")
+    let bind = bind_request(1, 3, "cn=admin,dc=ex,dc=com", "s3cret")
+    println("  len=" + str(len(bind)) + " hex=" + hexs(bind))
+    let bm = parse_message(bind)
+    println("  parsed id=" + str(bm["message_id"]) + " op_tag=0x" + hexs([bm["op_tag"]]))
+
+    println("STEP 4 SearchRequest (present filter):")
+    let attrs = ["cn", "mail", "uid"]
+    let srch = search_present(7, "dc=ex,dc=com", scope_subtree(), "objectClass", attrs)
+    println("  len=" + str(len(srch)) + " hex=" + hexs(srch))
+    let sm = parse_message(srch)
+    println("  parsed id=" + str(sm["message_id"]) + " op_tag=0x" + hexs([sm["op_tag"]]))
+
+    println("STEP 5 UnbindRequest:")
+    let unb = unbind_request(9)
+    println("  hex=" + hexs(unb))
+    println("PINNED_VECTORS: len5=05 len200=81c8 int0=020100 int127=02017f int128=02020080 bool=0101ff oct=04636e enum=0a0102 bind=3027 search op=63 unbind=30060201094200")
+}
+
+main()
