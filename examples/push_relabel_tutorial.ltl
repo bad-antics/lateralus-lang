@@ -1,0 +1,134 @@
+// examples/push_relabel_tutorial.ltl
+// Systems Engineering Demonstration:
+// Multi-Region Global Cloud WAN Backbone Traffic Engineering via Push-Relabel Algorithm
+
+pub fn min_val(a: int, b: int) -> int {
+    if a < b {
+        return a;
+    }
+    return b;
+}
+
+pub fn optimize_wan_backbone_egress(wan_capacities: list, node_count: int, src: int, dst: int) -> map {
+    let mut flow = [];
+    let mut excess = [];
+    let mut height = [];
+
+    let mut i = 0;
+    while i < node_count {
+        let mut row = [];
+        let mut j = 0;
+        while j < node_count {
+            row = row + [0];
+            j = j + 1;
+        }
+        flow = flow + [row];
+        excess = excess + [0];
+        if i == src {
+            height = height + [node_count];
+        } else {
+            height = height + [0];
+        }
+        i = i + 1;
+    }
+
+    // Preflow from ingress datacenter src
+    let mut v = 0;
+    while v < node_count {
+        let mut cap = wan_capacities[src][v];
+        if cap > 0 {
+            flow[src][v] = cap;
+            flow[v][src] = 0 - cap;
+            excess[v] = cap;
+            excess[src] = excess[src] - cap;
+        }
+        v = v + 1;
+    }
+
+    let mut active = true;
+    let mut iter = 0;
+    while active && iter < 1000 {
+        iter = iter + 1;
+        let mut found_u = -1;
+        let mut max_h = -1;
+
+        // Highest-label selection
+        let mut u = 0;
+        while u < node_count {
+            if u != src && u != dst {
+                if excess[u] > 0 {
+                    if height[u] > max_h {
+                        max_h = height[u];
+                        found_u = u;
+                    }
+                }
+            }
+            u = u + 1;
+        }
+
+        if found_u == -1 {
+            active = false;
+        } else {
+            let mut curr = found_u;
+            let mut target_v = 0;
+
+            while target_v < node_count && excess[curr] > 0 {
+                let mut res_cap = wan_capacities[curr][target_v] - flow[curr][target_v];
+                if res_cap > 0 && height[curr] == height[target_v] + 1 {
+                    let mut send = min_val(excess[curr], res_cap);
+                    flow[curr][target_v] = flow[curr][target_v] + send;
+                    flow[target_v][curr] = flow[target_v][curr] - send;
+                    excess[curr] = excess[curr] - send;
+                    excess[target_v] = excess[target_v] + send;
+                }
+                target_v = target_v + 1;
+            }
+
+            if excess[curr] > 0 {
+                let mut min_h = 999999;
+                let mut k = 0;
+                while k < node_count {
+                    let mut res_cap = wan_capacities[curr][k] - flow[curr][k];
+                    if res_cap > 0 {
+                        if height[k] < min_h {
+                            min_h = height[k];
+                        }
+                    }
+                    k = k + 1;
+                }
+                if min_h < 999999 {
+                    height[curr] = min_h + 1;
+                }
+            }
+        }
+    }
+
+    let mut peak_throughput = excess[dst];
+    return {
+        peak_throughput_gbps: peak_throughput,
+        node_heights: height,
+        egress_excess: excess
+    };
+}
+
+pub fn main() -> int {
+    // 6 Datacenter Nodes (Gigabits per second):
+    // 0: US-East (Ingress)
+    // 1: US-Central
+    // 2: EU-West
+    // 3: AP-East
+    // 4: SA-East
+    // 5: Global Data Lake (Egress Sink)
+    let mut backbone_grid = [
+        [0, 40, 30,  0,  0,  0], // 0 -> 1 (40G), 0 -> 2 (30G)
+        [0,  0, 10, 25,  0,  0], // 1 -> 2 (10G), 1 -> 3 (25G)
+        [0,  0,  0,  0, 20, 20], // 2 -> 4 (20G), 2 -> 5 (20G)
+        [0,  0,  0,  0,  0, 30], // 3 -> 5 (30G)
+        [0,  0,  0,  0,  0, 15], // 4 -> 5 (15G)
+        [0,  0,  0,  0,  0,  0]  // 5 (Sink)
+    ];
+
+    let mut plan = optimize_wan_backbone_egress(backbone_grid, 6, 0, 5);
+    let mut throughput = plan["peak_throughput_gbps"];
+    return throughput;
+}
