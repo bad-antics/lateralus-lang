@@ -1,0 +1,248 @@
+// ===================================================================
+// tests/stdlib_fractional_cascading_tutorial.ltl
+// -------------------------------------------------------------------
+// Complete test suite for Fractional Cascading in Lateralus.
+// Accelerates iterative binary searching across k sorted catalogues
+// from O(k log n) down to optimal O(log n + k).
+// Bernard Chazelle & Leonidas J. Guibas (1986).
+// ===================================================================
+
+pub fn fc_binary_search(vals: list, key: int) -> int {
+    let mut low = 0
+    let mut high = vals.len()
+    while low < high {
+        let mid = low + (high - low) / 2
+        if vals[mid] >= key {
+            high = mid
+        } else {
+            low = mid + 1
+        }
+    }
+    return low
+}
+
+pub fn fc_build(catalogues: list) -> dict {
+    let mut fc = {}
+    let k = catalogues.len()
+    let mut m_vals = []
+    let mut m_orig = []
+    let mut m_down = []
+
+    let mut i = 0
+    while i < k {
+        m_vals.push([])
+        m_orig.push([])
+        m_down.push([])
+        i = i + 1
+    }
+
+    // Bottom layer k - 1: directly the original catalogue
+    let bottom_arr = catalogues[k - 1]
+    let mut b_vals = []
+    let mut b_orig = []
+    let mut b_down = []
+    let mut bi = 0
+    while bi < bottom_arr.len() {
+        b_vals.push(bottom_arr[bi])
+        b_orig.push(bi)
+        b_down.push(0)
+        bi = bi + 1
+    }
+    m_vals[k - 1] = b_vals
+    m_orig[k - 1] = b_orig
+    m_down[k - 1] = b_down
+
+    // Build upwards from k - 2 down to 0
+    let mut layer = k - 2
+    while layer >= 0 {
+        let orig_list = catalogues[layer]
+        let down_vals = m_vals[layer + 1]
+
+        // Sample every second element from downstream layer
+        let mut sample_vals = []
+        let mut sample_indices = []
+        let mut si = 0
+        while si < down_vals.len() {
+            sample_vals.push(down_vals[si])
+            sample_indices.push(si)
+            si = si + 2
+        }
+
+        // Merge orig_list and sample_vals
+        let mut merged_vals = []
+        let mut merged_orig = []
+        let mut merged_down = []
+
+        let mut p1 = 0
+        let mut p2 = 0
+        let n1 = orig_list.len()
+        let n2 = sample_vals.len()
+
+        while p1 < n1 or p2 < n2 {
+            if p2 >= n2 or (p1 < n1 and orig_list[p1] <= sample_vals[p2]) {
+                let v = orig_list[p1]
+                merged_vals.push(v)
+                merged_orig.push(p1)
+                if p2 < n2 {
+                    merged_down.push(sample_indices[p2])
+                } else {
+                    merged_down.push(down_vals.len())
+                }
+                p1 = p1 + 1
+            } else {
+                let v = sample_vals[p2]
+                merged_vals.push(v)
+                merged_orig.push(p1)
+                merged_down.push(sample_indices[p2])
+                p2 = p2 + 1
+            }
+        }
+
+        m_vals[layer] = merged_vals
+        m_orig[layer] = merged_orig
+        m_down[layer] = merged_down
+        layer = layer - 1
+    }
+
+    fc["m_vals"] = m_vals
+    fc["m_orig"] = m_orig
+    fc["m_down"] = m_down
+    fc["num_catalogues"] = k
+    fc["catalogues"] = catalogues
+    return fc
+}
+
+pub fn fc_query(fc: dict, key: int) -> list {
+    let k = fc["num_catalogues"]
+    let m_vals = fc["m_vals"]
+    let m_orig = fc["m_orig"]
+    let m_down = fc["m_down"]
+
+    let mut results = []
+
+    // Step 1: Binary search exclusively on top layer M_0 in O(log n)
+    let top_vals = m_vals[0]
+    let mut pos = fc_binary_search(top_vals, key)
+
+    let top_orig = m_orig[0]
+    if pos < top_vals.len() {
+        results.push(top_orig[pos])
+    } else {
+        let catalogues = fc["catalogues"]
+        let first_cat = catalogues[0]
+        results.push(first_cat.len())
+    }
+
+    // Step 2: Cascade down remaining layers in strictly O(1) per layer
+    let mut layer = 0
+    while layer < k - 1 {
+        let cur_down = m_down[layer]
+        let next_vals = m_vals[layer + 1]
+        let next_orig = m_orig[layer + 1]
+        let catalogues = fc["catalogues"]
+        let next_cat = catalogues[layer + 1]
+
+        let mut candidate = 0
+        if pos < cur_down.len() {
+            candidate = cur_down[pos]
+        } else {
+            candidate = next_vals.len()
+        }
+
+        // Bounded fine-tuning step: candidate index is within offset 1 of actual lower_bound
+        let mut next_pos = candidate
+        if next_pos > 0 and next_pos - 1 < next_vals.len() {
+            if next_vals[next_pos - 1] >= key {
+                next_pos = next_pos - 1
+            }
+        }
+        if next_pos < next_vals.len() {
+            if next_vals[next_pos] < key {
+                next_pos = next_pos + 1
+            }
+        }
+
+        if next_pos < next_vals.len() {
+            results.push(next_orig[next_pos])
+        } else {
+            results.push(next_cat.len())
+        }
+
+        pos = next_pos
+        layer = layer + 1
+    }
+
+    return results
+}
+
+// -------------------------------------------------------------------
+// Smoke tests and Golden Test Vectors
+// -------------------------------------------------------------------
+
+pub fn test_fc_exact_multi_catalogues() -> bool {
+    // 3 sorted catalogues:
+    // A0: [10, 20, 30]
+    // A1: [15, 25, 35]
+    // A2: [5, 22, 40]
+    let a0 = [10, 20, 30]
+    let a1 = [15, 25, 35]
+    let a2 = [5, 22, 40]
+    let cats = [a0, a1, a2]
+
+    let fc = fc_build(cats)
+
+    // Query 1: key = 21
+    // A0 lower_bound >= 21 is 30 at index 2
+    // A1 lower_bound >= 21 is 25 at index 1
+    // A2 lower_bound >= 21 is 22 at index 1
+    let q21 = fc_query(fc, 21)
+    if q21.len() != 3 {
+        return false
+    }
+    if q21[0] != 2 or q21[1] != 1 or q21[2] != 1 {
+        return false
+    }
+
+    // Query 2: key = 10
+    // A0 >= 10 is 10 at index 0
+    // A1 >= 10 is 15 at index 0
+    // A2 >= 10 is 22 at index 1
+    let q10 = fc_query(fc, 10)
+    if q10[0] != 0 or q10[1] != 0 or q10[2] != 1 {
+        return false
+    }
+
+    // Query 3: key = 50 (larger than all elements)
+    // All should return catalogue length: [3, 3, 3]
+    let q50 = fc_query(fc, 50)
+    if q50[0] != 3 or q50[1] != 3 or q50[2] != 3 {
+        return false
+    }
+
+    return true
+}
+
+pub fn test_fc_comparison_against_naive() -> bool {
+    let a0 = [2, 8, 14, 20]
+    let a1 = [1, 7, 13, 19]
+    let a2 = [4, 9, 15, 25]
+    let cats = [a0, a1, a2]
+
+    let fc = fc_build(cats)
+
+    let mut target = 0
+    while target <= 26 {
+        let fc_res = fc_query(fc, target)
+
+        // Compare against naive binary searches
+        let exp0 = fc_binary_search(a0, target)
+        let exp1 = fc_binary_search(a1, target)
+        let exp2 = fc_binary_search(a2, target)
+
+        if fc_res[0] != exp0 or fc_res[1] != exp1 or fc_res[2] != exp2 {
+            return false
+        }
+        target = target + 3
+    }
+    return true
+}
