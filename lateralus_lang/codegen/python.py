@@ -504,7 +504,7 @@ class PythonTranspiler(ASTVisitor):
         self._w += "    return _builtins.sum((xs[i]-mx)*(ys[i]-my) for i in range(n))/n"
         self._w += "def correlation(xs,ys):"
         self._w += "    sx,sy=std_dev(xs),std_dev(ys)"
-        self._w += "    return 0.0 if sx<1e-12 or sy<1e-12 else covariance(xs,ys)/(sx*sy)"
+        self._w += "    return 0.0 if sx==0.0 or sy==0.0 else covariance(xs,ys)/(sx*sy)"
         self._w += "def normalize(lst):"
         self._w += "    lo,hi=_builtins.min(lst),_builtins.max(lst); rng=hi-lo"
         self._w += "    return [0.0]*_builtins.len(lst) if rng<1e-12 else [(x-lo)/rng for x in lst]"
