@@ -876,10 +876,37 @@ class PythonTranspiler(ASTVisitor):
             "polyglot":         "lateralus.polyglot",
             # Lateralus package stdlib modules
             "science":          "lateralus_lang.science",
+            "stdlib.science":   "lateralus_lang.science",
             "algorithms":       "lateralus_lang.algorithms",
+            "stdlib.algorithms":"lateralus_lang.algorithms",
             "data":             "lateralus_lang.data",
+            "stdlib.data":      "lateralus_lang.data",
             "crypto":           "lateralus_lang.crypto_engine",
+            "stdlib.crypto":    "lateralus_lang.crypto_engine",
         }
+        if node.items:
+            items_str = ", ".join(node.items)
+            if node.path in _alias_map:
+                target = _alias_map[node.path]
+                if target.startswith("lateralus_lang."):
+                    self._w += f"from {target} import {items_str}"
+                elif target == "_builtins":
+                    for itm in node.items:
+                        self._w += f"{itm} = getattr(_builtins, '{itm}', globals().get('{itm}'))"
+                elif target == "_math":
+                    self._w += f"from math import {items_str}"
+                elif target == "_time":
+                    self._w += f"from time import {items_str}"
+                elif target == "_io":
+                    for itm in node.items:
+                        self._w += f"{itm} = getattr(_io, '{itm}')"
+                else:
+                    self._w += f"from {target} import {items_str}"
+            else:
+                py_path = node.path.replace(".", ".")
+                self._w += f"from {py_path} import {items_str}"
+            return
+
         if node.path in _alias_map:
             target = _alias_map[node.path]
             if target.startswith("__import__"):
@@ -887,9 +914,13 @@ class PythonTranspiler(ASTVisitor):
             elif target.startswith("lateralus_lang."):
                 # Try to import the lateralus_lang sub-module; silently skip if missing
                 mod_path = target
+                base_name = mod_path.split(".")[-1]
                 self._w += "try:"
                 with self._w.indent():
                     self._w += f"import {mod_path} as {alias}"
+                    if alias != base_name:
+                        self._w += f"{base_name} = {alias}"
+                    self._w += f"from {mod_path} import *"
                 self._w += "except ImportError:"
                 with self._w.indent():
                     self._w += f"{alias} = None  # stdlib module '{node.path}' not available"
@@ -898,7 +929,10 @@ class PythonTranspiler(ASTVisitor):
             return
         # For from-imports of stdlib, emit a comment — symbols already in preamble
         if any(node.path.startswith(p) for p in ("stdlib.",)):
-            self._w += f"# stdlib '{node.path}' resolved via preamble shims"
+            if node.alias:
+                self._w += f"{node.alias} = None  # stdlib '{node.path}'"
+            else:
+                self._w += f"# stdlib '{node.path}' resolved via preamble shims"
             return
         py_path = node.path.replace(".", ".")
         self._w += f"import {py_path} as {alias}"
