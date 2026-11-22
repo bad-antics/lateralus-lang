@@ -195,6 +195,16 @@ class TestInterval:
         assert a.hi == 10.5
         assert a.mid == pytest.approx(10.0)
 
+    def test_reversed_endpoints(self):
+        """Issue #244: Interval(1, -1) must normalize to [-1, 1], not
+        collapse to [-1, -1] (the second __setattr__ read the already-
+        overwritten lo)."""
+        a = Interval(1, -1)
+        assert (a.lo, a.hi) == (-1, 1)
+        assert a == Interval(-1, 1)
+        with pytest.raises(ZeroDivisionError):
+            Interval.exact(1) / a
+
 
 # -------------------------------------------------------------------------
 # Automatic differentiation
