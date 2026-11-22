@@ -1,0 +1,360 @@
+// ===================================================================
+// tests/stdlib_rtree_tutorial.ltl
+// -------------------------------------------------------------------
+// Complete test suite for R-Tree Spatial Index in Lateralus.
+// Features 2D Minimum Bounding Box (MBR) hierarchy, quadratic split,
+// and sublinear spatial range window queries.
+// Antonin Guttman (1984).
+// ===================================================================
+
+pub fn mbr_create(min_x: int, min_y: int, max_x: int, max_y: int) -> dict {
+    let mut m = {}
+    m["min_x"] = min_x
+    m["min_y"] = min_y
+    m["max_x"] = max_x
+    m["max_y"] = max_y
+    return m
+}
+
+pub fn mbr_area(m: dict) -> int {
+    let w = m["max_x"] - m["min_x"]
+    let h = m["max_y"] - m["min_y"]
+    return w * h
+}
+
+pub fn mbr_union(a: dict, b: dict) -> dict {
+    let mut min_x = a["min_x"]
+    if b["min_x"] < min_x {
+        min_x = b["min_x"]
+    }
+    let mut min_y = a["min_y"]
+    if b["min_y"] < min_y {
+        min_y = b["min_y"]
+    }
+    let mut max_x = a["max_x"]
+    if b["max_x"] > max_x {
+        max_x = b["max_x"]
+    }
+    let mut max_y = a["max_y"]
+    if b["max_y"] > max_y {
+        max_y = b["max_y"]
+    }
+    return mbr_create(min_x, min_y, max_x, max_y)
+}
+
+pub fn mbr_intersects(a: dict, b: dict) -> bool {
+    if a["max_x"] < b["min_x"] or a["min_x"] > b["max_x"] {
+        return false
+    }
+    if a["max_y"] < b["min_y"] or a["min_y"] > b["max_y"] {
+        return false
+    }
+    return true
+}
+
+pub fn mbr_enlargement(a: dict, b: dict) -> int {
+    let u = mbr_union(a, b)
+    return mbr_area(u) - mbr_area(a)
+}
+
+pub fn rtree_create() -> dict {
+    let mut tree = {}
+    tree["root"] = 1
+    tree["max_entries"] = 4
+
+    // Node 0 is sentinel
+    let mut is_leaf = [false, true]
+    let mut entries_mbr = [[], []]
+    let mut entries_id = [[], []]
+    let mut node_mbr = [mbr_create(0, 0, 0, 0), mbr_create(0, 0, 0, 0)]
+    let mut parent = [0, 0]
+
+    tree["is_leaf"] = is_leaf
+    tree["entries_mbr"] = entries_mbr
+    tree["entries_id"] = entries_id
+    tree["node_mbr"] = node_mbr
+    tree["parent"] = parent
+    return tree
+}
+
+pub fn rtree_recalc_mbr(tree: dict, node_id: int) {
+    let entries_mbr = tree["entries_mbr"]
+    let mut node_mbr = tree["node_mbr"]
+    let mbrs = entries_mbr[node_id]
+
+    let n = mbrs.len()
+    if n == 0 {
+        node_mbr[node_id] = mbr_create(0, 0, 0, 0)
+        return
+    }
+
+    let mut u = mbrs[0]
+    let mut i = 1
+    while i < n {
+        u = mbr_union(u, mbrs[i])
+        i = i + 1
+    }
+    node_mbr[node_id] = u
+}
+
+pub fn rtree_choose_leaf(tree: dict, node_id: int, item_mbr: dict) -> int {
+    let is_leaf = tree["is_leaf"]
+    if is_leaf[node_id] {
+        return node_id
+    }
+
+    let entries_mbr = tree["entries_mbr"]
+    let entries_id = tree["entries_id"]
+    let mbrs = entries_mbr[node_id]
+    let children = entries_id[node_id]
+
+    let n = mbrs.len()
+    let mut best_child = children[0]
+    let mut min_enlarge = mbr_enlargement(mbrs[0], item_mbr)
+    let mut min_area = mbr_area(mbrs[0])
+
+    let mut i = 1
+    while i < n {
+        let enl = mbr_enlargement(mbrs[i], item_mbr)
+        let a = mbr_area(mbrs[i])
+        if enl < min_enlarge or (enl == min_enlarge and a < min_area) {
+            min_enlarge = enl
+            min_area = a
+            best_child = children[i]
+        }
+        i = i + 1
+    }
+
+    return rtree_choose_leaf(tree, best_child, item_mbr)
+}
+
+pub fn rtree_split_node(tree: dict, node_id: int) -> int {
+    let mut is_leaf = tree["is_leaf"]
+    let mut entries_mbr = tree["entries_mbr"]
+    let mut entries_id = tree["entries_id"]
+    let mut node_mbr = tree["node_mbr"]
+    let mut parent = tree["parent"]
+
+    let old_mbrs = entries_mbr[node_id]
+    let old_ids = entries_id[node_id]
+    let total = old_mbrs.len()
+
+    // Quadratic Split: pick two seeds with maximum wasted area
+    let mut seed1 = 0
+    let mut seed2 = 1
+    let mut max_d = -1
+
+    let mut i = 0
+    while i < total {
+        let mut j = i + 1
+        while j < total {
+            let u = mbr_union(old_mbrs[i], old_mbrs[j])
+            let d = mbr_area(u) - mbr_area(old_mbrs[i]) - mbr_area(old_mbrs[j])
+            if d > max_d {
+                max_d = d
+                seed1 = i
+                seed2 = j
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+
+    // Allocate new node
+    let new_node = is_leaf.len()
+    is_leaf.push(is_leaf[node_id])
+    entries_mbr.push([])
+    entries_id.push([])
+    node_mbr.push(mbr_create(0, 0, 0, 0))
+    parent.push(parent[node_id])
+
+    let mut g1_mbr = [old_mbrs[seed1]]
+    let mut g1_id = [old_ids[seed1]]
+    let mut g2_mbr = [old_mbrs[seed2]]
+    let mut g2_id = [old_ids[seed2]]
+
+    let mut k = 0
+    while k < total {
+        if k != seed1 and k != seed2 {
+            // Assign to group minimizing enlargement
+            let e = old_mbrs[k]
+            let id = old_ids[k]
+
+            let mut m1 = g1_mbr[0]
+            let mut p1 = 1
+            while p1 < g1_mbr.len() {
+                m1 = mbr_union(m1, g1_mbr[p1])
+                p1 = p1 + 1
+            }
+
+            let mut m2 = g2_mbr[0]
+            let mut p2 = 1
+            while p2 < g2_mbr.len() {
+                m2 = mbr_union(m2, g2_mbr[p2])
+                p2 = p2 + 1
+            }
+
+            let enl1 = mbr_enlargement(m1, e)
+            let enl2 = mbr_enlargement(m2, e)
+
+            if enl1 < enl2 or (enl1 == enl2 and g1_mbr.len() <= g2_mbr.len()) {
+                g1_mbr.push(e)
+                g1_id.push(id)
+            } else {
+                g2_mbr.push(e)
+                g2_id.push(id)
+            }
+        }
+        k = k + 1
+    }
+
+    entries_mbr[node_id] = g1_mbr
+    entries_id[node_id] = g1_id
+    entries_mbr[new_node] = g2_mbr
+    entries_id[new_node] = g2_id
+
+    rtree_recalc_mbr(tree, node_id)
+    rtree_recalc_mbr(tree, new_node)
+    return new_node
+}
+
+pub fn rtree_insert(tree: dict, item_mbr: dict, item_id: int) {
+    let mut entries_mbr = tree["entries_mbr"]
+    let mut entries_id = tree["entries_id"]
+    let mut is_leaf = tree["is_leaf"]
+    let mut node_mbr = tree["node_mbr"]
+    let mut parent = tree["parent"]
+
+    let leaf_id = rtree_choose_leaf(tree, tree["root"], item_mbr)
+
+    let mut mbrs = entries_mbr[leaf_id]
+    let mut ids = entries_id[leaf_id]
+    mbrs.push(item_mbr)
+    ids.push(item_id)
+    entries_mbr[leaf_id] = mbrs
+    entries_id[leaf_id] = ids
+    rtree_recalc_mbr(tree, leaf_id)
+
+    let max_e = tree["max_entries"]
+    if mbrs.len() > max_e {
+        let new_node = rtree_split_node(tree, leaf_id)
+
+        // If root was split, create new root
+        if leaf_id == tree["root"] {
+            let new_root = is_leaf.len()
+            is_leaf.push(false)
+
+            let r_mbrs = [node_mbr[leaf_id], node_mbr[new_node]]
+            let r_ids = [leaf_id, new_node]
+
+            entries_mbr.push(r_mbrs)
+            entries_id.push(r_ids)
+            node_mbr.push(mbr_union(node_mbr[leaf_id], node_mbr[new_node]))
+            parent.push(0)
+
+            parent[leaf_id] = new_root
+            parent[new_node] = new_root
+            tree["root"] = new_root
+        }
+    }
+}
+
+pub fn rtree_search_recursive(tree: dict, node_id: int, query: dict, mut_results: list) {
+    let node_mbr = tree["node_mbr"]
+    if not mbr_intersects(node_mbr[node_id], query) {
+        return
+    }
+
+    let is_leaf = tree["is_leaf"]
+    let entries_mbr = tree["entries_mbr"]
+    let entries_id = tree["entries_id"]
+
+    let mbrs = entries_mbr[node_id]
+    let ids = entries_id[node_id]
+    let n = mbrs.len()
+
+    let mut i = 0
+    while i < n {
+        if mbr_intersects(mbrs[i], query) {
+            if is_leaf[node_id] {
+                mut_results.push(ids[i])
+            } else {
+                rtree_search_recursive(tree, ids[i], query, mut_results)
+            }
+        }
+        i = i + 1
+    }
+}
+
+pub fn rtree_query(tree: dict, query: dict) -> list {
+    let mut res = []
+    rtree_search_recursive(tree, tree["root"], query, res)
+    return res
+}
+
+// -------------------------------------------------------------------
+// Smoke tests and Golden Test Vectors
+// -------------------------------------------------------------------
+
+pub fn test_rtree_mbr_operations() -> bool {
+    let m1 = mbr_create(0, 0, 10, 10)
+    let m2 = mbr_create(5, 5, 15, 15)
+    let m3 = mbr_create(20, 20, 30, 30)
+
+    if mbr_area(m1) != 100 {
+        return false
+    }
+
+    if not mbr_intersects(m1, m2) {
+        return false
+    }
+
+    if mbr_intersects(m1, m3) {
+        return false
+    }
+
+    let u = mbr_union(m1, m2)
+    if u["min_x"] != 0 or u["max_x"] != 15 {
+        return false
+    }
+    return true
+}
+
+pub fn test_rtree_insert_and_window_query() -> bool {
+    let tree = rtree_create()
+
+    // Insert 6 points (triggering quadratic split with max_entries = 4)
+    rtree_insert(tree, mbr_create(2, 2, 2, 2), 101)
+    rtree_insert(tree, mbr_create(3, 3, 3, 3), 102)
+    rtree_insert(tree, mbr_create(8, 8, 8, 8), 103)
+    rtree_insert(tree, mbr_create(9, 9, 9, 9), 104)
+    rtree_insert(tree, mbr_create(25, 25, 25, 25), 105)
+    rtree_insert(tree, mbr_create(26, 26, 26, 26), 106)
+
+    // Window Query 1: region [0, 0] to [5, 5]
+    let q1 = mbr_create(0, 0, 5, 5)
+    let res1 = rtree_query(tree, q1)
+
+    // Expected matches: 101 and 102
+    if res1.len() != 2 {
+        return false
+    }
+
+    // Window Query 2: region [20, 20] to [30, 30]
+    let q2 = mbr_create(20, 20, 30, 30)
+    let res2 = rtree_query(tree, q2)
+
+    // Expected matches: 105 and 106
+    if res2.len() != 2 {
+        return false
+    }
+
+    // Window Query 3: empty region [50, 50] to [60, 60]
+    let q3 = mbr_create(50, 50, 60, 60)
+    let res3 = rtree_query(tree, q3)
+    if res3.len() != 0 {
+        return false
+    }
+
+    return true
+}
