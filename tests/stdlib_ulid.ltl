@@ -1,0 +1,159 @@
+import "ulid"
+import "time"
+import "collections"
+
+// Test ULID generation
+fn test_ulid_generate() {
+    let id1 = ulid.ulid_generate()
+    let id2 = ulid.ulid_generate()
+    
+    // IDs should be different
+    assert id1 != id2
+    
+    // IDs should be valid
+    assert ulid.ulid_valid(id1)
+    assert ulid.ulid_valid(id2)
+    
+    // IDs should be 26 characters
+    assert len(id1) == 26
+    assert len(id2) == 26
+}
+
+// Test Crockford Base32 encoding/decoding
+fn test_crockford_encoding() {
+    let timestamp = ulid.ulid_timestamp_ms()
+    let encoded = ulid.timestamp_to_crockford(timestamp)
+    
+    // Encoded timestamp should be 8 characters
+    assert len(encoded) == 8
+    
+    // All characters should be valid Crockford Base32
+    for char in encoded {
+        assert ulid.CROCKFORD_ALPHABET.find(char.upper()) != -1
+    }
+    
+    // Test entropy encoding
+    let entropy = ulid.ulid_entropy()
+    let entropy_encoded = ulid.entropy_to_crockford(entropy)
+    
+    // Encoded entropy should be 13 characters
+    assert len(entropy_encoded) == 13
+    
+    // All characters should be valid Crockford Base32
+    for char in entropy_encoded {
+        assert ulid.CROCKFORD_ALPHABET.find(char.upper()) != -1
+    }
+}
+
+// Test ULID parsing
+fn test_ulid_parse() {
+    let id = ulid.ulid_generate()
+    let parsed = ulid.ulid_parse(id)
+    
+    // Parsed ULID should be valid
+    assert parsed.valid
+    
+    // Parsed timestamp should be non-zero
+    assert parsed.timestamp > 0
+    
+    // Parsed entropy should be 10 bytes
+    assert len(parsed.entropy) == 10
+    
+    // Time and entropy parts should match
+    assert parsed.time_str == id[0:8]
+    assert parsed.entropy_str == id[8:26]
+}
+
+// Test ULID validation
+fn test_ulid_validation() {
+    let valid_id = ulid.ulid_generate()
+    
+    // Valid ULID should pass validation
+    assert ulid.ulid_valid(valid_id)
+    
+    // Invalid ULIDs should fail validation
+    assert not ulid.ulid_valid("short")
+    assert not ulid.ulid_valid("01H5X8Z3Y4R5Q6W7E8F9G0H1J2K3L4M+")  // Invalid character
+    assert not ulid.ulid_valid("01H5X8Z3Y4R5Q6W7E8F9G0H1J2K3L4M")  // Valid
+    assert not ulid.ulid_valid("")
+}
+
+// Test monotonicity
+fn test_monotonicity() {
+    let ids = []
+    let timestamps = []
+    
+    // Generate multiple ULIDs
+    for i in range(0, 100) {
+        let id = ulid.ulid_generate()
+        ids = ids + [id]
+        let parsed = ulid.ulid_parse(id)
+        timestamps = timestamps + [parsed.timestamp]
+    }
+    
+    // Sort ULIDs
+    let sorted_ids = sort(ids)
+    let sorted_timestamps = sort(timestamps)
+    
+    // Check that sorted ULIDs correspond to sorted timestamps
+    for i in range(0, len(sorted_ids)) {
+        let parsed = ulid.ulid_parse(sorted_ids[i])
+        assert parsed.timestamp == sorted_timestamps[i]
+    }
+}
+
+// Test timestamp extraction
+fn test_timestamp_extraction() {
+    let id = ulid.ulid_generate()
+    let parsed = ulid.ulid_parse(id)
+    
+    // Extracted timestamp should match
+    assert ulid.ulid_parse_timestamp(id) == parsed.timestamp
+    
+    // Test with invalid ULID
+    assert ulid.ulid_parse_timestamp("invalid") == 0
+}
+
+// Test entropy extraction
+fn test_entropy_extraction() {
+    let id = ulid.ulid_generate()
+    let parsed = ulid.ulid_parse(id)
+    
+    // Extracted entropy should match
+    assert ulid.ulid_parse_entropy(id) == parsed.entropy
+    
+    // Test with invalid ULID
+    assert ulid.ulid_parse_entropy("invalid") == []
+}
+
+// Test Crockford value conversion
+fn test_crockford_conversion() {
+    // Test valid conversions
+    assert ulid.crockford_to_value("0") == 0
+    assert ulid.crockford_to_value("1") == 1
+    assert ulid.crockford_to_value("A") == 10
+    assert ulid.crockford_to_value("Z") == 31
+    assert ulid.crockford_to_value("a") == 10  // Case insensitive
+    assert ulid.crockford_to_value("z") == 31  // Case insensitive
+    
+    // Test invalid character
+    assert ulid.crockford_to_value("I") == 0
+    assert ulid.crockford_to_value("L") == 0
+    assert ulid.crockford_to_value("O") == 0
+    assert ulid.crockford_to_value("U") == 0
+    assert ulid.crockford_to_value("@") == 0
+}
+
+// Run all tests
+fn main() {
+    test_ulid_generate()
+    test_crockford_encoding()
+    test_ulid_parse()
+    test_ulid_validation()
+    test_monotonicity()
+    test_timestamp_extraction()
+    test_entropy_extraction()
+    test_crockford_conversion()
+    
+    println("All ULID tests passed!")
+}

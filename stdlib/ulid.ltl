@@ -1,0 +1,163 @@
+import "time"
+import "math"
+import "random"
+
+// Crockford Base32 alphabet (no ambiguous characters)
+const CROCKFORD_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+// ULID timestamp (48 bits, milliseconds since Unix epoch)
+pub fn ulid_timestamp() -> int {
+    return time.now_ms() / 1000
+}
+
+// ULID timestamp (48 bits, milliseconds since Unix epoch)
+pub fn ulid_timestamp_ms() -> int {
+    return time.now_ms()
+}
+
+// Generate 80 bits of cryptographically secure randomness
+pub fn ulid_entropy() -> list[int] {
+    let entropy = []
+    for i in range(0, 10) {
+        entropy = entropy + [random.randint(0, 255)]
+    }
+    return entropy
+}
+
+// Convert timestamp to Crockford Base32 (48 bits → 8 chars)
+pub fn timestamp_to_crockford(timestamp_ms: int) -> str {
+    let timestamp = timestamp_ms / 1000  // Convert to seconds
+    let result = ""
+    
+    for i in range(0, 8) {
+        let shift = 35 - (i * 5)  // 48 bits, 5 bits per char
+        let index = (timestamp >> shift) & 0x1F
+        result = result + CROCKFORD_ALPHABET[index + 1]
+    }
+    
+    return result
+}
+
+// Convert entropy to Crockford Base32 (80 bits → 13 chars)
+pub fn entropy_to_crockford(entropy: list[int]) -> str {
+    let result = ""
+    let combined = 0
+    
+    // Combine entropy bytes into a single integer
+    for i in range(0, len(entropy)) {
+        combined = (combined << 8) | entropy[i]
+    }
+    
+    // Extract 5-bit chunks
+    for i in range(0, 13) {
+        let shift = 75 - (i * 5)  // 80 bits, 5 bits per char
+        let index = (combined >> shift) & 0x1F
+        result = result + CROCKFORD_ALPHABET[index + 1]
+    }
+    
+    return result
+}
+
+// Generate a new ULID
+pub fn ulid_generate() -> str {
+    let timestamp_ms = ulid_timestamp_ms()
+    let timestamp_part = timestamp_to_crockford(timestamp_ms)
+    let entropy = ulid_entropy()
+    let entropy_part = entropy_to_crockford(entropy)
+    
+    return timestamp_part + entropy_part
+}
+
+// Parse ULID timestamp from string
+pub fn ulid_parse_timestamp(ulid: str) -> int {
+    if len(ulid) < 8 {
+        return 0
+    }
+    
+    let timestamp_str = ulid[0:8]
+    let timestamp = 0
+    
+    for i in range(0, 8) {
+        let char = timestamp_str[i]
+        let value = crockford_to_value(char)
+        timestamp = (timestamp << 5) | value
+    }
+    
+    return timestamp * 1000  // Convert back to milliseconds
+}
+
+// Parse ULID entropy from string
+pub fn ulid_parse_entropy(ulid: str) -> list[int] {
+    if len(ulid) < 13 {
+        return []
+    }
+    
+    let entropy_str = ulid[8:21]
+    let combined = 0
+    
+    for i in range(0, 13) {
+        let char = entropy_str[i]
+        let value = crockford_to_value(char)
+        combined = (combined << 5) | value
+    }
+    
+    // Convert back to byte array
+    let entropy = []
+    for i in range(0, 10) {
+        let shift = 80 - ((i + 1) * 8)
+        let byte = (combined >> shift) & 0xFF
+        entropy = entropy + [byte]
+    }
+    
+    return entropy
+}
+
+// Convert Crockford character to value (0-31)
+fn crockford_to_value(char: str) -> int {
+    let upper_char = char.upper()
+    let index = CROCKFORD_ALPHABET.find(upper_char)
+    
+    if index == -1 {
+        return 0
+    }
+    
+    return index - 1  // Offset by 1 for 1-based indexing
+}
+
+// Check if a string is a valid ULID
+pub fn ulid_valid(ulid: str) -> bool {
+    if len(ulid) != 26 {
+        return false
+    }
+    
+    // Check timestamp part
+    for i in range(0, 8) {
+        if CROCKFORD_ALPHABET.find(ulid[i].upper()) == -1 {
+            return false
+        }
+    }
+    
+    // Check entropy part
+    for i in range(8, 26) {
+        if CROCKFORD_ALPHABET.find(ulid[i].upper()) == -1 {
+            return false
+        }
+    }
+    
+    return true
+}
+
+// Parse a ULID into its components
+pub fn ulid_parse(ulid: str) -> dict {
+    if not ulid_valid(ulid) {
+        return {valid: false, timestamp: 0, entropy: []}
+    }
+    
+    return {
+        valid: true,
+        timestamp: ulid_parse_timestamp(ulid),
+        entropy: ulid_parse_entropy(ulid),
+        time_str: ulid[0:8],
+        entropy_str: ulid[8:26]
+    }
+}
