@@ -1,0 +1,218 @@
+// ===================================================================
+// examples/amqp_tutorial.ltl — stdlib/amqp.ltl tutorial companion
+// Runnable tour of the AMQP 0-9-1 wire codec: big-endian primitives,
+// the 7-byte frame envelope, protocol header, handshake method
+// builders, and the three-frame Basic.Publish sequence. Self-contained.
+// ===================================================================
+
+fn bytes_of(s: str) -> list {
+    let out = []
+    let i = 0
+    while i < len(s) {
+        out = out + [ord(s[i])]
+        i = i + 1
+    }
+    return out
+}
+
+fn frame_method()    -> int { return 1 }
+fn frame_header()    -> int { return 2 }
+fn frame_body()      -> int { return 3 }
+fn frame_end()       -> int { return 0xCE }
+
+fn class_basic()     -> int { return 60 }
+fn method_basic_publish() -> int { return 40 }
+
+fn enc_u8(v: int)  -> list { return [v & 0xff] }
+fn enc_u16(v: int) -> list { return [(v >> 8) & 0xff, v & 0xff] }
+fn enc_u32(v: int) -> list {
+    return [(v >> 24) & 0xff, (v >> 16) & 0xff,
+            (v >> 8)  & 0xff,  v        & 0xff]
+}
+fn enc_u64(v: int) -> list {
+    let out = []
+    let k = 7
+    while k >= 0 {
+        out = out + [(v >> (k * 8)) & 0xff]
+        k = k - 1
+    }
+    return out
+}
+
+fn dec_u8(buf: list, i: int)  -> list { return [buf[i], i + 1] }
+fn dec_u16(buf: list, i: int) -> list {
+    return [(buf[i] << 8) | buf[i + 1], i + 2]
+}
+fn dec_u32(buf: list, i: int) -> list {
+    let v = (buf[i] << 24) | (buf[i + 1] << 16) | (buf[i + 2] << 8) | buf[i + 3]
+    return [v, i + 4]
+}
+
+fn enc_short_str(s: str) -> list {
+    let bytes = bytes_of(s)
+    return [len(bytes) & 0xff] + bytes
+}
+
+fn enc_long_str(s: str) -> list {
+    let bytes = bytes_of(s)
+    return enc_u32(len(bytes)) + bytes
+}
+
+fn dec_short_str(buf: list, i: int) -> list {
+    let n = buf[i]
+    i = i + 1
+    let s = ""
+    let k = 0
+    while k < n {
+        s = s + chr(buf[i + k])
+        k = k + 1
+    }
+    return [s, i + n]
+}
+
+fn protocol_header() -> list {
+    return bytes_of("AMQP") + [0x00, 0x00, 0x09, 0x01]
+}
+
+fn frame(ftype: int, chan: int, payload: list) -> list {
+    return enc_u8(ftype)
+         + enc_u16(chan)
+         + enc_u32(len(payload))
+         + payload
+         + enc_u8(frame_end())
+}
+
+fn method_frame(chan: int, class_id: int, method_id: int,
+                args: list) -> list {
+    let payload = enc_u16(class_id) + enc_u16(method_id) + args
+    return frame(frame_method(), chan, payload)
+}
+
+fn parse_frame(buf: list, i: int) -> map {
+    if len(buf) < i + 8 { return nil }
+    let t = dec_u8(buf, i)
+    let ch = dec_u16(buf, t[1])
+    let sz = dec_u32(buf, ch[1])
+    let start = sz[1]
+    let end = start + sz[0]
+    if len(buf) < end + 1 { return nil }
+    if buf[end] != frame_end() { return nil }
+    let m = {}
+    m["type"]     = t[0]
+    m["chan"]     = ch[0]
+    m["payload"]  = slice(buf, start, end)
+    m["consumed"] = end + 1 - i
+    return m
+}
+
+fn empty_table() -> list { return enc_u32(0) }
+
+fn connection_start_ok(mechanism: str, response_bytes: list,
+                        locale: str) -> list {
+    let args = empty_table()
+             + enc_short_str(mechanism)
+             + enc_u32(len(response_bytes)) + response_bytes
+             + enc_short_str(locale)
+    return args
+}
+
+fn plain_auth(user: str, password: str) -> list {
+    return [0x00] + bytes_of(user) + [0x00] + bytes_of(password)
+}
+
+fn connection_tune_ok(channel_max: int, frame_max: int,
+                       heartbeat: int) -> list {
+    return enc_u16(channel_max) + enc_u32(frame_max) + enc_u16(heartbeat)
+}
+
+fn connection_open(vhost: str) -> list {
+    return enc_short_str(vhost) + enc_short_str("") + [0x00]
+}
+
+fn basic_publish_args(exchange: str, routing_key: str,
+                       mandatory: bool, immediate: bool) -> list {
+    let flags = 0
+    if mandatory { flags = flags | 0x01 }
+    if immediate { flags = flags | 0x02 }
+    return enc_u16(0) + enc_short_str(exchange)
+         + enc_short_str(routing_key)
+         + [flags & 0xff]
+}
+
+fn content_header(body_size: int) -> list {
+    return enc_u16(class_basic()) + enc_u16(0)
+         + enc_u64(body_size) + enc_u16(0)
+}
+
+fn publish_frames(chan: int, exchange: str, routing_key: str,
+                   mandatory: bool, immediate: bool,
+                   body: list) -> list {
+    let method = method_frame(chan, class_basic(), method_basic_publish(),
+                              basic_publish_args(exchange, routing_key,
+                                                  mandatory, immediate))
+    let header = frame(frame_header(), chan, content_header(len(body)))
+    let body_frame = frame(frame_body(), chan, body)
+    return method + header + body_frame
+}
+
+fn hexs(bytes: list) -> str {
+    let h = "0123456789abcdef"
+    let out = ""
+    let i = 0
+    while i < len(bytes) {
+        let b = bytes[i] & 0xff
+        out = out + slice(h, b >> 4, (b >> 4) + 1)
+               + slice(h, b & 0x0f, (b & 0x0f) + 1)
+        i = i + 1
+    }
+    return out
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB AMQP TUTORIAL ===")
+
+    println("STEP 1 protocol header:")
+    let ph = protocol_header()
+    println("  hex=" + hexs(ph) + " len=" + str(len(ph)))
+
+    println("STEP 2 primitive round-trip:")
+    let u32v = enc_u32(0x01020304)
+    println("  enc_u32(0x01020304)=" + hexs(u32v))
+    let d = dec_u32(u32v + [0xAA], 0)
+    println("  dec -> " + str(d[0]) + " consumed=" + str(d[1]))
+    let ss = enc_short_str("amq.direct")
+    println("  short_str len byte=" + str(ss[0]) + " tail=" + hexs(slice(ss, 1, len(ss))))
+
+    println("STEP 3 frame envelope:")
+    let fr = frame(frame_method(), 1, [0x00, 0x0A, 0x00, 0x28, 0xFF])
+    println("  frame hex=" + hexs(fr))
+    let pf = parse_frame(fr, 0)
+    println("  parse: type=" + str(pf["type"]) + " channel=" + str(pf["chan"])
+            + " payload=" + hexs(pf["payload"]) + " consumed=" + str(pf["consumed"]))
+    let short = parse_frame(slice(fr, 0, 5), 0)
+    println("  truncated -> " + str(short == nil))
+
+    println("STEP 4 handshake builders:")
+    let auth = plain_auth("guest", "guest")
+    println("  PLAIN auth hex=" + hexs(auth))
+    let so = connection_start_ok("AMQPLAIN", auth, "en_US")
+    println("  start-ok args len=" + str(len(so)))
+    let tune = connection_tune_ok(0, 131072, 60)
+    println("  tune-ok hex=" + hexs(tune))
+    let open = connection_open("/")
+    println("  open hex=" + hexs(open))
+
+    println("STEP 5 Basic.Publish triple:")
+    let pubf = publish_frames(1, "orders", "order.new", true, false,
+                             bytes_of("hello-amqp"))
+    println("  total bytes=" + str(len(pubf)))
+    let f1 = parse_frame(pubf, 0)
+    println("  frame1 type=" + str(f1["type"]) + " payload=" + hexs(f1["payload"]))
+    let f2 = parse_frame(pubf, f1["consumed"])
+    println("  frame2 type=" + str(f2["type"]) + " header hex=" + hexs(f2["payload"]))
+    let f3 = parse_frame(pubf, f1["consumed"] + f2["consumed"])
+    println("  frame3 type=" + str(f3["type"]) + " body=" + hexs(f3["payload"]))
+    println("PINNED_VECTORS: ph=414d515000000901 u32=01020304 ss=09+amq.direct env=01+ch+len+ce auth=00guest00guest pub3=method+header+body mandatory=01 body=hello-amqp")
+}
+
+main()
