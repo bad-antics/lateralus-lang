@@ -1,10 +1,29 @@
 // ===================================================================
 // stdlib/simhash.ltl  —  Spiral Wave 10
-// 64-bit SimHash for near-duplicate detection.  Uses xxhash as the
-// per-token hasher so documents hashed here compose cleanly with
-// the Wave 7 xxhash lane.  Hamming distance gives near-duplicate
-// similarity in constant time once fingerprints are computed.
+// 64-bit SimHash for near-duplicate detection.  Per-token hashing is
+// FNV-1a 64 (see simhash_hash64).  Hamming distance gives
+// near-duplicate similarity in constant time once fingerprints are
+// computed.
 // ===================================================================
+
+// Per-token hash.  FIX: the previous revision called
+// `xxhash_hash64`, which is not defined anywhere in the repo, and
+// stdlib imports do not resolve at runtime (so stdlib/xxhash.ltl's
+// hash64 could not be reached anyway — its str helpers also need the
+// missing `bytes_of` builtin).  FNV-1a 64 over char codes is used
+// instead: self-contained, well-distributed, and all simhash needs is
+// a deterministic 64-bit per-token hash.
+fn simhash_hash64(s: str) -> int {
+    let h = 14695981039346656037
+    let prime = 1099511628211
+    let mask = 0xffffffffffffffff
+    let i = 0
+    while i < len(s) {
+        h = ((h ^ ord(slice(s, i, i + 1))) * prime) & mask
+        i = i + 1
+    }
+    return h
+}
 
 // Tokenise on whitespace + punctuation into lowercase words.
 fn simhash_tokenize(text: str) -> list {
@@ -12,7 +31,7 @@ fn simhash_tokenize(text: str) -> list {
     let buf = ""
     let i = 0
     while i < len(text) {
-        let c = char_at(text, i)
+        let c = slice(text, i, i + 1)
         let oc = ord(c)
         let is_alnum = false
         if oc >= 48 && oc <= 57 { is_alnum = true }
@@ -42,7 +61,7 @@ pub fn fingerprint(text: str) -> int {
 
     let t = 0
     while t < len(tokens) {
-        let h = xxhash_hash64(tokens[t])
+        let h = simhash_hash64(tokens[t])
         let b = 0
         while b < 64 {
             let bit = (h >> b) & 1
