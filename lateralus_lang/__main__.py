@@ -466,7 +466,7 @@ def main(argv=None) -> int:
             _print_errors(result)
             return 1
         # Inject a test-runner tail into the generated Python
-        runner = """
+        runner = r"""
 import time as _test_time
 _passed = _failed = 0
 for _fn in _LATERALUS_TESTS:
@@ -481,16 +481,15 @@ for _fn in _LATERALUS_TESTS:
         print(f"  \033[91m✗\033[0m  {_fn.__name__}  ({_ms:.2f}ms)  →  {_e}")
         _failed += 1
 print(f"\n  {_passed} passed  {_failed} failed")
+raise SystemExit(1 if _failed else 0)
 """
-        py_src = result.code + "\n" + runner
-        import pathlib
+        py_src = result.python_src + "\n" + runner
         import subprocess
         import tempfile
-        tmp = tempfile.NamedTemporaryFile(suffix=".py", delete=False, mode="w")
-        tmp.write(py_src); tmp.close()
-        ret = subprocess.run([sys.executable, tmp.name]).returncode
-        pathlib.Path(tmp.name).unlink(missing_ok=True)
-        return ret
+        with tempfile.TemporaryDirectory(prefix="lateralus-test-") as tmp_dir:
+            runner_path = pathlib.Path(tmp_dir) / "tests.py"
+            runner_path.write_text(py_src, encoding="utf-8")
+            return subprocess.run([sys.executable, str(runner_path)]).returncode
 
     elif ns.cmd == "verify":
         # v3.2 — run @law property tests (optionally with mutation testing)
