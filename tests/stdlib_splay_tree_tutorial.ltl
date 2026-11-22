@@ -1,0 +1,290 @@
+// ===================================================================
+// tests/stdlib_splay_tree_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for Sleator-Tarjan Self-Adjusting Splay Tree
+// maintaining zero-overhead amortized O(log n) access locality.
+// ===================================================================
+
+pub fn new_splay_tree() {
+    let tree = dict()
+    tree["root"] = -1
+    tree["nodes"] = dict()
+    tree["sz"] = 0
+    return tree
+}
+
+pub fn splay(tree, key) {
+    if tree["root"] == -1 {
+        return -1
+    }
+
+    // Allocate dummy node for top-down splay
+    let dummy_id = 999999
+    let dummy = dict()
+    dummy["left"] = -1
+    dummy["right"] = -1
+    tree["nodes"][dummy_id] = dummy
+
+    let l_max = dummy_id
+    let r_min = dummy_id
+    let t = tree["root"]
+
+    while true {
+        let t_node = tree["nodes"][t]
+        if key < t_node["key"] {
+            if t_node["left"] == -1 {
+                break
+            }
+            let left_id = t_node["left"]
+            let left_node = tree["nodes"][left_id]
+            if key < left_node["key"] {
+                // Zig-Zig: rotate right
+                let y = left_id
+                t_node["left"] = left_node["right"]
+                left_node["right"] = t
+                t = y
+                t_node = left_node
+                if t_node["left"] == -1 {
+                    break
+                }
+            }
+            // Link Right
+            tree["nodes"][r_min]["left"] = t
+            r_min = t
+            t = t_node["left"]
+            tree["nodes"][r_min]["left"] = -1
+        } else {
+            if key > t_node["key"] {
+                if t_node["right"] == -1 {
+                    break
+                }
+                let right_id = t_node["right"]
+                let right_node = tree["nodes"][right_id]
+                if key > right_node["key"] {
+                    // Zig-Zig: rotate left
+                    let y = right_id
+                    t_node["right"] = right_node["left"]
+                    right_node["left"] = t
+                    t = y
+                    t_node = right_node
+                    if t_node["right"] == -1 {
+                        break
+                    }
+                }
+                // Link Left
+                tree["nodes"][l_max]["right"] = t
+                l_max = t
+                t = t_node["right"]
+                tree["nodes"][l_max]["right"] = -1
+            } else {
+                break
+            }
+        }
+    }
+
+    // Assemble
+    let t_node = tree["nodes"][t]
+    tree["nodes"][l_max]["right"] = t_node["left"]
+    tree["nodes"][r_min]["left"] = t_node["right"]
+    t_node["left"] = tree["nodes"][dummy_id]["right"]
+    t_node["right"] = tree["nodes"][dummy_id]["left"]
+    tree["root"] = t
+
+    return t
+}
+
+pub fn splay_insert(tree, key, val) {
+    if tree["root"] == -1 {
+        let new_id = tree["sz"]
+        tree["sz"] = new_id + 1
+        let node = dict()
+        node["key"] = key
+        node["val"] = val
+        node["left"] = -1
+        node["right"] = -1
+        tree["nodes"][new_id] = node
+        tree["root"] = new_id
+        return true
+    }
+
+    splay(tree, key)
+    let root = tree["nodes"][tree["root"]]
+    if root["key"] == key {
+        root["val"] = val
+        return true
+    }
+
+    let new_id = tree["sz"]
+    tree["sz"] = new_id + 1
+    let new_node = dict()
+    new_node["key"] = key
+    new_node["val"] = val
+
+    if key < root["key"] {
+        new_node["left"] = root["left"]
+        new_node["right"] = tree["root"]
+        root["left"] = -1
+    } else {
+        new_node["right"] = root["right"]
+        new_node["left"] = tree["root"]
+        root["right"] = -1
+    }
+
+    tree["nodes"][new_id] = new_node
+    tree["root"] = new_id
+    return true
+}
+
+pub fn splay_search(tree, key) {
+    if tree["root"] == -1 {
+        return nil
+    }
+    splay(tree, key)
+    let root = tree["nodes"][tree["root"]]
+    if root["key"] == key {
+        return root["val"]
+    }
+    return nil
+}
+
+pub fn splay_verify_bst(tree, curr_id, min_key, max_key) {
+    if curr_id == -1 {
+        return true
+    }
+    let node = tree["nodes"][curr_id]
+    let k = node["key"]
+    if min_key != nil {
+        if k <= min_key {
+            return false
+        }
+    }
+    if max_key != nil {
+        if k >= max_key {
+            return false
+        }
+    }
+    if not splay_verify_bst(tree, node["left"], min_key, k) {
+        return false
+    }
+    if not splay_verify_bst(tree, node["right"], k, max_key) {
+        return false
+    }
+    return true
+}
+
+// -------------------------------------------------------------------
+// Verification Tests
+// -------------------------------------------------------------------
+
+pub fn test_splay_empty() -> bool {
+    let tree = new_splay_tree()
+    if splay_search(tree, 100) != nil {
+        return false
+    }
+    return true
+}
+
+pub fn test_splay_single() -> bool {
+    let tree = new_splay_tree()
+    splay_insert(tree, 50, "fifty")
+    if splay_search(tree, 50) != "fifty" {
+        return false
+    }
+    if splay_search(tree, 51) != nil {
+        return false
+    }
+    if not splay_verify_bst(tree, tree["root"], nil, nil) {
+        return false
+    }
+    return true
+}
+
+pub fn test_splay_access_locality() -> bool {
+    let tree = new_splay_tree()
+    // Insert ordered sequence 10, 20, 30, 40, 50
+    splay_insert(tree, 10, 100)
+    splay_insert(tree, 20, 200)
+    splay_insert(tree, 30, 300)
+    splay_insert(tree, 40, 400)
+    splay_insert(tree, 50, 500)
+
+    // After inserting 50, root must be 50!
+    if tree["nodes"][tree["root"]]["key"] != 50 {
+        return false
+    }
+
+    // Access 20 -> 20 must rise to the root!
+    let val_20 = splay_search(tree, 20)
+    if val_20 != 200 {
+        return false
+    }
+    if tree["nodes"][tree["root"]]["key"] != 20 {
+        return false
+    }
+
+    // Verify BST invariant holds after splaying
+    if not splay_verify_bst(tree, tree["root"], nil, nil) {
+        return false
+    }
+
+    // Access 40 -> 40 must rise to root!
+    let val_40 = splay_search(tree, 40)
+    if val_40 != 400 {
+        return false
+    }
+    if tree["nodes"][tree["root"]]["key"] != 40 {
+        return false
+    }
+
+    if not splay_verify_bst(tree, tree["root"], nil, nil) {
+        return false
+    }
+
+    return true
+}
+
+pub fn test_splay_multi_elements() -> bool {
+    let tree = new_splay_tree()
+    // Insert random keys
+    splay_insert(tree, 100, "hundred")
+    splay_insert(tree, 50, "fifty")
+    splay_insert(tree, 150, "one-fifty")
+    splay_insert(tree, 25, "twenty-five")
+    splay_insert(tree, 75, "seventy-five")
+
+    if not splay_verify_bst(tree, tree["root"], nil, nil) {
+        return false
+    }
+
+    if splay_search(tree, 25) != "twenty-five" {
+        return false
+    }
+    if tree["nodes"][tree["root"]]["key"] != 25 {
+        return false
+    }
+
+    if splay_search(tree, 150) != "one-fifty" {
+        return false
+    }
+    if tree["nodes"][tree["root"]]["key"] != 150 {
+        return false
+    }
+
+    return true
+}
+
+pub fn run_all_splay_tests() -> bool {
+    if not test_splay_empty() {
+        return false
+    }
+    if not test_splay_single() {
+        return false
+    }
+    if not test_splay_access_locality() {
+        return false
+    }
+    if not test_splay_multi_elements() {
+        return false
+    }
+    return true
+}
