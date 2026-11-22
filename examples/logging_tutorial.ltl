@@ -1,0 +1,112 @@
+// ===================================================================
+// examples/logging_tutorial.ltl — stdlib/logging.ltl tutorial companion
+// Runnable tour of structured logging: severity levels, level gating,
+// prefixes, key-value context, conditional/assert helpers.
+// Self-contained. NOTE: the module keeps config in globals; functions
+// can't mutate globals under the Python backend, so this version keeps
+// config in a map cell and _log RETURNS the line for pinnable output.
+// ===================================================================
+
+fn new_logger(level: int, prefix: str) -> map {
+    let cfg = {}
+    cfg["level"] = level
+    cfg["prefix"] = prefix
+    cfg["show_time"] = false
+    return cfg
+}
+
+fn level_name(level: int) -> str {
+    if level == 0 { return "TRACE" }
+    if level == 1 { return "DEBUG" }
+    if level == 2 { return "INFO" }
+    if level == 3 { return "WARN" }
+    if level == 4 { return "ERROR" }
+    if level == 5 { return "FATAL" }
+    return "UNKNOWN"
+}
+
+fn _log(cfg: map, level: int, message: str) -> str {
+    if level < cfg["level"] {
+        return ""
+    }
+    let line = "[" + level_name(level) + "] " + message
+    if len(cfg["prefix"]) > 0 {
+        return "[" + cfg["prefix"] + "] " + line
+    }
+    return line
+}
+
+fn trace(cfg: map, message: str) -> str { return _log(cfg, 0, message) }
+fn debug(cfg: map, message: str) -> str { return _log(cfg, 1, message) }
+fn info(cfg: map, message: str) -> str { return _log(cfg, 2, message) }
+fn warn(cfg: map, message: str) -> str { return _log(cfg, 3, message) }
+fn error(cfg: map, message: str) -> str { return _log(cfg, 4, message) }
+fn fatal(cfg: map, message: str) -> str { return _log(cfg, 5, message) }
+
+fn log_ctx(cfg: map, level: int, message: str, context: list) -> str {
+    if level < cfg["level"] {
+        return ""
+    }
+    let parts = [message]
+    for kv in context {
+        if len(kv) >= 2 {
+            parts = parts + [str(kv[0]) + "=" + str(kv[1])]
+        }
+    }
+    return _log(cfg, level, join(parts, " "))
+}
+
+fn log_if(cfg: map, condition: bool, level: int, message: str) -> str {
+    if condition {
+        return _log(cfg, level, message)
+    }
+    return ""
+}
+
+fn log_assert(cfg: map, condition: bool, message: str) -> str {
+    if !condition {
+        return _log(cfg, 5, "Assertion failed: " + message)
+    }
+    return ""
+}
+
+fn show(line: str) {
+    if len(line) > 0 {
+        println(line)
+    }
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB LOGGING TUTORIAL ===")
+    let cfg = new_logger(2, "api")
+
+    println("STEP 1 level gate (min=INFO=2):")
+    show(trace(cfg, "trace msg - suppressed"))
+    show(debug(cfg, "debug msg - suppressed"))
+    show(info(cfg, "info msg - shown"))
+    show(warn(cfg, "warn msg - shown"))
+    show(error(cfg, "error msg - shown"))
+
+    println("STEP 2 prefix + context:")
+    show(log_ctx(cfg, 2, "request handled", [["method", "GET"], ["status", "200"], ["ms", 42]]))
+    show(log_ctx(cfg, 3, "slow query", [["table", "users"], ["rows", 9000]]))
+
+    println("STEP 3 conditional + assert:")
+    show(log_if(cfg, true, 2, "cache hit"))
+    show(log_if(cfg, false, 2, "cache miss - suppressed"))
+    show(log_assert(cfg, false, "index out of range"))
+    show(log_assert(cfg, true, "this passes silently"))
+
+    println("STEP 4 lower the level to DEBUG:")
+    cfg["level"] = 1
+    show(debug(cfg, "now visible at DEBUG"))
+    show(trace(cfg, "still hidden at TRACE"))
+
+    println("STEP 5 raise to ERROR:")
+    cfg["level"] = 4
+    show(info(cfg, "info suppressed again"))
+    show(error(cfg, "only errors now"))
+    println("PINNED_VECTORS: gate=info+warn+error prefix=[api] ctx=method=GET+status=200+ms=42 assert=Assertion+failed debug_at_1=shown trace_at_1=hidden")
+}
+
+main()
