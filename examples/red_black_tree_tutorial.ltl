@@ -1,0 +1,300 @@
+// examples/red_black_tree_tutorial.ltl
+// Practical Application: Linux CFS (Completely Fair Scheduler) Task Runtime Red-Black Tree Queue
+
+// Color constants: 0 = BLACK, 1 = RED
+fn is_red(nodes: list, idx: int) -> int {
+    if idx == -1 {
+        return 0
+    }
+    let node: map = nodes[idx]
+    let c: int = node.color
+    return c
+}
+
+fn set_color(nodes: list, idx: int, color: int) -> void {
+    if idx != -1 {
+        let node: map = nodes[idx]
+        node.color = color
+    }
+}
+
+fn get_parent(nodes: list, idx: int) -> int {
+    if idx == -1 {
+        return -1
+    }
+    let node: map = nodes[idx]
+    let p: int = node.parent
+    return p
+}
+
+fn get_left(nodes: list, idx: int) -> int {
+    if idx == -1 {
+        return -1
+    }
+    let node: map = nodes[idx]
+    let l: int = node.left
+    return l
+}
+
+fn get_right(nodes: list, idx: int) -> int {
+    if idx == -1 {
+        return -1
+    }
+    let node: map = nodes[idx]
+    let r: int = node.right
+    return r
+}
+
+fn rb_left_rotate(tree: map, x: int) -> void {
+    let nodes: list = tree.nodes
+    let node_x: map = nodes[x]
+    let y: int = node_x.right
+    let node_y: map = nodes[y]
+    
+    node_x.right = node_y.left
+    if node_y.left != -1 {
+        let y_left_node: map = nodes[node_y.left]
+        y_left_node.parent = x
+    }
+    
+    node_y.parent = node_x.parent
+    if node_x.parent == -1 {
+        tree.root = y
+    } else {
+        let node_p: map = nodes[node_x.parent]
+        if x == node_p.left {
+            node_p.left = y
+        } else {
+            node_p.right = y
+        }
+    }
+    
+    node_y.left = x
+    node_x.parent = y
+}
+
+fn rb_right_rotate(tree: map, y: int) -> void {
+    let nodes: list = tree.nodes
+    let node_y: map = nodes[y]
+    let x: int = node_y.left
+    let node_x: map = nodes[x]
+    
+    node_y.left = node_x.right
+    if node_x.right != -1 {
+        let x_right_node: map = nodes[node_x.right]
+        x_right_node.parent = y
+    }
+    
+    node_x.parent = node_y.parent
+    if node_y.parent == -1 {
+        tree.root = x
+    } else {
+        let node_p: map = nodes[node_y.parent]
+        if y == node_p.left {
+            node_p.left = x
+        } else {
+            node_p.right = x
+        }
+    }
+    
+    node_x.right = y
+    node_y.parent = x
+}
+
+fn rb_insert_fixup(tree: map, z_init: int) -> void {
+    let nodes: list = tree.nodes
+    let z: int = z_init
+    
+    while z != tree.root and is_red(nodes, get_parent(nodes, z)) == 1 {
+        let p: int = get_parent(nodes, z)
+        let gp: int = get_parent(nodes, p)
+        
+        if p == get_left(nodes, gp) {
+            let y: int = get_right(nodes, gp)
+            if is_red(nodes, y) == 1 {
+                // Case 1: Uncle is RED
+                set_color(nodes, p, 0)
+                set_color(nodes, y, 0)
+                set_color(nodes, gp, 1)
+                z = gp
+            } else {
+                if z == get_right(nodes, p) {
+                    // Case 2: Uncle is BLACK and z is right child
+                    z = p
+                    rb_left_rotate(tree, z)
+                    p = get_parent(nodes, z)
+                    gp = get_parent(nodes, p)
+                }
+                // Case 3: Uncle is BLACK and z is left child
+                set_color(nodes, p, 0)
+                set_color(nodes, gp, 1)
+                rb_right_rotate(tree, gp)
+            }
+        } else {
+            let y: int = get_left(nodes, gp)
+            if is_red(nodes, y) == 1 {
+                // Case 1 symmetric: Uncle is RED
+                set_color(nodes, p, 0)
+                set_color(nodes, y, 0)
+                set_color(nodes, gp, 1)
+                z = gp
+            } else {
+                if z == get_left(nodes, p) {
+                    // Case 2 symmetric: Uncle is BLACK and z is left child
+                    z = p
+                    rb_right_rotate(tree, z)
+                    p = get_parent(nodes, z)
+                    gp = get_parent(nodes, p)
+                }
+                // Case 3 symmetric: Uncle is BLACK and z is right child
+                set_color(nodes, p, 0)
+                set_color(nodes, gp, 1)
+                rb_left_rotate(tree, gp)
+            }
+        }
+    }
+    
+    set_color(nodes, tree.root, 0)
+}
+
+fn rb_insert(tree: map, key: int, val: int) -> void {
+    let nodes: list = tree.nodes
+    let new_idx: int = len(nodes)
+    let new_node = {
+        key: key,
+        val: val,
+        color: 1,
+        parent: -1,
+        left: -1,
+        right: -1
+    }
+    nodes.append(new_node)
+    
+    let y: int = -1
+    let x: int = tree.root
+    
+    while x != -1 {
+        y = x
+        let node_x: map = nodes[x]
+        let k_x: int = node_x.key
+        if key < k_x {
+            x = node_x.left
+        } else if key > k_x {
+            x = node_x.right
+        } else {
+            node_x.val = val
+            return
+        }
+    }
+    
+    new_node.parent = y
+    if y == -1 {
+        tree.root = new_idx
+    } else {
+        let node_y: map = nodes[y]
+        let k_y: int = node_y.key
+        if key < k_y {
+            node_y.left = new_idx
+        } else {
+            node_y.right = new_idx
+        }
+    }
+    
+    rb_insert_fixup(tree, new_idx)
+    let c: int = tree.count
+    tree.count = c + 1
+}
+
+fn rb_search(tree: map, key: int) -> int {
+    let nodes: list = tree.nodes
+    let curr: int = tree.root
+    while curr != -1 {
+        let node: map = nodes[curr]
+        let k: int = node.key
+        if key == k {
+            let v: int = node.val
+            return v
+        } else if key < k {
+            curr = node.left
+        } else {
+            curr = node.right
+        }
+    }
+    return -1
+}
+
+// O(log n) leftmost search for Linux CFS min-vruntime task selection
+fn rb_find_min(tree: map) -> int {
+    if tree.root == -1 {
+        return -1
+    }
+    let nodes: list = tree.nodes
+    let curr: int = tree.root
+    while get_left(nodes, curr) != -1 {
+        curr = get_left(nodes, curr)
+    }
+    return curr
+}
+
+fn rb_inorder_rec(nodes: list, curr: int, out: list) -> void {
+    if curr == -1 {
+        return
+    }
+    let node: map = nodes[curr]
+    rb_inorder_rec(nodes, node.left, out)
+    out.append(node.key)
+    rb_inorder_rec(nodes, node.right, out)
+}
+
+fn rb_inorder(tree: map) -> list {
+    let out: list = []
+    let nodes: list = tree.nodes
+    rb_inorder_rec(nodes, tree.root, out)
+    return out
+}
+
+fn create_rb_tree() -> map {
+    let empty_nodes: list = []
+    return {
+        root: -1,
+        count: 0,
+        nodes: empty_nodes
+    }
+}
+
+fn main() -> int {
+    let cfs_queue: map = create_rb_tree()
+    
+    // Linux Completely Fair Scheduler (CFS) Task Queue:
+    // Key = Virtual Runtime (vruntime in nanoseconds)
+    // Val = Process ID (PID)
+    print("Initializing Linux CFS Task Queue with vruntime priorities:")
+    rb_insert(cfs_queue, 1200, 101)
+    rb_insert(cfs_queue, 850, 102)
+    rb_insert(cfs_queue, 2300, 103)
+    rb_insert(cfs_queue, 410, 104)
+    rb_insert(cfs_queue, 1600, 105)
+    rb_insert(cfs_queue, 990, 106)
+    
+    let schedule_order: list = rb_inorder(cfs_queue)
+    print("CFS In-Order Scheduling Sequence (Sorted by lowest vruntime):")
+    let i: int = 0
+    while i < len(schedule_order) {
+        let vruntime: int = schedule_order[i]
+        let pid: int = rb_search(cfs_queue, vruntime)
+        print(vruntime)
+        print(pid)
+        i = i + 1
+    }
+    
+    let min_node_idx: int = rb_find_min(cfs_queue)
+    let nodes: list = cfs_queue.nodes
+    let min_node: map = nodes[min_node_idx]
+    let next_vruntime: int = min_node.key
+    let next_pid: int = min_node.val
+    
+    print("Next Scheduled Process to Occupy CPU Core:")
+    print(next_pid)
+    print(next_vruntime)
+    return 0
+}
