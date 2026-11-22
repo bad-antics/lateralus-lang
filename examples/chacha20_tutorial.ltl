@@ -1,0 +1,68 @@
+// ===================================================================
+// examples/chacha20_tutorial.ltl
+//
+// Tutorial: Fast & Secure Stream Encryption with Lateralus
+// stdlib/chacha20.ltl (RFC 8439).
+//
+// Demonstrates:
+// 1. Initializing 256-bit symmetric key and 96-bit unique nonce.
+// 2. Generating 64-byte keystream blocks at arbitrary counters.
+// 3. Encrypting and decrypting arbitrary byte buffers via XOR.
+// 4. Invariant property: decryption is identical to encryption.
+// ===================================================================
+
+import chacha20
+
+pub fn main() {
+    print("=== Lateralus ChaCha20 (RFC 8439) Tutorial ===")
+
+    // 1. 256-bit secret key (32 bytes)
+    let key = [
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+        0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+        0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f
+    ]
+
+    // 2. 96-bit nonce (12 bytes, unique per message)
+    let nonce = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4a, 0x00, 0x00, 0x00, 0x00]
+    let initial_counter = 1
+
+    print("Secret key length: " + str(len(key)) + " bytes")
+    print("Nonce length: " + str(len(nonce)) + " bytes")
+
+    // 3. Generate raw 64-byte keystream block
+    let ks = chacha20_block(key, nonce, initial_counter)
+    print("Generated 64-byte keystream block. First byte: " + str(ks[0]) + ", Last byte: " + str(ks[63]))
+
+    // 4. Encrypt confidential payload (ASCII bytes for 'LATERALUS_HIGH_SPEED_CIPHER')
+    let plaintext = [
+        76, 65, 84, 69, 82, 65, 76, 85, 83, 95,
+        72, 73, 71, 72, 95, 83, 80, 69, 69, 68
+    ]
+    print("Original plaintext length: " + str(len(plaintext)) + " bytes")
+
+    // Encrypt
+    let ciphertext = chacha20_xor(key, nonce, initial_counter, plaintext)
+    print("Ciphertext generated successfully. First 4 encrypted bytes: " +
+          str(ciphertext[0]) + ", " + str(ciphertext[1]) + ", " +
+          str(ciphertext[2]) + ", " + str(ciphertext[3]))
+
+    // 5. Decrypt by passing ciphertext through chacha20_xor with identical key & nonce
+    let decrypted = chacha20_xor(key, nonce, initial_counter, ciphertext)
+
+    let is_matched = true
+    let i = 0
+    while i < len(plaintext) {
+        if decrypted[i] != plaintext[i] { is_matched = false }
+        i = i + 1
+    }
+
+    if is_matched {
+        print("PASS: Decrypted payload matches original plaintext byte-for-byte!")
+    } else {
+        print("FAIL: Decryption mismatch detected!")
+    }
+
+    print("=== ChaCha20 demonstration completed successfully ===")
+}
