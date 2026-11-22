@@ -197,13 +197,13 @@ class Compiler:
             bridge.submit(ctx)
             return self._failed(reporter, filename, target, t0)
 
-        if target == Target.CHECK:
-            return self._success(reporter, filename, target, t0)
-
         # -- 3. Semantic analysis + IR ------------------------------------------
         ir_module, sem_errors = analyze(ast, filename)
         for se in sem_errors:
-            sev = Severity.ERROR if se.level == "error" else Severity.WARNING
+            if target == Target.CHECK and "Undefined" in se.message:
+                sev = Severity.ERROR
+            else:
+                sev = Severity.ERROR if se.level == "error" else Severity.WARNING
             ctx = ErrorContext(
                 severity = sev,
                 code     = "SemanticError",
@@ -213,10 +213,14 @@ class Compiler:
                 col      = se.span.col  if se.span else 0,
             )
             reporter.add(ctx)
+
         if reporter.has_errors and any(
                 c.severity == Severity.ERROR for c in reporter.all()):
             bridge.submit_all()
             return self._failed(reporter, filename, target, t0, ir_module=ir_module)
+
+        if target == Target.CHECK:
+            return self._success(reporter, filename, target, t0)
 
         if target == Target.PYTHON:
             try:

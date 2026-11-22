@@ -656,7 +656,7 @@ class SemanticAnalyzer(ASTVisitor):
     def visit_Ident(self, node: Ident) -> str:
         sym = self._scope.resolve(node.name)
         if sym is None:
-            # Emit a warning (not error) for undefined names — snippets and
+            # Emit a warning for undefined names — snippets and
             # partial programs often rely on external bindings resolved at runtime.
             self._warn(f"Undefined name '{node.name}'", node.span)
             tmp = self._builder.new_tmp()
