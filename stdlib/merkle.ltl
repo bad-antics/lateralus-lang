@@ -8,12 +8,23 @@
 // SHA-256 and hand it in as `hasher`.
 // ===================================================================
 
-import hash
+// stdlib imports cannot reach hash.ltl under the Python backend, so a
+// self-contained FNV-1a/64 is used for the default hasher.
+
+fn _fnv1a64(data: str) -> int {
+    let h = 14695981039346656037
+    let prime = 1099511628211
+    let mask = 18446744073709551616
+    for i in range(0, len(data)) {
+        h = ((h ^ ord(slice(data, i, i + 1))) * prime) % mask
+    }
+    return h
+}
 
 // -- Default hasher -------------------------------------------------
 
 pub fn default_hash(data: str) -> str {
-    return to_hex64(hash_fnv1a_64(data))
+    return to_hex64(_fnv1a64(data))
 }
 
 pub fn to_hex64(n: int) -> str {
@@ -22,7 +33,7 @@ pub fn to_hex64(n: int) -> str {
     let k = 0
     while k < 16 {
         let nibble = (n >> ((15 - k) * 4)) & 0x0f
-        out = out + char_at(hex_chars, nibble)
+        out = out + slice(hex_chars, nibble, nibble + 1)
         k = k + 1
     }
     return out
@@ -103,7 +114,7 @@ pub fn proof(tree: map, index: int) -> list {
         } else {
             path = path + [[level[sibling_idx], sibling_idx > index]]
         }
-        index = index / 2
+        index = idiv(index, 2)
         k = k + 1
     }
     return path
