@@ -1,0 +1,170 @@
+// ===================================================================
+// examples/arena_tutorial.ltl — stdlib/arena.ltl tutorial companion
+// Runnable tour of the arena (region) allocator: block-chunked slots,
+// O(1) bulk reset, slot-id addressing, stats. Self-contained.
+// NOTE: id / capacity uses int() — Lateralus "/" yields float, which
+// cannot index lists (stdlib/arena.ltl has this latent bug).
+// ===================================================================
+
+fn new(capacity: int) -> map {
+    let arena = {}
+    arena["blocks"] = [[]]
+    arena["current"] = 0
+    arena["capacity"] = capacity
+    arena["total"] = 0
+    return arena
+}
+
+fn alloc(arena: map, value) -> list {
+    let blocks = arena["blocks"]
+    let current = arena["current"]
+    let capacity = arena["capacity"]
+
+    let block = blocks[current]
+    if len(block) >= capacity {
+        blocks = blocks + [[]]
+        current = current + 1
+        block = blocks[current]
+    }
+
+    let slot = len(block)
+    block = block + [value]
+    blocks[current] = block
+
+    arena["blocks"] = blocks
+    arena["current"] = current
+    arena["total"] = arena["total"] + 1
+
+    let id = current * capacity + slot
+    return [arena, id]
+}
+
+fn alloc_many(arena: map, values: list) -> list {
+    let ids = []
+    for value in values {
+        let result = alloc(arena, value)
+        arena = result[0]
+        ids = ids + [result[1]]
+    }
+    return [arena, ids]
+}
+
+fn get(arena: map, id: int) {
+    let capacity = arena["capacity"]
+    let block_idx = int(id / capacity)
+    let slot_idx = id % capacity
+    let blocks = arena["blocks"]
+    if block_idx >= len(blocks) {
+        return nil
+    }
+    let block = blocks[block_idx]
+    if slot_idx >= len(block) {
+        return nil
+    }
+    return block[slot_idx]
+}
+
+fn set(arena: map, id: int, value) -> map {
+    let capacity = arena["capacity"]
+    let block_idx = int(id / capacity)
+    let slot_idx = id % capacity
+    let blocks = arena["blocks"]
+    let block = blocks[block_idx]
+    block[slot_idx] = value
+    blocks[block_idx] = block
+    arena["blocks"] = blocks
+    return arena
+}
+
+fn total(arena: map) -> int { return arena["total"] }
+fn block_count(arena: map) -> int { return arena["current"] + 1 }
+
+fn remaining(arena: map) -> int {
+    let blocks = arena["blocks"]
+    let current = arena["current"]
+    let block = blocks[current]
+    return arena["capacity"] - len(block)
+}
+
+fn total_capacity(arena: map) -> int {
+    return block_count(arena) * arena["capacity"]
+}
+
+fn usage(arena: map) -> float {
+    let cap = total_capacity(arena)
+    if cap == 0 {
+        return 0.0
+    }
+    return float(arena["total"]) / float(cap)
+}
+
+fn reset(arena: map) -> map {
+    arena["blocks"] = [[]]
+    arena["current"] = 0
+    arena["total"] = 0
+    return arena
+}
+
+fn to_list(arena: map) -> list {
+    let result = []
+    let blocks = arena["blocks"]
+    for block in blocks {
+        for item in block {
+            result = result + [item]
+        }
+    }
+    return result
+}
+
+fn stats(arena: map) -> map {
+    let s = {}
+    s["total_allocations"] = total(arena)
+    s["block_count"] = block_count(arena)
+    s["capacity_per_block"] = arena["capacity"]
+    s["total_capacity"] = total_capacity(arena)
+    s["remaining_in_block"] = remaining(arena)
+    s["usage_ratio"] = usage(arena)
+    return s
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB ARENA TUTORIAL ===")
+    let arena = new(3)
+
+    let r1 = alloc(arena, "alpha")
+    arena = r1[0]
+    let id1 = r1[1]
+    let r2 = alloc(arena, "beta")
+    arena = r2[0]
+    let id2 = r2[1]
+    let r3 = alloc(arena, "gamma")
+    arena = r3[0]
+    let id3 = r3[1]
+    println("STEP 1 ids: " + str(id1) + "," + str(id2) + "," + str(id3) + " (capacity 3 fills block 0)")
+
+    let r4 = alloc(arena, "delta")
+    arena = r4[0]
+    let id4 = r4[1]
+    println("STEP 1 4th alloc -> id " + str(id4) + " (spills to block 1)")
+    println("STEP 1 get(id4) = " + str(get(arena, id4)) + " get(id1) = " + str(get(arena, id1)))
+
+    arena = set(arena, id2, "BETA")
+    println("STEP 2 after set: get(id2) = " + str(get(arena, id2)))
+
+    let r5 = alloc_many(arena, ["x", "y", "z"])
+    arena = r5[0]
+    println("STEP 3 alloc_many ids = [" + join(r5[1], ",") + "] total=" + str(total(arena)))
+    println("STEP 3 to_list = [" + join(to_list(arena), ", ") + "]")
+
+    let st = stats(arena)
+    println("STEP 4 stats: total=" + str(st["total_allocations"]) + " blocks=" + str(st["block_count"]) +
+        " cap=" + str(st["total_capacity"]) + " remaining=" + str(st["remaining_in_block"]) +
+        " usage=" + str(st["usage_ratio"]))
+
+    arena = reset(arena)
+    println("STEP 5 after reset: total=" + str(total(arena)) + " blocks=" + str(block_count(arena)) +
+        " get(old id1)=" + str(get(arena, id1)))
+    println("PINNED_VECTORS: ids=0,1,2,3 spill=block1 set=BETA many=4,5,6 total=7 blocks=3 usage=0.7777777777777778 reset_total=0")
+}
+
+main()
