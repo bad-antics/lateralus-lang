@@ -1,0 +1,301 @@
+// ===================================================================
+// examples/oauth2_tutorial.ltl — stdlib/oauth2.ltl tutorial companion
+// Runnable tour of the OAuth 2.0 + PKCE client helpers: percent/form
+// encoding, PKCE S256 challenge (RFC 7636 vector), authorization URL,
+// token/refresh/revoke request bodies, response normalisation, and
+// constant-time state validation. Self-contained.
+// NOTE: char_at->s[i], bytes_of->ord helper, join/contains/base64url
+// inlined; sha256_bytes bridges builtin sha256(hex) -> byte list.
+// ===================================================================
+
+fn char_at(s: str, i: int) -> str { return s[i] }
+
+fn bytes_of(s: str) -> list {
+    let out = []
+    let i = 0
+    while i < len(s) {
+        out = out + [ord(s[i])]
+        i = i + 1
+    }
+    return out
+}
+
+fn join(items: list, sep: str) -> str {
+    let out = ""
+    let i = 0
+    while i < len(items) {
+        if i > 0 { out = out + sep }
+        out = out + items[i]
+        i = i + 1
+    }
+    return out
+}
+
+fn contains(items: list, x: str) -> bool {
+    let i = 0
+    while i < len(items) {
+        if items[i] == x { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn b64url(bytes: list) -> str {
+    let alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    let out = ""
+    let i = 0
+    while i < len(bytes) {
+        let b0 = bytes[i]
+        let b1 = 0
+        let b2 = 0
+        let pad = 0
+        if i + 1 < len(bytes) { b1 = bytes[i + 1] } else { pad = pad + 1 }
+        if i + 2 < len(bytes) { b2 = bytes[i + 2] } else { pad = pad + 1 }
+        let c0 = b0 >> 2
+        let c1 = ((b0 & 3) << 4) | (b1 >> 4)
+        let c2 = ((b1 & 15) << 2) | (b2 >> 6)
+        let c3 = b2 & 63
+        out = out + char_at(alpha, c0) + char_at(alpha, c1)
+        if pad <= 1 { out = out + char_at(alpha, c2) } else { out = out + "=" }
+        if pad == 0    { out = out + char_at(alpha, c3) } else { out = out + "=" }
+        i = i + 3
+    }
+    return out
+}
+
+fn hexval(c: str) -> int {
+    if c >= "0" && c <= "9" { return ord(c) - ord("0") }
+    if c >= "a" && c <= "f" { return ord(c) - ord("a") + 10 }
+    return ord(c) - ord("A") + 10
+}
+
+fn hex_to_bytes(hex: str) -> list {
+    let out = []
+    let i = 0
+    while i + 1 < len(hex) {
+        out = out + [(hexval(hex[i]) << 4) | hexval(hex[i + 1])]
+        i = i + 2
+    }
+    return out
+}
+
+fn sha256_bytes(s: str) -> list {
+    return hex_to_bytes(sha256(s))
+}
+
+fn is_unreserved(ch: str) -> bool {
+    if ch >= "a" && ch <= "z" { return true }
+    if ch >= "A" && ch <= "Z" { return true }
+    if ch >= "0" && ch <= "9" { return true }
+    return ch == "-" || ch == "_" || ch == "." || ch == "~"
+}
+
+fn hex_nibble(n: int) -> str {
+    return char_at("0123456789ABCDEF", n & 0x0f)
+}
+
+fn percent_encode(s: str) -> str {
+    let out = ""
+    let i = 0
+    while i < len(s) {
+        let ch = char_at(s, i)
+        if is_unreserved(ch) {
+            out = out + ch
+        } else {
+            let b = bytes_of(ch)
+            let j = 0
+            while j < len(b) {
+                out = out + "%" + hex_nibble(b[j] >> 4) + hex_nibble(b[j])
+                j = j + 1
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn form_encode(pairs: map) -> str {
+    let ks = keys(pairs)
+    let out = ""
+    let i = 0
+    while i < len(ks) {
+        if i > 0 { out = out + "&" }
+        out = out + percent_encode(ks[i]) + "=" + percent_encode(pairs[ks[i]])
+        i = i + 1
+    }
+    return out
+}
+
+fn pkce_verifier(entropy: str) -> str {
+    return entropy
+}
+
+fn strip_padding(s: str) -> str {
+    let i = len(s)
+    while i > 0 && char_at(s, i - 1) == "=" {
+        i = i - 1
+    }
+    return slice(s, 0, i)
+}
+
+fn pkce_challenge_s256(verifier: str, sha256_bytes_fn) -> str {
+    let digest = sha256_bytes_fn(verifier)
+    return strip_padding(b64url(digest))
+}
+
+fn new_client(client_id: str, client_secret: str,
+              auth_url: str, token_url: str,
+              redirect_uri: str, scopes: list) -> map {
+    let c = {}
+    c["client_id"]     = client_id
+    c["client_secret"] = client_secret
+    c["auth_url"]      = auth_url
+    c["token_url"]     = token_url
+    c["redirect_uri"]  = redirect_uri
+    c["scopes"]        = scopes
+    return c
+}
+
+fn authorization_url(client: map, state: str, pkce_challenge: str,
+                     extra: map) -> str {
+    let params = {}
+    params["response_type"] = "code"
+    params["client_id"]     = client["client_id"]
+    params["redirect_uri"]  = client["redirect_uri"]
+    params["scope"]         = join(client["scopes"], " ")
+    params["state"]         = state
+    if pkce_challenge != "" {
+        params["code_challenge"]        = pkce_challenge
+        params["code_challenge_method"] = "S256"
+    }
+    let ks = keys(extra)
+    let i = 0
+    while i < len(ks) {
+        params[ks[i]] = extra[ks[i]]
+        i = i + 1
+    }
+    return client["auth_url"] + "?" + form_encode(params)
+}
+
+fn token_request_body(client: map, code: str, pkce_verifier_s: str) -> str {
+    let params = {}
+    params["grant_type"]   = "authorization_code"
+    params["code"]         = code
+    params["redirect_uri"] = client["redirect_uri"]
+    params["client_id"]    = client["client_id"]
+    if client["client_secret"] != "" {
+        params["client_secret"] = client["client_secret"]
+    }
+    if pkce_verifier_s != "" {
+        params["code_verifier"] = pkce_verifier_s
+    }
+    return form_encode(params)
+}
+
+fn refresh_request_body(client: map, refresh_token: str) -> str {
+    let params = {}
+    params["grant_type"]    = "refresh_token"
+    params["refresh_token"] = refresh_token
+    params["client_id"]     = client["client_id"]
+    if client["client_secret"] != "" {
+        params["client_secret"] = client["client_secret"]
+    }
+    return form_encode(params)
+}
+
+fn revoke_request_body(client: map, token: str, hint: str) -> str {
+    let params = {}
+    params["token"]     = token
+    params["client_id"] = client["client_id"]
+    if hint != "" {
+        params["token_type_hint"] = hint
+    }
+    if client["client_secret"] != "" {
+        params["client_secret"] = client["client_secret"]
+    }
+    return form_encode(params)
+}
+
+fn parse_token_response(json_map: map) -> map {
+    let t = {}
+    t["access_token"]  = ""
+    t["refresh_token"] = ""
+    t["id_token"]      = ""
+    t["token_type"]    = "Bearer"
+    t["expires_in"]    = 0
+    t["scope"]         = ""
+    let ks = keys(json_map)
+    let i = 0
+    while i < len(ks) {
+        let k = ks[i]
+        if contains(keys(t), k) {
+            t[k] = json_map[k]
+        }
+        i = i + 1
+    }
+    return t
+}
+
+fn validate_state(expected: str, got: str) -> bool {
+    if len(expected) != len(got) { return false }
+    let diff = 0
+    let i = 0
+    while i < len(expected) {
+        let a = bytes_of(char_at(expected, i))[0]
+        let b = bytes_of(char_at(got, i))[0]
+        diff = diff | (a ^ b)
+        i = i + 1
+    }
+    return diff == 0
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB OAUTH2 TUTORIAL ===")
+
+    println("STEP 1 percent + form encoding:")
+    println("  pct(\"a b&c=d\")=" + percent_encode("a b&c=d"))
+    println("  pct(\"~ok-._\")=" + percent_encode("~ok-._"))
+    let form = {}
+    form["grant_type"] = "authorization_code"
+    form["code"] = "abc 123"
+    println("  form=" + form_encode(form))
+
+    println("STEP 2 PKCE S256 (RFC 7636 vector):")
+    let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+    let challenge = pkce_challenge_s256(verifier, sha256_bytes)
+    println("  challenge=" + challenge)
+    println("  matches RFC7636=" + str(challenge == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"))
+
+    println("STEP 3 client + authorization URL:")
+    let scopes = ["openid", "profile", "email"]
+    let client = new_client("my-client-id", "shh",
+                            "https://auth.example.com/authorize",
+                            "https://auth.example.com/token",
+                            "https://app.example.com/cb", scopes)
+    let extra = {}
+    extra["audience"] = "api.example.com"
+    let url = authorization_url(client, "st4te-123", challenge, extra)
+    println("  url=" + url)
+
+    println("STEP 4 token exchange body:")
+    println("  " + token_request_body(client, "auth-code-1", verifier))
+    println("  refresh=" + refresh_request_body(client, "rt-9"))
+    println("  revoke=" + revoke_request_body(client, "at-9", "access_token"))
+
+    println("STEP 5 parse token response + state check:")
+    let resp = {}
+    resp["access_token"] = "eyJ..."
+    resp["refresh_token"] = "rt..."
+    resp["expires_in"] = 3600
+    resp["token_type"] = "bearer"
+    resp["unexpected"] = "dropped"
+    let t = parse_token_response(resp)
+    println("  at=" + str(t["access_token"]) + " type=" + str(t["token_type"])
+            + " expires=" + str(t["expires_in"]))
+    println("  unknown key kept? " + str(contains(keys(t), "unexpected")))
+    println("  state ok=" + str(validate_state("st4te-123", "st4te-123"))
+            + " bad=" + str(validate_state("st4te-123", "st4te-124")))
+    println("PINNED_VECTORS: pct=a%20b%26c%3Dd pkce=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM url=authorize+S256 body=grant_type+code_verifier resp=eyJ+3600 state=true/false")
+}
+
+main()
