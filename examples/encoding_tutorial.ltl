@@ -1,0 +1,177 @@
+// ===================================================================
+// examples/encoding_tutorial.ltl — stdlib/encoding.ltl tutorial companion
+// Runnable tour of the encoding module: hex, base64 and percent
+// (URL) encoding/decoding with pinned RFC-style test vectors.
+// Self-contained so it runs on `lateralus run`.
+// Bit ops are written as arithmetic (/ and %) so the script stays
+// backend-agnostic.
+// ===================================================================
+
+fn hex_encode(bytes: list) -> str {
+    let digits = "0123456789abcdef"
+    let result = ""
+    for b in bytes {
+        result = result + digits[floor(b / 16) % 16] + digits[b % 16]
+    }
+    return result
+}
+
+fn hex_val(c: str) -> int {
+    if c >= "0" && c <= "9" { return ord(c) - ord("0") }
+    if c >= "a" && c <= "f" { return ord(c) - ord("a") + 10 }
+    if c >= "A" && c <= "F" { return ord(c) - ord("A") + 10 }
+    return 0
+}
+
+fn hex_decode(s: str) -> list {
+    let result = []
+    let i = 0
+    while i + 1 < len(s) {
+        result = result + [hex_val(s[i]) * 16 + hex_val(s[i + 1])]
+        i = i + 2
+    }
+    return result
+}
+
+fn b64_val(c: str) -> int {
+    if c >= "A" && c <= "Z" { return ord(c) - ord("A") }
+    if c >= "a" && c <= "z" { return ord(c) - ord("a") + 26 }
+    if c >= "0" && c <= "9" { return ord(c) - ord("0") + 52 }
+    if c == "+" { return 62 }
+    if c == "/" { return 63 }
+    return 0
+}
+
+fn b64_encode(bytes: list) -> str {
+    let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    let result = ""
+    let i = 0
+    let n = len(bytes)
+    while i < n {
+        let b0 = bytes[i]
+        let b1 = 0
+        let b2 = 0
+        if i + 1 < n { b1 = bytes[i + 1] }
+        if i + 2 < n { b2 = bytes[i + 2] }
+        result = result + chars[floor(b0 / 4) % 64]
+        result = result + chars[(b0 % 4) * 16 + floor(b1 / 16)]
+        if i + 1 < n {
+            result = result + chars[(b1 % 16) * 4 + floor(b2 / 64)]
+        } else {
+            result = result + "="
+        }
+        if i + 2 < n {
+            result = result + chars[b2 % 64]
+        } else {
+            result = result + "="
+        }
+        i = i + 3
+    }
+    return result
+}
+
+fn b64_decode(s: str) -> list {
+    let result = []
+    let i = 0
+    while i + 3 < len(s) {
+        let a = b64_val(s[i])
+        let b = b64_val(s[i + 1])
+        let c = b64_val(s[i + 2])
+        let d = b64_val(s[i + 3])
+        result = result + [(a * 4 + floor(b / 16)) % 256]
+        if s[i + 2] != "=" {
+            result = result + [((b % 16) * 16 + floor(c / 4)) % 256]
+        }
+        if s[i + 3] != "=" {
+            result = result + [((c % 4) * 64 + d) % 256]
+        }
+        i = i + 4
+    }
+    return result
+}
+
+fn url_encode(s: str) -> str {
+    let safe = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~"
+    let hex = "0123456789ABCDEF"
+    let result = ""
+    for i in range(0, len(s)) {
+        let c = s[i]
+        if contains(safe, c) {
+            result = result + c
+        } else {
+            let code = ord(c)
+            result = result + "%" + hex[floor(code / 16) % 16] + hex[code % 16]
+        }
+    }
+    return result
+}
+
+fn url_decode(s: str) -> str {
+    let result = ""
+    let i = 0
+    while i < len(s) {
+        if s[i] == "%" && i + 2 < len(s) {
+            result = result + chr(hex_val(s[i + 1]) * 16 + hex_val(s[i + 2]))
+            i = i + 3
+        } else if s[i] == "+" {
+            result = result + " "
+            i = i + 1
+        } else {
+            result = result + s[i]
+            i = i + 1
+        }
+    }
+    return result
+}
+
+fn bytes_of_str(s: str) -> list {
+    let out = []
+    for i in range(0, len(s)) {
+        out = out + [ord(s[i])]
+    }
+    return out
+}
+
+fn str_of_bytes(bs: list) -> str {
+    let out = ""
+    for b in bs {
+        out = out + chr(b)
+    }
+    return out
+}
+
+fn show_bytes(label: str, bs: list) {
+    println(label + ": [" + join(bs, ", ") + "]")
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB ENCODING TUTORIAL ===")
+
+    // STEP 1: hex round-trip on "hello"
+    let hello = bytes_of_str("hello")
+    show_bytes("STEP 1: bytes_of('hello')", hello)
+    println("STEP 1: hex_encode = " + hex_encode(hello))
+    show_bytes("STEP 1: hex_decode round-trip", hex_decode("68656c6c6f"))
+
+    // STEP 2: base64 on "hello" -> aGVsbG8=  (RFC 4648); SGVsbG8= is "Hello"
+    println("STEP 2: base64_encode('hello') = " + b64_encode(hello))
+    println("STEP 2: base64_encode('Hello') = " + b64_encode(bytes_of_str("Hello")))
+    show_bytes("STEP 2: base64_decode('aGVsbG8=')", b64_decode("aGVsbG8="))
+    show_bytes("STEP 2c: base64_decode('SGVsbG8=') = 'Hello'", b64_decode("SGVsbG8="))
+    show_bytes("STEP 2b: base64_decode('aGVsbG8gd29ybGQ=') -> 'hello world'", b64_decode("aGVsbG8gd29ybGQ="))
+
+    // STEP 3: url encoding
+    println("STEP 3: url_encode('a b&c=d') = " + url_encode("a b&c=d"))
+    println("STEP 3: url_encode('100% sure?') = " + url_encode("100% sure?"))
+    println("STEP 3: url_decode round-trip = " + url_decode(url_encode("a b&c=d")))
+    println("STEP 3b: url_decode('a+b%20c') = '" + url_decode("a+b%20c") + "'")
+
+    // STEP 4: edge cases — empty and single byte
+    show_bytes("STEP 4: hex_encode([])", hex_encode([]))
+    println("STEP 4: base64_encode([0]) = '" + b64_encode([0]) + "'")
+    println("STEP 4: base64_encode([255,255,255]) = '" + b64_encode([255, 255, 255]) + "'")
+
+    println("PINNED_VECTORS: hex=68656c6c6f b64=aGVsbG8= b64Hello=SGVsbG8= b64world=aGVsbG8gd29ybGQ= url=a%20b%26c%3Dd")
+}
+
+main()
