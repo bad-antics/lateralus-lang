@@ -1,0 +1,53 @@
+// Lateralus Standard Library Example: Token Bucket API Gateway Rate Limiter
+// Demonstrates burst smoothing, zero-token HTTP 429 throttling, and dynamic recovery.
+
+fn min_int(a: int, b: int) -> int {
+    if a < b { return a; }
+    return b;
+}
+
+fn main() -> int {
+    println("=== Lateralus Token Bucket API Gateway Limiter Demo ===");
+
+    let burst_capacity = 4;
+    let rate_per_second = 1;
+    let mut current_tokens = 4;
+    let mut last_refill = 0;
+
+    println("Configured Limiter: Burst Capacity = 4, Refill Rate = 1 token/sec");
+
+    // Phase 1: Burst of 4 rapid queries at t=0
+    println("\n[t=0s] Processing rapid burst of 4 requests...");
+    let mut req = 1;
+    while req <= 4 {
+        if current_tokens >= 1 {
+            current_tokens = current_tokens - 1;
+            println("  Request #" + str(req) + ": PASSED (200 OK) | Remaining Tokens: " + str(current_tokens));
+        }
+        req = req + 1;
+    }
+    assert(current_tokens == 0);
+
+    // Phase 2: 5th request at t=0 exceeds capacity -> 429 Throttle!
+    println("\n[t=0s] 5th request arrives immediately:");
+    if current_tokens < 1 {
+        println("  Request #5: THROTTLED (429 Too Many Requests)! Rate limit exceeded.");
+    }
+    assert(current_tokens == 0);
+
+    // Phase 3: Fast-forward 2 seconds to t=2s -> Replenishes 2 tokens
+    let now = 2;
+    let elapsed = now - last_refill;
+    current_tokens = min_int(burst_capacity, current_tokens + elapsed * rate_per_second);
+    last_refill = now;
+    println("\n[t=2s] Replenished tokens based on elapsed time: " + str(current_tokens) + " tokens available.");
+    assert(current_tokens == 2);
+
+    // Request 6 succeeds
+    current_tokens = current_tokens - 1;
+    println("  Request #6: PASSED (200 OK) | Remaining Tokens: " + str(current_tokens));
+    assert(current_tokens == 1);
+
+    println("\nToken Bucket traffic shaping verification complete!");
+    return 0;
+}

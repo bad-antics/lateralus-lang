@@ -1,0 +1,72 @@
+// Standard Library Token Bucket Rate Limiter Tutorial Verification Suite
+// Validates burst capacity, time-based token refill, zero-token rejection, and recovery.
+
+fn min_val(a: int, b: int) -> int {
+    if a < b { return a; }
+    return b;
+}
+
+// Calculates replenished token balance capped at capacity
+fn rl_replenish(current_tokens: int, last_time: int, now_time: int, capacity: int, refill_rate: int) -> int {
+    let delta = now_time - last_time;
+    if delta <= 0 {
+        return current_tokens;
+    }
+    let added = delta * refill_rate;
+    return min_val(capacity, current_tokens + added);
+}
+
+// Determines whether the requested token cost can be fulfilled
+fn rl_can_acquire(tokens: int, cost: int) -> bool {
+    return tokens >= cost;
+}
+
+// Deducts consumed tokens
+fn rl_consume(tokens: int, cost: int) -> int {
+    if tokens >= cost {
+        return tokens - cost;
+    }
+    return tokens;
+}
+
+fn main() -> int {
+    let cap = 5;
+    let rate = 1; // 1 token per time unit
+    let mut tokens = 5; // Starts full
+    let mut last_t = 100;
+
+    // 1. Initial burst capacity assertion
+    assert(tokens == 5);
+    assert(rl_can_acquire(tokens, 3));
+
+    // Consume 3 tokens at t=100
+    tokens = rl_consume(tokens, 3);
+    assert(tokens == 2);
+
+    // Consume remaining 2 tokens at t=100 -> bucket exhausted!
+    assert(rl_can_acquire(tokens, 2));
+    tokens = rl_consume(tokens, 2);
+    assert(tokens == 0);
+
+    // 2. Immediate subsequent request at t=100 must be rejected
+    tokens = rl_replenish(tokens, last_t, 100, cap, rate);
+    assert(tokens == 0);
+    assert(!rl_can_acquire(tokens, 1)); // 429 Too Many Requests!
+
+    // 3. Time advances by 2 units to t=102 -> adds 2 tokens
+    tokens = rl_replenish(tokens, last_t, 102, cap, rate);
+    last_t = 102;
+    assert(tokens == 2);
+    assert(rl_can_acquire(tokens, 1));
+
+    // Consume 1 token -> 1 remains
+    tokens = rl_consume(tokens, 1);
+    assert(tokens == 1);
+
+    // 4. Large time delta to t=120 -> caps at max capacity (5)
+    tokens = rl_replenish(tokens, last_t, 120, cap, rate);
+    last_t = 120;
+    assert(tokens == 5); // Cannot exceed max capacity of 5
+
+    return 0;
+}
