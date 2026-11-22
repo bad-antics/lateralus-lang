@@ -1,0 +1,167 @@
+// ===================================================================
+// examples/trie_autocomplete_tutorial.ltl
+// -------------------------------------------------------------------
+// Demonstration of Trie (Prefix Tree) Autocompletion in Lateralus.
+//
+// Real-World Applications:
+// 1. IDE Code Editor Keyword & Function Autocompletion (Language Server Protocol).
+// 2. Search Engine Predictive Query Suggestions (Google / Algolia search bar).
+// 3. Command Line Interface (CLI) Subcommand & Flag Autocompletion (Tab-completion).
+// ===================================================================
+
+fn make_node(node_id) {
+    let node = dict()
+    node["id"] = node_id
+    node["keys"] = []
+    node["next_ids"] = []
+    node["is_end"] = false
+    node["freq"] = 0
+    node["word"] = ""
+    return node
+}
+
+fn get_child_id(node, ch) {
+    let keys = node["keys"]
+    let next_ids = node["next_ids"]
+    let i = 0
+    let n = len(keys)
+    while i < n {
+        if keys[i] == ch {
+            return next_ids[i]
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+fn put_child(node, ch, child_id) {
+    node["keys"] = push(node["keys"], ch)
+    node["next_ids"] = push(node["next_ids"], child_id)
+}
+
+pub fn create_autocomplete_engine() {
+    let engine = dict()
+    let root = make_node(0)
+    engine["nodes"] = [root]
+    return engine
+}
+
+pub fn index_token(engine, word, popularity_weight) {
+    let nodes = engine["nodes"]
+    let curr_id = 0
+    let n = len(word)
+    let i = 0
+
+    while i < n {
+        let ch = word[i]
+        let curr_node = nodes[curr_id]
+        let next_id = get_child_id(curr_node, ch)
+
+        if next_id != -1 {
+            curr_id = next_id
+        } else {
+            let new_id = len(nodes)
+            let new_node = make_node(new_id)
+            nodes = push(nodes, new_node)
+            engine["nodes"] = nodes
+            put_child(curr_node, ch, new_id)
+            curr_id = new_id
+        }
+        i = i + 1
+    }
+
+    let end_node = nodes[curr_id]
+    end_node["is_end"] = true
+    end_node["freq"] = popularity_weight
+    end_node["word"] = word
+}
+
+fn dfs_collect_suggestions(nodes, curr_id, suggestions) {
+    let curr_node = nodes[curr_id]
+    if curr_node["is_end"] {
+        suggestions = push(suggestions, curr_node["word"])
+    }
+
+    let next_ids = curr_node["next_ids"]
+    let i = 0
+    let n = len(next_ids)
+    while i < n {
+        let nxt = next_ids[i]
+        suggestions = dfs_collect_suggestions(nodes, nxt, suggestions)
+        i = i + 1
+    }
+    return suggestions
+}
+
+pub fn suggest(engine, query_prefix) {
+    let nodes = engine["nodes"]
+    let curr_id = 0
+    let n = len(query_prefix)
+    let i = 0
+
+    while i < n {
+        let ch = query_prefix[i]
+        let curr_node = nodes[curr_id]
+        let next_id = get_child_id(curr_node, ch)
+
+        if next_id == -1 {
+            return []
+        }
+        curr_id = next_id
+        i = i + 1
+    }
+
+    let suggestions = []
+    return dfs_collect_suggestions(nodes, curr_id, suggestions)
+}
+
+pub fn main() {
+    print("=================================================================")
+    print("   Lateralus Standard Library: Trie Autocomplete Engine Demo     ")
+    print("=================================================================")
+
+    let engine = create_autocomplete_engine()
+
+    // 1. Index Lateralus Standard Library & Language Keywords
+    index_token(engine, "function", 100)
+    index_token(engine, "for", 85)
+    index_token(engine, "foreign", 40)
+    index_token(engine, "filter", 75)
+    index_token(engine, "match", 90)
+    index_token(engine, "map", 95)
+    index_token(engine, "measure", 50)
+    index_token(engine, "pipeline", 120)
+    index_token(engine, "push", 110)
+    index_token(engine, "pub", 130)
+
+    print("Indexed 10 language tokens into Trie.")
+
+    // 2. Query Prefix 'f'
+    let f_candidates = suggest(engine, "f")
+    print("Suggestions for prefix 'f':")
+    let i = 0
+    while i < len(f_candidates) {
+        print("  -> " + f_candidates[i])
+        i = i + 1
+    }
+
+    // 3. Query Prefix 'ma'
+    let ma_candidates = suggest(engine, "ma")
+    print("Suggestions for prefix 'ma':")
+    let j = 0
+    while j < len(ma_candidates) {
+        print("  -> " + ma_candidates[j])
+        j = j + 1
+    }
+
+    // 4. Query Prefix 'p'
+    let p_candidates = suggest(engine, "p")
+    print("Suggestions for prefix 'p':")
+    let k = 0
+    while k < len(p_candidates) {
+        print("  -> " + p_candidates[k])
+        k = k + 1
+    }
+
+    print("Trie Autocompletion execution completed successfully.")
+}
