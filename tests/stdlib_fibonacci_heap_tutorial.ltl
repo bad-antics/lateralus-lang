@@ -1,0 +1,453 @@
+// ===================================================================
+// tests/stdlib_fibonacci_heap_tutorial.ltl
+// -------------------------------------------------------------------
+// Complete test suite for Fibonacci Heap in Lateralus.
+// Features O(1) amortized insert, meld, and decrease-key operations
+// using lazy consolidation and cascading cuts.
+// Michael L. Fredman and Robert E. Tarjan (1987).
+// ===================================================================
+
+pub fn fib_create() -> dict {
+    let mut heap = {}
+    heap["min_node"] = 0
+    heap["count"] = 0
+
+    // Index 0 represents null node
+    let mut keys = [0]
+    let mut values = [0]
+    let mut parent = [0]
+    let mut child = [0]
+    let mut left = [0]
+    let mut right = [0]
+    let mut degree = [0]
+    let mut mark = [false]
+
+    heap["keys"] = keys
+    heap["values"] = values
+    heap["parent"] = parent
+    heap["child"] = child
+    heap["left"] = left
+    heap["right"] = right
+    heap["degree"] = degree
+    heap["mark"] = mark
+
+    return heap
+}
+
+pub fn fib_insert(heap: dict, key: int, val: int) -> int {
+    let mut keys = heap["keys"]
+    let mut values = heap["values"]
+    let mut parent = heap["parent"]
+    let mut child = heap["child"]
+    let mut left = heap["left"]
+    let mut right = heap["right"]
+    let mut degree = heap["degree"]
+    let mut mark = heap["mark"]
+
+    let u = keys.len()
+    keys.push(key)
+    values.push(val)
+    parent.push(0)
+    child.push(0)
+    left.push(u)
+    right.push(u)
+    degree.push(0)
+    mark.push(false)
+
+    let min_node = heap["min_node"]
+    if min_node == 0 {
+        heap["min_node"] = u
+    } else {
+        // Insert u into root list next to min_node
+        let r = right[min_node]
+        right[min_node] = u
+        left[u] = min_node
+        right[u] = r
+        left[r] = u
+
+        if key < keys[min_node] {
+            heap["min_node"] = u
+        }
+    }
+
+    let count = heap["count"]
+    heap["count"] = count + 1
+    return u
+}
+
+pub fn fib_get_min_key(heap: dict) -> int {
+    let min_node = heap["min_node"]
+    if min_node == 0 {
+        return -1
+    }
+    let keys = heap["keys"]
+    return keys[min_node]
+}
+
+pub fn fib_get_min_val(heap: dict) -> int {
+    let min_node = heap["min_node"]
+    if min_node == 0 {
+        return -1
+    }
+    let values = heap["values"]
+    return values[min_node]
+}
+
+pub fn fib_link_nodes(heap: dict, y: int, x: int) {
+    let mut parent = heap["parent"]
+    let mut child = heap["child"]
+    let mut left = heap["left"]
+    let mut right = heap["right"]
+    let mut degree = heap["degree"]
+    let mut mark = heap["mark"]
+
+    // Remove y from root list
+    let y_l = left[y]
+    let y_r = right[y]
+    right[y_l] = y_r
+    left[y_r] = y_l
+
+    // Make y a child of x
+    parent[y] = x
+    let c = child[x]
+    if c == 0 {
+        child[x] = y
+        left[y] = y
+        right[y] = y
+    } else {
+        let c_r = right[c]
+        right[c] = y
+        left[y] = c
+        right[y] = c_r
+        left[c_r] = y
+    }
+
+    let d = degree[x]
+    degree[x] = d + 1
+    mark[y] = false
+}
+
+pub fn fib_consolidate(heap: dict) {
+    let min_node = heap["min_node"]
+    if min_node == 0 {
+        return
+    }
+
+    let keys = heap["keys"]
+    let mut left = heap["left"]
+    let mut right = heap["right"]
+    let degree = heap["degree"]
+
+    // Collect all root nodes into a list
+    let mut root_nodes = []
+    let mut curr = min_node
+    let mut done = false
+    while not done {
+        root_nodes.push(curr)
+        curr = right[curr]
+        if curr == min_node {
+            done = true
+        }
+    }
+
+    // Degree array (up to max degree 32)
+    let mut a = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+    let mut i = 0
+    let n_roots = root_nodes.len()
+    while i < n_roots {
+        let mut x = root_nodes[i]
+        let mut d = degree[x]
+
+        while a[d] != 0 {
+            let mut y = a[d]
+            if keys[x] > keys[y] {
+                let temp = x
+                x = y
+                y = temp
+            }
+            fib_link_nodes(heap, y, x)
+            a[d] = 0
+            d = d + 1
+        }
+        a[d] = x
+        i = i + 1
+    }
+
+    // Rebuild root list from non-zero elements in a
+    heap["min_node"] = 0
+    let mut new_min = 0
+
+    let mut j = 0
+    while j < 32 {
+        let node_id = a[j]
+        if node_id != 0 {
+            if new_min == 0 {
+                new_min = node_id
+                left[node_id] = node_id
+                right[node_id] = node_id
+            } else {
+                let r = right[new_min]
+                right[new_min] = node_id
+                left[node_id] = new_min
+                right[node_id] = r
+                left[r] = node_id
+
+                if keys[node_id] < keys[new_min] {
+                    new_min = node_id
+                }
+            }
+        }
+        j = j + 1
+    }
+
+    heap["min_node"] = new_min
+}
+
+pub fn fib_extract_min(heap: dict) -> dict {
+    let mut res = {}
+    res["key"] = -1
+    res["val"] = -1
+
+    let z = heap["min_node"]
+    if z == 0 {
+        return res
+    }
+
+    let keys = heap["keys"]
+    let values = heap["values"]
+    let mut parent = heap["parent"]
+    let mut child = heap["child"]
+    let mut left = heap["left"]
+    let mut right = heap["right"]
+
+    res["key"] = keys[z]
+    res["val"] = values[z]
+
+    // Add all children of z to the root list
+    let c = child[z]
+    if c != 0 {
+        let mut child_nodes = []
+        let mut curr = c
+        let mut done = false
+        while not done {
+            child_nodes.push(curr)
+            curr = right[curr]
+            if curr == c {
+                done = true
+            }
+        }
+
+        let mut i = 0
+        let n_children = child_nodes.len()
+        while i < n_children {
+            let ch = child_nodes[i]
+            parent[ch] = 0
+
+            // Insert ch into root list next to z
+            let r = right[z]
+            right[z] = ch
+            left[ch] = z
+            right[ch] = r
+            left[r] = ch
+
+            i = i + 1
+        }
+    }
+
+    // Remove z from root list
+    let z_l = left[z]
+    let z_r = right[z]
+    right[z_l] = z_r
+    left[z_r] = z_l
+
+    if z_r == z {
+        heap["min_node"] = 0
+    } else {
+        heap["min_node"] = z_r
+        fib_consolidate(heap)
+    }
+
+    let count = heap["count"]
+    heap["count"] = count - 1
+    return res
+}
+
+pub fn fib_cut(heap: dict, x: int, y: int) {
+    let mut child = heap["child"]
+    let mut left = heap["left"]
+    let mut right = heap["right"]
+    let mut parent = heap["parent"]
+    let mut degree = heap["degree"]
+    let mut mark = heap["mark"]
+
+    // Remove x from y's child list
+    let x_l = left[x]
+    let x_r = right[x]
+    right[x_l] = x_r
+    left[x_r] = x_l
+
+    if child[y] == x {
+        if x_r == x {
+            child[y] = 0
+        } else {
+            child[y] = x_r
+        }
+    }
+
+    let d = degree[y]
+    degree[y] = d - 1
+
+    // Add x to root list
+    let min_node = heap["min_node"]
+    let r = right[min_node]
+    right[min_node] = x
+    left[x] = min_node
+    right[x] = r
+    left[r] = x
+
+    parent[x] = 0
+    mark[x] = false
+}
+
+pub fn fib_cascading_cut(heap: dict, y: int) {
+    let parent = heap["parent"]
+    let mut mark = heap["mark"]
+    let z = parent[y]
+
+    if z != 0 {
+        if not mark[y] {
+            mark[y] = true
+        } else {
+            fib_cut(heap, y, z)
+            fib_cascading_cut(heap, z)
+        }
+    }
+}
+
+pub fn fib_decrease_key(heap: dict, x: int, new_key: int) -> bool {
+    let mut keys = heap["keys"]
+    let parent = heap["parent"]
+
+    if new_key > keys[x] {
+        return false
+    }
+
+    keys[x] = new_key
+    let y = parent[x]
+
+    if y != 0 and keys[x] < keys[y] {
+        fib_cut(heap, x, y)
+        fib_cascading_cut(heap, y)
+    }
+
+    let min_node = heap["min_node"]
+    if keys[x] < keys[min_node] {
+        heap["min_node"] = x
+    }
+    return true
+}
+
+// -------------------------------------------------------------------
+// Smoke tests and Golden Test Vectors
+// -------------------------------------------------------------------
+
+pub fn test_fib_insert_and_extract_sorted() -> bool {
+    let heap = fib_create()
+    fib_insert(heap, 30, 3)
+    fib_insert(heap, 10, 1)
+    fib_insert(heap, 50, 5)
+    fib_insert(heap, 20, 2)
+    fib_insert(heap, 40, 4)
+
+    if heap["count"] != 5 {
+        return false
+    }
+
+    let e1 = fib_extract_min(heap)
+    let e2 = fib_extract_min(heap)
+    let e3 = fib_extract_min(heap)
+    let e4 = fib_extract_min(heap)
+    let e5 = fib_extract_min(heap)
+
+    if e1["key"] != 10 or e1["val"] != 1 {
+        return false
+    }
+    if e2["key"] != 20 or e2["val"] != 2 {
+        return false
+    }
+    if e3["key"] != 30 or e3["val"] != 3 {
+        return false
+    }
+    if e4["key"] != 40 or e4["val"] != 4 {
+        return false
+    }
+    if e5["key"] != 50 or e5["val"] != 5 {
+        return false
+    }
+
+    if heap["count"] != 0 {
+        return false
+    }
+    return true
+}
+
+pub fn test_fib_decrease_key() -> bool {
+    let heap = fib_create()
+    let n1 = fib_insert(heap, 100, 1)
+    let n2 = fib_insert(heap, 200, 2)
+    let n3 = fib_insert(heap, 300, 3)
+
+    // Trigger initial consolidation
+    let _ = fib_extract_min(heap) // removes n1 (100)
+
+    // Now n2 and n3 are consolidated
+    // Decrease n3 from 300 down to 50
+    let ok = fib_decrease_key(heap, n3, 50)
+    if not ok {
+        return false
+    }
+
+    // Min key should now be 50
+    if fib_get_min_key(heap) != 50 {
+        return false
+    }
+
+    let next_min = fib_extract_min(heap)
+    if next_min["key"] != 50 or next_min["val"] != 3 {
+        return false
+    }
+
+    let last = fib_extract_min(heap)
+    if last["key"] != 200 or last["val"] != 2 {
+        return false
+    }
+
+    return true
+}
+
+pub fn test_fib_cascading_cuts() -> bool {
+    let heap = fib_create()
+    let mut i = 1
+    let mut nodes = [0]
+    while i <= 8 {
+        let nid = fib_insert(heap, i * 10, i)
+        nodes.push(nid)
+        i = i + 1
+    }
+
+    // Extract min to form high-degree tree
+    let first = fib_extract_min(heap)
+    if first["key"] != 10 {
+        return false
+    }
+
+    // Decrease several keys to exercise cuts
+    fib_decrease_key(heap, nodes[7], 5)
+    let min1 = fib_extract_min(heap)
+    if min1["key"] != 5 {
+        return false
+    }
+
+    return true
+}
