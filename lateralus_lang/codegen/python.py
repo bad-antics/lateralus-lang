@@ -276,6 +276,24 @@ class PythonTranspiler(ASTVisitor):
         self._w += "def pad_center(s, n, c=' '):return str(s).center(n, c)"
         self._w += "def format_int(n, width=0):return str(n).rjust(width) if width else str(n)"
         self._w += "def format_float(n, prec=2):return f'{n:.{prec}f}'"
+        self._w += "def split(s, sep):        return str_split(s, sep)"
+        self._w += "def trim(s):              return str_trim(s)"
+        self._w += "def char_at(s, i):        return s[i] if 0 <= i < len(s) else ''"
+        self._w += "def starts_with(s, p):    return str_starts_with(s, p)"
+        self._w += "def ends_with(s, p):      return str_ends_with(s, p)"
+        self._w += "def index_of(s, sub):     return s.find(sub)"
+        self._w += "def try_int(s):"
+        self._w += "    try: return int(s)"
+        self._w += "    except: return None"
+        self._w += "def _ltl_typeof(x):"
+        self._w += "    if x is None: return 'null'"
+        self._w += "    if isinstance(x, bool): return 'bool'"
+        self._w += "    if isinstance(x, int): return 'int'"
+        self._w += "    if isinstance(x, float): return 'float'"
+        self._w += "    if isinstance(x, str): return 'str'"
+        self._w += "    if isinstance(x, list): return 'list'"
+        self._w += "    if isinstance(x, dict): return 'map'"
+        self._w += "    return type(x).__name__"
         self._w += "def to_str(v):            return _builtins.str(v)"
         self._w += "def to_int(v):            return _builtins.int(v)"
         self._w += "def to_float(v):          return _builtins.float(v)"
@@ -1217,8 +1235,10 @@ class PythonTranspiler(ASTVisitor):
             node.else_body.accept(self)
 
     def visit_PipelineAssign(self, node: PipelineAssign):
-        """target |>= expr  →  target = expr(target)"""
-        self._w += f"{self._expr(node.target)} = {self._expr(node.value)}"
+        """target |>= expr  →  target = target |> expr"""
+        target_str = self._expr(node.target)
+        pipe_expr = BinOp(op="|>", left=node.target, right=node.value)
+        self._w += f"{target_str} = {self._expr(pipe_expr)}"
 
     # ── v1.5 statement visitors ────────────────────────────────────────────────
 
@@ -1505,7 +1525,7 @@ class PythonTranspiler(ASTVisitor):
             return f"({self._expr(node.left)} {py_op} {self._expr(node.right)})"
         if isinstance(node, UnaryOp):
             py_op = {"!": "not ", "not": "not ", "-": "-", "~": "~",
-                     "typeof": "type(", "sizeof": "len("}.get(node.op, node.op)
+                     "typeof": "_ltl_typeof(", "sizeof": "len("}.get(node.op, node.op)
             if node.op in ("typeof", "sizeof"):
                 return f"{py_op}{self._expr(node.operand)})"
             return f"{py_op}{self._expr(node.operand)}"
