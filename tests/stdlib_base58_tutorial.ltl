@@ -1,0 +1,152 @@
+// Standard Library Base58 (Bitcoin Alphabet) Tutorial Verification Suite
+// Validates Satoshi Nakamoto's Base58 radix conversion, leading zero preservation, and lossless decoding.
+
+fn base58_alphabet() -> string {
+    return "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+}
+
+fn base58_encode(data: list) -> string {
+    let alpha = base58_alphabet();
+    let n = len(data);
+    if n == 0 {
+        return "";
+    }
+
+    let mut zeroes = 0;
+    while zeroes < n && data[zeroes] == 0 {
+        zeroes = zeroes + 1;
+    }
+
+    let mut digits = [0];
+    let mut i = 0;
+    while i < n {
+        let mut carry = data[i];
+        let mut j = 0;
+        while j < len(digits) {
+            carry = carry + digits[j] * 256;
+            digits[j] = carry % 58;
+            carry = carry / 58;
+            j = j + 1;
+        }
+        while carry > 0 {
+            digits = digits + [carry % 58];
+            carry = carry / 58;
+        }
+        i = i + 1;
+    }
+
+    let mut encoded = "";
+    let mut z = 0;
+    while z < zeroes {
+        encoded = encoded + "1";
+        z = z + 1;
+    }
+
+    if zeroes != n {
+        let mut d_idx = len(digits) - 1;
+        while d_idx >= 0 {
+            let val = digits[d_idx];
+            encoded = encoded + slice(alpha, val, val + 1);
+            d_idx = d_idx - 1;
+        }
+    }
+
+    return encoded;
+}
+
+fn base58_decode(s: string) -> list {
+    let alpha = base58_alphabet();
+    let n = len(s);
+    if n == 0 {
+        return [];
+    }
+
+    let mut lookup = {};
+    let mut idx = 0;
+    while idx < 58 {
+        lookup[slice(alpha, idx, idx + 1)] = idx;
+        idx = idx + 1;
+    }
+
+    let mut ones = 0;
+    while ones < n && slice(s, ones, ones + 1) == "1" {
+        ones = ones + 1;
+    }
+
+    let mut bytes = [0];
+    let mut i = ones;
+    while i < n {
+        let ch = slice(s, i, i + 1);
+        if contains(lookup, ch) == false {
+            return [];
+        }
+        let mut carry = lookup[ch];
+        let mut j = 0;
+        while j < len(bytes) {
+            carry = carry + bytes[j] * 58;
+            bytes[j] = carry % 256;
+            carry = carry / 256;
+            j = j + 1;
+        }
+        while carry > 0 {
+            bytes = bytes + [carry % 256];
+            carry = carry / 256;
+        }
+        i = i + 1;
+    }
+
+    let mut out = [];
+    let mut z = 0;
+    while z < ones {
+        out = out + [0];
+        z = z + 1;
+    }
+
+    if ones != n {
+        let mut b_idx = len(bytes) - 1;
+        while b_idx >= 0 {
+            out = out + [bytes[b_idx]];
+            b_idx = b_idx - 1;
+        }
+    }
+
+    return out;
+}
+
+fn main() -> int {
+    // 1. Classical Vector: "Hello World"
+    // ASCII bytes: [72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100]
+    let hello_bytes = [72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100];
+    let b58 = base58_encode(hello_bytes);
+    assert(b58 == "JxF12TrwUP45BMd");
+
+    let restored_hello = base58_decode(b58);
+    assert(len(restored_hello) == len(hello_bytes));
+    let mut k = 0;
+    while k < len(hello_bytes) {
+        assert(restored_hello[k] == hello_bytes[k]);
+        k = k + 1;
+    }
+
+    // 2. Leading Zero Preservation (Bitcoin address format feature)
+    // [0, 0, 72, 105] ("\x00\x00Hi") -> must start with "11"
+    let zero_prefixed = [0, 0, 72, 105];
+    let zero_b58 = base58_encode(zero_prefixed);
+    assert(slice(zero_b58, 0, 2) == "11");
+
+    let restored_zeroes = base58_decode(zero_b58);
+    assert(len(restored_zeroes) == 4);
+    assert(restored_zeroes[0] == 0);
+    assert(restored_zeroes[1] == 0);
+    assert(restored_zeroes[2] == 72);
+    assert(restored_zeroes[3] == 105);
+
+    // 3. Single byte vector: [0] -> "1"
+    let single_zero = [0];
+    assert(base58_encode(single_zero) == "1");
+    let decoded_single = base58_decode("1");
+    assert(len(decoded_single) == 1);
+    assert(decoded_single[0] == 0);
+
+    return 0;
+}
