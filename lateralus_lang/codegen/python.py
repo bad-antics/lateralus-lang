@@ -1498,8 +1498,8 @@ class PythonTranspiler(ASTVisitor):
                     rest = [self._expr(a) for a in node.right.args]
                     kw   = [f"{k}={self._expr(v)}" for k, v in node.right.kwargs]
                     all_args = ", ".join([tmp] + rest + kw)
-                    return f"(({tmp} := {left}) is not None and {fn}({all_args}) or None)"
-                return f"(({tmp} := {left}) is not None and {self._expr(node.right)}({tmp}) or None)"
+                    return f"(None if ({tmp} := {left}) is None else {fn}({all_args}))"
+                return f"(None if ({tmp} := {left}) is None else {self._expr(node.right)}({tmp}))"
             py_op = {"&&": "and", "||": "or", "**": "**",
                      "and": "and", "or": "or"}.get(node.op, node.op)
             return f"({self._expr(node.left)} {py_op} {self._expr(node.right)})"
