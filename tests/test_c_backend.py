@@ -746,3 +746,17 @@ class TestTypeAlias:
         c_src = check_c("type Score = int")
         assert "typedef" in c_src
         assert "Score" in c_src
+
+
+class TestShiftBitwiseInference:
+    """Issue #330 reproducer 1: shift/bitwise results on int64 operands
+    must infer int64_t so let-decls don't emit ltl_value_t = int."""
+
+    def test_variable_shift_decl(self):
+        c_src = check_c("fn main() { let n = 3\n let bit = 1 << n\n io.println(str(bit)) }")
+        assert "int64_t bit = (1 << n)" in c_src
+
+    def test_bitwise_ops(self):
+        for expr in ("a & b", "a | b", "a ^ b", "a >> 1"):
+            c_src = check_c(f"fn main() {{ let a = 6\n let b = 3\n let r = {expr} }}")
+            assert "ltl_value_t r =" not in c_src

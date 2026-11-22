@@ -691,6 +691,10 @@ class CTranspiler(ASTVisitor):
                 if "ltl_string_t*" in (lt, rt): return "ltl_string_t*"
                 if "double" in (lt, rt):         return "double"
                 if lt == "int64_t" and rt == "int64_t": return "int64_t"
+            if op in ("<<", ">>", "&", "|", "^"):
+                lt = self._infer_ctype_from_expr(node.left)
+                rt = self._infer_ctype_from_expr(node.right)
+                if lt == "int64_t" and rt == "int64_t": return "int64_t"
             if op in ("==", "!=", "<", ">", "<=", ">=", "and", "or", "not"):
                 return "bool"
         if isinstance(node, CastExpr):
