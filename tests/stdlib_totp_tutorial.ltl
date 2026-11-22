@@ -1,0 +1,41 @@
+// Pinned RFC 6238 and RFC 4226 vectors for the stdlib/totp tutorial.
+
+import totp
+
+pub fn test_rfc4226_hotp_vectors() -> bool {
+    let secret = bytes_of("12345678901234567890")
+    // Counter 0 -> "755224", Counter 1 -> "287082", Counter 2 -> "359152"
+    if totp_hotp(secret, 0, 6, "sha1") != "755224" { return false }
+    if totp_hotp(secret, 1, 6, "sha1") != "287082" { return false }
+    if totp_hotp(secret, 2, 6, "sha1") != "359152" { return false }
+    return true
+}
+
+pub fn test_rfc6238_totp_vectors() -> bool {
+    let secret = bytes_of("12345678901234567890")
+    // T = 59s with 30s step -> counter = 1 -> "287082"
+    let c59 = totp_totp(secret, 59, 30, 6, "sha1")
+    // T = 1111111109s -> counter = 37037036 -> "081804"
+    let c_epoch = totp_totp(secret, 1111111109, 30, 6, "sha1")
+    // T = 1234567890s -> counter = 41152263 -> "005924"
+    let c2009 = totp_totp(secret, 1234567890, 30, 6, "sha1")
+
+    if c59 != "287082" { return false }
+    if c_epoch != "081804" { return false }
+    if c2009 != "005924" { return false }
+    return true
+}
+
+pub fn test_totp_verify_with_drift() -> bool {
+    let secret = bytes_of("12345678901234567890")
+    let now = 1234567890
+    let code = totp_totp(secret, now, 30, 6, "sha1")
+    // Verify at same exact window
+    let ok_exact = totp_verify(secret, code, now, 30, 6, 0, "sha1")
+    // Verify with +30s drift and drift tolerance 1
+    let ok_drift = totp_verify(secret, code, now + 30, 30, 6, 1, "sha1")
+    // Should fail if drift tolerance is 0 but timestamp shifted by 30s
+    let fail_drift = totp_verify(secret, code, now + 30, 30, 6, 0, "sha1")
+
+    return ok_exact && ok_drift && not fail_drift
+}
