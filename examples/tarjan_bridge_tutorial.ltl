@@ -1,0 +1,151 @@
+// ===================================================================
+// examples/tarjan_bridge_tutorial.ltl
+// -------------------------------------------------------------------
+// Practical Application: Telecommunications Fiber-Optic Backbone Single
+// Point of Failure (SPOF) Vulnerability Detection using Tarjan's Bridge.
+// ===================================================================
+
+pub fn new_graph(n) {
+    let adj = dict()
+    let i = 0
+    while i < n {
+        let list = dict()
+        list["len"] = 0
+        adj[i] = list
+        i = i + 1
+    }
+    return adj
+}
+
+pub fn add_edge(adj, u, v) {
+    let l_u = adj[u]
+    let sz_u = l_u["len"]
+    l_u[sz_u] = v
+    l_u["len"] = sz_u + 1
+
+    let l_v = adj[v]
+    let sz_v = l_v["len"]
+    l_v[sz_v] = u
+    l_v["len"] = sz_v + 1
+}
+
+pub fn dfs_bridge(u, p, adj, dfn, low, state, bridges) {
+    let t = state["timer"] + 1
+    state["timer"] = t
+    dfn[u] = t
+    low[u] = t
+
+    let neighbors = adj[u]
+    let deg = neighbors["len"]
+    let i = 0
+    while i < deg {
+        let v = neighbors[i]
+        if v == p {
+            // Ignore immediate parent edge in undirected traversal
+        } else {
+            if dfn[v] > 0 {
+                if dfn[v] < low[u] {
+                    low[u] = dfn[v]
+                }
+            } else {
+                dfs_bridge(v, u, adj, dfn, low, state, bridges)
+                if low[v] < low[u] {
+                    low[u] = low[v]
+                }
+                if low[v] > dfn[u] {
+                    let b = dict()
+                    if u < v {
+                        b["u"] = u
+                        b["v"] = v
+                    } else {
+                        b["u"] = v
+                        b["v"] = u
+                    }
+                    let cnt = state["bridges_cnt"]
+                    bridges[cnt] = b
+                    state["bridges_cnt"] = cnt + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+}
+
+pub fn find_bridges(adj, n) {
+    let dfn = dict()
+    let low = dict()
+    let i = 0
+    while i < n {
+        dfn[i] = 0
+        low[i] = 0
+        i = i + 1
+    }
+
+    let state = dict()
+    state["timer"] = 0
+    state["bridges_cnt"] = 0
+
+    let bridges = dict()
+
+    i = 0
+    while i < n {
+        if dfn[i] == 0 {
+            dfs_bridge(i, -1, adj, dfn, low, state, bridges)
+        }
+        i = i + 1
+    }
+
+    let result = dict()
+    result["count"] = state["bridges_cnt"]
+    result["bridges"] = bridges
+    return result
+}
+
+pub fn main() {
+    print("=== Telecom Backbone Critical Link & SPOF Detection ===")
+
+    // Topology:
+    // Regional Cluster A: US-East DC0, DC1, DC2 (triangle ring: 0-1, 1-2, 2-0)
+    // Trans-Atlantic Subsea Fiber: DC2 - DC3 (critical trunk!)
+    // Regional Cluster B: Europe DC3, DC4, DC5 (triangle ring: 3-4, 4-5, 5-3)
+    // Branch Station: DC5 - DC6 (dedicated island link!)
+    let n = 7
+    let network = new_graph(n)
+
+    // Cluster A Ring
+    add_edge(network, 0, 1)
+    add_edge(network, 1, 2)
+    add_edge(network, 2, 0)
+
+    // Inter-Cluster Trunk
+    add_edge(network, 2, 3)
+
+    // Cluster B Ring
+    add_edge(network, 3, 4)
+    add_edge(network, 4, 5)
+    add_edge(network, 5, 3)
+
+    // Spur link to remote station DC6
+    add_edge(network, 5, 6)
+
+    print("Analyzing 7-node carrier network for single point of failure bridges...")
+    let analysis = find_bridges(network, n)
+    let bridge_count = analysis["count"]
+
+    print("Total critical bridges detected:")
+    print(bridge_count)
+
+    let idx = 0
+    while idx < bridge_count {
+        let b = analysis["bridges"][idx]
+        print("SPOF Bridge Link found between Node and Node:")
+        print(b["u"])
+        print(b["v"])
+        idx = idx + 1
+    }
+
+    // Verify exactly 2 bridges: (2, 3) and (5, 6)
+    assert(bridge_count == 2, "Expected exactly 2 bridges in network topology")
+
+    print("Telecom network SPOF bridge analysis completed successfully!")
+}

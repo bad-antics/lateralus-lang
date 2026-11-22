@@ -1,0 +1,164 @@
+// ===================================================================
+// tests/stdlib_tarjan_bridge_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for Tarjan's Undirected Graph Bridge Finding,
+// O(V + E) discovery/low-link invariants, and critical link detection.
+// ===================================================================
+
+pub fn new_graph(n) {
+    let adj = dict()
+    let i = 0
+    while i < n {
+        let list = dict()
+        list["len"] = 0
+        adj[i] = list
+        i = i + 1
+    }
+    return adj
+}
+
+pub fn add_edge(adj, u, v) {
+    // Add u -> v
+    let l_u = adj[u]
+    let sz_u = l_u["len"]
+    l_u[sz_u] = v
+    l_u["len"] = sz_u + 1
+
+    // Add v -> u (undirected)
+    let l_v = adj[v]
+    let sz_v = l_v["len"]
+    l_v[sz_v] = u
+    l_v["len"] = sz_v + 1
+}
+
+pub fn dfs_bridge(u, p, adj, dfn, low, state, bridges) {
+    let t = state["timer"] + 1
+    state["timer"] = t
+    dfn[u] = t
+    low[u] = t
+
+    let neighbors = adj[u]
+    let deg = neighbors["len"]
+    let i = 0
+    while i < deg {
+        let v = neighbors[i]
+        if v == p {
+            // Traverse past immediate parent edge
+        } else {
+            if dfn[v] > 0 {
+                // Back-edge to an ancestor
+                if dfn[v] < low[u] {
+                    low[u] = dfn[v]
+                }
+            } else {
+                // Tree-edge
+                dfs_bridge(v, u, adj, dfn, low, state, bridges)
+                if low[v] < low[u] {
+                    low[u] = low[v]
+                }
+                // Necessary & sufficient bridge condition
+                if low[v] > dfn[u] {
+                    let b = dict()
+                    if u < v {
+                        b["u"] = u
+                        b["v"] = v
+                    } else {
+                        b["u"] = v
+                        b["v"] = u
+                    }
+                    let cnt = state["bridges_cnt"]
+                    bridges[cnt] = b
+                    state["bridges_cnt"] = cnt + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+}
+
+pub fn find_bridges(adj, n) {
+    let dfn = dict()
+    let low = dict()
+    let i = 0
+    while i < n {
+        dfn[i] = 0
+        low[i] = 0
+        i = i + 1
+    }
+
+    let state = dict()
+    state["timer"] = 0
+    state["bridges_cnt"] = 0
+
+    let bridges = dict()
+
+    i = 0
+    while i < n {
+        if dfn[i] == 0 {
+            dfs_bridge(i, -1, adj, dfn, low, state, bridges)
+        }
+        i = i + 1
+    }
+
+    let result = dict()
+    result["count"] = state["bridges_cnt"]
+    result["bridges"] = bridges
+    return result
+}
+
+// -------------------------------------------------------------------
+// Verification Tests
+// -------------------------------------------------------------------
+
+pub fn test_dumbbell_graph() {
+    // Two triangles connected by a single bridge edge (2-3):
+    // Triangle 1: 0-1, 1-2, 2-0
+    // Triangle 2: 3-4, 4-5, 5-3
+    // Bridge: 2 - 3
+    let n = 6
+    let g = new_graph(n)
+    add_edge(g, 0, 1)
+    add_edge(g, 1, 2)
+    add_edge(g, 2, 0)
+    add_edge(g, 2, 3)
+    add_edge(g, 3, 4)
+    add_edge(g, 4, 5)
+    add_edge(g, 5, 3)
+
+    let res = find_bridges(g, n)
+    assert(res["count"] == 1, "Exactly one bridge exists in dumbbell graph")
+    let b = res["bridges"][0]
+    assert(b["u"] == 2 && b["v"] == 3, "Bridge is edge 2-3")
+}
+
+pub fn test_cycle_graph_no_bridges() {
+    // 4-cycle: 0-1, 1-2, 2-3, 3-0. No bridges exist.
+    let n = 4
+    let g = new_graph(n)
+    add_edge(g, 0, 1)
+    add_edge(g, 1, 2)
+    add_edge(g, 2, 3)
+    add_edge(g, 3, 0)
+
+    let res = find_bridges(g, n)
+    assert(res["count"] == 0, "No bridge in simple 4-cycle")
+}
+
+pub fn test_tree_all_bridges() {
+    // A tree with 4 nodes: 0-1, 1-2, 1-3. All 3 edges are bridges!
+    let n = 4
+    let g = new_graph(n)
+    add_edge(g, 0, 1)
+    add_edge(g, 1, 2)
+    add_edge(g, 1, 3)
+
+    let res = find_bridges(g, n)
+    assert(res["count"] == 3, "All 3 edges in a 4-node tree are bridges")
+}
+
+pub fn main() {
+    test_dumbbell_graph()
+    test_cycle_graph_no_bridges()
+    test_tree_all_bridges()
+    print("All Tarjan Bridge verification tests passed successfully!")
+}
