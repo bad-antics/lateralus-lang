@@ -1,0 +1,189 @@
+// ===================================================================
+// examples/quic_tutorial.ltl — stdlib/quic.ltl tutorial companion
+// Runnable tour of the QUIC wire-format primer: the RFC 9000 §16
+// variable-length integer codec, long/short header discrimination,
+// long-header field parsing, short-header DCID slicing, and the
+// frame-type tags. Self-contained — the module code is inlined, as
+// in the other stdlib tutorials. Crypto packet protection is OUT of
+// scope, matching the module.
+// ===================================================================
+
+// -- Varint encode/decode (RFC 9000 §16) ----------------------------
+
+fn enc_varint(v: int) -> list {
+    // NOTE: integer division uses >> — lateralus "/" yields float.
+    if v < 64 {
+        return [v]
+    }
+    if v < 16384 {
+        let hi = (v >> 8) & 0x3f
+        return [0x40 | hi, v & 255]
+    }
+    if v < 1073741824 {
+        let b0 = 0x80 | ((v >> 24) & 0x3f)
+        return [b0, (v >> 16) & 255, (v >> 8) & 255, v & 255]
+    }
+    let b0 = 0xc0 | ((v >> 56) & 0x3f)
+    return [b0,
+        (v >> 48) & 255,
+        (v >> 40) & 255,
+        (v >> 32) & 255,
+        (v >> 24) & 255,
+        (v >> 16) & 255,
+        (v >> 8)  & 255,
+        v & 255]
+}
+
+/// Decode one varint. Returns [value, bytes_consumed].
+fn dec_varint(buf: list, i: int) -> list {
+    let b0 = buf[i]
+    let length_bits = (b0 >> 6) & 3
+    let vlen = 1
+    if length_bits == 1 { vlen = 2 }
+    if length_bits == 2 { vlen = 4 }
+    if length_bits == 3 { vlen = 8 }
+    let v = b0 & 0x3f
+    let k = 1
+    while k < vlen {
+        v = v * 256 + buf[i + k]
+        k = k + 1
+    }
+    return [v, vlen]
+}
+
+// -- Packet-header discrimination -----------------------------------
+
+/// Return 1 for long-header, 0 for short-header. Bit 7 of first byte.
+fn header_form(first_byte: int) -> int {
+    return (first_byte >> 7) & 1
+}
+
+/// Return 1 for a fixed-bit-respecting packet (always 1 in QUIC v1).
+fn fixed_bit(first_byte: int) -> int {
+    return (first_byte >> 6) & 1
+}
+
+fn long_packet_type(first_byte: int) -> int {
+    return (first_byte >> 4) & 3
+}
+
+fn pkt_type_initial()   -> int { return 0 }
+fn pkt_type_zero_rtt()  -> int { return 1 }
+fn pkt_type_handshake() -> int { return 2 }
+fn pkt_type_retry()     -> int { return 3 }
+
+// -- Long header parse -----------------------------------------------
+
+/// Parse a QUIC v1 long-header frame prefix. Returns a map:
+/// {type, version, dcid, scid, token, length, payload_offset}
+/// Cryptographic unprotection of the header byte and PN is NOT done.
+fn parse_long_header(buf: list) -> map {
+    let out = {}
+    let b0 = buf[0]
+    out["type"] = long_packet_type(b0)
+    out["version"] = buf[1] * 16777216 + buf[2] * 65536 + buf[3] * 256 + buf[4]
+    let dcil = buf[5]
+    let dcid_start = 6
+    out["dcid"] = slice(buf, dcid_start, dcid_start + dcil)
+    let scil_off = dcid_start + dcil
+    let scil = buf[scil_off]
+    let scid_start = scil_off + 1
+    out["scid"] = slice(buf, scid_start, scid_start + scil)
+    let off = scid_start + scil
+
+    if out["type"] == pkt_type_initial() {
+        let tvl = dec_varint(buf, off)
+        off = off + tvl[1]
+        out["token"] = slice(buf, off, off + tvl[0])
+        off = off + tvl[0]
+    } else {
+        out["token"] = []
+    }
+    let lvl = dec_varint(buf, off)
+    off = off + lvl[1]
+    out["length"] = lvl[0]
+    out["payload_offset"] = off
+    return out
+}
+
+// -- Short header (1-RTT) --------------------------------------------
+
+/// The DCID length on a short header is not self-describing — callers
+/// must know it from the connection state. This returns a map with
+/// `dcid` and `payload_offset`.
+fn parse_short_header(buf: list, dcid_len: int) -> map {
+    let out = {}
+    out["spin_bit"] = (buf[0] >> 5) & 1
+    out["key_phase"] = (buf[0] >> 2) & 1
+    out["dcid"] = slice(buf, 1, 1 + dcid_len)
+    out["payload_offset"] = 1 + dcid_len
+    return out
+}
+
+// -- Frame type enum ---------------------------------------------------
+
+fn frame_padding()            -> int { return 0x00 }
+fn frame_ping()               -> int { return 0x01 }
+fn frame_ack()                -> int { return 0x02 }
+fn frame_crypto()             -> int { return 0x06 }
+fn frame_stream_base()        -> int { return 0x08 }
+fn frame_connection_close()   -> int { return 0x1c }
+
+/// Tag `frame_stream_base` with the low 3-bit flags (OFF, LEN, FIN).
+fn stream_frame_tag(off: bool, has_len: bool, fin: bool) -> int {
+    let t = frame_stream_base()
+    if off      { t = t | 0x04 }
+    if has_len  { t = t | 0x02 }
+    if fin      { t = t | 0x01 }
+    return t
+}
+
+fn hex(v: int) -> str {
+    let digits = "0123456789ABCDEF"
+    let hi = (v >> 4) & 15
+    let lo = v & 15
+    return "0x" + slice(digits, hi, hi + 1) + slice(digits, lo, lo + 1)
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB QUIC TUTORIAL ===")
+
+    println("STEP 1 varint boundaries (RFC 9000 §16):")
+    let cases = [63, 64, 16383, 16384, 1073741823, 1073741824]
+    let i = 0
+    while i < len(cases) {
+        let v = cases[i]
+        let enc = enc_varint(v)
+        let dec = dec_varint(enc, 0)
+        println("  " + str(v) + " -> " + str(len(enc)) + " bytes, roundtrip=" + str(dec[0] == v and dec[1] == len(enc)))
+        i = i + 1
+    }
+
+    println("STEP 2 header discrimination (first byte bits):")
+    let long_b0 = 0xc3   // 1 1 00 0011 -> long header, fixed=1, type=Initial(0)
+    let short_b0 = 0x45  // 0 1 00 0101 -> short header, spin=0, key_phase=1
+    println("  long:  form=" + str(header_form(long_b0)) + " fixed=" + str(fixed_bit(long_b0)) + " type=" + str(long_packet_type(long_b0)) + " (Initial=" + str(pkt_type_initial()) + ")")
+    println("  short: form=" + str(header_form(short_b0)) + " fixed=" + str(fixed_bit(short_b0)) + " spin=" + str((short_b0 >> 5) & 1) + " key_phase=" + str((short_b0 >> 2) & 1))
+
+    println("STEP 3 parse a long-header Initial packet:")
+    // Hand-built Initial: b0=0xc3, ver=1, dcid_len=8+dcid, scid_len=2+scid,
+    // token varint len=0, length varint=50.
+    let pkt = [0xc3, 0, 0, 0, 1, 8, 1, 2, 3, 4, 5, 6, 7, 8, 2, 9, 10, 0, 50]
+    let p = parse_long_header(pkt)
+    println("  type=" + str(p["type"]) + " version=" + str(p["version"]) + " length=" + str(p["length"]))
+    println("  dcid=" + str(p["dcid"]) + " scid=" + str(p["scid"]) + " token=" + str(p["token"]))
+    println("  payload_offset=" + str(p["payload_offset"]) + " (frame bytes start here)")
+
+    println("STEP 4 parse a short-header 1-RTT packet:")
+    let spkt = [0x45, 11, 22, 33, 44, 55, 66, 77, 88, 0x06, 0x00]
+    let sp = parse_short_header(spkt, 8)
+    println("  spin=" + str(sp["spin_bit"]) + " key_phase=" + str(sp["key_phase"]) + " dcid=" + str(sp["dcid"]))
+    println("  payload_offset=" + str(sp["payload_offset"]) + " (PN + protected payload follow)")
+
+    println("STEP 5 frame-type tags:")
+    println("  PADDING=" + hex(frame_padding()) + " PING=" + hex(frame_ping()) + " ACK=" + hex(frame_ack()) + " CRYPTO=" + hex(frame_crypto()) + " STREAM base=" + hex(frame_stream_base()) + " CONN_CLOSE=" + hex(frame_connection_close()))
+    println("  stream(off,len,fin)=" + hex(stream_frame_tag(true, true, true)) + " stream(fin only)=" + hex(stream_frame_tag(false, false, true)))
+    println("PINNED_VECTORS: vi63=1B vi64=2B vi16k=4B vi1g=8B hdr=11000011 type0 spinhdr=01000101 dcid=1..8 payloadoff=19 tag_stream_all=0x0f tag_stream_fin=0x09")
+}
+
+main()
