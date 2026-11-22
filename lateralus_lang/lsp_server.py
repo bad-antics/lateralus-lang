@@ -16,6 +16,7 @@ import logging
 import re
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Optional
 
 # --- Compiler integration (real diagnostics) --------------------------
@@ -398,6 +399,64 @@ def get_completions(doc: TextDocument, line: int, character: int) -> list[dict]:
     return items
 
 
+# --- Stdlib signatures (hover) ---------------------------------------
+
+_STDLIB_FN_RE = re.compile(
+    r"^\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)\s*\([^)]*\)\s*(?:->\s*[^{]+)?\{"
+)
+_STDLIB_DOC_RE = re.compile(r"^\s*///\s?(.*)$")
+
+
+def _stdlib_dir() -> Optional[Path]:
+    """Locate the bundled stdlib directory for a checkout or an install."""
+    here = Path(__file__).resolve().parent
+    candidates = (
+        here.parent / "stdlib",                              # repository checkout
+        Path(sys.prefix) / "share" / "lateralus" / "stdlib", # installed data-files
+    )
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
+def _load_stdlib_functions() -> dict[str, dict[str, str]]:
+    """Index every stdlib `fn` with the first `///` line above it."""
+    index: dict[str, dict[str, str]] = {}
+    directory = _stdlib_dir()
+    if directory is None:
+        return index
+    for path in sorted(directory.glob("*.ltl")):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:                            # pragma: no cover - unreadable file
+            continue
+        pending: list[str] = []
+        for line in text.splitlines():
+            doc = _STDLIB_DOC_RE.match(line)
+            if doc:
+                pending.append(doc.group(1).strip())
+                continue
+            fn = _STDLIB_FN_RE.match(line)
+            if fn:
+                name = fn.group(1)
+                doc_line = pending[0] if pending else ""
+                existing = index.get(name)
+                # Same name can appear in several modules; keep the first
+                # documented definition, otherwise the first one seen.
+                if existing is None or (not existing["doc"] and doc_line):
+                    index[name] = {
+                        "signature": line.split("{", 1)[0].strip(),
+                        "doc": doc_line,
+                        "module": path.name,
+                    }
+            pending = []
+    return index
+
+
+STDLIB_FUNCTIONS = _load_stdlib_functions()
+
+
 def get_hover(doc: TextDocument, line: int, character: int) -> Optional[dict]:
     """Get hover information at position."""
     word = doc.get_word_at(line, character)
@@ -438,6 +497,20 @@ def get_hover(doc: TextDocument, line: int, character: int) -> Optional[dict]:
             "contents": {
                 "kind": "markdown",
                 "value": keyword_docs[word],
+            },
+        }
+
+    # Check stdlib functions (signatures and docs parsed from stdlib/*.ltl)
+    stdlib = STDLIB_FUNCTIONS.get(word)
+    if stdlib:
+        doc_line = stdlib["doc"] or "Lateralus stdlib function."
+        return {
+            "contents": {
+                "kind": "markdown",
+                "value": (
+                    "```lateralus\n" + stdlib["signature"] + "\n```\n\n"
+                    + doc_line + "\n\n`stdlib/" + stdlib["module"] + "`"
+                ),
             },
         }
 
