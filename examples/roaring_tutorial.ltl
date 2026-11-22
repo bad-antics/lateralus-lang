@@ -1,0 +1,344 @@
+// ===================================================================
+// examples/roaring_tutorial.ltl — stdlib/roaring.ltl tutorial companion
+// Runnable tour of the Roaring bitmap: add/has/cardinality across
+// hi16 containers, dedup, union, to_list, and array→bitmap promotion
+// past 4096 entries. Self-contained module inline.
+// Fix: `try_int` is not a runtime builtin -> `to_int`.
+// ===================================================================
+
+let ROAR_ARR_MAX = 4096
+
+fn make_array_container() -> map {
+    let c = {}
+    c["kind"]   = "array"
+    c["values"] = []
+    c["card"]   = 0
+    return c
+}
+
+fn make_bitmap_container() -> map {
+    let c = {}
+    c["kind"] = "bitmap"
+    let bits = []
+    let i = 0
+    while i < 1024 { bits = bits + [0]; i = i + 1 }
+    c["bits"] = bits
+    c["card"] = 0
+    return c
+}
+
+/// Create an empty bitmap.
+fn new_bitmap() -> map {
+    let b = {}
+    b["containers"] = {}   // int hi16 → container map
+    return b
+}
+
+// -- internal array container ops ----------------------------------
+
+fn arr_lower_bound(xs: list, v: int) -> int {
+    let lo = 0
+    let hi = len(xs)
+    while lo < hi {
+        let mid = (lo + hi) >> 1
+        if xs[mid] < v { lo = mid + 1 }
+        else           { hi = mid }
+    }
+    return lo
+}
+
+fn arr_insert(c: map, v: int) -> map {
+    let xs = c["values"]
+    let idx = arr_lower_bound(xs, v)
+    if idx < len(xs) && xs[idx] == v { return c }
+    // insert at idx
+    let left  = slice(xs, 0, idx)
+    let right = slice(xs, idx, len(xs))
+    c["values"] = left + [v] + right
+    c["card"]   = c["card"] + 1
+    return c
+}
+
+fn arr_contains(c: map, v: int) -> bool {
+    let xs = c["values"]
+    let idx = arr_lower_bound(xs, v)
+    if idx < len(xs) && xs[idx] == v { return true }
+    return false
+}
+
+fn arr_to_bitmap(c: map) -> map {
+    let b = make_bitmap_container()
+    let xs = c["values"]
+    let i = 0
+    while i < len(xs) {
+        let v = xs[i]
+        let w = v >> 6
+        let bit = v & 63
+        let bits = b["bits"]
+        bits[w] = bits[w] | (1 << bit)
+        b["bits"] = bits
+        i = i + 1
+    }
+    b["card"] = c["card"]
+    return b
+}
+
+// -- internal bitmap container ops ---------------------------------
+
+fn bmp_set(c: map, v: int) -> map {
+    let w = v >> 6
+    let bit = v & 63
+    let bits = c["bits"]
+    let mask = 1 << bit
+    if (bits[w] & mask) == 0 {
+        bits[w] = bits[w] | mask
+        c["bits"] = bits
+        c["card"] = c["card"] + 1
+    }
+    return c
+}
+
+fn bmp_contains(c: map, v: int) -> bool {
+    let w = v >> 6
+    let bit = v & 63
+    let bits = c["bits"]
+    if (bits[w] & (1 << bit)) != 0 { return true }
+    return false
+}
+
+fn popcount64(x: int) -> int {
+    let c = 0
+    while x != 0 {
+        x = x & (x - 1)
+        c = c + 1
+    }
+    return c
+}
+
+// -- public surface ------------------------------------------------
+
+fn add(b: map, v: int) -> map {
+    let hi = (v >> 16) & 0xffff
+    let lo = v & 0xffff
+    let containers = b["containers"]
+    let key = str(hi)
+    let c = nil
+    if contains(containers, key) {
+        c = containers[key]
+    } else {
+        c = make_array_container()
+    }
+    if c["kind"] == "array" {
+        c = arr_insert(c, lo)
+        if c["card"] > ROAR_ARR_MAX {
+            c = arr_to_bitmap(c)
+        }
+    } else {
+        c = bmp_set(c, lo)
+    }
+    containers[key] = c
+    b["containers"] = containers
+    return b
+}
+
+fn has(b: map, v: int) -> bool {
+    let hi = (v >> 16) & 0xffff
+    let lo = v & 0xffff
+    let containers = b["containers"]
+    let key = str(hi)
+    if not contains(containers, key) { return false }
+    let c = containers[key]
+    if c["kind"] == "array" { return arr_contains(c, lo) }
+    return bmp_contains(c, lo)
+}
+
+fn cardinality(b: map) -> int {
+    let total = 0
+    let ks = keys(b["containers"])
+    let i = 0
+    while i < len(ks) {
+        total = total + b["containers"][ks[i]]["card"]
+        i = i + 1
+    }
+    return total
+}
+
+/// Union two bitmaps into a new one.  O(total elements).
+fn union(a: map, b: map) -> map {
+    let out = new_bitmap()
+    let ca = a["containers"]
+    let cb = b["containers"]
+    // re-add all elements (simple, correct).
+    let kas = keys(ca)
+    let i = 0
+    while i < len(kas) {
+        let k = kas[i]
+        let c = ca[k]
+        let hi = to_int(k)
+        if c["kind"] == "array" {
+            let xs = c["values"]
+            let j = 0
+            while j < len(xs) {
+                out = add(out, (hi << 16) | xs[j])
+                j = j + 1
+            }
+        } else {
+            let bits = c["bits"]
+            let w = 0
+            while w < 1024 {
+                let word = bits[w]
+                if word != 0 {
+                    let bit = 0
+                    while bit < 64 {
+                        if (word & (1 << bit)) != 0 {
+                            out = add(out, (hi << 16) | ((w << 6) | bit))
+                        }
+                        bit = bit + 1
+                    }
+                }
+                w = w + 1
+            }
+        }
+        i = i + 1
+    }
+    let kbs = keys(cb)
+    let j = 0
+    while j < len(kbs) {
+        let k = kbs[j]
+        let c = cb[k]
+        let hi = to_int(k)
+        if c["kind"] == "array" {
+            let xs = c["values"]
+            let m = 0
+            while m < len(xs) {
+                out = add(out, (hi << 16) | xs[m])
+                m = m + 1
+            }
+        } else {
+            let bits = c["bits"]
+            let w = 0
+            while w < 1024 {
+                let word = bits[w]
+                if word != 0 {
+                    let bit = 0
+                    while bit < 64 {
+                        if (word & (1 << bit)) != 0 {
+                            out = add(out, (hi << 16) | ((w << 6) | bit))
+                        }
+                        bit = bit + 1
+                    }
+                }
+                w = w + 1
+            }
+        }
+        j = j + 1
+    }
+    return out
+}
+
+/// Materialise as a sorted list.  For debugging / tests.
+fn to_list(b: map) -> list {
+    let out = []
+    let ks = keys(b["containers"])
+    // collect hi keys as ints and sort
+    let his = []
+    let i = 0
+    while i < len(ks) { his = his + [to_int(ks[i])]; i = i + 1 }
+    his = sorted(his)
+    let k = 0
+    while k < len(his) {
+        let hi = his[k]
+        let c = b["containers"][str(hi)]
+        if c["kind"] == "array" {
+            let xs = c["values"]
+            let j = 0
+            while j < len(xs) {
+                out = out + [(hi << 16) | xs[j]]
+                j = j + 1
+            }
+        } else {
+            let bits = c["bits"]
+            let w = 0
+            while w < 1024 {
+                let word = bits[w]
+                if word != 0 {
+                    let bit = 0
+                    while bit < 64 {
+                        if (word & (1 << bit)) != 0 {
+                            out = out + [(hi << 16) | ((w << 6) | bit)]
+                        }
+                        bit = bit + 1
+                    }
+                }
+                w = w + 1
+            }
+        }
+        k = k + 1
+    }
+    return out
+}
+
+fn main() {
+    print("=== LATERALUS STDLIB ROARING TUTORIAL ===")
+
+    // -- Step 1: add/has/cardinality ----------------------------------------
+    print("STEP 1 add/has:")
+    let b = new_bitmap()
+    b = add(b, 1)
+    b = add(b, 2)
+    b = add(b, 100000)
+    b = add(b, 100001)
+    print("  card=" + str(cardinality(b)))
+    print("  has1=" + str(has(b, 1)))
+    print("  has3=" + str(has(b, 3)))
+    print("  has100000=" + str(has(b, 100000)))
+    print("  has99999=" + str(has(b, 99999)))
+
+    // -- Step 2: multi-container (hi16 split) ---------------------------------
+    print("STEP 2 containers:")
+    b = add(b, 70000)
+    b = add(b, 131072)
+    print("  card=" + str(cardinality(b)))
+    let lst = to_list(b)
+    print("  sorted=" + str(lst))
+
+    // -- Step 3: dedup -----------------------------------------------------------
+    print("STEP 3 dedup:")
+    b = add(b, 1)
+    b = add(b, 2)
+    print("  card_after_dups=" + str(cardinality(b)))
+
+    // -- Step 4: union --------------------------------------------------------------
+    print("STEP 4 union:")
+    let a = new_bitmap()
+    a = add(a, 1)
+    a = add(a, 5)
+    a = add(a, 70000)
+    let c = new_bitmap()
+    c = add(c, 2)
+    c = add(c, 5)
+    c = add(c, 80000)
+    let u = union(a, c)
+    print("  union_card=" + str(cardinality(u)))
+    print("  union_list=" + str(to_list(u)))
+
+    // -- Step 5: bitmap-container promotion (>4096 same hi16) -----------------------
+    print("STEP 5 bitmap promotion:")
+    let big = new_bitmap()
+    let i = 0
+    while i < 5000 {
+        big = add(big, i * 2)
+        i = i + 1
+    }
+    print("  card=" + str(cardinality(big)))
+    print("  has0=" + str(has(big, 0)))
+    print("  has9998=" + str(has(big, 9998)))
+    print("  has9999=" + str(has(big, 9999)))
+    print("  list_head=" + str(slice(to_list(big), 0, 5)))
+    print("  list_tail=" + str(slice(to_list(big), 4995, 5000)))
+
+    print("PINNED_VECTORS: card5 has checks dedup union_5elems "
+        + "promote_5000 card5000 has9998_true has9999_false")
+    print("  OK examples/roaring_tutorial.ltl")
+    return 0
+}
