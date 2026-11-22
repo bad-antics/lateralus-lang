@@ -418,8 +418,10 @@ def _apply_join(left: Collection, clause) -> Collection:
                 result.append({**l, **r})
                 matched_right.add(id(r))
         elif kind == "left":
-            # Left join: keep left row with nulls for right
-            result.append({**l, **{k: None for k in (right[0].keys() if right else [])}})
+            # Left join: keep left row with nulls for right.
+            # Right-side nulls go first so shared keys (e.g. the join
+            # column) keep the left row's values.
+            result.append({**{k: None for k in (right[0].keys() if right else [])}, **l})
 
     if kind == "right":
         # Add unmatched right rows

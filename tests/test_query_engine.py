@@ -225,6 +225,22 @@ class TestJoins:
         first = result[0]
         assert "name" in first or "user_name" in first or "amount" in first
 
+    def test_left_join_unmatched_keeps_left_id(self):
+        """Issue #328: unmatched LEFT JOIN rows must keep the left row's
+        values on shared keys (e.g. the join column)."""
+        result = (Query()
+                  .from_([{"id": 7, "name": "Ada"}])
+                  .left_join([{"id": 8, "amount": 10}], "id", "id")
+                  .execute())
+        assert result == [{"id": 7, "name": "Ada", "amount": None}]
+
+    def test_left_join_matched_row(self):
+        result = (Query()
+                  .from_([{"id": 7, "name": "Ada"}])
+                  .left_join([{"id": 7, "amount": 10}], "id", "id")
+                  .execute())
+        assert result == [{"id": 7, "name": "Ada", "amount": 10}]
+
     def test_join_with_filter(self):
         result = (Query()
                   .from_(USERS)
