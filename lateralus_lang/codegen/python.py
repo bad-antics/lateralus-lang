@@ -271,6 +271,33 @@ class PythonTranspiler(ASTVisitor):
         self._w += "def str_contains(s, sub): return sub in s"
         self._w += "def str_starts_with(s, p):return s.startswith(p)"
         self._w += "def str_ends_with(s, p):  return s.endswith(p)"
+        self._w += "def char_at(s, i):        return s[i] if 0 <= i < len(s) else ''"
+        self._w += "def index_of(s, sub):     return s.find(sub)"
+        self._w += "def ends_with(s, p):      return s.endswith(p)"
+        self._w += "import os as _os, socket as _socket, platform as _platform, tempfile as _tempfile"
+        self._w += "def sys_platform():       return 'windows' if _sys.platform == 'win32' else _sys.platform"
+        self._w += "def sys_arch():           return _platform.machine()"
+        self._w += "def sys_hostname():       return _socket.gethostname()"
+        self._w += "def sys_pid():            return _os.getpid()"
+        self._w += "def sys_exit(c=0):        _sys.exit(c)"
+        self._w += "def env_get(k):           return _os.environ.get(k, '')"
+        self._w += "def env_set(k, v):        _os.environ[k] = v"
+        self._w += "def env_all():            return dict(_os.environ)"
+        self._w += "def fs_exists(p):         return _os.path.exists(p)"
+        self._w += "def fs_is_file(p):        return _os.path.isfile(p)"
+        self._w += "def fs_is_dir(p):         return _os.path.isdir(p)"
+        self._w += "def fs_list_dir(p):       return _os.listdir(p)"
+        self._w += "def fs_cwd():             return _os.getcwd()"
+        self._w += "def fs_chdir(p):          _os.chdir(p)"
+        self._w += "def fs_file_size(p):      return _os.path.getsize(p)"
+        self._w += "def fs_mkdir(p):          _os.mkdir(p)"
+        self._w += "def fs_mkdirs(p):         _os.makedirs(p, exist_ok=True)"
+        self._w += "def fs_remove(p):         _os.remove(p)"
+        self._w += "def fs_rename(s, d):      _os.rename(s, d)"
+        self._w += "def fs_temp_dir():        return _tempfile.gettempdir()"
+        self._w += "def fs_temp_file(p, s):   return _tempfile.NamedTemporaryFile(prefix=p, suffix=s, delete=False).name"
+        self._w += "def sys_exec(cmd):        return {'exit_code': 0, 'stdout': '', 'stderr': ''}"
+        self._w += "def sys_exec_args(c, a):  return {'exit_code': 0, 'stdout': '', 'stderr': ''}"
         self._w += "def pad_left(s, n, c=' '): return str(s).rjust(n, c)"
         self._w += "def pad_right(s, n, c=' '):return str(s).ljust(n, c)"
         self._w += "def pad_center(s, n, c=' '):return str(s).center(n, c)"
@@ -1078,6 +1105,9 @@ class PythonTranspiler(ASTVisitor):
         self._w += "continue"
 
     def visit_BlockStmt(self, node: BlockStmt):
+        if not node.stmts:
+            self._w += "pass"
+            return
         for stmt in node.stmts:
             stmt.accept(self)
 
