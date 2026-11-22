@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Find repeated text with suffix arrays</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "Find repeated text with stdlib/suffix_array"
+date: 2026-11-19
+abstract: A small executable example of suffix ordering, adjacent common prefixes, and repeated text.
+---
+
+# Start with a question
+
+Which substring occurs more than once in "banana", and is longest?
+Occurrences may overlap: "ana" begins at offsets 1 and 3. We can answer
+this by ordering suffixes, then comparing neighboring suffixes.
+
+## Sort starting positions, not copies of the text
+
+A suffix starts at an offset and runs to the end. For "banana", the
+lexicographically sorted suffixes are:
+
+| Offset | Suffix |
+| --- | --- |
+| 5 | a |
+| 3 | ana |
+| 1 | anana |
+| 0 | banana |
+| 4 | na |
+| 2 | nana |
+
+So `build("banana")` produces `[5, 3, 1, 0, 4, 2]`. These are offsets
+in the original text, not ranks indexed by original position. The module
+does not append a sentinel or include an extra empty suffix.
+
+## Compare adjacent suffixes
+
+`lcp(text, suffixes)` returns the longest common prefix length between
+each sorted suffix and the previous one. Its first entry is zero.
+
+For "banana", the pinned vector is `[0, 1, 3, 0, 0, 2]`:
+"a" and "ana" share one character; "ana" and "anana" share three.
+Suffixes sharing a prefix appear together in sorted order, so a maximum
+adjacent common prefix identifies a longest repeated substring.
+`longest_repeated("banana")` returns "ana". Where several different
+answers tie in length, do not assume a special tie-breaking rule.
+
+## Run the actual module
+
+From the repository root, with Python 3.10 or newer:
+
+```bash
+python3 scripts/run_suffix_array_tutorial.py
+```
+
+Expected output:
+
+```text
+[5, 3, 1, 0, 4, 2]
+[0, 1, 3, 0, 0, 2]
+ana
+```
+
+The example calls the real module functions:
+
+```lateralus
+fn main() {
+    let text = "banana"
+    let suffixes = build(text)
+    println(suffixes)
+    println(lcp(text, suffixes))
+    println(longest_repeated(text))
+}
+```
+
+The runner concatenates the unchanged `stdlib/suffix_array.ltl` and
+`examples/suffix_array_demo.ltl`, then compiles with `Target.PYTHON`.
+It does not claim that `import suffix_array` works. In the current
+3.2.0 Python backend, the module's `char_at` helper is missing. The
+example explicitly supplies this compatibility function:
+
+```lateralus
+fn char_at(text: str, index: int) -> str {
+    return slice(text, index, index + 1)
+}
+```
+
+The current semantic checker also warns about `ord` and forward helper
+references even though this Python execution succeeds. This example is
+not a claim of warning-free compilation, native C support, or WASM support.
+
+## Check the edges
+
+Empty text has an empty suffix array and LCP vector; its repeated
+substring is empty. A single character has suffix array `[0]`, LCP
+`[0]`, and no repeated substring. For "aaaaa", offsets sort as
+`[4, 3, 2, 1, 0]`, LCP is `[0, 1, 2, 3, 4]`, and the answer is "aaaa".
+For text with no repeated characters, the answer is empty.
+
+Run the tests without installing extra dependencies:
+
+```bash
+python3 -m unittest tests.test_suffix_array_tutorial -v
+```
+
+They check the pinned banana vectors, the documented command, all 127
+binary strings through length six, and six additional inputs. The oracle
+sorts Python suffix slices and counts common prefixes directly, rather
+than reimplementing prefix doubling or Kasai's algorithm. The Unicode
+case checks Python string positions only; these are not UTF-8 byte offsets
+or user-perceived grapheme positions.
+
+## Limits worth keeping in view
+
+Pass `lcp` the array returned by `build` for that same text. This example
+does not validate arbitrary malformed suffix arrays. Use small teaching
+inputs: the current source uses insertion sort and repeated list
+concatenation, so the module header's fast construction estimate should
+not be treated as a measured scaling guarantee.
+
+The module also exposes `search`, but it uses `/` for its midpoint. In
+the current Python backend this produces a float used as a list index,
+so a nonempty search can fail. This tutorial does not patch that separate
+problem or present `search` as a working path. The demonstrated scope is
+`build`, `lcp`, and `longest_repeated` with the helper above.
+
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>
