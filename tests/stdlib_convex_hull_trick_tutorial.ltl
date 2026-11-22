@@ -1,0 +1,161 @@
+// ===================================================================
+// tests/stdlib_convex_hull_trick_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for Li Chao Segment Tree (Convex Hull Trick / CHT)
+// maintaining dynamic line functions y = mx + c with O(log C)
+// point evaluation queries.
+// ===================================================================
+
+pub fn new_cht(max_coord) {
+    let tree = dict()
+    tree["max_coord"] = max_coord
+    tree["lines"] = dict()
+    return tree
+}
+
+pub fn make_line(m, c) {
+    let line = dict()
+    line["m"] = m
+    line["c"] = c
+    return line
+}
+
+pub fn eval_line(line, x) {
+    if line == nil {
+        return 0 - 999999999
+    }
+    return line["m"] * x + line["c"]
+}
+
+pub fn cht_insert(tree, u, l, r, new_line) {
+    if tree["lines"][u] == nil {
+        tree["lines"][u] = new_line
+        return true
+    }
+
+    let mid = (l + r) / 2
+    let new_mid = eval_line(new_line, mid)
+    let curr_mid = eval_line(tree["lines"][u], mid)
+
+    if new_mid > curr_mid {
+        let temp = tree["lines"][u]
+        tree["lines"][u] = new_line
+        new_line = temp
+    }
+
+    if l == r {
+        return true
+    }
+
+    let new_left = eval_line(new_line, l)
+    let curr_left = eval_line(tree["lines"][u], l)
+    if new_left > curr_left {
+        cht_insert(tree, 2 * u, l, mid, new_line)
+        return true
+    }
+
+    let new_right = eval_line(new_line, r)
+    let curr_right = eval_line(tree["lines"][u], r)
+    if new_right > curr_right {
+        cht_insert(tree, 2 * u + 1, mid + 1, r, new_line)
+        return true
+    }
+
+    return true
+}
+
+pub fn cht_add_line(tree, m, c) {
+    let line = make_line(m, c)
+    let max_c = tree["max_coord"]
+    cht_insert(tree, 1, 0, max_c, line)
+    return true
+}
+
+pub fn cht_query(tree, u, l, r, x) {
+    let ans = eval_line(tree["lines"][u], x)
+    if l == r {
+        return ans
+    }
+
+    let mid = (l + r) / 2
+    if x <= mid {
+        let child_ans = cht_query(tree, 2 * u, l, mid, x)
+        if child_ans > ans {
+            ans = child_ans
+        }
+    } else {
+        let child_ans = cht_query(tree, 2 * u + 1, mid + 1, r, x)
+        if child_ans > ans {
+            ans = child_ans
+        }
+    }
+    return ans
+}
+
+pub fn cht_get_max(tree, x) {
+    let max_c = tree["max_coord"]
+    return cht_query(tree, 1, 0, max_c, x)
+}
+
+// -------------------------------------------------------------------
+// Verification Tests
+// -------------------------------------------------------------------
+
+pub fn test_cht_single_line() -> bool {
+    let tree = new_cht(100)
+    // y = 3x + 10
+    cht_add_line(tree, 3, 10)
+
+    if cht_get_max(tree, 0) != 10 {
+        return false
+    }
+    if cht_get_max(tree, 5) != 25 {
+        return false
+    }
+    if cht_get_max(tree, 10) != 40 {
+        return false
+    }
+    return true
+}
+
+pub fn test_cht_upper_envelope() -> bool {
+    let tree = new_cht(20)
+    // Line 1: y = 2x + 1
+    cht_add_line(tree, 2, 1)
+    // Line 2: y = 5x - 5
+    cht_add_line(tree, 5, 0 - 5)
+    // Line 3: y = -x + 20
+    cht_add_line(tree, 0 - 1, 20)
+
+    // At x = 0: L1=1, L2=-5, L3=20 -> max = 20
+    if cht_get_max(tree, 0) != 20 {
+        return false
+    }
+
+    // At x = 2: L1=5, L2=5, L3=18 -> max = 18
+    if cht_get_max(tree, 2) != 18 {
+        return false
+    }
+
+    // At x = 5: L1=11, L2=20, L3=15 -> max = 20
+    if cht_get_max(tree, 5) != 20 {
+        return false
+    }
+
+    // At x = 10: L1=21, L2=45, L3=10 -> max = 45
+    if cht_get_max(tree, 10) != 45 {
+        return false
+    }
+
+    return true
+}
+
+pub fn run_all_cht_tests() -> bool {
+    if not test_cht_single_line() {
+        return false
+    }
+    if not test_cht_upper_envelope() {
+        return false
+    }
+    return true
+}
