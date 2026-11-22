@@ -1,0 +1,272 @@
+// ===================================================================
+// examples/binomial_heap_tutorial.ltl
+// -------------------------------------------------------------------
+// Demonstration of Binomial Heap in Lateralus.
+// Features binary adder meld mechanism for distributed job queues.
+// ===================================================================
+
+pub fn bin_create() -> dict {
+    let mut heap = {}
+    heap["head"] = 0
+    heap["count"] = 0
+
+    let mut keys = [0]
+    let mut values = [0]
+    let mut parent = [0]
+    let mut child = [0]
+    let mut sibling = [0]
+    let mut degree = [0]
+
+    heap["keys"] = keys
+    heap["values"] = values
+    heap["parent"] = parent
+    heap["child"] = child
+    heap["sibling"] = sibling
+    heap["degree"] = degree
+
+    return heap
+}
+
+pub fn bin_link(heap: dict, y: int, z: int) {
+    let mut parent = heap["parent"]
+    let mut child = heap["child"]
+    let mut sibling = heap["sibling"]
+    let mut degree = heap["degree"]
+
+    parent[y] = z
+    sibling[y] = child[z]
+    child[z] = y
+    let d = degree[z]
+    degree[z] = d + 1
+}
+
+pub fn bin_merge_roots(heap: dict, h1: int, h2: int) -> int {
+    if h1 == 0 {
+        return h2
+    }
+    if h2 == 0 {
+        return h1
+    }
+
+    let degree = heap["degree"]
+    let mut sibling = heap["sibling"]
+
+    let mut p1 = h1
+    let mut p2 = h2
+    let mut head = 0
+    let mut tail = 0
+
+    if degree[p1] <= degree[p2] {
+        head = p1
+        tail = p1
+        p1 = sibling[p1]
+    } else {
+        head = p2
+        tail = p2
+        p2 = sibling[p2]
+    }
+
+    while p1 != 0 and p2 != 0 {
+        if degree[p1] <= degree[p2] {
+            sibling[tail] = p1
+            tail = p1
+            p1 = sibling[p1]
+        } else {
+            sibling[tail] = p2
+            tail = p2
+            p2 = sibling[p2]
+        }
+    }
+
+    if p1 != 0 {
+        sibling[tail] = p1
+    } else {
+        sibling[tail] = p2
+    }
+
+    return head
+}
+
+pub fn bin_meld(heap: dict, h1: int, h2: int) -> int {
+    let mut new_head = bin_merge_roots(heap, h1, h2)
+    if new_head == 0 {
+        return 0
+    }
+
+    let degree = heap["degree"]
+    let keys = heap["keys"]
+    let mut sibling = heap["sibling"]
+
+    let mut prev = 0
+    let mut curr = new_head
+    let mut next = sibling[curr]
+
+    while next != 0 {
+        let mut condition = false
+        if degree[curr] != degree[next] {
+            condition = true
+        } else {
+            let next_next = sibling[next]
+            if next_next != 0 and degree[next_next] == degree[curr] {
+                condition = true
+            }
+        }
+
+        if condition {
+            prev = curr
+            curr = next
+        } else {
+            if keys[curr] <= keys[next] {
+                sibling[curr] = sibling[next]
+                bin_link(heap, next, curr)
+            } else {
+                if prev == 0 {
+                    new_head = next
+                } else {
+                    sibling[prev] = next
+                }
+                bin_link(heap, curr, next)
+                curr = next
+            }
+        }
+        next = sibling[curr]
+    }
+
+    return new_head
+}
+
+pub fn bin_insert(heap: dict, key: int, val: int) -> int {
+    let mut keys = heap["keys"]
+    let mut values = heap["values"]
+    let mut parent = heap["parent"]
+    let mut child = heap["child"]
+    let mut sibling = heap["sibling"]
+    let mut degree = heap["degree"]
+
+    let u = keys.len()
+    keys.push(key)
+    values.push(val)
+    parent.push(0)
+    child.push(0)
+    sibling.push(0)
+    degree.push(0)
+
+    let head = heap["head"]
+    let new_head = bin_meld(heap, head, u)
+    heap["head"] = new_head
+
+    let count = heap["count"]
+    heap["count"] = count + 1
+    return u
+}
+
+pub fn bin_extract_min(heap: dict) -> dict {
+    let mut res = {}
+    res["key"] = -1
+    res["val"] = -1
+
+    let head = heap["head"]
+    if head == 0 {
+        return res
+    }
+
+    let keys = heap["keys"]
+    let values = heap["values"]
+    let mut parent = heap["parent"]
+    let child = heap["child"]
+    let mut sibling = heap["sibling"]
+
+    let mut min_node = head
+    let mut min_prev = 0
+    let mut prev = head
+    let mut curr = sibling[head]
+
+    while curr != 0 {
+        if keys[curr] < keys[min_node] {
+            min_node = curr
+            min_prev = prev
+        }
+        prev = curr
+        curr = sibling[curr]
+    }
+
+    res["key"] = keys[min_node]
+    res["val"] = values[min_node]
+
+    if min_prev == 0 {
+        heap["head"] = sibling[min_node]
+    } else {
+        sibling[min_prev] = sibling[min_node]
+    }
+
+    let mut child_curr = child[min_node]
+    let mut reversed_head = 0
+
+    while child_curr != 0 {
+        let next_child = sibling[child_curr]
+        parent[child_curr] = 0
+        sibling[child_curr] = reversed_head
+        reversed_head = child_curr
+        child_curr = next_child
+    }
+
+    let current_head = heap["head"]
+    let new_head = bin_meld(heap, current_head, reversed_head)
+    heap["head"] = new_head
+
+    let count = heap["count"]
+    heap["count"] = count - 1
+    return res
+}
+
+pub fn bin_decrease_key(heap: dict, x: int, new_key: int) -> bool {
+    let mut keys = heap["keys"]
+    let mut values = heap["values"]
+    let parent = heap["parent"]
+
+    if new_key > keys[x] {
+        return false
+    }
+
+    keys[x] = new_key
+    let mut curr = x
+    let mut p = parent[curr]
+
+    while p != 0 and keys[curr] < keys[p] {
+        let temp_k = keys[curr]
+        keys[curr] = keys[p]
+        keys[p] = temp_k
+
+        let temp_v = values[curr]
+        values[curr] = values[p]
+        values[p] = temp_v
+
+        curr = p
+        p = parent[curr]
+    }
+
+    return true
+}
+
+fn main() {
+    print("=== Binomial Heap Job Scheduler ===")
+    let cluster_heap = bin_create()
+
+    // Insert jobs with priorities (lower integer = higher priority)
+    let job1 = bin_insert(cluster_heap, 50, 101) // Routine telemetry
+    let job2 = bin_insert(cluster_heap, 20, 102) // Batch sync
+    let job3 = bin_insert(cluster_heap, 80, 103) // Cache warm-up
+
+    print("Next dispatch job (expected key 20):")
+    let top1 = bin_extract_min(cluster_heap)
+    print(top1["key"])
+
+    // Emergency promotion of Job 3 from 80 down to 5
+    bin_decrease_key(cluster_heap, job3, 5)
+
+    print("After priority escalation, next dispatch (expected key 5):")
+    let top2 = bin_extract_min(cluster_heap)
+    print(top2["key"])
+}
+
+main()
