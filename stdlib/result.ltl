@@ -5,12 +5,27 @@ module stdlib.result
 
 // -- Result constructors ------------------------------------------------------
 
+fn _mk_result(tag: str, value, error) -> map {
+    let m = {}
+    m["_tag"] = tag
+    if tag == "Ok" {
+        m["value"] = value
+        m["is_ok"] = true
+        m["is_err"] = false
+    } else {
+        m["error"] = error
+        m["is_ok"] = false
+        m["is_err"] = true
+    }
+    return m
+}
+
 pub fn ok(value) -> map {
-    return {"_tag": "Ok", "value": value, "is_ok": true, "is_err": false}
+    return _mk_result("Ok", value, nil)
 }
 
 pub fn err(error) -> map {
-    return {"_tag": "Err", "error": error, "is_ok": false, "is_err": true}
+    return _mk_result("Err", nil, error)
 }
 
 // -- Result operations --------------------------------------------------------
@@ -74,18 +89,32 @@ pub fn flatten(r: map) -> map {
 }
 
 pub fn is_result(v) -> bool {
-    if type_of(v) != "map" { return false }
-    return "_tag" in v && (v["_tag"] == "Ok" || v["_tag"] == "Err")
+    return contains(keys(v), "_tag")
+        && (v["_tag"] == "Ok" || v["_tag"] == "Err")
 }
 
 // -- Option constructors ------------------------------------------------------
 
+fn _mk_option(tag: str, value) -> map {
+    let m = {}
+    m["_tag"] = tag
+    if tag == "Some" {
+        m["value"] = value
+        m["is_some"] = true
+        m["is_none"] = false
+    } else {
+        m["is_some"] = false
+        m["is_none"] = true
+    }
+    return m
+}
+
 pub fn some(value) -> map {
-    return {"_tag": "Some", "value": value, "is_some": true, "is_none": false}
+    return _mk_option("Some", value)
 }
 
 pub fn none() -> map {
-    return {"_tag": "None", "is_some": false, "is_none": true}
+    return _mk_option("None", nil)
 }
 
 // -- Option operations --------------------------------------------------------
@@ -143,8 +172,8 @@ pub fn try_call(f) -> map {
     try {
         let value = f()
         return ok(value)
-    } catch e {
-        return err(e)
+    } recover * (e) {
+        return err(to_str(e))
     }
 }
 
@@ -152,8 +181,8 @@ pub fn try_call_with(f, arg) -> map {
     try {
         let value = f(arg)
         return ok(value)
-    } catch e {
-        return err(e)
+    } recover * (e) {
+        return err(to_str(e))
     }
 }
 
@@ -162,7 +191,7 @@ pub fn try_call_with(f, arg) -> map {
 pub fn collect_results(results: list) -> map {
     // Convert list of Results to Result of list
     // Returns Err on first error encountered
-    let mut values = []
+    let values = []
     for r in results {
         if r["_tag"] == "Err" { return r }
         values = push(values, r["value"])
@@ -172,8 +201,8 @@ pub fn collect_results(results: list) -> map {
 
 pub fn partition_results(results: list) -> map {
     // Split into {oks: list, errs: list}
-    let mut oks = []
-    let mut errs = []
+    let oks = []
+    let errs = []
     for r in results {
         if r["_tag"] == "Ok" {
             oks = push(oks, r["value"])
@@ -181,5 +210,8 @@ pub fn partition_results(results: list) -> map {
             errs = push(errs, r["error"])
         }
     }
-    return {"oks": oks, "errs": errs}
+    let out = {}
+    out["oks"] = oks
+    out["errs"] = errs
+    return out
 }
