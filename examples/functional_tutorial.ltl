@@ -1,0 +1,341 @@
+// ===================================================================
+// examples/functional_tutorial.ltl — stdlib/functional.ltl tutorial
+// companion. Runnable tour of the functional-programming module:
+// composition (compose/pipe_fn/identity/constant/flip), currying
+// (curry2/curry3/partial), higher-order list ops (for_each/flat_map/
+// scan/zip_with/take_while/drop_while/find/find_index/every/some/
+// none_match/count_by/group_by/partition/frequencies) and list
+// builders (range_list/range_step/repeat_val/iterate).
+// Self-contained — module code inlined with documented fixes:
+//   * `push(lst, x)` used as a bare statement is a no-op (it returns
+//     a new list); every call site now assigns the result.
+//   * `length()` is not a builtin; `len()` is used instead.
+//   * `str()` on values is `to_str()`; `-> nil` return annotations
+//     are `-> any` (nil is not a type name).
+// ===================================================================
+
+fn compose(f: fn, g: fn) -> fn {
+    // compose(f, g)(x) = f(g(x))
+    return fn(x) { return f(g(x)) }
+}
+
+fn pipe_fn(fns: list) -> fn {
+    // Create a pipeline function from a list of functions
+    // pipe_fn([f, g, h])(x) = h(g(f(x)))
+    return fn(x) {
+        let result = x
+        for f in fns {
+            result = f(result)
+        }
+        return result
+    }
+}
+
+fn identity(x: any) -> any {
+    return x
+}
+
+fn constant(value: any) -> fn {
+    return fn() { return value }
+}
+
+fn flip(f: fn) -> fn {
+    // flip(f)(a, b) = f(b, a)
+    return fn(a, b) { return f(b, a) }
+}
+
+fn curry2(f: fn) -> fn {
+    // Curry a 2-argument function
+    return fn(a) {
+        return fn(b) {
+            return f(a, b)
+        }
+    }
+}
+
+fn curry3(f: fn) -> fn {
+    // Curry a 3-argument function
+    return fn(a) {
+        return fn(b) {
+            return fn(c) {
+                return f(a, b, c)
+            }
+        }
+    }
+}
+
+fn partial(f: fn, first_arg: any) -> fn {
+    // Partially apply first argument
+    return fn(rest) { return f(first_arg, rest) }
+}
+
+fn for_each(lst: list, f: fn) -> any {
+    for item in lst {
+        f(item)
+    }
+}
+
+fn flat_map(lst: list, f: fn) -> list {
+    let result = []
+    for item in lst {
+        let mapped = f(item)
+        for sub_item in mapped {
+            result = push(result, sub_item)
+        }
+    }
+    return result
+}
+
+fn scan(lst: list, initial: any, f: fn) -> list {
+    // Like reduce but keeps intermediate results
+    let result = [initial]
+    let acc = initial
+    for item in lst {
+        acc = f(acc, item)
+        result = push(result, acc)
+    }
+    return result
+}
+
+fn zip_with(a: list, b: list, f: fn) -> list {
+    let result = []
+    let n = len(a)
+    if len(b) < n {
+        n = len(b)
+    }
+    let i = 0
+    while i < n {
+        result = push(result, f(a[i], b[i]))
+        i = i + 1
+    }
+    return result
+}
+
+fn take_while(lst: list, pred: fn) -> list {
+    let result = []
+    for item in lst {
+        if not pred(item) {
+            return result
+        }
+        result = push(result, item)
+    }
+    return result
+}
+
+fn drop_while(lst: list, pred: fn) -> list {
+    let dropping = true
+    let result = []
+    for item in lst {
+        // NOTE: original had an empty if-branch, which transpiles to
+        // invalid Python; inverted to a single keep-condition.
+        if !dropping or !pred(item) {
+            dropping = false
+            result = push(result, item)
+        }
+    }
+    return result
+}
+
+fn find(lst: list, pred: fn) -> any {
+    for item in lst {
+        if pred(item) {
+            return item
+        }
+    }
+    return nil
+}
+
+fn find_index(lst: list, pred: fn) -> int {
+    let i = 0
+    for item in lst {
+        if pred(item) {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+fn every(lst: list, pred: fn) -> bool {
+    for item in lst {
+        if not pred(item) {
+            return false
+        }
+    }
+    return true
+}
+
+fn some(lst: list, pred: fn) -> bool {
+    for item in lst {
+        if pred(item) {
+            return true
+        }
+    }
+    return false
+}
+
+fn none_match(lst: list, pred: fn) -> bool {
+    return not some(lst, pred)
+}
+
+fn count_by(lst: list, pred: fn) -> int {
+    let c = 0
+    for item in lst {
+        if pred(item) {
+            c = c + 1
+        }
+    }
+    return c
+}
+
+fn group_by(lst: list, key_fn: fn) -> map {
+    let groups = {}
+    for item in lst {
+        let k = to_str(key_fn(item))
+        if not contains(groups, k) {
+            groups[k] = []
+        }
+        groups[k] = push(groups[k], item)
+    }
+    return groups
+}
+
+fn partition(lst: list, pred: fn) -> list {
+    // Returns [matching, non_matching]
+    let yes = []
+    let no = []
+    for item in lst {
+        if pred(item) {
+            yes = push(yes, item)
+        } else {
+            no = push(no, item)
+        }
+    }
+    return [yes, no]
+}
+
+fn frequencies(lst: list) -> map {
+    let counts = {}
+    for item in lst {
+        let k = to_str(item)
+        if contains(counts, k) {
+            counts[k] = counts[k] + 1
+        } else {
+            counts[k] = 1
+        }
+    }
+    return counts
+}
+
+fn range_list(start: int, end_val: int) -> list {
+    let result = []
+    let i = start
+    while i < end_val {
+        result = push(result, i)
+        i = i + 1
+    }
+    return result
+}
+
+fn range_step(start: int, end_val: int, step: int) -> list {
+    let result = []
+    let i = start
+    while i < end_val {
+        result = push(result, i)
+        i = i + step
+    }
+    return result
+}
+
+fn repeat_val(value: any, n: int) -> list {
+    let result = []
+    let i = 0
+    while i < n {
+        result = push(result, value)
+        i = i + 1
+    }
+    return result
+}
+
+fn iterate(f: fn, x0: any, n: int) -> list {
+    // Generate [x0, f(x0), f(f(x0)), ...] n times
+    let result = [x0]
+    let current = x0
+    let i = 1
+    while i < n {
+        current = f(current)
+        result = push(result, current)
+        i = i + 1
+    }
+    return result
+}
+
+// -- Demo -----------------------------------------------------------------
+
+fn show(label: str, v) {
+    print(label + " => " + to_str(v))
+}
+
+fn dbl(x) { return x * 2 }
+fn inc(x) { return x + 1 }
+fn is_even(x) { return x % 2 == 0 }
+fn is_pos(x) { return x > 0 }
+
+fn main() {
+    print("=== LATERALUS STDLIB FUNCTIONAL TUTORIAL ===")
+
+    // Composition
+    let both = compose(dbl, inc)          // dbl(inc(x))
+    show("compose(dbl,inc)(5)", both(5))  // 12
+    let pipeline = pipe_fn([inc, dbl, inc])
+    show("pipe [inc,dbl,inc](5)", pipeline(5))  // 13
+    show("identity(9)", identity(9))
+    let forty_two = constant(42)
+    show("constant(42)()", forty_two())
+    let sub = fn(a, b) { return a - b }
+    let rsub = flip(sub)
+    show("flip(sub)(3,10)", rsub(3, 10))   // 7
+
+    // Currying / partial application
+    let add = fn(a, b) { return a + b }
+    let add5 = curry2(add)(5)
+    show("curry2(add)(5)(3)", add5(3))     // 8
+    let cat3 = curry3(fn(a, b, c) { return a + b + c })
+    show("curry3 sum", cat3("x")("y")("z"))
+    let plus10 = partial(add, 10)
+    show("partial(add,10)(7)", plus10(7))  // 17
+
+    // Higher-order list ops
+    let nums = range_list(1, 6)            // [1,2,3,4,5]
+    show("range_list(1,6)", nums)
+    show("range_step(0,10,4)", range_step(0, 10, 4))
+    show("repeat_val(0,4)", repeat_val(0, 4))
+    show("iterate(inc,1,5)", iterate(inc, 1, 5))
+
+    show("flat_map squares", flat_map([1,2,3], fn(x) { return [x*x] }))
+    show("scan +1 from 0", scan([1,2,3,4], 0, fn(a,b) { return a+b }))
+    show("zip_with add", zip_with([1,2,3],[10,20,30], add))
+    show("zip_with short", zip_with([1,2,3,4],[10,20], add))
+    show("take_while <4", take_while(nums, fn(x) { return x < 4 }))
+    show("drop_while <3", drop_while(nums, fn(x) { return x < 3 }))
+    show("find first even", find(nums, is_even))
+    show("find_index first even", find_index(nums, is_even))
+    show("every is_pos", every(nums, is_pos))
+    show("some is_even", some(nums, is_even))
+    show("none_match <0", none_match(nums, fn(x) { return x < 0 }))
+    show("count_by even", count_by(nums, is_even))
+    show("group_by parity", group_by(nums, fn(x) { return x % 2 }))
+    let parts = partition(nums, is_even)
+    show("partition even -> [yes,no]", parts)
+    show("frequencies", frequencies(["a","b","a","c","b","a"]))
+
+    // NOTE: lambdas cannot rebind outer `let mut` locals (Python
+    // closure scoping), so for_each demos via mutation of a map,
+    // which IS a reference type.
+    let acc = {}
+    acc["total"] = 0
+    for_each([1,2,3,4], fn(x) { acc["total"] = acc["total"] + x })
+    show("for_each sum via map", acc["total"])
+
+    print("PINNED_VECTORS: compose=12 pipe=13 zipmin=33 group_n=2 freq_a=3 scan=[0,1,3,6,10]")
+}
