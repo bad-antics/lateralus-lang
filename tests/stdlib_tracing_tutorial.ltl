@@ -1,0 +1,61 @@
+// Pinned test vectors for stdlib/tracing tutorial (W3C Trace Context / OpenTelemetry).
+
+import tracing
+
+fn mock_exporter(span: map) {
+    // No-op collector for test runner
+}
+
+pub fn test_w3c_traceparent_roundtrip() -> bool {
+    let raw = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+    let ctx = tracing_parse_traceparent(raw)
+
+    if ctx == nil { return false }
+    if ctx["trace_id"] != "4bf92f3577b34da6a3ce929d0e0e4736" { return false }
+    if ctx["span_id"] != "00f067aa0ba902b7" { return false }
+    if not ctx["sampled"] { return false }
+
+    // Wire re-encoding must reproduce identical W3C string
+    if tracing_traceparent(ctx) != raw { return false }
+
+    // Reject malformed traceparent strings
+    if tracing_parse_traceparent("01-malformed-format") != nil { return false }
+    if tracing_parse_traceparent("00-short") != nil { return false }
+
+    return true
+}
+
+pub fn test_span_parent_child_context_inheritance() -> bool {
+    let tracer = tracing_new_tracer("orders_svc", mock_exporter, tracing_always_sample)
+
+    let root_attrs = {}
+    root_attrs["http.method"] = "POST"
+    let root_span = tracing_start(tracer, "HTTP POST /orders", nil, "server", root_attrs)
+
+    let root_ctx = root_span["ctx"]
+    if len(root_ctx["trace_id"]) != 32 { return false }
+    if len(root_ctx["span_id"]) != 16 { return false }
+    if root_ctx["parent"] != "" { return false }
+
+    // Child span inheriting root context
+    let child_attrs = {}
+    child_attrs["db.system"] = "postgresql"
+    let child_span = tracing_start(tracer, "SELECT * FROM inventory", root_ctx, "client", child_attrs)
+
+    let child_ctx = child_span["ctx"]
+    // Trace ID must remain identical across distributed child spans
+    if child_ctx["trace_id"] != root_ctx["trace_id"] { return false }
+    // Child's parent pointer must match root's span_id
+    if child_ctx["parent"] != root_ctx["span_id"] { return false }
+    // Child must have unique span_id
+    if child_ctx["span_id"] == root_ctx["span_id"] { return false }
+
+    tracing_end_ok(child_span)
+    tracing_end_ok(root_span)
+
+    if root_span["status"] != "ok" { return false }
+    if child_span["status"] != "ok" { return false }
+    if tracing_duration_ns(root_span) < 0 { return false }
+
+    return true
+}
