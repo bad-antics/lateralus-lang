@@ -136,6 +136,7 @@ class IROp(Enum):
 
     # Pipeline
     PIPE      = auto()  # dest = src2(src1)  (a |> f)
+    PIPE_OPT  = auto()  # dest = src1 nil ? nil : callee(src1, *args)  (a |? f)
 
     # Async
     AWAIT     = auto()  # dest = await src1
@@ -680,11 +681,27 @@ class SemanticAnalyzer(ASTVisitor):
             tmp = self._builder.new_tmp()
             self._emit(IROp.PIPE, dest=tmp, src1=left_tmp, src2=right_tmp, span=node.span)
             return tmp
+        if node.op == "|?":
+            return self._visit_pipe_opt(node)
         left_tmp  = node.left.accept(self)
         right_tmp = node.right.accept(self)
         tmp = self._builder.new_tmp()
         ir_op = op_map.get(node.op, IROp.ADD)
         self._emit(ir_op, dest=tmp, src1=left_tmp, src2=right_tmp, span=node.span)
+        return tmp
+
+    def _visit_pipe_opt(self, node: BinOp) -> str:
+        """Lower `a |? f` to a single PIPE_OPT op (desugared by the bytecode backend)."""
+        left_tmp = node.left.accept(self)
+        if isinstance(node.right, CallExpr):
+            callee_tmp = node.right.callee.accept(self)
+            arg_tmps = [left_tmp] + [a.accept(self) for a in node.right.args]
+        else:
+            callee_tmp = node.right.accept(self)
+            arg_tmps = [left_tmp]
+        tmp = self._builder.new_tmp()
+        self._emit(IROp.PIPE_OPT, dest=tmp, src1=left_tmp,
+                   src2=arg_tmps, extra={"callee": callee_tmp}, span=node.span)
         return tmp
 
     def visit_UnaryOp(self, node: UnaryOp) -> str:

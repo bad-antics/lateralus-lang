@@ -230,6 +230,37 @@ class BytecodeGenerator:
             self._bc.emit_u8(int(Op.CALL))
             self._emit_label_ref(str(instr.src2))
 
+        elif op == IROp.PIPE_OPT:
+            # a |? f  →  a is nil ? nil : f(a, *args)
+            # Stack on entry (top→bottom): argN … arg1 receiver — the receiver
+            # and extra args were pushed by their own instructions in order.
+            args   = list(instr.src2 or [instr.src1])
+            extra  = args[1:]
+            callee = str((instr.extra or {}).get("callee") or args[0] or instr.src1)
+            if len(extra) > 8:
+                raise BytecodeGenError("pipe-opt: too many extra args")
+            end_label = f"__pipe_opt_{len(self._label_map)}_{id(instr) & 0xffff:x}"
+            # Stash extra args into high regs (popped top-first), leaving the
+            # receiver on top for the nil test.
+            for i in range(len(extra)):
+                self._bc.emit_u8(int(Op.POP_REG))
+                self._bc.emit_u8(15 - i)
+            self._bc.emit_u8(int(Op.DUP))
+            self._bc.emit_u8(int(Op.PUSH_IMM))
+            self._bc.emit_u64(0)          # nil representation
+            self._bc.emit_u8(int(Op.CMPEQ))
+            self._bc.emit_u8(int(Op.JT))
+            self._emit_label_ref(end_label)
+            # Call path: restore args above the receiver, then call.
+            for i in range(len(extra)):
+                self._bc.emit_u8(int(Op.PUSH_REG))
+                self._bc.emit_u8(15 - (len(extra) - 1 - i))
+            self._bc.emit_u8(int(Op.CALL))
+            self._emit_label_ref(callee)
+            self._bc.emit_u8(int(Op.JMP))
+            self._emit_label_ref(end_label)
+            self._label_map[end_label] = len(self._bc.code)
+
         elif op == IROp.AWAIT:
             self._push_operand(instr.src1)
             self._bc.emit_u8(int(Op.AWAIT_OP))
