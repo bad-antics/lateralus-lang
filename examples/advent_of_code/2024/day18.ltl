@@ -1,0 +1,132 @@
+// Advent of Code 2024 · Day 18 · RAM Run
+// Part 1: after the first N bytes fall, shortest path from (0,0) to the far corner.
+// Part 2: the coordinates "x,y" of the first byte that cuts the corner off.
+
+let SAMPLE = "5,4
+4,2
+4,5
+3,0
+2,1
+6,3
+2,4
+1,5
+0,6
+3,3
+2,6
+5,1
+1,2
+5,5
+2,5
+6,5
+1,4
+0,4
+6,4
+1,1
+6,1
+1,0
+0,5
+1,6
+2,0"
+
+// The real puzzle is a 71x71 grid with the first 1024 bytes fallen;
+// the sample uses a 7x7 grid and 12 bytes.
+let REAL_SIZE = 71
+let REAL_BYTES = 1024
+
+let DX = [1, -1, 0, 0]
+let DY = [0, 0, 1, -1]
+
+fn parse(text: str) -> list {
+    let pts = []
+    for line in str_split(text, "\n") {
+        let l = str_trim(line)
+        if len(l) > 0 {
+            let xy = str_split(l, ",")
+            pts.append([int(xy[0]), int(xy[1])])
+        }
+    }
+    return pts
+}
+
+// fall_time[y * size + x] = index of the byte that lands there (or a huge
+// number if none does). With `t` bytes fallen, a cell is open iff fall_time >= t.
+fn fall_times(pts: list, size: int) -> list {
+    let times = [1 << 60] * (size * size)
+    for i in range(0, len(pts)) {
+        let cell = pts[i][1] * size + pts[i][0]
+        if times[cell] > i { times[cell] = i }
+    }
+    return times
+}
+
+// BFS from the top-left to the bottom-right corner; -1 if unreachable.
+fn shortest(times: list, size: int, t: int) -> int {
+    let goal = size * size - 1
+    if times[0] < t || times[goal] < t { return -1 }
+    let dist = [-1] * (size * size)
+    dist[0] = 0
+    let queue = [0]
+    let head = 0
+    while head < len(queue) {
+        let cur = queue[head]
+        head = head + 1
+        if cur == goal { return dist[cur] }
+        let x = imod(cur, size)
+        let y = idiv(cur, size)
+        for k in range(0, 4) {
+            let nx = x + DX[k]
+            let ny = y + DY[k]
+            if nx >= 0 && nx < size && ny >= 0 && ny < size {
+                let nxt = ny * size + nx
+                if dist[nxt] < 0 && times[nxt] >= t {
+                    dist[nxt] = dist[cur] + 1
+                    queue.append(nxt)
+                }
+            }
+        }
+    }
+    return -1
+}
+
+fn part1(text: str, size: int, nbytes: int) -> int {
+    return shortest(fall_times(parse(text), size), size, nbytes)
+}
+
+// Binary search for the smallest t such that the first t bytes block the
+// exit; byte number t - 1 is the culprit. Reachability is monotonic in t.
+fn part2(text: str, size: int) -> str {
+    let pts = parse(text)
+    let times = fall_times(pts, size)
+    let lo = 0
+    let hi = len(pts)
+    while lo < hi {
+        let mid = (lo + hi) >> 1
+        if shortest(times, size, mid + 1) < 0 {
+            hi = mid
+        } else {
+            lo = mid + 1
+        }
+    }
+    if lo >= len(pts) { return "none" }
+    return str(pts[lo][0]) + "," + str(pts[lo][1])
+}
+
+@test
+fn test_part1() {
+    assert_eq(part1(SAMPLE, 7, 12), 22)
+    assert_eq(part1(SAMPLE, 7, 0), 12)
+}
+
+@test
+fn test_part2() {
+    assert_eq(part2(SAMPLE, 7), "6,1")
+}
+
+fn main() {
+    // For a real puzzle input use: part1(input, REAL_SIZE, REAL_BYTES)
+    // and part2(input, REAL_SIZE).
+    print("Day 18 Part 1: " + str(part1(SAMPLE, 7, 12)))
+    print("Day 18 Part 2: " + part2(SAMPLE, 7))
+}
+
+main()

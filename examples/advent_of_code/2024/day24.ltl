@@ -1,0 +1,222 @@
+// Advent of Code 2024 · Day 24 · Crossed Wires
+// Part 1: simulate the AND/OR/XOR gate network; read the z wires as a binary number.
+// Part 2: the network is a ripple-carry adder with 4 pairs of swapped outputs —
+// find the 8 miswired outputs by checking each gate against the adder's structure.
+
+let SAMPLE_SMALL = "x00: 1
+x01: 1
+x02: 1
+y00: 0
+y01: 1
+y02: 0
+
+x00 AND y00 -> z00
+x01 XOR y01 -> z01
+x02 OR y02 -> z02"
+
+let SAMPLE = "x00: 1
+x01: 0
+x02: 1
+x03: 1
+x04: 0
+y00: 1
+y01: 1
+y02: 1
+y03: 1
+y04: 1
+
+ntg XOR fgs -> mjb
+y02 OR x01 -> tnw
+kwq OR kpj -> z05
+x00 OR x03 -> fst
+tgd XOR rvg -> z01
+vdt OR tnw -> bfw
+bfw AND frj -> z10
+ffh OR nrd -> bqk
+y00 AND y03 -> djm
+y03 OR y00 -> psh
+bqk OR frj -> z08
+tnw OR fst -> frj
+gnj AND tgd -> z11
+bfw XOR mjb -> z00
+x03 OR x00 -> vdt
+gnj AND wpb -> z02
+x04 AND y00 -> kjc
+djm OR pbm -> qhw
+nrd AND vdt -> hwm
+kjc AND fst -> rvg
+y04 OR y02 -> fgs
+y01 AND x02 -> pbm
+ntg OR kjc -> kwq
+psh XOR fgs -> tgd
+qhw XOR tgd -> z09
+pbm OR djm -> kpj
+x03 XOR y03 -> ffh
+x00 XOR y04 -> ntg
+bfw OR bqk -> z06
+nrd XOR fgs -> wpb
+frj XOR qhw -> z04
+bqk OR frj -> z07
+y03 OR x01 -> nrd
+hwm AND bqk -> z03
+tgd XOR rvg -> z12
+tnw OR pbm -> gnj"
+
+// The puzzle gives no example for part 2, so here is a hand-built 4-bit
+// ripple-carry adder (bit i: p = x^y, g = x&y, z = p^carry, t = p&carry,
+// carry' = g|t) with two output pairs swapped: p01<->g01 and z02<->c02.
+let BROKEN_ADDER = "x00: 1
+x01: 1
+x02: 0
+x03: 1
+y00: 0
+y01: 1
+y02: 1
+y03: 0
+
+x00 XOR y00 -> z00
+x00 AND y00 -> c00
+x01 XOR y01 -> g01
+x01 AND y01 -> p01
+p01 XOR c00 -> z01
+p01 AND c00 -> t01
+g01 OR t01 -> c01
+x02 XOR y02 -> p02
+x02 AND y02 -> g02
+p02 XOR c01 -> c02
+p02 AND c01 -> t02
+g02 OR t02 -> z02
+x03 XOR y03 -> p03
+x03 AND y03 -> g03
+p03 XOR c02 -> z03
+p03 AND c02 -> t03
+g03 OR t03 -> z04"
+
+// Returns [initial values: wire -> 0/1, gates: list of [a, op, b, out]].
+fn parse(text: str) -> list {
+    let values = {}
+    let gates = []
+    for line in str_split(text, "\n") {
+        let t = str_trim(line)
+        if str_contains(t, ": ") {
+            let kv = str_split(t, ": ")
+            values[kv[0]] = int(kv[1])
+        } else if str_contains(t, " -> ") {
+            let w = str_split(t, " ")      // a OP b -> out
+            gates.append([w[0], w[1], w[2], w[4]])
+        }
+    }
+    return [values, gates]
+}
+
+// Evaluate a wire on demand, caching results in `values`.
+fn eval_wire(wire: str, values: map, driver: map) -> int {
+    if contains(values, wire) { return values[wire] }
+    let g = driver[wire]
+    let a = eval_wire(g[0], values, driver)
+    let b = eval_wire(g[2], values, driver)
+    let r = 0
+    if g[1] == "AND" {
+        r = a & b
+    } else if g[1] == "OR" {
+        r = a | b
+    } else {
+        r = a ^ b
+    }
+    values[wire] = r
+    return r
+}
+
+fn part1(text: str) -> int {
+    let p = parse(text)
+    let values = p[0]
+    let driver = {}
+    let zs = []
+    for g in p[1] {
+        driver[g[3]] = g
+        if str_starts_with(g[3], "z") { zs.append(g[3]) }
+    }
+    // z00 is the least significant bit, so read from the highest z down
+    let n = 0
+    for z in reverse(sorted(zs)) {
+        n = n * 2 + eval_wire(z, values, driver)
+    }
+    return n
+}
+
+fn is_input(w: str) -> bool {
+    return str_starts_with(w, "x") || str_starts_with(w, "y")
+}
+
+// In a correct ripple-carry adder every gate has a fixed role:
+//   x XOR y -> p      feeds the XOR and AND of its bit   (bit 0: is z00)
+//   x AND y -> g      feeds an OR                        (bit 0: is the carry)
+//   p XOR carry -> z  is an output bit
+//   p AND carry -> t  feeds an OR
+//   g OR t -> carry   feeds the next bit's XOR and AND   (top bit: is the last z)
+// A gate whose output breaks its role is one of the swapped wires.
+fn part2(text: str) -> str {
+    let gates = parse(text)[1]
+    // for each wire, the set of gate kinds that read it
+    let readers = {}
+    let last_z = ""
+    for g in gates {
+        for w in [g[0], g[2]] {
+            if !contains(readers, w) { readers[w] = set() }
+            readers[w].add(g[1])
+        }
+        if str_starts_with(g[3], "z") && g[3] > last_z { last_z = g[3] }
+    }
+    let bad = set()
+    for g in gates {
+        let op = g[1]
+        let out = g[3]
+        let from_inputs = is_input(g[0]) && is_input(g[2])
+        let bit0 = from_inputs && slice(g[0], 1, len(g[0])) == "00"
+        let feeds = set()
+        if contains(readers, out) { feeds = readers[out] }
+
+        if str_starts_with(out, "z") {
+            if out == last_z {
+                if op != "OR" { bad.add(out) }
+            } else if op != "XOR" {
+                bad.add(out)
+            }
+        }
+        if op == "XOR" {
+            if from_inputs && !bit0 && !contains(feeds, "XOR") { bad.add(out) }
+            if !from_inputs && !str_starts_with(out, "z") { bad.add(out) }
+        }
+        if op == "AND" && !bit0 && !contains(feeds, "OR") { bad.add(out) }
+        if op == "OR" && out != last_z && !contains(feeds, "XOR") { bad.add(out) }
+    }
+    return str_join(sorted(bad), ",")
+}
+
+@test
+fn test_small_part1() {
+    assert_eq(part1(SAMPLE_SMALL), 4)
+}
+
+@test
+fn test_sample_part1() {
+    assert_eq(part1(SAMPLE), 2024)
+}
+
+@test
+fn test_broken_adder_part2() {
+    assert_eq(part2(BROKEN_ADDER), "c02,g01,p01,z02")
+}
+
+@test
+fn test_broken_adder_adds_wrong() {
+    // 11 + 6 should be 17, but the swapped wires corrupt the sum
+    assert_eq(part1(BROKEN_ADDER) != 17, true)
+}
+
+fn main() {
+    print("Day 24 Part 1: " + str(part1(SAMPLE)))
+    print("Day 24 Part 2: " + part2(BROKEN_ADDER) + "  (hand-built broken adder)")
+}
+
+main()

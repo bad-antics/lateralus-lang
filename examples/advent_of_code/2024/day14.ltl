@@ -1,0 +1,148 @@
+// Advent of Code 2024 · Day 14 · Restroom Redoubt
+// Part 1: after 100 seconds on a wrapping grid, multiply the robot counts of the four quadrants.
+// Part 2: the first second at which the robots draw a picture of a Christmas tree.
+
+// The puzzle's example uses an 11x7 room; real inputs use 101x103.
+let REAL_WIDTH = 101
+let REAL_HEIGHT = 103
+
+let SAMPLE = "p=0,4 v=3,-3
+p=6,3 v=-1,-3
+p=10,3 v=-1,2
+p=2,0 v=2,-1
+p=0,0 v=1,3
+p=3,0 v=-2,-2
+p=7,6 v=-1,-3
+p=3,0 v=-1,-2
+p=9,3 v=2,3
+p=7,3 v=-1,2
+p=2,4 v=2,-3
+p=9,5 v=-3,-3"
+
+// Part 2 has no example, so this one is constructed: on a 23x11 room, ten
+// robots were placed on the row segment x = 6..15, y = 6 and then run
+// backwards for 37 seconds (plus two stray robots). The picture therefore
+// appears at exactly second 37, and at no earlier second.
+let PICTURE_SAMPLE = "p=20,3 v=4,-2
+p=0,0 v=-1,-4
+p=6,2 v=-1,1
+p=0,2 v=1,1
+p=7,0 v=2,-4
+p=4,3 v=-1,-2
+p=15,9 v=3,2
+p=16,8 v=-4,5
+p=22,10 v=-1,-1
+p=14,10 v=3,-1
+p=15,4 v=-3,4
+p=15,2 v=4,-3"
+
+// A picture shows up as at least this many robots side by side in one row.
+let MIN_RUN = 10
+
+fn is_digit(c: str) -> bool {
+    return c >= "0" && c <= "9"
+}
+
+// Every (possibly negative) integer in the text, in order of appearance.
+fn numbers(text: str) -> list {
+    let out = []
+    let cur = 0
+    let sign = 1
+    let in_num = false
+    for ch in text {
+        if is_digit(ch) {
+            cur = cur * 10 + int(ch)
+            in_num = true
+        } else {
+            if in_num { out.append(sign * cur) }
+            cur = 0
+            in_num = false
+            sign = 1
+            if ch == "-" { sign = -1 }
+        }
+    }
+    if in_num { out.append(sign * cur) }
+    return out
+}
+
+// Robots as [px, py, vx, vy] quadruples.
+fn parse(text: str) -> list {
+    let nums = numbers(text)
+    let robots = []
+    let i = 0
+    while i + 3 < len(nums) {
+        robots.append([nums[i], nums[i + 1], nums[i + 2], nums[i + 3]])
+        i = i + 4
+    }
+    return robots
+}
+
+// Motion is linear modulo the room, so a robot's position after t seconds
+// is ((p + v * t) mod size); `%` is non-negative for a positive divisor.
+fn part1(text: str, width: int, height: int) -> int {
+    let mid_x = idiv(width, 2)
+    let mid_y = idiv(height, 2)
+    let quads = [0, 0, 0, 0]
+    for r in parse(text) {
+        let x = (r[0] + r[2] * 100) % width
+        let y = (r[1] + r[3] * 100) % height
+        if x == mid_x || y == mid_y { continue }
+        let q = 0
+        if x > mid_x { q = q + 1 }
+        if y > mid_y { q = q + 2 }
+        quads[q] = quads[q] + 1
+    }
+    return quads[0] * quads[1] * quads[2] * quads[3]
+}
+
+// The tree is drawn inside a solid rectangular frame (31 robots wide in real
+// inputs), while at every other second the ~500 robots are scattered with a
+// density of about 5%, so ten robots in an unbroken horizontal run
+// essentially only happen when the picture is on screen. Positions repeat
+// every width * height seconds, so that bounds the search; -1 means "never".
+fn part2(text: str, width: int, height: int) -> int {
+    let robots = parse(text)
+    for t in range(0, width * height) {
+        let occupied = set()
+        for r in robots {
+            let x = (r[0] + r[2] * t) % width
+            let y = (r[1] + r[3] * t) % height
+            occupied.add(y * width + x)
+        }
+        for cell in occupied {
+            // Only measure runs from their left end.
+            if imod(cell, width) > 0 && contains(occupied, cell - 1) { continue }
+            let run = 1
+            while imod(cell + run, width) > 0 && contains(occupied, cell + run) {
+                run = run + 1
+            }
+            if run >= MIN_RUN { return t }
+        }
+    }
+    return -1
+}
+
+@test
+fn test_sample_part1() {
+    assert_eq(part1(SAMPLE, 11, 7), 12)
+}
+
+@test
+fn test_picture_sample_part2() {
+    assert_eq(part2(PICTURE_SAMPLE, 23, 11), 37)
+}
+
+@test
+fn test_no_picture_in_sample() {
+    // The 12 example robots never line up, so part 2 finds nothing.
+    assert_eq(part2(SAMPLE, 11, 7), -1)
+}
+
+fn main() {
+    // A real input would be solved with part1(input, REAL_WIDTH, REAL_HEIGHT)
+    // and part2(input, REAL_WIDTH, REAL_HEIGHT).
+    print("Day 14 Part 1: " + str(part1(SAMPLE, 11, 7)))
+    print("Day 14 Part 2: " + str(part2(PICTURE_SAMPLE, 23, 11)))
+}
+
+main()

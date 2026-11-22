@@ -1,0 +1,188 @@
+// Advent of Code 2024 · Day 6 · Guard Gallivant
+// Part 1: the guard walks forward, turning right at each #; count distinct cells visited.
+// Part 2: count the cells where one new obstruction would trap the guard in a loop.
+
+let SAMPLE = "....#.....
+.........#
+..........
+..#.......
+.......#..
+..........
+.#..^.....
+........#.
+#.........
+......#..."
+
+// Directions: 0 up, 1 right, 2 down, 3 left (turning right is d + 1 mod 4).
+let DR = [-1, 0, 1, 0]
+let DC = [0, 1, 0, -1]
+
+// Returns [height, width, walls, start], cells indexed r * width + c.
+fn parse(text: str) -> list {
+    let rows = []
+    for line in str_split(text, "\n") {
+        let row = str_trim(line)
+        if len(row) > 0 { rows.append(row) }
+    }
+    let h = len(rows)
+    let w = len(rows[0])
+    let walls = []
+    let start = 0
+    for r in range(0, h) {
+        for c in range(0, w) {
+            walls.append(rows[r][c] == "#")
+            if rows[r][c] == "^" { start = r * w + c }
+        }
+    }
+    return [h, w, walls, start]
+}
+
+// Plain step-by-step walk; returns the list of distinct cells visited.
+fn patrol(h: int, w: int, walls: list, start: int) -> list {
+    let seen = []
+    for i in range(0, h * w) { seen.append(false) }
+    let cells = []
+    let r = idiv(start, w)
+    let c = imod(start, w)
+    let d = 0
+    while true {
+        if !seen[r * w + c] {
+            seen[r * w + c] = true
+            cells.append(r * w + c)
+        }
+        let nr = r + DR[d]
+        let nc = c + DC[d]
+        if nr < 0 || nr >= h || nc < 0 || nc >= w { return cells }
+        if walls[nr * w + nc] {
+            d = imod(d + 1, 4)
+        } else {
+            r = nr
+            c = nc
+        }
+    }
+    return cells
+}
+
+fn part1(text: str) -> int {
+    let p = parse(text)
+    return len(patrol(p[0], p[1], p[2], p[3]))
+}
+
+// Jump tables for part 2: run[d][i] is how many steps the guard can walk from
+// cell i in direction d before a wall stops it; exits[d][i] says whether that
+// run ends at the map edge instead of a wall. Lets each simulation move a whole
+// straight segment at a time.
+fn build_runs(h: int, w: int, walls: list) -> list {
+    let run = []
+    let exits = []
+    for d in range(0, 4) {
+        let rd = []
+        let ed = []
+        for i in range(0, h * w) {
+            rd.append(0)
+            ed.append(true)
+        }
+        run.append(rd)
+        exits.append(ed)
+    }
+    // Fill each direction starting from the side the guard walks towards, so the
+    // neighbour ahead is always computed first.
+    for d in range(0, 4) {
+        for k in range(0, h * w) {
+            let i = k
+            if d == 1 || d == 2 { i = h * w - 1 - k }
+            let r = idiv(i, w)
+            let c = imod(i, w)
+            let nr = r + DR[d]
+            let nc = c + DC[d]
+            if nr < 0 || nr >= h || nc < 0 || nc >= w {
+                run[d][i] = 0
+                exits[d][i] = true
+            } else if walls[nr * w + nc] {
+                run[d][i] = 0
+                exits[d][i] = false
+            } else {
+                run[d][i] = run[d][nr * w + nc] + 1
+                exits[d][i] = exits[d][nr * w + nc]
+            }
+        }
+    }
+    return [run, exits]
+}
+
+// Distance from (r, c) to the extra obstacle (or, oc) along direction d, or 0
+// when the obstacle isn't straight ahead.
+fn dist_to(r: int, c: int, d: int, orow: int, ocol: int) -> int {
+    if d == 0 && ocol == c && orow < r { return r - orow }
+    if d == 2 && ocol == c && orow > r { return orow - r }
+    if d == 1 && orow == r && ocol > c { return ocol - c }
+    if d == 3 && orow == r && ocol < c { return c - ocol }
+    return 0
+}
+
+fn part2(text: str) -> int {
+    let p = parse(text)
+    let h = p[0]
+    let w = p[1]
+    let walls = p[2]
+    let start = p[3]
+    let tables = build_runs(h, w, walls)
+    let run = tables[0]
+    let exits = tables[1]
+    // stamp[state] == trial number marks (cell, direction) states already hit
+    // in this trial, so no per-trial set allocation is needed
+    let stamp = []
+    for i in range(0, h * w * 4) { stamp.append(-1) }
+    let loops = 0
+    let trial = 0
+    // Only cells on the original route can change the guard's path.
+    for cell in patrol(h, w, walls, start) {
+        if cell == start { continue }
+        trial = trial + 1
+        let orow = idiv(cell, w)
+        let ocol = imod(cell, w)
+        let r = idiv(start, w)
+        let c = imod(start, w)
+        let d = 0
+        while true {
+            let i = r * w + c
+            let steps = run[d][i]
+            let escapes = exits[d][i]
+            let k = dist_to(r, c, d, orow, ocol)
+            if k > 0 && k <= steps {
+                // the new obstacle is hit before the original stop point
+                steps = k - 1
+                escapes = false
+            }
+            if escapes { break }
+            r = r + DR[d] * steps
+            c = c + DC[d] * steps
+            // record the state at each wall bump; seeing one twice means a loop
+            let state = (r * w + c) * 4 + d
+            if stamp[state] == trial {
+                loops = loops + 1
+                break
+            }
+            stamp[state] = trial
+            d = imod(d + 1, 4)
+        }
+    }
+    return loops
+}
+
+@test
+fn test_sample_part1() {
+    assert_eq(part1(SAMPLE), 41)
+}
+
+@test
+fn test_sample_part2() {
+    assert_eq(part2(SAMPLE), 6)
+}
+
+fn main() {
+    print("Day 6 Part 1: " + str(part1(SAMPLE)))
+    print("Day 6 Part 2: " + str(part2(SAMPLE)))
+}
+
+main()

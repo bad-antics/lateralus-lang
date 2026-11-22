@@ -1,0 +1,121 @@
+// Advent of Code 2024 · Day 21 · Keypad Conundrum
+// Part 1: type each door code through a chain of 2 robots on directional pads;
+// sum (shortest human press count × numeric part of code).
+// Part 2: same with 25 robot directional keypads — memoised cost per (moves, depth).
+
+let SAMPLE = "029A
+980A
+179A
+456A
+379A"
+
+// Map each key to its [row, col]. The empty corner is stored under " " —
+// a robot arm may never hover over it.
+fn make_pad(rows: list) -> map {
+    let pad = {}
+    for r in range(0, len(rows)) {
+        for c in range(0, len(rows[r])) {
+            pad[rows[r][c]] = [r, c]
+        }
+    }
+    return pad
+}
+
+let NUM_PAD = make_pad(["789", "456", "123", " 0A"])
+let DIR_PAD = make_pad([" ^A", "<v>"])
+
+// Candidate key sequences (each ending in "A") that move the arm from key a
+// to key b. Only "all horizontal then all vertical" or the reverse can be
+// optimal — zig-zagging costs extra presses higher up the chain.
+fn moves(pad: map, a: str, b: str) -> list {
+    let src = pad[a]
+    let dst = pad[b]
+    let gap = pad[" "]
+    let dr = dst[0] - src[0]
+    let dc = dst[1] - src[1]
+    let v = ""
+    if dr > 0 { v = "v" * dr } else { v = "^" * (-dr) }
+    let h = ""
+    if dc > 0 { h = ">" * dc } else { h = "<" * (-dc) }
+    let out = []
+    // horizontal first passes the corner (src row, dst col)
+    if !(src[0] == gap[0] && dst[1] == gap[1]) { out.append(h + v + "A") }
+    // vertical first passes the corner (dst row, src col)
+    if !(dst[0] == gap[0] && src[1] == gap[1]) { out.append(v + h + "A") }
+    return out
+}
+
+// Human presses needed to get `seq` typed on a directional pad that sits
+// `depth` robots away from the human. Every sub-sequence starts and ends with
+// the arm on "A", so costs compose independently and memoise well.
+fn seq_cost(seq: str, depth: int, memo: map) -> int {
+    if depth == 0 { return len(seq) }
+    let key = seq + "|" + str(depth)
+    if contains(memo, key) { return memo[key] }
+    let total = 0
+    let prev = "A"
+    for i in range(0, len(seq)) {
+        total = total + best_move(DIR_PAD, prev, seq[i], depth - 1, memo)
+        prev = seq[i]
+    }
+    memo[key] = total
+    return total
+}
+
+// Cheapest way to move from a to b on `pad` and press b.
+fn best_move(pad: map, a: str, b: str, depth: int, memo: map) -> int {
+    let best = -1
+    for m in moves(pad, a, b) {
+        let c = seq_cost(m, depth, memo)
+        if best < 0 || c < best { best = c }
+    }
+    return best
+}
+
+fn complexity(text: str, robots: int) -> int {
+    let memo = {}
+    let total = 0
+    for line in str_split(text, "\n") {
+        let code = str_trim(line)
+        if len(code) == 0 { continue }
+        let presses = 0
+        let prev = "A"
+        for i in range(0, len(code)) {
+            presses = presses + best_move(NUM_PAD, prev, code[i], robots, memo)
+            prev = code[i]
+        }
+        total = total + presses * int(slice(code, 0, len(code) - 1))
+    }
+    return total
+}
+
+fn part1(text: str) -> int {
+    return complexity(text, 2)
+}
+
+fn part2(text: str) -> int {
+    return complexity(text, 25)
+}
+
+@test
+fn test_sample_part1() {
+    assert_eq(part1(SAMPLE), 126384)
+}
+
+@test
+fn test_single_code() {
+    // 029A needs 68 presses with two robots: 68 * 29
+    assert_eq(part1("029A"), 1972)
+}
+
+@test
+fn test_sample_part2() {
+    assert_eq(part2(SAMPLE), 154115708116294)
+}
+
+fn main() {
+    print("Day 21 Part 1: " + str(part1(SAMPLE)))
+    print("Day 21 Part 2: " + str(part2(SAMPLE)))
+}
+
+main()

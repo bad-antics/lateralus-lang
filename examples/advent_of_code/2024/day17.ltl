@@ -1,0 +1,130 @@
+// Advent of Code 2024 · Day 17 · Chronospatial Computer
+// Part 1: run a 3-bit VM (registers A, B, C; 8 opcodes) and join its output.
+// Part 2: find the lowest initial A that makes the program print itself.
+
+let SAMPLE = "Register A: 729
+Register B: 0
+Register C: 0
+
+Program: 0,1,5,4,3,0"
+
+let SAMPLE2 = "Register A: 2024
+Register B: 0
+Register C: 0
+
+Program: 0,3,5,4,3,0"
+
+// Returns [a, b, c, program].
+fn parse(text: str) -> list {
+    let regs = []
+    let program = []
+    for line in str_split(text, "\n") {
+        let l = str_trim(line)
+        if str_starts_with(l, "Register") {
+            regs.append(int(str_trim(str_split(l, ":")[1])))
+        } else if str_starts_with(l, "Program") {
+            for tok in str_split(str_trim(str_split(l, ":")[1]), ",") {
+                program.append(int(tok))
+            }
+        }
+    }
+    return [regs[0], regs[1], regs[2], program]
+}
+
+// Execute the program and return its output values.
+// The division opcodes (adv/bdv/cdv) divide A by 2^combo, i.e. A >> combo.
+fn run(a: int, b: int, c: int, program: list) -> list {
+    let out = []
+    let ip = 0
+    let n = len(program)
+    while ip + 1 < n {
+        let op = program[ip]
+        let lit = program[ip + 1]
+        let combo = lit
+        if lit == 4 { combo = a }
+        else if lit == 5 { combo = b }
+        else if lit == 6 { combo = c }
+
+        if op == 0 { a = a >> combo }            // adv
+        else if op == 1 { b = b ^ lit }          // bxl
+        else if op == 2 { b = combo & 7 }        // bst
+        else if op == 3 && a != 0 {              // jnz
+            ip = lit
+            continue
+        }
+        else if op == 4 { b = b ^ c }            // bxc
+        else if op == 5 { out.append(combo & 7) } // out
+        else if op == 6 { b = a >> combo }       // bdv
+        else if op == 7 { c = a >> combo }       // cdv
+        ip = ip + 2
+    }
+    return out
+}
+
+fn join_ints(xs: list) -> str {
+    let parts = []
+    for x in xs { parts.append(str(x)) }
+    return str_join(parts, ",")
+}
+
+fn part1(text: str) -> str {
+    let p = parse(text)
+    return join_ints(run(p[0], p[1], p[2], p[3]))
+}
+
+// Assumption (true for the example and for real puzzle inputs): the program
+// is a single loop that prints one value per iteration, does `A = A >> 3`
+// once per iteration, and jumps back while A != 0. B and C are recomputed
+// from A each iteration. So the last output only depends on the top 3 bits
+// of A, the second-to-last on the top 6 bits, and so on.
+// We therefore build A three bits at a time, from the last output backwards,
+// keeping every candidate prefix that reproduces the program's tail.
+fn part2(text: str) -> int {
+    let p = parse(text)
+    let program = p[3]
+    let n = len(program)
+    let candidates = [0]
+    let i = n - 1
+    while i >= 0 {
+        let want = join_ints(slice(program, i, n))
+        let survivors = []
+        for prefix in candidates {
+            for digit in range(0, 8) {
+                let a = prefix * 8 + digit
+                if join_ints(run(a, p[1], p[2], program)) == want {
+                    survivors.append(a)
+                }
+            }
+        }
+        candidates = survivors
+        i = i - 1
+    }
+    if len(candidates) == 0 { return -1 }
+    return min(candidates)
+}
+
+@test
+fn test_part1() {
+    assert_eq(part1(SAMPLE), "4,6,3,5,6,3,5,2,1,0")
+}
+
+@test
+fn test_small_programs() {
+    // a couple of the puzzle's single-instruction examples
+    assert_eq(join_ints(run(10, 0, 0, [5, 0, 5, 1, 5, 4])), "0,1,2")
+    assert_eq(join_ints(run(2024, 0, 0, [0, 1, 5, 4, 3, 0])), "4,2,5,6,7,7,7,7,3,1,0")
+}
+
+@test
+fn test_part2() {
+    assert_eq(part2(SAMPLE2), 117440)
+    // and the answer really does make the program print itself
+    assert_eq(join_ints(run(117440, 0, 0, [0, 3, 5, 4, 3, 0])), "0,3,5,4,3,0")
+}
+
+fn main() {
+    print("Day 17 Part 1: " + part1(SAMPLE))
+    print("Day 17 Part 2: " + str(part2(SAMPLE2)))
+}
+
+main()

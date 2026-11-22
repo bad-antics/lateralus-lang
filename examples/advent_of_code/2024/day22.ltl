@@ -1,0 +1,94 @@
+// Advent of Code 2024 · Day 22 · Monkey Market
+// Part 1: evolve each buyer's secret number 2000 times; sum the final secrets.
+// Part 2: pick the 4-price-change pattern that earns the most bananas across buyers.
+
+let SAMPLE1 = "1
+10
+100
+2024"
+
+let SAMPLE2 = "1
+2
+3
+2024"
+
+let STEPS = 2000
+let PRUNE = 16777215    // mod 16777216 == keep the low 24 bits
+
+// Price changes lie in -9..9, so a window of four fits a base-19 number.
+let PATTERNS = 130321   // 19^4
+
+fn parse(text: str) -> list {
+    let seeds = []
+    for line in str_split(text, "\n") {
+        let t = str_trim(line)
+        if len(t) > 0 { seeds.append(int(t)) }
+    }
+    return seeds
+}
+
+// Multiply by 64, divide by 32, multiply by 2048 — all powers of two, so
+// mix (xor) and prune (mask) are done with shifts.
+fn next_secret(secret: int) -> int {
+    let s = ((secret << 6) ^ secret) & PRUNE
+    s = ((s >> 5) ^ s) & PRUNE
+    return ((s << 11) ^ s) & PRUNE
+}
+
+fn part1(text: str) -> int {
+    let total = 0
+    for seed in parse(text) {
+        let s = seed
+        for i in range(0, STEPS) { s = next_secret(s) }
+        total = total + s
+    }
+    return total
+}
+
+// One flat array of banana totals indexed by pattern, plus the id of the last
+// buyer that hit each pattern (a monkey sells at the FIRST occurrence only).
+fn part2(text: str) -> int {
+    let bananas = [0] * PATTERNS
+    let last_buyer = [-1] * PATTERNS
+    let seeds = parse(text)
+    for buyer in range(0, len(seeds)) {
+        let s = seeds[buyer]
+        let prev = s % 10
+        let window = 0
+        for i in range(0, STEPS) {
+            s = next_secret(s)
+            let price = s % 10
+            // slide the 4-change window: drop the oldest digit, append the new one
+            window = (window * 19 + price - prev + 9) % PATTERNS
+            prev = price
+            if i >= 3 && last_buyer[window] != buyer {
+                last_buyer[window] = buyer
+                bananas[window] = bananas[window] + price
+            }
+        }
+    }
+    return max(bananas)
+}
+
+@test
+fn test_next_secret() {
+    assert_eq(next_secret(123), 15887950)
+    assert_eq(next_secret(15887950), 16495136)
+}
+
+@test
+fn test_sample_part1() {
+    assert_eq(part1(SAMPLE1), 37327623)
+}
+
+@test
+fn test_sample_part2() {
+    assert_eq(part2(SAMPLE2), 23)
+}
+
+fn main() {
+    print("Day 22 Part 1: " + str(part1(SAMPLE1)))
+    print("Day 22 Part 2: " + str(part2(SAMPLE2)))
+}
+
+main()
