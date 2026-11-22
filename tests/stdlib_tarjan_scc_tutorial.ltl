@@ -1,0 +1,181 @@
+// ===================================================================
+// tests/stdlib_tarjan_scc_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for Tarjan's Strongly Connected Components (SCC)
+// algorithm, low-link values, and DFS stack decomposition.
+// ===================================================================
+
+fn min_val(a, b) {
+    if a < b {
+        return a
+    }
+    return b
+}
+
+fn tarjan_dfs(u, adj, state) {
+    state["timer"] = state["timer"] + 1
+    state["dfn"][u] = state["timer"]
+    state["low"][u] = state["timer"]
+    state["stack"] = push(state["stack"], u)
+    state["in_stack"][u] = true
+
+    let neighbors = adj[u]
+    let i = 0
+    while i < len(neighbors) {
+        let v = neighbors[i]
+        if state["dfn"][v] == 0 {
+            tarjan_dfs(v, adj, state)
+            state["low"][u] = min_val(state["low"][u], state["low"][v])
+        } else {
+            if state["in_stack"][v] {
+                state["low"][u] = min_val(state["low"][u], state["dfn"][v])
+            }
+        }
+        i = i + 1
+    }
+
+    if state["low"][u] == state["dfn"][u] {
+        let comp = []
+        let done = false
+        while not done {
+            let top_idx = len(state["stack"]) - 1
+            let w = state["stack"][top_idx]
+            state["stack"] = slice(state["stack"], 0, top_idx)
+            state["in_stack"][w] = false
+            comp = push(comp, w)
+            if w == u {
+                done = true
+            }
+        }
+        state["sccs"] = push(state["sccs"], comp)
+    }
+}
+
+pub fn tarjan_scc(n, adj) {
+    let state = dict()
+    state["dfn"] = dict()
+    state["low"] = dict()
+    state["in_stack"] = dict()
+    state["stack"] = []
+    state["sccs"] = []
+    state["timer"] = 0
+
+    let i = 0
+    while i < n {
+        state["dfn"][i] = 0
+        state["low"][i] = 0
+        state["in_stack"][i] = false
+        i = i + 1
+    }
+
+    let u = 0
+    while u < n {
+        if state["dfn"][u] == 0 {
+            tarjan_dfs(u, adj, state)
+        }
+        u = u + 1
+    }
+
+    return state["sccs"]
+}
+
+pub fn test_tarjan_two_cycles() -> bool {
+    // 0 -> 1 -> 2 -> 0 (cycle 1: 0,1,2)
+    // 2 -> 3
+    // 3 -> 4 -> 3 (cycle 2: 3,4)
+    let adj = dict()
+    adj[0] = [1]
+    adj[1] = [2]
+    adj[2] = [0, 3]
+    adj[3] = [4]
+    adj[4] = [3]
+
+    let sccs = tarjan_scc(5, adj)
+    if len(sccs) != 2 {
+        return false
+    }
+
+    // First popped SCC is {4, 3} (size 2), second is {2, 1, 0} (size 3)
+    let c0 = sccs[0]
+    let c1 = sccs[1]
+    if len(c0) != 2 {
+        return false
+    }
+    if len(c1) != 3 {
+        return false
+    }
+
+    return true
+}
+
+pub fn test_tarjan_dag_linear() -> bool {
+    // 0 -> 1 -> 2 -> 3 (no back edges, DAG)
+    let adj = dict()
+    adj[0] = [1]
+    adj[1] = [2]
+    adj[2] = [3]
+    adj[3] = []
+
+    let sccs = tarjan_scc(4, adj)
+    if len(sccs) != 4 {
+        return false
+    }
+
+    let i = 0
+    while i < len(sccs) {
+        if len(sccs[i]) != 1 {
+            return false
+        }
+        i = i + 1
+    }
+
+    return true
+}
+
+pub fn test_tarjan_disconnected_components() -> bool {
+    // Component A: 0 -> 1 -> 0
+    // Component B: 2 -> 3 -> 2
+    // Component C: 4 (isolated)
+    let adj = dict()
+    adj[0] = [1]
+    adj[1] = [0]
+    adj[2] = [3]
+    adj[3] = [2]
+    adj[4] = []
+
+    let sccs = tarjan_scc(5, adj)
+    if len(sccs) != 3 {
+        return false
+    }
+
+    return true
+}
+
+pub fn test_tarjan_self_loop() -> bool {
+    // 0 -> 0 (self-loop), 0 -> 1
+    let adj = dict()
+    adj[0] = [0, 1]
+    adj[1] = []
+
+    let sccs = tarjan_scc(2, adj)
+    if len(sccs) != 2 {
+        return false
+    }
+
+    return true
+}
+
+pub fn test_tarjan_single_vertex() -> bool {
+    let adj = dict()
+    adj[0] = []
+
+    let sccs = tarjan_scc(1, adj)
+    if len(sccs) != 1 {
+        return false
+    }
+    if len(sccs[0]) != 1 {
+        return false
+    }
+
+    return true
+}
