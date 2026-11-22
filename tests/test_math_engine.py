@@ -229,6 +229,18 @@ class TestDual:
             return x * x * x
         assert derivative(f, 2.0) == pytest.approx(12.0)
 
+    def test_pow_constant_exponent(self):
+        """Issue #242: Dual.__pow__ precedence bug dropped the
+        o.val*self.dot/self.val term, returning 0.0 for every
+        constant-exponent power."""
+        assert derivative(lambda x: x ** 2, 3.0) == pytest.approx(6.0)
+        assert derivative(lambda x: x ** 3, 3.0) == pytest.approx(27.0)
+        assert derivative(lambda x: x ** 0.5, 3.0) == pytest.approx(0.5 / (3.0 ** 0.5))
+        x = Dual(3.0, 1.0)
+        result = x ** 2 + 2 * x + 1
+        assert result.val == pytest.approx(16.0)
+        assert result.dot == pytest.approx(8.0)
+
     def test_dual_sin(self):
         # d/dx(sin(x)) = cos(x)
         x = Dual(0.0, 1.0)
