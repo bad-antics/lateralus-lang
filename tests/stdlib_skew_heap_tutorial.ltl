@@ -1,0 +1,205 @@
+// ===================================================================
+// tests/stdlib_skew_heap_tutorial.ltl
+// -------------------------------------------------------------------
+// Complete test suite for Skew Heap in Lateralus.
+// Self-adjusting meldable heap with zero structural metadata and
+// unconditional child swapping. Sleator & Tarjan (1986).
+// ===================================================================
+
+pub fn skew_create() -> dict {
+    let mut tree = {}
+    let mut val = []
+    let mut left = []
+    let mut right = []
+
+    // Node 0 represents nil
+    val.push(0)
+    left.push(0)
+    right.push(0)
+
+    tree["val"] = val
+    tree["left"] = left
+    tree["right"] = right
+    return tree
+}
+
+pub fn skew_meld(tree: dict, u: int, v: int) -> int {
+    if u == 0 {
+        return v
+    }
+    if v == 0 {
+        return u
+    }
+
+    let mut node_u = u
+    let mut node_v = v
+
+    let val = tree["val"]
+    if val[node_u] > val[node_v] {
+        let tmp = node_u
+        node_u = node_v
+        node_v = tmp
+    }
+
+    // Recursively meld right child of node_u with node_v
+    let right = tree["right"]
+    let merged_right = skew_meld(tree, right[node_u], node_v)
+
+    // Unconditional child swap: old left becomes new right, merged_right becomes new left
+    let left = tree["left"]
+    let old_left = left[node_u]
+
+    let mut new_left = tree["left"]
+    let mut new_right = tree["right"]
+
+    new_left[node_u] = merged_right
+    new_right[node_u] = old_left
+
+    tree["left"] = new_left
+    tree["right"] = new_right
+
+    return node_u
+}
+
+pub fn skew_insert(tree: dict, root: int, key: int) -> int {
+    let mut val = tree["val"]
+    let mut left = tree["left"]
+    let mut right = tree["right"]
+
+    let node = val.len()
+    val.push(key)
+    left.push(0)
+    right.push(0)
+
+    tree["val"] = val
+    tree["left"] = left
+    tree["right"] = right
+
+    return skew_meld(tree, root, node)
+}
+
+pub fn skew_find_min(tree: dict, root: int) -> int {
+    if root == 0 {
+        return -1
+    }
+    let val = tree["val"]
+    return val[root]
+}
+
+pub fn skew_delete_min(tree: dict, root: int) -> list {
+    if root == 0 {
+        return [0, -1]
+    }
+    let val = tree["val"]
+    let min_val = val[root]
+
+    let left = tree["left"]
+    let right = tree["right"]
+    let l_child = left[root]
+    let r_child = right[root]
+
+    let new_root = skew_meld(tree, l_child, r_child)
+    return [new_root, min_val]
+}
+
+// -------------------------------------------------------------------
+// Smoke tests and Golden Test Vectors
+// -------------------------------------------------------------------
+
+pub fn test_skew_basic() -> bool {
+    let tree = skew_create()
+    let mut root = 0
+
+    root = skew_insert(tree, root, 40)
+    root = skew_insert(tree, root, 10)
+    root = skew_insert(tree, root, 30)
+
+    if skew_find_min(tree, root) != 10 {
+        return false
+    }
+
+    let res1 = skew_delete_min(tree, root)
+    root = res1[0]
+    let val1 = res1[1]
+    if val1 != 10 {
+        return false
+    }
+    if skew_find_min(tree, root) != 30 {
+        return false
+    }
+
+    let res2 = skew_delete_min(tree, root)
+    root = res2[0]
+    let val2 = res2[1]
+    if val2 != 30 {
+        return false
+    }
+    if skew_find_min(tree, root) != 40 {
+        return false
+    }
+
+    return true
+}
+
+pub fn test_skew_heapsort() -> bool {
+    let tree = skew_create()
+    let mut root = 0
+    let keys = [64, 34, 25, 12, 22, 11, 90]
+
+    let mut i = 0
+    while i < keys.len() {
+        root = skew_insert(tree, root, keys[i])
+        i = i + 1
+    }
+
+    let expected = [11, 12, 22, 25, 34, 64, 90]
+    let mut idx = 0
+    while idx < expected.len() {
+        let res = skew_delete_min(tree, root)
+        root = res[0]
+        let extracted = res[1]
+        if extracted != expected[idx] {
+            return false
+        }
+        idx = idx + 1
+    }
+
+    if root != 0 {
+        return false
+    }
+    return true
+}
+
+pub fn test_skew_meld_disjoint() -> bool {
+    let tree = skew_create()
+    let mut h1 = 0
+    let mut h2 = 0
+
+    h1 = skew_insert(tree, h1, 15)
+    h1 = skew_insert(tree, h1, 45)
+    h1 = skew_insert(tree, h1, 75)
+
+    h2 = skew_insert(tree, h2, 25)
+    h2 = skew_insert(tree, h2, 35)
+    h2 = skew_insert(tree, h2, 85)
+
+    let merged = skew_meld(tree, h1, h2)
+    if skew_find_min(tree, merged) != 15 {
+        return false
+    }
+
+    // Sequentially extract and verify min order
+    let expected = [15, 25, 35, 45, 75, 85]
+    let mut cur = merged
+    let mut idx = 0
+    while idx < expected.len() {
+        let res = skew_delete_min(tree, cur)
+        cur = res[0]
+        if res[1] != expected[idx] {
+            return false
+        }
+        idx = idx + 1
+    }
+
+    return cur == 0
+}
