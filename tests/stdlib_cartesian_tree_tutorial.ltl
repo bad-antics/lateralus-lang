@@ -1,0 +1,164 @@
+// ===================================================================
+// tests/stdlib_cartesian_tree_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for Cartesian Tree, linear O(n) monotonic stack
+// construction, BST in-order sequence invariant, and min-heap hierarchy.
+// ===================================================================
+
+pub fn build_cartesian_tree(arr, n) {
+    let left = dict()
+    let right = dict()
+    let parent = dict()
+    let i = 0
+    while i < n {
+        left[i] = -1
+        right[i] = -1
+        parent[i] = -1
+        i = i + 1
+    }
+
+    let stack = dict()
+    let top = 0
+
+    i = 0
+    while i < n {
+        let last_popped = -1
+        while top > 0 && arr[stack[top - 1]] > arr[i] {
+            last_popped = stack[top - 1]
+            top = top - 1
+        }
+
+        if last_popped != -1 {
+            left[i] = last_popped
+            parent[last_popped] = i
+        }
+
+        if top > 0 {
+            let p = stack[top - 1]
+            right[p] = i
+            parent[i] = p
+        }
+
+        stack[top] = i
+        top = top + 1
+        i = i + 1
+    }
+
+    let root = -1
+    if n > 0 {
+        root = stack[0]
+    }
+
+    let tree = dict()
+    tree["root"] = root
+    tree["left"] = left
+    tree["right"] = right
+    tree["parent"] = parent
+    return tree
+}
+
+// In-order traversal collector using iterative stack
+pub fn in_order_sequence(tree, n) {
+    let root = tree["root"]
+    let left = tree["left"]
+    let right = tree["right"]
+
+    let res = dict()
+    let res_len = 0
+
+    let stack = dict()
+    let top = 0
+    let curr = root
+
+    while curr != -1 || top > 0 {
+        while curr != -1 {
+            stack[top] = curr
+            top = top + 1
+            curr = left[curr]
+        }
+
+        top = top - 1
+        curr = stack[top]
+        res[res_len] = curr
+        res_len = res_len + 1
+
+        curr = right[curr]
+    }
+
+    return res
+}
+
+// -------------------------------------------------------------------
+// Verification Tests
+// -------------------------------------------------------------------
+
+pub fn test_classic_seven_elements() {
+    // Array: [9, 3, 7, 1, 8, 12, 10, 20, 15, 18, 5]
+    // Value:  0  1  2  3  4   5   6   7   8   9 10
+    // Global minimum is 1 at index 3 -> Root must be 3!
+    let arr = dict()
+    arr[0] = 9; arr[1] = 3; arr[2] = 7; arr[3] = 1; arr[4] = 8
+    arr[5] = 12; arr[6] = 10; arr[7] = 20; arr[8] = 15; arr[9] = 18; arr[10] = 5
+    let n = 11
+
+    let tree = build_cartesian_tree(arr, n)
+
+    // 1. Root must be index of global minimum (index 3, value 1)
+    let root = tree["root"]
+    assert(root == 3, "Root must be index 3 (minimum value 1)")
+    assert(arr[root] == 1, "Root value is 1")
+
+    // 2. In-order traversal must strictly yield indices 0..n-1
+    let seq = in_order_sequence(tree, n)
+    let idx = 0
+    while idx < n {
+        assert(seq[idx] == idx, "In-order traversal reproduces sequence indices")
+        idx = idx + 1
+    }
+
+    // 3. Min-heap property: each non-root node has parent with smaller or equal value
+    let parent = tree["parent"]
+    let i = 0
+    while i < n {
+        let p = parent[i]
+        if p != -1 {
+            assert(arr[p] <= arr[i], "Min-heap property holds: parent <= child")
+        }
+        i = i + 1
+    }
+}
+
+pub fn test_sorted_ascending_and_descending() {
+    // Ascending: right-spine line tree
+    let arr_asc = dict()
+    arr_asc[0] = 10; arr_asc[1] = 20; arr_asc[2] = 30; arr_asc[3] = 40
+    let t_asc = build_cartesian_tree(arr_asc, 4)
+    assert(t_asc["root"] == 0, "Root of ascending array is first element 0")
+    assert(t_asc["right"][0] == 1, "0 right child is 1")
+    assert(t_asc["right"][1] == 2, "1 right child is 2")
+
+    // Descending: left-spine line tree
+    let arr_desc = dict()
+    arr_desc[0] = 40; arr_desc[1] = 30; arr_desc[2] = 20; arr_desc[3] = 10
+    let t_desc = build_cartesian_tree(arr_desc, 4)
+    assert(t_desc["root"] == 3, "Root of descending array is last element 3")
+    assert(t_desc["left"][3] == 2, "3 left child is 2")
+    assert(t_desc["left"][2] == 1, "2 left child is 1")
+}
+
+pub fn test_single_element() {
+    let arr = dict()
+    arr[0] = 42
+    let tree = build_cartesian_tree(arr, 1)
+    assert(tree["root"] == 0, "Single element root is 0")
+    assert(tree["left"][0] == -1, "No left child")
+    assert(tree["right"][0] == -1, "No right child")
+    assert(tree["parent"][0] == -1, "No parent")
+}
+
+pub fn main() {
+    test_classic_seven_elements()
+    test_sorted_ascending_and_descending()
+    test_single_element()
+    print("All Cartesian Tree verification tests passed successfully!")
+}
