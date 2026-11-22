@@ -1154,7 +1154,9 @@ class Parser:
         if self._check(TK.LBRACE):
             # Peek to decide: is it a block or a map literal?
             # Map literal starts with  { expr : expr
-            if self._peek().kind == TK.IDENT and self._peek(2).kind == TK.COLON:
+            # Keys may be identifiers or string literals (e.g. {"year": 2024}).
+            if self._peek().kind in (TK.IDENT, TK.STRING, TK.RAW_STRING) \
+                    and self._peek(2).kind == TK.COLON:
                 return self._parse_map(span)
             return self._parse_inline_block(span)
 
