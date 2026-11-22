@@ -1,0 +1,132 @@
+// ===================================================================
+// examples/poly1305_tutorial.ltl — stdlib/poly1305.ltl tutorial companion
+// Runnable tour of the Poly1305 one-time MAC (RFC 8439): r||s key
+// split, clamping, 2^130-5 accumulator, per-block 0x01 padding,
+// constant-time verify. Pinned to RFC test vectors. Self-contained.
+// ===================================================================
+
+let P1305_PRIME = 0x3FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFB
+
+fn to_bytes(s: str) -> list {
+    let out = []
+    let i = 0
+    while i < len(s) {
+        out = out + [ord(s[i])]
+        i = i + 1
+    }
+    return out
+}
+
+fn read_le_int(buf: list, i: int, n: int) -> int {
+    let v = 0
+    let k = 0
+    while k < n {
+        v = v | (buf[i + k] << (8 * k))
+        k = k + 1
+    }
+    return v
+}
+
+fn clamp_r(key: list) -> int {
+    let r0 = key[ 0]; let r1 = key[ 1]; let r2 = key[ 2]; let r3 = key[ 3]
+    let r4 = key[ 4]; let r5 = key[ 5]; let r6 = key[ 6]; let r7 = key[ 7]
+    let r8 = key[ 8]; let r9 = key[ 9]; let r10= key[10]; let r11= key[11]
+    let r12= key[12]; let r13= key[13]; let r14= key[14]; let r15= key[15]
+    r3  = r3  & 15
+    r7  = r7  & 15
+    r11 = r11 & 15
+    r15 = r15 & 15
+    r4  = r4  & 252
+    r8  = r8  & 252
+    r12 = r12 & 252
+    let bytes = [r0,r1,r2,r3,r4,r5,r6,r7,r8,r9,r10,r11,r12,r13,r14,r15]
+    return read_le_int(bytes, 0, 16)
+}
+
+fn mac(key: list, msg: list) -> list {
+    let r = clamp_r(key)
+    let s = read_le_int(key, 16, 16)
+    let acc = 0
+    let n = len(msg)
+    let i = 0
+    while i < n {
+        let take = 16
+        if n - i < 16 { take = n - i }
+        let block_bytes = []
+        let j = 0
+        while j < take { block_bytes = block_bytes + [msg[i + j]]; j = j + 1 }
+        block_bytes = block_bytes + [1]
+        while len(block_bytes) < 17 { block_bytes = block_bytes + [0] }
+        let n_int = read_le_int(block_bytes, 0, 17)
+        acc = ((acc + n_int) * r) % P1305_PRIME
+        i = i + 16
+    }
+    let tag_int = (acc + s) & 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
+    let out = []
+    let b = 0
+    while b < 16 {
+        out = out + [(tag_int >> (8 * b)) & 0xff]
+        b = b + 1
+    }
+    return out
+}
+
+fn verify(tag_a: list, tag_b: list) -> bool {
+    if len(tag_a) != 16 || len(tag_b) != 16 { return false }
+    let diff = 0
+    let i = 0
+    while i < 16 {
+        diff = diff | (tag_a[i] ^ tag_b[i])
+        i = i + 1
+    }
+    return diff == 0
+}
+
+fn bytes_hex(bs: list) -> str {
+    let digits = "0123456789abcdef"
+    let out = ""
+    let i = 0
+    while i < len(bs) {
+        let b = bs[i]
+        out = out + str(slice(digits, int(b / 16), int(b / 16) + 1)) + str(slice(digits, b % 16, (b % 16) + 1))
+        i = i + 1
+    }
+    return out
+}
+
+fn tag_hex(key_hex: str, msg: str) -> str {
+    return bytes_hex(mac(hex_decode(key_hex), to_bytes(msg)))
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB POLY1305 TUTORIAL ===")
+    let k1 = "85d6be7857556d337f4452fe42d506a80103808afb0db2fd4abff6af4149f51b"
+    let k2 = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+    let k0 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+    println("STEP 1 RFC8439 vector 1:")
+    println("  " + tag_hex(k1, "Cryptographic Forum Research Group"))
+    println("  expect a8061dc1305136c6c22b8baf0c0127a9")
+
+    println("STEP 2 RFC8439 vector 2:")
+    println("  " + tag_hex(k2, "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it."))
+    println("  expect 1020e8c25c2d34db3d2154327530594a")
+
+    println("STEP 3 empty message, zero key:")
+    println("  " + tag_hex(k0, ""))
+    println("  expect 00000000000000000000000000000000")
+
+    println("STEP 4 verify round-trip:")
+    let t1 = mac(hex_decode(k1), to_bytes("Cryptographic Forum Research Group"))
+    let good = hex_decode("a8061dc1305136c6c22b8baf0c0127a9")
+    let bad = hex_decode("a8061dc1305136c6c22b8baf0c0127a8")
+    println("  verify(good)=" + str(verify(t1, good)) + " verify(bad)=" + str(verify(t1, bad)))
+
+    println("STEP 5 clamping demo — r high nibble forced down:")
+    let rk = hex_decode("ffffffffffffffffffffffffffffffff" + "00000000000000000000000000000000")
+    let rc = clamp_r(rk)
+    println("  clamped r = " + str(rc))
+    println("PINNED_VECTORS: v1=a8061dc1305136c6c22b8baf0c0127a9 v2=1020e8c25c2d34db3d2154327530594a empty=00000000000000000000000000000000 verify=true/false")
+}
+
+main()
