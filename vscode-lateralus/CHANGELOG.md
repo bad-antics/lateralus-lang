@@ -2,6 +2,25 @@
 
 All notable changes to the Lateralus Language extension will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- Grammar now highlights every keyword in the language: the v1.6
+  concurrency keywords (`select`, `nursery`, `cancel`), the v1.6
+  low-level keywords (`unsafe`, `extern`, `volatile`, `static`,
+  `addr_of`, `deref`, `alignof`, `offsetof`), the v1.8
+  metaprogramming keywords (`macro`, `comptime`, `derive`, `reflect`),
+  the combined `async for` form, and the language annotations
+  (`@law`, `@bench`, `@test`, `@derive`, `@memo`).
+- Snippets file `lateralus-stdlib.json`: one snippet per top-20
+  stdlib module (ranked by import and usage counts across the repo),
+  each showing the module's typical call pattern.
+- `Run Current File` command (`lateralus.runFile`) with a
+  `$(play) Run` status-bar button shown while a `.ltl` file is
+  active. Runs the file through `lateralus run` (falling back to
+  `python -m lateralus_lang run`) and streams the output into the
+  Lateralus output channel.
+
 ## [3.2.0] — 2026-04-26
 
 ### Added

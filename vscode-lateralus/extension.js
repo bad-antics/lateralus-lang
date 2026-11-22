@@ -23,6 +23,12 @@ let outputChannel;
 /** @type {vscode.StatusBarItem} */
 let statusBarItem;
 
+/** @type {vscode.StatusBarItem} */
+let runStatusBarItem;
+
+/** @type {import('child_process').ChildProcess | null} */
+let runProcess = null;
+
 /**
  * Find the Python interpreter to use for the LSP server.
  * Checks: 1) config setting, 2) python3, 3) python
@@ -58,6 +64,114 @@ function findLateralusModule() {
         }
     }
     return null;
+}
+
+/**
+ * Find the `lateralus` CLI executable on PATH, or null when it is not
+ * installed. Mirrors the probe style of findPython().
+ */
+function findLateralusExecutable() {
+    const { execSync } = require("child_process");
+    try {
+        execSync("lateralus --version", { stdio: "ignore" });
+        return "lateralus";
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Show the Run status-bar button only while a Lateralus (.ltl) file is
+ * the active editor.
+ */
+function updateRunButton() {
+    if (!runStatusBarItem) return;
+    const editor = vscode.window.activeTextEditor;
+    if (editor && editor.document.languageId === "lateralus") {
+        runStatusBarItem.show();
+    } else {
+        runStatusBarItem.hide();
+    }
+}
+
+/**
+ * Run the current .ltl file through `lateralus run` and stream the
+ * program's stdout/stderr into the Lateralus output channel (the
+ * OUTPUT pane). Falls back to `python -m lateralus_lang run` when the
+ * `lateralus` executable is not on PATH, using the same interpreter
+ * and workspace resolution as the language server.
+ */
+async function runCurrentFile() {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.document.languageId !== "lateralus") {
+        outputChannel.appendLine("[lateralus] Run: no Lateralus file is active");
+        outputChannel.show(true);
+        return;
+    }
+
+    const doc = editor.document;
+    if (doc.isUntitled) {
+        outputChannel.appendLine("[lateralus] Run: save the file before running it");
+        outputChannel.show(true);
+        return;
+    }
+    if (doc.isDirty) {
+        const saved = await doc.save();
+        if (!saved) {
+            outputChannel.appendLine("[lateralus] Run: file could not be saved");
+            outputChannel.show(true);
+            return;
+        }
+    }
+
+    if (runProcess) {
+        runProcess.kill("SIGTERM");
+        runProcess = null;
+    }
+
+    const filePath = doc.uri.fsPath;
+    const executable = findLateralusExecutable();
+    let command;
+    let args;
+    const options = {
+        cwd: path.dirname(filePath),
+        stdio: ["ignore", "pipe", "pipe"],
+    };
+    if (executable) {
+        command = executable;
+        args = ["run", filePath];
+    } else {
+        command = findPython();
+        args = ["-m", "lateralus_lang", "run", filePath];
+        const modulePath = findLateralusModule();
+        if (modulePath) {
+            options.env = {
+                ...process.env,
+                PYTHONPATH: modulePath + (process.env.PYTHONPATH ? ":" + process.env.PYTHONPATH : ""),
+            };
+        }
+    }
+
+    outputChannel.show(true);
+    outputChannel.appendLine("");
+    outputChannel.appendLine(`[lateralus] run ${filePath}`);
+
+    runProcess = spawn(command, args, options);
+
+    runProcess.stdout.on("data", (data) => {
+        outputChannel.append(data.toString());
+    });
+    runProcess.stderr.on("data", (data) => {
+        outputChannel.append(data.toString());
+    });
+    runProcess.on("error", (err) => {
+        outputChannel.appendLine(`[lateralus] Run failed: ${err.message}`);
+        runProcess = null;
+    });
+    runProcess.on("exit", (code, signal) => {
+        outputChannel.appendLine(`[lateralus] run exited (code=${code}, signal=${signal})`);
+        runProcess = null;
+    });
 }
 
 /**
@@ -1016,6 +1130,17 @@ function activate(context) {
     statusBarItem.command = "lateralus.restartServer";
     context.subscriptions.push(statusBarItem);
 
+    // Run button — runs the current .ltl file via `lateralus run`
+    runStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
+    runStatusBarItem.text = "$(play) Run";
+    runStatusBarItem.tooltip = "Run current file (lateralus run)";
+    runStatusBarItem.command = "lateralus.runFile";
+    context.subscriptions.push(runStatusBarItem);
+    context.subscriptions.push(
+        vscode.window.onDidChangeActiveTextEditor(() => updateRunButton())
+    );
+    updateRunButton();
+
     // Diagnostics collection
     diagnosticCollection = vscode.languages.createDiagnosticCollection("lateralus");
     context.subscriptions.push(diagnosticCollection);
@@ -1096,6 +1221,9 @@ function activate(context) {
         vscode.commands.registerCommand("lateralus.showOutput", () => {
             outputChannel.show();
         }),
+        vscode.commands.registerCommand("lateralus.runFile", () => {
+            runCurrentFile();
+        }),
         vscode.commands.registerCommand("lateralus.formatDocument", () => {
             vscode.commands.executeCommand("editor.action.formatDocument");
         }),
@@ -1164,8 +1292,13 @@ function stopServer() {
 
 function deactivate() {
     stopServer();
+    if (runProcess) {
+        runProcess.kill("SIGTERM");
+        runProcess = null;
+    }
     if (outputChannel) outputChannel.dispose();
     if (statusBarItem) statusBarItem.dispose();
+    if (runStatusBarItem) runStatusBarItem.dispose();
 }
 
 module.exports = { activate, deactivate };
