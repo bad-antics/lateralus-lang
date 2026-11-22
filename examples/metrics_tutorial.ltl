@@ -1,0 +1,64 @@
+// ===================================================================
+// examples/metrics_tutorial.ltl
+//
+// Tutorial: Cloud-Native Observability with Lateralus stdlib/metrics.ltl
+// (Prometheus Text Exposition Format).
+//
+// Demonstrates:
+// 1. Instantiating a central metrics registry.
+// 2. Instrumenting Counters (request rates) and Gauges (memory/pools).
+// 3. Tracking latency distributions with Histograms.
+// 4. Exposing Prometheus metrics ready for scraping by Prometheus/Grafana.
+// ===================================================================
+
+import metrics
+
+pub fn main() {
+    print("=== Lateralus Prometheus Metrics Observability Tutorial ===")
+
+    // 1. Create registry
+    let reg = metrics_new_registry()
+
+    // 2. Register metric families
+    metrics_register_counter(reg, "http_requests_total", "Cumulative HTTP requests received")
+    metrics_register_gauge(reg, "database_pool_active_connections", "Current database connection pool saturation")
+
+    let latency_buckets = [0.01, 0.05, 0.1, 0.25, 0.5, 1.0]
+    metrics_register_histogram(reg, "http_request_duration_seconds", "HTTP request latency in seconds", latency_buckets)
+
+    print("Registered metric families: Counters, Gauges, and Histograms.")
+
+    // 3. Simulate operational telemetry
+    let get_200 = {}
+    get_200["method"] = "GET"
+    get_200["status"] = "200"
+
+    let post_500 = {}
+    post_500["method"] = "POST"
+    post_500["status"] = "500"
+
+    metrics_inc(reg, "http_requests_total", get_200, 10.0)
+    metrics_inc(reg, "http_requests_total", post_500, 1.0)
+
+    let db_labels = {}
+    db_labels["db_cluster"] = "primary-us-east"
+    metrics_set_value(reg, "database_pool_active_connections", db_labels, 18.0)
+
+    let req_labels = {}
+    req_labels["handler"] = "checkout"
+    metrics_observe(reg, "http_request_duration_seconds", req_labels, 0.045) // falls in <= 0.05
+    metrics_observe(reg, "http_request_duration_seconds", req_labels, 0.180) // falls in <= 0.25
+    metrics_observe(reg, "http_request_duration_seconds", req_labels, 0.750) // falls in <= 1.0
+
+    print("Simulated telemetry recorded into registry.")
+
+    // 4. Render exposition for Prometheus scraper
+    print("Rendering Prometheus text format...")
+    let rendered_text = metrics_render_prometheus(reg)
+
+    print("--- BEGIN PROMETHEUS SCRAPE PAYLOAD ---")
+    print(rendered_text)
+    print("--- END PROMETHEUS SCRAPE PAYLOAD ---")
+
+    print("=== Metrics tutorial demonstration completed successfully ===")
+}

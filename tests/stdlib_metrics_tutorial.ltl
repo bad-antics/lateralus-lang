@@ -1,0 +1,51 @@
+// Pinned test vectors for stdlib/metrics tutorial (Prometheus Exposition Format).
+
+import metrics
+import strings
+
+pub fn test_metrics_counter_and_gauge() -> bool {
+    let reg = metrics_new_registry()
+    metrics_register_counter(reg, "api_requests_total", "Total API calls")
+    metrics_register_gauge(reg, "active_sessions", "Active user sessions")
+
+    let lbl = {}
+    lbl["handler"] = "login"
+    metrics_inc(reg, "api_requests_total", lbl, 1.0)
+    metrics_inc(reg, "api_requests_total", lbl, 3.0)
+
+    let empty_lbl = {}
+    metrics_set_value(reg, "active_sessions", empty_lbl, 15.0)
+
+    let prom = metrics_render_prometheus(reg)
+
+    if not contains(prom, "# TYPE api_requests_total counter") { return false }
+    if not contains(prom, "# TYPE active_sessions gauge") { return false }
+    if not contains(prom, "active_sessions 15") { return false }
+
+    return true
+}
+
+pub fn test_metrics_histogram_cumulative_buckets() -> bool {
+    let reg = metrics_new_registry()
+    let buckets = [10.0, 50.0, 100.0]
+    metrics_register_histogram(reg, "http_duration_ms", "Request latency distribution", buckets)
+
+    let lbl = {}
+    lbl["route"] = "/query"
+
+    // 1st sample: 5.0ms (falls in <= 10.0)
+    metrics_observe(reg, "http_duration_ms", lbl, 5.0)
+    // 2nd sample: 75.0ms (falls in <= 100.0)
+    metrics_observe(reg, "http_duration_ms", lbl, 75.0)
+    // 3rd sample: 200.0ms (falls in > 100.0 -> +Inf)
+    metrics_observe(reg, "http_duration_ms", lbl, 200.0)
+
+    let prom = metrics_render_prometheus(reg)
+
+    // Verify cumulative counts
+    if not contains(prom, "http_duration_ms_count") { return false }
+    if not contains(prom, "http_duration_ms_sum") { return false }
+    if not contains(prom, "le=\"+Inf\"") { return false }
+
+    return true
+}
