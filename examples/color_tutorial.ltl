@@ -1,0 +1,88 @@
+// ===================================================================
+// examples/color_tutorial.ltl — stdlib/color.ltl tutorial companion
+// Runnable tour of the color module: packed-int RGB/RGBA representation,
+// channel extraction, hex formatting, lighten/darken/mix/invert and
+// Rec.601 grayscale. Self-contained so it runs on `lateralus run`.
+// ===================================================================
+
+fn clamp(v: int, lo: int, hi: int) -> int {
+    if v < lo { return lo }
+    if v > hi { return hi }
+    return v
+}
+
+fn rgb(r: int, g: int, b: int) -> int {
+    return clamp(r, 0, 255) * 65536 + clamp(g, 0, 255) * 256 + clamp(b, 0, 255)
+}
+
+fn rgba(r: int, g: int, b: int, a: int) -> int {
+    return clamp(a, 0, 255) * 16777216 + rgb(r, g, b)
+}
+
+fn red(c: int) -> int { return floor(c / 65536) % 256 }
+fn green(c: int) -> int { return floor(c / 256) % 256 }
+fn blue(c: int) -> int { return c % 256 }
+fn alpha(c: int) -> int { return floor(c / 16777216) % 256 }
+
+fn hex_byte(v: int) -> str {
+    let chars = "0123456789abcdef"
+    return chars[floor(v / 16) % 16] + chars[v % 16]
+}
+
+fn to_hex(c: int) -> str {
+    return "#" + hex_byte(red(c)) + hex_byte(green(c)) + hex_byte(blue(c))
+}
+
+fn lighten(c: int, factor: float) -> int {
+    let r = red(c)
+    let g = green(c)
+    let b = blue(c)
+    return rgb(r + int((255 - r) * factor), g + int((255 - g) * factor), b + int((255 - b) * factor))
+}
+
+fn darken(c: int, factor: float) -> int {
+    return rgb(int(red(c) * (1.0 - factor)), int(green(c) * (1.0 - factor)), int(blue(c) * (1.0 - factor)))
+}
+
+fn mix(a: int, b: int, ratio: float) -> int {
+    return rgb(
+        int(red(a) * (1.0 - ratio) + red(b) * ratio),
+        int(green(a) * (1.0 - ratio) + green(b) * ratio),
+        int(blue(a) * (1.0 - ratio) + blue(b) * ratio)
+    )
+}
+
+fn invert(c: int) -> int {
+    return rgb(255 - red(c), 255 - green(c), 255 - blue(c))
+}
+
+fn grayscale(c: int) -> int {
+    let lum = int(red(c) * 0.299 + green(c) * 0.587 + blue(c) * 0.114)
+    return rgb(lum, lum, lum)
+}
+
+fn show(label: str, c: int) {
+    println(label + " = " + to_hex(c) + "  (r=" + str(red(c)) + " g=" + str(green(c)) + " b=" + str(blue(c)) + ")")
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB COLOR TUTORIAL ===")
+    let coral = rgb(255, 127, 80)
+    let teal = rgb(0, 128, 128)
+    let half = rgba(200, 30, 30, 128)
+
+    show("STEP 1: rgb(255,127,80)", coral)
+    show("STEP 2: rgba(200,30,30,128)", half)
+    println("STEP 2: alpha(rgba) = " + str(alpha(half)))
+    println("STEP 3: to_hex round-trip #FF7F50 -> " + to_hex(0xFF7F50))
+    show("STEP 4: lighten(coral, 0.25)", lighten(coral, 0.25))
+    show("STEP 5: darken(coral, 0.25)", darken(coral, 0.25))
+    show("STEP 6: mix(coral, teal, 0.5)", mix(coral, teal, 0.5))
+    show("STEP 7: invert(teal)", invert(teal))
+    show("STEP 8: grayscale(coral)", grayscale(coral))
+    show("STEP 9: clamp test rgb(300,-5,128)", rgb(300, -5, 128))
+
+    println("PINNED_VECTORS: coral=#ff7f50 lighten25=#ff9f7b darken25=#bf5f3c mix=#7f7f68 invert_teal=#ff7f7f gray_coral=#9f9f9f")
+}
+
+main()
