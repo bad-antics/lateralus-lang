@@ -1,0 +1,156 @@
+// Standard Library Topological Sort (Kahn's Algorithm) Verification Suite
+// Validates DAG dependency ordering, cycle detection, in-degree updates, and component isolation.
+
+fn toposort(n: int, adj: dict) -> dict {
+    let mut in_degree = [];
+    let mut i = 0;
+    while i < n {
+        in_degree = in_degree + [0];
+        i = i + 1;
+    }
+
+    let mut u = 0;
+    while u < n {
+        if contains(adj, u) {
+            let targets = adj[u];
+            let mut j = 0;
+            while j < len(targets) {
+                let v = targets[j];
+                in_degree[v] = in_degree[v] + 1;
+                j = j + 1;
+            }
+        }
+        u = u + 1;
+    }
+
+    let mut queue = [];
+    let mut q_head = 0;
+    let mut k = 0;
+    while k < n {
+        if in_degree[k] == 0 {
+            queue = queue + [k];
+        }
+        k = k + 1;
+    }
+
+    let mut order = [];
+    while q_head < len(queue) {
+        let curr = queue[q_head];
+        q_head = q_head + 1;
+        order = order + [curr];
+
+        if contains(adj, curr) {
+            let neighbors = adj[curr];
+            let mut m = 0;
+            while m < len(neighbors) {
+                let nxt = neighbors[m];
+                in_degree[nxt] = in_degree[nxt] - 1;
+                if in_degree[nxt] == 0 {
+                    queue = queue + [nxt];
+                }
+                m = m + 1;
+            }
+        }
+    }
+
+    let mut result = {};
+    result["order"] = order;
+    result["is_dag"] = (len(order) == n);
+    return result;
+}
+
+// Helper to verify that for every directed edge u -> v, pos(u) < pos(v)
+fn verify_valid_topological_order(n: int, adj: dict, order: list) -> bool {
+    if len(order) != n {
+        return false;
+    }
+
+    let mut pos = {};
+    let mut idx = 0;
+    while idx < n {
+        pos[order[idx]] = idx;
+        idx = idx + 1;
+    }
+
+    let mut u = 0;
+    while u < n {
+        if contains(adj, u) {
+            let targets = adj[u];
+            let mut j = 0;
+            while j < len(targets) {
+                let v = targets[j];
+                if pos[u] >= pos[v] {
+                    return false;
+                }
+                j = j + 1;
+            }
+        }
+        u = u + 1;
+    }
+    return true;
+}
+
+fn main() -> int {
+    // 1. Classical 6-node Build Pipeline DAG
+    // 0: lexer -> 1: parser
+    // 1: parser -> 2: ast
+    // 2: ast -> 3: typechecker
+    // 3: typechecker -> 4: optimizer, 5: codegen
+    // 4: optimizer -> 5: codegen
+    let mut adj1 = {};
+    adj1[0] = [1];
+    adj1[1] = [2];
+    adj1[2] = [3];
+    adj1[3] = [4, 5];
+    adj1[4] = [5];
+
+    let res1 = toposort(6, adj1);
+    assert(res1["is_dag"] == true);
+    assert(len(res1["order"]) == 6);
+    assert(verify_valid_topological_order(6, adj1, res1["order"]) == true);
+    // In this specific DAG, total order is uniquely determined: [0, 1, 2, 3, 4, 5]
+    let o1 = res1["order"];
+    assert(o1[0] == 0);
+    assert(o1[1] == 1);
+    assert(o1[2] == 2);
+    assert(o1[3] == 3);
+    assert(o1[4] == 4);
+    assert(o1[5] == 5);
+
+    // 2. Cyclic Graph (Deadlock / Circular Dependency)
+    // 0 -> 1 -> 2 -> 0 (cycle), plus 3 -> 0
+    let mut adj2 = {};
+    adj2[0] = [1];
+    adj2[1] = [2];
+    adj2[2] = [0];
+    adj2[3] = [0];
+
+    let res2 = toposort(4, adj2);
+    assert(res2["is_dag"] == false);
+    // Only node 3 has in-degree 0 initially, once 3 is removed, nodes 0,1,2 retain in-degree >= 1
+    assert(len(res2["order"]) == 1);
+    let o2 = res2["order"];
+    assert(o2[0] == 3);
+
+    // 3. Disconnected DAG with Multiple Valid Sources
+    // Component A: 0 -> 1
+    // Component B: 2 -> 3
+    let mut adj3 = {};
+    adj3[0] = [1];
+    adj3[2] = [3];
+
+    let res3 = toposort(4, adj3);
+    assert(res3["is_dag"] == true);
+    assert(len(res3["order"]) == 4);
+    assert(verify_valid_topological_order(4, adj3, res3["order"]) == true);
+
+    // 4. Single-node and Empty Edge Graphs
+    let adj4 = {};
+    let res4 = toposort(1, adj4);
+    assert(res4["is_dag"] == true);
+    assert(len(res4["order"]) == 1);
+    let o4 = res4["order"];
+    assert(o4[0] == 0);
+
+    return 0;
+}
