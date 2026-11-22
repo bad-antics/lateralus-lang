@@ -1,0 +1,151 @@
+// Standard Library Shunting-Yard & RPN Expression Evaluation Verification Suite
+// Validates operator precedence, parenthesis handling, and postfix evaluation.
+
+fn get_precedence(op: str) -> int {
+    if op == "+" || op == "-" {
+        return 1;
+    }
+    if op == "*" || op == "/" {
+        return 2;
+    }
+    return 0;
+}
+
+fn is_operator(token: str) -> bool {
+    if token == "+" || token == "-" || token == "*" || token == "/" {
+        return true;
+    }
+    return false;
+}
+
+fn shunting_yard(tokens: list) -> list {
+    let mut output = [];
+    let mut op_stack = [];
+    let mut i = 0;
+    while i < len(tokens) {
+        let tok = tokens[i];
+        if is_operator(tok) {
+            let mut prec = get_precedence(tok);
+            let mut searching = true;
+            while len(op_stack) > 0 && searching {
+                let top_op = op_stack[len(op_stack) - 1];
+                if is_operator(top_op) && get_precedence(top_op) >= prec {
+                    output = output + [top_op];
+                    op_stack = slice(op_stack, 0, len(op_stack) - 1);
+                } else {
+                    searching = false;
+                }
+            }
+            op_stack = op_stack + [tok];
+        } else {
+            if tok == "(" {
+                op_stack = op_stack + [tok];
+            } else {
+                if tok == ")" {
+                    let mut found_paren = false;
+                    while len(op_stack) > 0 && found_paren == false {
+                        let top_op = op_stack[len(op_stack) - 1];
+                        op_stack = slice(op_stack, 0, len(op_stack) - 1);
+                        if top_op == "(" {
+                            found_paren = true;
+                        } else {
+                            output = output + [top_op];
+                        }
+                    }
+                } else {
+                    output = output + [tok];
+                }
+            }
+        }
+        i = i + 1;
+    }
+
+    while len(op_stack) > 0 {
+        let top_op = op_stack[len(op_stack) - 1];
+        op_stack = slice(op_stack, 0, len(op_stack) - 1);
+        if top_op != "(" && top_op != ")" {
+            output = output + [top_op];
+        }
+    }
+
+    return output;
+}
+
+fn rpn_eval(postfix: list) -> int {
+    let mut val_stack = [];
+    let mut i = 0;
+    while i < len(postfix) {
+        let tok = postfix[i];
+        if is_operator(tok) {
+            let n = len(val_stack);
+            let b = val_stack[n - 1];
+            let a = val_stack[n - 2];
+            val_stack = slice(val_stack, 0, n - 2);
+
+            let mut res = 0;
+            if tok == "+" {
+                res = a + b;
+            } else {
+                if tok == "-" {
+                    res = a - b;
+                } else {
+                    if tok == "*" {
+                        res = a * b;
+                    } else {
+                        if tok == "/" {
+                            res = idiv(a, b);
+                        }
+                    }
+                }
+            }
+            val_stack = val_stack + [res];
+        } else {
+            val_stack = val_stack + [to_int(tok)];
+        }
+        i = i + 1;
+    }
+    return val_stack[0];
+}
+
+fn evaluate_expression(tokens: list) -> int {
+    let postfix = shunting_yard(tokens);
+    return rpn_eval(postfix);
+}
+
+fn main() -> int {
+    // 1. Operator Precedence: 3 + 4 * 2 = 11
+    let expr1 = ["3", "+", "4", "*", "2"];
+    let post1 = shunting_yard(expr1);
+    assert(len(post1) == 5);
+    assert(post1[0] == "3");
+    assert(post1[1] == "4");
+    assert(post1[2] == "2");
+    assert(post1[3] == "*");
+    assert(post1[4] == "+");
+    assert(evaluate_expression(expr1) == 11);
+
+    // 2. Parenthesized Precedence: (3 + 4) * 2 = 14
+    let expr2 = ["(", "3", "+", "4", ")", "*", "2"];
+    let post2 = shunting_yard(expr2);
+    assert(len(post2) == 5);
+    assert(post2[0] == "3");
+    assert(post2[1] == "4");
+    assert(post2[2] == "+");
+    assert(post2[3] == "2");
+    assert(post2[4] == "*");
+    assert(evaluate_expression(expr2) == 14);
+
+    // 3. Left-Associativity Subtraction: 10 - 4 - 2 = 4
+    let expr3 = ["10", "-", "4", "-", "2"];
+    assert(evaluate_expression(expr3) == 4);
+
+    // 4. Complex Nested Expression: ((2 + 3) * (4 - 1)) / 5 = (5 * 3) / 5 = 3
+    let expr4 = ["(", "(", "2", "+", "3", ")", "*", "(", "4", "-", "1", ")", ")", "/", "5"];
+    assert(evaluate_expression(expr4) == 3);
+
+    // 5. Single Number Base Case: 42
+    let expr5 = ["42"];
+    assert(evaluate_expression(expr5) == 42);
+
+    return 0;
+}
