@@ -1,0 +1,50 @@
+// ===================================================================
+// examples/argon2_tutorial.ltl
+//
+// Tutorial: Password Security & Key Derivation with Lateralus
+// stdlib/argon2.ltl (RFC 9106 Argon2id).
+//
+// Demonstrates:
+// 1. Password hashing using the interactive profile.
+// 2. PHC string format parsing ($argon2id$v=19$m=...,t=...,p=...).
+// 3. Constant-time verification preventing timing side channels.
+// 4. Zero-downtime progressive rehashing for security policy upgrades.
+// ===================================================================
+
+import argon2
+
+pub fn main() {
+    print("=== Lateralus Argon2id (RFC 9106) Tutorial ===")
+
+    // 1. User Signup: Hash raw password with interactive profile
+    let plain_password = "CorrectHorseBatteryStaple#2026"
+    let interactive_prof = argon2_profile_interactive()
+
+    print("Hashing password using Argon2id (m=64MB, t=3, p=1)...")
+    let stored_phc = argon2_hash(plain_password, interactive_prof)
+
+    print("Generated PHC string for database storage:")
+    print("  " + stored_phc)
+
+    // 2. User Login: Authenticate against stored PHC hash
+    let login_attempt = "CorrectHorseBatteryStaple#2026"
+    if argon2_verify(login_attempt, stored_phc) {
+        print("PASS: Login credentials verified successfully!")
+    } else {
+        print("FAIL: Bad credentials!")
+    }
+
+    // 3. Security Policy Escalation: Progressive Rehash
+    // Suppose company security policy increases memory hardness to sensitive profile
+    let strict_prof = argon2_profile_sensitive()
+
+    if argon2_needs_rehash(stored_phc, strict_prof) {
+        print("NOTICE: Stored hash was derived using older/weaker parameters.")
+        print("Re-hashing password with elevated profile during active login session...")
+        let upgraded_phc = argon2_hash(login_attempt, strict_prof)
+        print("Upgraded PHC hash ready to update database row:")
+        print("  " + upgraded_phc)
+    }
+
+    print("=== Argon2id tutorial demonstration completed successfully ===")
+}

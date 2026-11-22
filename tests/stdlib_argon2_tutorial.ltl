@@ -1,0 +1,49 @@
+// Pinned test vectors for stdlib/argon2 tutorial (RFC 9106 / PHC format).
+
+import argon2
+
+pub fn test_argon2_verification_roundtrip() -> bool {
+    let pw = "correct-horse-battery-staple-2026"
+    let profile = argon2_profile_interactive()
+
+    let phc_str = argon2_hash(pw, profile)
+
+    // Verification must pass with exact password
+    if not argon2_verify(pw, phc_str) { return false }
+
+    // Verification must fail with wrong password
+    if argon2_verify("wrong-password", phc_str) { return false }
+
+    return true
+}
+
+pub fn test_argon2_phc_structure() -> bool {
+    let profile = argon2_profile_interactive()
+    let phc = argon2_hash("test-password-123", profile)
+
+    let parsed = argon2_phc_decode(phc)
+    if parsed == nil { return false }
+
+    // Check decoded cost parameters match interactive profile
+    if parsed["m"] != 65536 { return false }
+    if parsed["t"] != 3 { return false }
+    if parsed["p"] != 1 { return false }
+    if len(parsed["salt"]) != 16 { return false }
+    if len(parsed["hash"]) != 32 { return false }
+
+    return true
+}
+
+pub fn test_argon2_progressive_rehash_escalation() -> bool {
+    let old_profile = argon2_profile_interactive()
+    let phc = argon2_hash("my-secret", old_profile)
+
+    // Current profile should NOT require rehash
+    if argon2_needs_rehash(phc, old_profile) { return false }
+
+    // Escalated sensitive profile MUST require rehash
+    let higher_profile = argon2_profile_sensitive()
+    if not argon2_needs_rehash(phc, higher_profile) { return false }
+
+    return true
+}
