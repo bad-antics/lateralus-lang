@@ -1,0 +1,100 @@
+// ===================================================================
+// examples/rational_tutorial.ltl
+// -------------------------------------------------------------------
+// Practical Application: Zero-Drift Multi-Tier Financial Royalty &
+// Treasury Split Engine using Canonical Rational Numbers (stdlib/rational.ltl)
+// ===================================================================
+
+pub fn abs_int(x) {
+    if x < 0 {
+        return -x
+    }
+    return x
+}
+
+pub fn gcd(a, b) {
+    let x = abs_int(a)
+    let y = abs_int(b)
+    while y != 0 {
+        let t = x % y
+        x = y
+        y = t
+    }
+    if x == 0 {
+        return 1
+    }
+    return x
+}
+
+pub fn make_rational(num, den) {
+    let n = num
+    let d = den
+    if d < 0 {
+        n = -n
+        d = -d
+    }
+    let g = gcd(n, d)
+    let r = dict()
+    r["num"] = n / g
+    r["den"] = d / g
+    return r
+}
+
+pub fn rat_add(a, b) {
+    let num = (a["num"] * b["den"]) + (b["num"] * a["den"])
+    let den = a["den"] * b["den"]
+    return make_rational(num, den)
+}
+
+pub fn rat_sub(a, b) {
+    let num = (a["num"] * b["den"]) - (b["num"] * a["den"])
+    let den = a["den"] * b["den"]
+    return make_rational(num, den)
+}
+
+pub fn rat_mul(a, b) {
+    return make_rational(a["num"] * b["num"], a["den"] * b["den"])
+}
+
+pub fn rat_div(a, b) {
+    return make_rational(a["num"] * b["den"], a["den"] * b["num"])
+}
+
+pub fn rat_eq(a, b) {
+    return (a["num"] == b["num"]) && (a["den"] == b["den"])
+}
+
+pub fn main() {
+    print("=== Exact Rational Arithmetic: Treasury Split Verification ===")
+
+    // Classic IEEE-754 drift test: 1/10 + 2/10 == 3/10 exactly
+    let r1 = make_rational(1, 10)
+    let r2 = make_rational(2, 10)
+    let sum_dec = rat_add(r1, r2)
+    assert(sum_dec["num"] == 3, "1/10 + 2/10 numerator must be 3")
+    assert(sum_dec["den"] == 10, "1/10 + 2/10 denominator must be 10")
+
+    // Multi-party royalty split: 1/3 + 1/6 + 3/8 + 1/8 = 1/1
+    let tier_a = make_rational(1, 3)
+    let tier_b = make_rational(1, 6)
+    let tier_c = make_rational(3, 8)
+    let tier_d = make_rational(1, 8)
+
+    let total_share = rat_add(rat_add(tier_a, tier_b), rat_add(tier_c, tier_d))
+    assert(total_share["num"] == 1, "Royalty shares sum numerator == 1")
+    assert(total_share["den"] == 1, "Royalty shares sum denominator == 1")
+
+    // Distributing a 7200 EUR pool across the exact rational shares
+    let pool = make_rational(7200, 1)
+    let payout_a = rat_mul(pool, tier_a)
+    let payout_b = rat_mul(pool, tier_b)
+    let payout_c = rat_mul(pool, tier_c)
+    let payout_d = rat_mul(pool, tier_d)
+
+    assert(payout_a["num"] == 2400 && payout_a["den"] == 1, "Tier A payout 2400 EUR")
+    assert(payout_b["num"] == 1200 && payout_b["den"] == 1, "Tier B payout 1200 EUR")
+    assert(payout_c["num"] == 2700 && payout_c["den"] == 1, "Tier C payout 2700 EUR")
+    assert(payout_d["num"] == 900 && payout_d["den"] == 1, "Tier D payout 900 EUR")
+
+    print("All rational arithmetic and zero-drift payout invariants verified!")
+}
