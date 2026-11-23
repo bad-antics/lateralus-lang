@@ -1,0 +1,164 @@
+// ===================================================================
+// tests/stdlib_graham_scan_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for Graham Scan 2D Convex Hull algorithm (1972),
+// pivot selection, polar angle sorting, CCW cross products, and stack building.
+// ===================================================================
+
+fn cross_product(o, a, b) {
+    return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+}
+
+fn dist_sq(p1, p2) {
+    let dx = p1[0] - p2[0]
+    let dy = p1[1] - p2[1]
+    return dx * dx + dy * dy
+}
+
+fn compare_polar(pivot, p1, p2) {
+    let cp = cross_product(pivot, p1, p2)
+    if cp > 0 {
+        return -1
+    }
+    if cp < 0 {
+        return 1
+    }
+    // Collinear points: closer point comes first
+    let d1 = dist_sq(pivot, p1)
+    let d2 = dist_sq(pivot, p2)
+    if d1 < d2 {
+        return -1
+    }
+    return 1
+}
+
+pub fn graham_scan(points) {
+    let n = len(points)
+    if n <= 3 {
+        return points
+    }
+
+    // Step 1: Find pivot with lowest y (and lowest x on tie)
+    let pivot_idx = 0
+    let i = 1
+    while i < n {
+        let pt = points[i]
+        let piv = points[pivot_idx]
+        if pt[1] < piv[1] or (pt[1] == piv[1] and pt[0] < piv[0]) {
+            pivot_idx = i
+        }
+        i = i + 1
+    }
+
+    let pivot = points[pivot_idx]
+
+    // Step 2: Separate other points
+    let others = []
+    let j = 0
+    while j < n {
+        if j != pivot_idx {
+            others = push(others, points[j])
+        }
+        j = j + 1
+    }
+
+    // Step 3: Sort other points by polar angle with pivot using insertion sort
+    let m = len(others)
+    let a = 1
+    while a < m {
+        let key = others[a]
+        let b = a - 1
+        while b >= 0 {
+            let prev = others[b]
+            if compare_polar(pivot, prev, key) > 0 {
+                others[b + 1] = prev
+                b = b - 1
+            } else {
+                break
+            }
+        }
+        others[b + 1] = key
+        a = a + 1
+    }
+
+    // Step 4: Build convex hull stack
+    let hull = [pivot, others[0]]
+    let k = 1
+    while k < m {
+        let pt = others[k]
+        while len(hull) >= 2 {
+            let h_len = len(hull)
+            let p1 = hull[h_len - 2]
+            let p2 = hull[h_len - 1]
+            if cross_product(p1, p2, pt) <= 0 {
+                // Pop the top of stack (right turn or collinear)
+                let new_hull = []
+                let h_idx = 0
+                while h_idx < h_len - 1 {
+                    new_hull = push(new_hull, hull[h_idx])
+                    h_idx = h_idx + 1
+                }
+                hull = new_hull
+            } else {
+                break
+            }
+        }
+        hull = push(hull, pt)
+        k = k + 1
+    }
+
+    return hull
+}
+
+// -------------------------------------------------------------------
+// Verification Tests
+// -------------------------------------------------------------------
+
+pub fn test_square_with_interior_point() {
+    // Square with corners (0,0), (4,0), (4,4), (0,4) and interior (2,2)
+    let pts = [[0, 0], [4, 0], [4, 4], [0, 4], [2, 2]]
+    let hull = graham_scan(pts)
+
+    assert(len(hull) == 4, "Square hull must contain exactly 4 corner vertices")
+
+    // Verify all 4 corners are in hull
+    let count = 0
+    let i = 0
+    while i < len(hull) {
+        let p = hull[i]
+        if (p[0] == 0 and p[1] == 0) or (p[0] == 4 and p[1] == 0) or (p[0] == 4 and p[1] == 4) or (p[0] == 0 and p[1] == 4) {
+            count = count + 1
+        }
+        // Verify interior point (2,2) is excluded
+        assert(p[0] != 2 or p[1] != 2, "Interior point (2,2) must not be in hull")
+        i = i + 1
+    }
+    assert(count == 4, "All 4 corner points must be retained in hull")
+}
+
+pub fn test_triangle_with_interior_point() {
+    // Triangle (0,0), (6,0), (3,5) and interior (3,1)
+    let pts = [[0, 0], [6, 0], [3, 5], [3, 1]]
+    let hull = graham_scan(pts)
+
+    assert(len(hull) == 3, "Triangle hull must contain exactly 3 vertices")
+    let i = 0
+    while i < len(hull) {
+        let p = hull[i]
+        assert(p[0] != 3 or p[1] != 1, "Interior point (3,1) must be pruned")
+        i = i + 1
+    }
+}
+
+pub fn test_minimal_three_points() {
+    let pts = [[0, 0], [2, 0], [1, 2]]
+    let hull = graham_scan(pts)
+    assert(len(hull) == 3, "3 points form complete non-degenerate triangle")
+}
+
+pub fn main() {
+    test_square_with_interior_point()
+    test_triangle_with_interior_point()
+    test_minimal_three_points()
+    print("All Graham Scan verification tests passed successfully!")
+}
