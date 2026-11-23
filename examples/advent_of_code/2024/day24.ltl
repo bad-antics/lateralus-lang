@@ -1,0 +1,164 @@
+// Advent of Code 2024 · Day 24 · Crossed Wires
+// Gate network producing bits z00..zNN. Part 1 evaluates the circuit and reads
+// the z-wires as a binary number. Sample answers 4 and 2024 come from
+// https://adventofcode.com/2024/day/24 (both examples on that page).
+
+let SMALL = "x00: 1
+x01: 1
+x02: 1
+y00: 0
+y01: 1
+y02: 0
+
+x00 AND y00 -> z00
+x01 XOR y01 -> z01
+x02 OR y02 -> z02"
+
+let BIG = "x00: 1
+x01: 0
+x02: 1
+x03: 1
+x04: 0
+y00: 1
+y01: 1
+y02: 1
+y03: 1
+y04: 1
+
+ntg XOR fgs -> mjb
+y02 OR x01 -> tnw
+kwq OR kpj -> z05
+x00 OR x03 -> fst
+tgd XOR rvg -> z01
+vdt OR tnw -> bfw
+bfw AND frj -> z10
+ffh OR nrd -> bqk
+y00 AND y03 -> djm
+y03 OR y00 -> psh
+bqk OR frj -> z08
+tnw OR fst -> frj
+gnj AND tgd -> z11
+bfw XOR mjb -> z00
+x03 OR x00 -> vdt
+gnj AND wpb -> z02
+x04 AND y00 -> kjc
+djm OR pbm -> qhw
+nrd AND vdt -> hwm
+kjc AND fst -> rvg
+y04 OR y02 -> fgs
+y01 AND x02 -> pbm
+ntg OR kjc -> kwq
+psh XOR fgs -> tgd
+qhw XOR tgd -> z09
+pbm OR djm -> kpj
+x03 XOR y03 -> ffh
+x00 XOR y04 -> ntg
+bfw OR bqk -> z06
+nrd XOR fgs -> wpb
+frj XOR qhw -> z04
+bqk OR frj -> z07
+y03 OR x01 -> nrd
+hwm AND bqk -> z03
+tgd XOR rvg -> z12
+tnw OR pbm -> gnj"
+
+fn lines_of(text: str) -> list {
+    let out = []
+    for line in str_split(text, "\n") {
+        let l = str_trim(line)
+        if len(l) > 0 { out = out + [l] }
+    }
+    return out
+}
+
+// "x00: 1" -> [name, value]
+fn parse_wire(line: str) -> list {
+    let parts = str_split(line, ":")
+    return [str_trim(parts[0]), int(str_trim(parts[1]))]
+}
+
+// "x00 AND y00 -> z00" -> [a, op, b, out]
+fn parse_gate(line: str) -> list {
+    let parts = str_split(line, " ")
+    return [parts[0], parts[1], parts[2], parts[4]]
+}
+
+fn evaluate(text: str) -> dict {
+    let vals = {}
+    let gates = []
+    let in_gates = false
+    for line in lines_of(text) {
+        if contains(line, "->") {
+            in_gates = true
+            gates = gates + [parse_gate(line)]
+        } else if not in_gates {
+            let w = parse_wire(line)
+            vals[w[0]] = w[1]
+        }
+    }
+    // Fixed-point evaluation: gates whose inputs are known get resolved.
+    let progress = true
+    while progress {
+        progress = false
+        for g in gates {
+            let a = g[0]
+            let op = g[1]
+            let b = g[2]
+            let out = g[3]
+            if contains(vals, out) { continue }
+            if not contains(vals, a) || not contains(vals, b) { continue }
+            if op == "AND" {
+                vals[out] = vals[a] * vals[b]
+            } else if op == "OR" {
+                let v = vals[a] + vals[b]
+                if v > 1 { v = 1 }
+                vals[out] = v
+            } else {
+                if vals[a] != vals[b] { vals[out] = 1 } else { vals[out] = 0 }
+            }
+            progress = true
+        }
+    }
+    return vals
+}
+
+// Read every z-wire into one integer (z00 = least significant bit).
+fn z_value(vals: dict) -> int {
+    let total = 0
+    let place = 1
+    let i = 0
+    while i < 100 {
+        let name = "z"
+        if i < 10 { name = name + "0" }
+        name = name + str(i)
+        if contains(vals, name) {
+            if vals[name] == 1 { total = total + place }
+            place = place * 2
+        } else if i > 0 {
+            return total
+        }
+        i = i + 1
+    }
+    return total
+}
+
+fn part1(text: str) -> int {
+    return z_value(evaluate(text))
+}
+
+@test
+fn test_small() {
+    assert_eq(part1(SMALL), 4)
+}
+
+@test
+fn test_big() {
+    assert_eq(part1(BIG), 2024)
+}
+
+fn main() {
+    print("Day 24 Part 1 (small sample): " + str(part1(SMALL)))
+    print("Day 24 Part 1 (big sample): " + str(part1(BIG)))
+}
+
+main()
