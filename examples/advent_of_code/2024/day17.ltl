@@ -1,0 +1,201 @@
+// Advent of Code 2024 · Day 17 · Chronospatial Computer
+// Part 1: emulate the 3-bit computer on the sample registers/program and
+// join the outputs with commas = "4,6,3,5,6,3,5,2,1,0".
+// Part 2: find the smallest initial A so the program outputs itself. The
+// puzzle's part-2 example uses a different, shorter program,
+// 0,3,5,4,3,0, whose answer is 117440 (verified against the puzzle text:
+// "if we have the program 0,3,5,4,3,0, and we set A to 117440, the output
+// of the program will be 0,3,5,4,3,0"). The search builds A one octal
+// digit at a time from the most significant digit: after choosing m
+// digits, running the candidate must reproduce the last m outputs of the
+// target program. This works because the program shifts A right by 3
+// bits each loop iteration and outputs once per iteration, so the last
+// outputs depend only on the top digits chosen so far. Trying digits in
+// increasing order makes the first complete match the smallest A.
+// Sample answers: part 1 = "4,6,3,5,6,3,5,2,1,0", part 2 = 117440.
+
+let SAMPLE = "Register A: 729
+Register B: 0
+Register C: 0
+
+Program: 0,1,5,4,3,0"
+
+let SAMPLE2 = "Register A: 0
+Register B: 0
+Register C: 0
+
+Program: 0,3,5,4,3,0"
+
+fn parse(text: str) -> list {
+    let a = 0
+    let b = 0
+    let c = 0
+    let prog = []
+    let lines = str_split(text, "\n")
+    let i = 0
+    while i < len(lines) {
+        let line = str_trim(lines[i])
+        if str_starts_with(line, "Register A:") {
+            a = int(str_split(line, ": ")[1])
+        }
+        if str_starts_with(line, "Register B:") {
+            b = int(str_split(line, ": ")[1])
+        }
+        if str_starts_with(line, "Register C:") {
+            c = int(str_split(line, ": ")[1])
+        }
+        if str_starts_with(line, "Program:") {
+            let nums = str_split(str_split(line, ": ")[1], ",")
+            let j = 0
+            while j < len(nums) {
+                prog = prog + [int(nums[j])]
+                j = j + 1
+            }
+        }
+        i = i + 1
+    }
+    return [a, b, c, prog]
+}
+
+fn combo(op: int, a: int, b: int, c: int) -> int {
+    if op <= 3 { return op }
+    if op == 4 { return a }
+    if op == 5 { return b }
+    if op == 6 { return c }
+    return 0
+}
+
+// Integer division of a by 2 to the power e. For e > 30 the divisor
+// exceeds any register value in the samples, so the result is 0.
+fn div_pow2(a: int, e: int) -> int {
+    if e > 30 { return 0 }
+    return idiv(a, 2 ** e)
+}
+
+// Run the program with the given registers. Returns the output list.
+fn run(prog: list, a: int, b: int, c: int) -> list {
+    let out = []
+    let ip = 0
+    let steps = 0
+    while ip < len(prog) && steps < 100000 {
+        steps = steps + 1
+        let op = prog[ip]
+        let operand = prog[ip + 1]
+        if op == 0 {
+            a = div_pow2(a, combo(operand, a, b, c))
+            ip = ip + 2
+        } else {
+            if op == 1 {
+                b = b ^ operand
+                ip = ip + 2
+            } else {
+                if op == 2 {
+                    b = imod(combo(operand, a, b, c), 8)
+                    ip = ip + 2
+                } else {
+                    if op == 3 {
+                        if a != 0 { ip = operand } else { ip = ip + 2 }
+                    } else {
+                        if op == 4 {
+                            b = b ^ c
+                            ip = ip + 2
+                        } else {
+                            if op == 5 {
+                                out = out + [imod(combo(operand, a, b, c), 8)]
+                                ip = ip + 2
+                            } else {
+                                if op == 6 {
+                                    b = div_pow2(a, combo(operand, a, b, c))
+                                    ip = ip + 2
+                                } else {
+                                    c = div_pow2(a, combo(operand, a, b, c))
+                                    ip = ip + 2
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return out
+}
+
+fn lists_equal(x: list, y: list) -> bool {
+    if len(x) != len(y) { return false }
+    let i = 0
+    while i < len(x) {
+        if x[i] != y[i] { return false }
+        i = i + 1
+    }
+    return true
+}
+
+// True when running `cand` reproduces the last len(out) entries of prog.
+fn suffix_matches(out: list, prog: list) -> bool {
+    let start = len(prog) - len(out)
+    let i = 0
+    while i < len(out) {
+        if out[i] != prog[start + i] { return false }
+        i = i + 1
+    }
+    return true
+}
+
+// Depth-first search for the smallest A (in octal digits, most
+// significant first) whose run outputs `prog`. Returns -1 if none.
+fn search(prog: list, a: int, depth: int) -> int {
+    if depth == len(prog) {
+        if lists_equal(run(prog, a, 0, 0), prog) { return a }
+        return -1
+    }
+    let d = 0
+    while d < 8 {
+        if depth == 0 && d == 0 {
+            d = d + 1
+        } else {
+            let cand = a * 8 + d
+            let out = run(prog, cand, 0, 0)
+            if len(out) == depth + 1 && suffix_matches(out, prog) {
+                let res = search(prog, cand, depth + 1)
+                if res != -1 { return res }
+            }
+            d = d + 1
+        }
+    }
+    return -1
+}
+
+fn part1(text: str) -> str {
+    let p = parse(text)
+    let out = run(p[3], p[0], p[1], p[2])
+    let parts = []
+    let i = 0
+    while i < len(out) {
+        parts = parts + [str(out[i])]
+        i = i + 1
+    }
+    return str_join(parts, ",")
+}
+
+fn part2(text: str) -> int {
+    let p = parse(text)
+    return search(p[3], 0, 0)
+}
+
+@test
+fn test_sample_part1() {
+    assert_eq(part1(SAMPLE), "4,6,3,5,6,3,5,2,1,0")
+}
+
+@test
+fn test_sample_part2() {
+    assert_eq(part2(SAMPLE2), 117440)
+}
+
+fn main() {
+    print("Day 17 Part 1: " + part1(SAMPLE))
+    print("Day 17 Part 2: " + str(part2(SAMPLE2)))
+}
+
+main()

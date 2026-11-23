@@ -1,0 +1,166 @@
+// Advent of Code 2024 · Day 9 · Disk Fragmenter
+// Dense disk map: alternating file sizes and free-space sizes, file IDs
+// starting at 0. Checksum = sum over blocks of position * file ID.
+// Part 1: move file blocks one at a time from the end into the leftmost
+// free block until no gaps remain between file blocks.
+// Part 2: move whole files (never split) into the leftmost free span
+// that fits, processing files from the highest ID down.
+
+let SAMPLE = "2333133121414131402"
+
+// Expand the dense map into a block list: file ID per block, -1 = free.
+fn expand(text: str) -> list {
+    let s = str_trim(text)
+    let blocks = []
+    let fid = 0
+    let i = 0
+    while i < len(s) {
+        let n = int(slice(s, i, i + 1))
+        let k = 0
+        while k < n {
+            if imod(i, 2) == 0 {
+                blocks = blocks + [fid]
+            } else {
+                blocks = blocks + [-1]
+            }
+            k = k + 1
+        }
+        if imod(i, 2) == 0 {
+            fid = fid + 1
+        }
+        i = i + 1
+    }
+    return blocks
+}
+
+fn checksum(blocks: list) -> int {
+    let total = 0
+    let i = 0
+    while i < len(blocks) {
+        if blocks[i] != -1 {
+            total = total + i * blocks[i]
+        }
+        i = i + 1
+    }
+    return total
+}
+
+fn part1(text: str) -> int {
+    let blocks = expand(text)
+    // Count file blocks; the compacted disk is exactly that many long.
+    let total_file = 0
+    let i = 0
+    while i < len(blocks) {
+        if blocks[i] != -1 {
+            total_file = total_file + 1
+        }
+        i = i + 1
+    }
+    // Two pointers: take file blocks from the left in order; when the
+    // left pointer hits a gap, fill it with the rightmost remaining
+    // file block instead.
+    let compacted = []
+    let left = 0
+    let right = len(blocks) - 1
+    while len(compacted) < total_file {
+        if blocks[left] != -1 {
+            compacted = compacted + [blocks[left]]
+            left = left + 1
+        } else {
+            while blocks[right] == -1 {
+                right = right - 1
+            }
+            compacted = compacted + [blocks[right]]
+            right = right - 1
+            left = left + 1
+        }
+    }
+    return checksum(compacted)
+}
+
+// Find the start index and size of the file with the given ID in blocks.
+fn find_file(blocks: list, fid: int) -> list {
+    let start = -1
+    let size = 0
+    let i = 0
+    while i < len(blocks) {
+        if blocks[i] == fid {
+            if start == -1 {
+                start = i
+            }
+            size = size + 1
+        }
+        i = i + 1
+    }
+    return [start, size]
+}
+
+// Find the leftmost free run of at least `size` blocks starting before
+// `limit`. Returns its start index, or -1 if none.
+fn find_free(blocks: list, size: int, limit: int) -> int {
+    let i = 0
+    while i < limit {
+        if blocks[i] == -1 {
+            let run = 0
+            while i + run < len(blocks) && blocks[i + run] == -1 {
+                run = run + 1
+            }
+            if run >= size {
+                return i
+            }
+            i = i + run
+        } else {
+            i = i + 1
+        }
+    }
+    return -1
+}
+
+fn part2(text: str) -> int {
+    let blocks = expand(text)
+    // Highest file ID.
+    let max_id = -1
+    let i = 0
+    while i < len(blocks) {
+        if blocks[i] > max_id {
+            max_id = blocks[i]
+        }
+        i = i + 1
+    }
+    let fid = max_id
+    while fid >= 0 {
+        let f = find_file(blocks, fid)
+        let start = f[0]
+        let size = f[1]
+        if start != -1 {
+            let dest = find_free(blocks, size, start)
+            if dest != -1 {
+                let k = 0
+                while k < size {
+                    blocks = list_set(blocks, dest + k, fid)
+                    blocks = list_set(blocks, start + k, -1)
+                    k = k + 1
+                }
+            }
+        }
+        fid = fid - 1
+    }
+    return checksum(blocks)
+}
+
+@test
+fn test_sample_part1() {
+    assert_eq(part1(SAMPLE), 1928)
+}
+
+@test
+fn test_sample_part2() {
+    assert_eq(part2(SAMPLE), 2858)
+}
+
+fn main() {
+    print("Day 9 Part 1: " + str(part1(SAMPLE)))
+    print("Day 9 Part 2: " + str(part2(SAMPLE)))
+}
+
+main()

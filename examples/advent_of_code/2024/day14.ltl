@@ -1,0 +1,152 @@
+// Advent of Code 2024 · Day 14 · Restroom Redoubt
+// Robots move in straight lines on a toroidal floor: after t seconds a robot
+// is at (imod(px + t*vx, W), imod(py + t*vy, H)).
+// Part 1: safety factor after 100 seconds = product of the robot counts in
+// the four quadrants (robots on the middle row/column count in none).
+// Sample floor is 11 wide x 7 tall (the real floor is 101 x 103);
+// sample -> 12 (official sample answer).
+// Part 2: NO OFFICIAL SAMPLE ANSWER EXISTS for part 2 — the puzzle gives no
+// expected output for the sample. part2() implements the standard tree
+// search: the earliest second at which some row contains a run of >= 10
+// robots side by side (the trunk/base of the Christmas tree), searching
+// one full period (W*H seconds). It returns -1 when no such second exists,
+// which is what the sample yields — that -1 is NOT an official answer, it
+// only means "no tree in the sample". The @test below pins exactly that:
+// part2(SAMPLE) == -1 asserts the search finds no tree in the sample,
+// not that -1 is the puzzle's answer.
+
+let SAMPLE = "p=0,4 v=3,-3
+p=6,3 v=-1,-3
+p=10,3 v=-1,2
+p=2,0 v=2,-1
+p=0,0 v=1,3
+p=3,0 v=-2,-2
+p=7,6 v=-1,-3
+p=3,0 v=-1,-2
+p=9,3 v=2,3
+p=7,3 v=-1,2
+p=2,4 v=2,-3
+p=9,5 v=-3,-3"
+
+// Sample floor size (real input: 101 x 103).
+let W = 11
+let H = 7
+
+// Parse robots into a list of [px, py, vx, vy].
+fn parse(text: str) -> list {
+    let robots = []
+    let lines = str_split(text, "\n")
+    let i = 0
+    while i < len(lines) {
+        let line = str_trim(lines[i])
+        if len(line) > 0 {
+            let clean = str_replace(line, "p=", "")
+            clean = str_replace(clean, " v=", " ")
+            clean = str_replace(clean, ",", " ")
+            let parts = str_split(clean, " ")
+            robots = robots + [[int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3])]]
+        }
+        i = i + 1
+    }
+    return robots
+}
+
+// Positions of all robots after t seconds, as a list of [x, y].
+fn positions_at(robots: list, t: int) -> list {
+    let pos = []
+    let i = 0
+    while i < len(robots) {
+        let r = robots[i]
+        let x = imod(r[0] + t * r[2], W)
+        let y = imod(r[1] + t * r[3], H)
+        pos = pos + [[x, y]]
+        i = i + 1
+    }
+    return pos
+}
+
+fn part1(text: str) -> int {
+    let robots = parse(text)
+    let pos = positions_at(robots, 100)
+    let mx = idiv(W, 2)
+    let my = idiv(H, 2)
+    let q1 = 0
+    let q2 = 0
+    let q3 = 0
+    let q4 = 0
+    let i = 0
+    while i < len(pos) {
+        let x = pos[i][0]
+        let y = pos[i][1]
+        if x < mx && y < my { q1 = q1 + 1 }
+        if x > mx && y < my { q2 = q2 + 1 }
+        if x < mx && y > my { q3 = q3 + 1 }
+        if x > mx && y > my { q4 = q4 + 1 }
+        i = i + 1
+    }
+    return q1 * q2 * q3 * q4
+}
+
+// Longest run of robots occupying consecutive tiles in any single row.
+fn longest_row_run(pos: list) -> int {
+    let occupied = {}
+    let i = 0
+    while i < len(pos) {
+        occupied[str(pos[i][0]) + "," + str(pos[i][1])] = true
+        i = i + 1
+    }
+    let best = 0
+    let y = 0
+    while y < H {
+        let x = 0
+        while x < W {
+            if contains(occupied, str(x) + "," + str(y)) {
+                // Only count a run from its leftmost cell.
+                if x == 0 || contains(occupied, str(x - 1) + "," + str(y)) == false {
+                    let run = 0
+                    let xx = x
+                    while xx < W && contains(occupied, str(xx) + "," + str(y)) {
+                        run = run + 1
+                        xx = xx + 1
+                    }
+                    if run > best { best = run }
+                }
+            }
+            x = x + 1
+        }
+        y = y + 1
+    }
+    return best
+}
+
+// Earliest second in one full period whose layout has a horizontal run of
+// >= 10 robots (the tree), or -1 if no such second exists in the sample.
+fn part2(text: str) -> int {
+    let robots = parse(text)
+    let t = 0
+    while t < W * H {
+        let pos = positions_at(robots, t)
+        if longest_row_run(pos) >= 10 { return t }
+        t = t + 1
+    }
+    return -1
+}
+
+@test
+fn test_sample_part1() {
+    assert_eq(part1(SAMPLE), 12)
+}
+
+// -1 here means "no tree in the sample", NOT an official sample answer
+// (the puzzle gives none for part 2).
+@test
+fn test_sample_part2() {
+    assert_eq(part2(SAMPLE), -1)
+}
+
+fn main() {
+    print("Day 14 Part 1: " + str(part1(SAMPLE)))
+    print("Day 14 Part 2: " + str(part2(SAMPLE)) + " (no official sample answer; -1 = no tree found in sample)")
+}
+
+main()

@@ -1,0 +1,183 @@
+// Advent of Code 2024 · Day 5 · Print Queue
+// Rules "X|Y" mean page X must print before page Y (when both are present).
+// Part 1: sum of the middle page of every update already in the right order.
+// Part 2: fix the incorrectly-ordered updates (topological sort) and sum
+// their middle pages.
+
+let SAMPLE = "47|53
+97|13
+97|61
+97|47
+75|29
+61|13
+75|53
+29|13
+97|29
+53|29
+61|53
+97|53
+61|29
+47|13
+75|47
+97|75
+47|61
+75|61
+47|29
+75|13
+53|13
+75,47,61,53,29
+97,61,53,29,13
+75,29,13
+75,97,47,61,53
+61,13,29
+97,13,75,29,47"
+
+// Parse: rules as a dict keyed by page (as string) -> list of pages that
+// must come after it; updates as a list of page lists.
+fn parse(text: str) -> list {
+    let rules = {}
+    let updates = []
+    let lines = str_split(text, "\n")
+    let i = 0
+    while i < len(lines) {
+        let line = str_trim(lines[i])
+        if len(line) > 0 {
+            if str_contains(line, "|") {
+                let parts = str_split(line, "|")
+                let a = int(parts[0])
+                let b = int(parts[1])
+                let key = str(a)
+                if contains(rules, key) {
+                    rules[key] = rules[key] + [b]
+                } else {
+                    rules[key] = [b]
+                }
+            } else {
+                let parts = str_split(line, ",")
+                let upd = []
+                let j = 0
+                while j < len(parts) {
+                    upd = upd + [int(parts[j])]
+                    j = j + 1
+                }
+                updates = updates + [upd]
+            }
+        }
+        i = i + 1
+    }
+    return [rules, updates]
+}
+
+// True if page a must be printed before page b according to the rules.
+fn must_before(rules, a: int, b: int) -> bool {
+    let key = str(a)
+    if contains(rules, key) {
+        return contains(rules[key], b)
+    }
+    return false
+}
+
+// True if the update respects every rule.
+fn valid(rules, upd: list) -> bool {
+    let i = 0
+    while i < len(upd) {
+        let j = i + 1
+        while j < len(upd) {
+            if must_before(rules, upd[j], upd[i]) {
+                return false
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return true
+}
+
+// Fix an incorrectly-ordered update by topological sort: repeatedly take
+// the first remaining page that no other remaining page must precede.
+fn fix(rules, upd: list) -> list {
+    let remaining = upd
+    let fixed = []
+    while len(remaining) > 0 {
+        let i = 0
+        let picked = -1
+        while i < len(remaining) {
+            let p = remaining[i]
+            let blocked = false
+            let j = 0
+            while j < len(remaining) {
+                if j != i && must_before(rules, remaining[j], p) {
+                    blocked = true
+                }
+                j = j + 1
+            }
+            if blocked == false {
+                picked = i
+                break
+            }
+            i = i + 1
+        }
+        fixed = fixed + [remaining[picked]]
+        let next_remaining = []
+        let k = 0
+        while k < len(remaining) {
+            if k != picked {
+                next_remaining = next_remaining + [remaining[k]]
+            }
+            k = k + 1
+        }
+        remaining = next_remaining
+    }
+    return fixed
+}
+
+fn middle(upd: list) -> int {
+    return upd[idiv(len(upd), 2)]
+}
+
+fn part1(text: str) -> int {
+    let p = parse(text)
+    let rules = p[0]
+    let updates = p[1]
+    let total = 0
+    let i = 0
+    while i < len(updates) {
+        if valid(rules, updates[i]) {
+            total = total + middle(updates[i])
+        }
+        i = i + 1
+    }
+    return total
+}
+
+fn part2(text: str) -> int {
+    let p = parse(text)
+    let rules = p[0]
+    let updates = p[1]
+    let total = 0
+    let i = 0
+    while i < len(updates) {
+        if valid(rules, updates[i]) == false {
+            total = total + middle(fix(rules, updates[i]))
+        }
+        i = i + 1
+    }
+    return total
+}
+
+@test
+fn test_sample_part1() {
+    assert_eq(part1(SAMPLE), 143)
+}
+
+@test
+fn test_sample_part2() {
+    assert_eq(part2(SAMPLE), 123)
+}
+
+fn main() {
+    print("Day 5 Part 1: " + str(part1(SAMPLE)))
+    print("Day 5 Part 2: " + str(part2(SAMPLE)))
+}
+
+main()

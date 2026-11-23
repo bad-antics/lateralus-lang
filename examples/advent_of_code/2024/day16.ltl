@@ -1,0 +1,236 @@
+// Advent of Code 2024 · Day 16 · Reindeer Maze
+// Dijkstra over states (r, c, direction): moving forward costs 1, turning
+// 90 degrees costs 1000. The reindeer starts at S facing East.
+// Part 1: lowest score to reach E = 7036.
+// Part 2: tiles on at least one best path = 45, found by combining a
+// forward Dijkstra from S with a reverse Dijkstra from E (a tile is on a
+// best path when dist_from_start + dist_to_end == best score for some
+// direction). No heap builtin exists, so the priority queue is a plain
+// list with a linear-min pop.
+// Sample answers: part 1 = 7036, part 2 = 45.
+
+let SAMPLE = "###############
+#.......#....E#
+#.#.###.#.###.#
+#.....#.#...#.#
+#.###.#####.#.#
+#.#.#.......#.#
+#.#.#####.###.#
+#...........#.#
+###.#.#####.#.#
+#...#.....#.#.#
+#.#.#.###.#.#.#
+#.....#...#.#.#
+#.###.#.#.#.#.#
+#S..#.....#...#
+###############"
+
+let DIRS = [[-1, 0], [0, 1], [1, 0], [0, -1]]
+
+fn rows_of(text: str) -> list {
+    let rows = []
+    let lines = str_split(text, "\n")
+    let i = 0
+    while i < len(lines) {
+        if len(str_trim(lines[i])) > 0 {
+            rows = rows + [lines[i]]
+        }
+        i = i + 1
+    }
+    return rows
+}
+
+fn ch(rows: list, r: int, c: int) -> str {
+    return slice(rows[r], c, c + 1)
+}
+
+fn find(rows: list, target: str) -> list {
+    let r = 0
+    while r < len(rows) {
+        let c = 0
+        while c < len(rows[r]) {
+            if ch(rows, r, c) == target { return [r, c] }
+            c = c + 1
+        }
+        r = r + 1
+    }
+    return [-1, -1]
+}
+
+fn skey(r: int, c: int, d: int) -> str {
+    return str(r) + "," + str(c) + "," + str(d)
+}
+
+fn in_bounds(rows: list, r: int, c: int) -> bool {
+    if r < 0 { return false }
+    if c < 0 { return false }
+    if r >= len(rows) { return false }
+    if c >= len(rows[0]) { return false }
+    return true
+}
+
+// Pop the lowest-cost entry from the priority queue (a list of
+// [cost, r, c, d]). Returns [entry, remaining queue].
+fn pq_pop(pq: list) -> list {
+    let best = 0
+    let i = 1
+    while i < len(pq) {
+        if pq[i][0] < pq[best][0] { best = i }
+        i = i + 1
+    }
+    let entry = pq[best]
+    let rest = []
+    let j = 0
+    while j < len(pq) {
+        if j != best { rest = rest + [pq[j]] }
+        j = j + 1
+    }
+    return [entry, rest]
+}
+
+fn relax(dist: dict, pq: list, r: int, c: int, d: int, cost: int) -> list {
+    let k = skey(r, c, d)
+    if contains(dist, k) == false || cost < dist[k] {
+        dist[k] = cost
+        pq = pq + [[cost, r, c, d]]
+    }
+    return pq
+}
+
+// Forward Dijkstra from (sr, sc) facing East (direction 1).
+fn dijkstra_forward(rows: list, sr: int, sc: int) -> dict {
+    let dist = {}
+    dist[skey(sr, sc, 1)] = 0
+    let pq = [[0, sr, sc, 1]]
+    while len(pq) > 0 {
+        let popped = pq_pop(pq)
+        pq = popped[1]
+        let item = popped[0]
+        let cost = item[0]
+        let r = item[1]
+        let c = item[2]
+        let d = item[3]
+        if cost == dist[skey(r, c, d)] {
+            let nr = r + DIRS[d][0]
+            let nc = c + DIRS[d][1]
+            if in_bounds(rows, nr, nc) && ch(rows, nr, nc) != "#" {
+                pq = relax(dist, pq, nr, nc, d, cost + 1)
+            }
+            pq = relax(dist, pq, r, c, imod(d + 1, 4), cost + 1000)
+            pq = relax(dist, pq, r, c, imod(d + 3, 4), cost + 1000)
+        }
+    }
+    return dist
+}
+
+// Reverse Dijkstra from (er, ec): dist_to_end for every state. The reverse
+// predecessors of a state (r, c, d) are the cell behind it (same direction,
+// cost + 1) and the same cell facing a direction that turns into d
+// (cost + 1000).
+fn dijkstra_reverse(rows: list, er: int, ec: int) -> dict {
+    let dist = {}
+    let pq = []
+    let d = 0
+    while d < 4 {
+        dist[skey(er, ec, d)] = 0
+        pq = pq + [[0, er, ec, d]]
+        d = d + 1
+    }
+    while len(pq) > 0 {
+        let popped = pq_pop(pq)
+        pq = popped[1]
+        let item = popped[0]
+        let cost = item[0]
+        let r = item[1]
+        let c = item[2]
+        let dir = item[3]
+        if cost == dist[skey(r, c, dir)] {
+            let pr = r - DIRS[dir][0]
+            let pc = c - DIRS[dir][1]
+            if in_bounds(rows, pr, pc) && ch(rows, pr, pc) != "#" {
+                pq = relax(dist, pq, pr, pc, dir, cost + 1)
+            }
+            pq = relax(dist, pq, r, c, imod(dir + 1, 4), cost + 1000)
+            pq = relax(dist, pq, r, c, imod(dir + 3, 4), cost + 1000)
+        }
+    }
+    return dist
+}
+
+fn best_score(text: str) -> list {
+    let rows = rows_of(text)
+    let s = find(rows, "S")
+    let e = find(rows, "E")
+    let dist = dijkstra_forward(rows, s[0], s[1])
+    let best = -1
+    let d = 0
+    while d < 4 {
+        let k = skey(e[0], e[1], d)
+        if contains(dist, k) {
+            if best == -1 || dist[k] < best { best = dist[k] }
+        }
+        d = d + 1
+    }
+    return [rows, dist, best]
+}
+
+fn part1(text: str) -> int {
+    let b = best_score(text)
+    return b[2]
+}
+
+fn part2(text: str) -> int {
+    let rows = rows_of(text)
+    let s = find(rows, "S")
+    let e = find(rows, "E")
+    let dist_f = dijkstra_forward(rows, s[0], s[1])
+    let dist_r = dijkstra_reverse(rows, e[0], e[1])
+    let best = -1
+    let d = 0
+    while d < 4 {
+        let k = skey(e[0], e[1], d)
+        if contains(dist_f, k) {
+            if best == -1 || dist_f[k] < best { best = dist_f[k] }
+        }
+        d = d + 1
+    }
+    let total = 0
+    let r = 0
+    while r < len(rows) {
+        let c = 0
+        while c < len(rows[r]) {
+            if ch(rows, r, c) != "#" {
+                let on_path = false
+                let dd = 0
+                while dd < 4 {
+                    let k = skey(r, c, dd)
+                    if contains(dist_f, k) && contains(dist_r, k) {
+                        if dist_f[k] + dist_r[k] == best { on_path = true }
+                    }
+                    dd = dd + 1
+                }
+                if on_path { total = total + 1 }
+            }
+            c = c + 1
+        }
+        r = r + 1
+    }
+    return total
+}
+
+@test
+fn test_sample_part1() {
+    assert_eq(part1(SAMPLE), 7036)
+}
+
+@test
+fn test_sample_part2() {
+    assert_eq(part2(SAMPLE), 45)
+}
+
+fn main() {
+    print("Day 16 Part 1: " + str(part1(SAMPLE)))
+    print("Day 16 Part 2: " + str(part2(SAMPLE)))
+}
+
+main()
