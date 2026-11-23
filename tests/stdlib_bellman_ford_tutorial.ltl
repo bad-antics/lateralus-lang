@@ -1,0 +1,162 @@
+// Standard Library Bellman-Ford Shortest Path Verification Suite
+// Validates negative-weight edge relaxation, convergence, negative-cycle detection, and path reconstruction.
+
+fn bellman_ford(n: int, edges: list, source: int) -> dict {
+    let INF = 1000000000;
+    let mut dist = [];
+    let mut parent = [];
+    let mut i = 0;
+    while i < n {
+        dist = dist + [INF];
+        parent = parent + [-1];
+        i = i + 1;
+    }
+    dist[source] = 0;
+
+    let mut iter = 0;
+    while iter < (n - 1) {
+        let mut updated = false;
+        let mut e_idx = 0;
+        while e_idx < len(edges) {
+            let e = edges[e_idx];
+            let u = e[0];
+            let v = e[1];
+            let w = e[2];
+            if dist[u] != INF {
+                if dist[u] + w < dist[v] {
+                    dist[v] = dist[u] + w;
+                    parent[v] = u;
+                    updated = true;
+                }
+            }
+            e_idx = e_idx + 1;
+        }
+        if updated == false {
+            iter = n;
+        } else {
+            iter = iter + 1;
+        }
+    }
+
+    let mut has_negative_cycle = false;
+    let mut cycle_node = -1;
+    let mut k = 0;
+    while k < len(edges) {
+        let e2 = edges[k];
+        let u2 = e2[0];
+        let v2 = e2[1];
+        let w2 = e2[2];
+        if dist[u2] != INF {
+            if dist[u2] + w2 < dist[v2] {
+                has_negative_cycle = true;
+                cycle_node = v2;
+                k = len(edges);
+            }
+        }
+        k = k + 1;
+    }
+
+    let mut result = {};
+    result["dist"] = dist;
+    result["parent"] = parent;
+    result["has_negative_cycle"] = has_negative_cycle;
+    result["cycle_node"] = cycle_node;
+    return result;
+}
+
+fn reconstruct_path(parent: list, target: int) -> list {
+    let mut path = [];
+    let mut curr = target;
+    while curr != -1 {
+        path = [curr] + path;
+        curr = parent[curr];
+    }
+    return path;
+}
+
+fn main() -> int {
+    let INF = 1000000000;
+
+    // 1. Graph with Negative Weights but NO Negative Cycles
+    // 5 vertices (0..4)
+    // 0 -> 1 (weight 6)
+    // 0 -> 2 (weight 7)
+    // 1 -> 2 (weight 8)
+    // 1 -> 3 (weight 5)
+    // 1 -> 4 (weight -4)  <-- negative weight edge
+    // 2 -> 3 (weight -3)  <-- negative weight edge
+    // 2 -> 4 (weight 9)
+    // 3 -> 1 (weight -2)  <-- negative weight edge
+    // 4 -> 3 (weight 7)
+    let edges1 = [
+        [0, 1, 6],
+        [0, 2, 7],
+        [1, 2, 8],
+        [1, 3, 5],
+        [1, 4, -4],
+        [2, 3, -3],
+        [2, 4, 9],
+        [3, 1, -2],
+        [4, 3, 7]
+    ];
+
+    let res1 = bellman_ford(5, edges1, 0);
+    assert(res1["has_negative_cycle"] == false);
+    let dist1 = res1["dist"];
+    let parent1 = res1["parent"];
+
+    // Optimal paths from 0:
+    // 0 -> 2: 7
+    // 0 -> 2 -> 3: 7 + (-3) = 4
+    // 0 -> 2 -> 3 -> 1: 4 + (-2) = 2
+    // 0 -> 2 -> 3 -> 1 -> 4: 2 + (-4) = -2
+    assert(dist1[0] == 0);
+    assert(dist1[2] == 7);
+    assert(dist1[3] == 4);
+    assert(dist1[1] == 2);
+    assert(dist1[4] == -2);
+
+    let path_to_4 = reconstruct_path(parent1, 4);
+    assert(len(path_to_4) == 5);
+    assert(path_to_4[0] == 0);
+    assert(path_to_4[1] == 2);
+    assert(path_to_4[2] == 3);
+    assert(path_to_4[3] == 1);
+    assert(path_to_4[4] == 4);
+
+    // 2. Graph WITH Negative Weight Cycle (Arbitrage Loop)
+    // 0 -> 1 (weight 1)
+    // 1 -> 2 (weight 2)
+    // 2 -> 3 (weight 3)
+    // 3 -> 1 (weight -6)  => Cycle 1 -> 2 -> 3 -> 1 has weight 2 + 3 + (-6) = -1 < 0!
+    let edges2 = [
+        [0, 1, 1],
+        [1, 2, 2],
+        [2, 3, 3],
+        [3, 1, -6]
+    ];
+
+    let res2 = bellman_ford(4, edges2, 0);
+    assert(res2["has_negative_cycle"] == true);
+
+    // 3. Unreachable Vertices
+    // 3 vertices: 0 -> 1 (weight 5), vertex 2 disconnected
+    let edges3 = [
+        [0, 1, 5]
+    ];
+    let res3 = bellman_ford(3, edges3, 0);
+    assert(res3["has_negative_cycle"] == false);
+    let dist3 = res3["dist"];
+    assert(dist3[0] == 0);
+    assert(dist3[1] == 5);
+    assert(dist3[2] == INF);
+
+    // 4. Single-node Base Case
+    let edges4 = [];
+    let res4 = bellman_ford(1, edges4, 0);
+    assert(res4["has_negative_cycle"] == false);
+    let dist4 = res4["dist"];
+    assert(dist4[0] == 0);
+
+    return 0;
+}
