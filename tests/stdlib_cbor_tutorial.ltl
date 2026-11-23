@@ -1,0 +1,134 @@
+// Standard Library CBOR (RFC 8949) Tutorial Verification Suite
+// Validates major type encodings, compact headers, and Appendix A golden vectors.
+
+fn hex_char(val: int) -> string {
+    if val == 0 { return "0"; }
+    if val == 1 { return "1"; }
+    if val == 2 { return "2"; }
+    if val == 3 { return "3"; }
+    if val == 4 { return "4"; }
+    if val == 5 { return "5"; }
+    if val == 6 { return "6"; }
+    if val == 7 { return "7"; }
+    if val == 8 { return "8"; }
+    if val == 9 { return "9"; }
+    if val == 10 { return "a"; }
+    if val == 11 { return "b"; }
+    if val == 12 { return "c"; }
+    if val == 13 { return "d"; }
+    if val == 14 { return "e"; }
+    if val == 15 { return "f"; }
+    return "0";
+}
+
+fn byte_to_hex(val: int) -> string {
+    let hi = val / 16;
+    let lo = val % 16;
+    return hex_char(hi) + hex_char(lo);
+}
+
+// Major Type 0: Unsigned Integer (0..23)
+fn cbor_encode_uint_small(val: int) -> string {
+    if val >= 0 && val <= 23 {
+        return byte_to_hex(val);
+    }
+    return "";
+}
+
+// Major Type 1: Negative Integer (-1..-24) -> encoded as -1 - val
+fn cbor_encode_nint_small(val: int) -> string {
+    let positive_equiv = -1 - val;
+    if positive_equiv >= 0 && positive_equiv <= 23 {
+        let byte_val = 32 + positive_equiv; // 0x20 + n
+        return byte_to_hex(byte_val);
+    }
+    return "";
+}
+
+// Major Type 7: Simple values (False=0xf4, True=0xf5, Null=0xf6)
+fn cbor_encode_bool(val: bool) -> string {
+    if val {
+        return "f5";
+    } else {
+        return "f4";
+    }
+}
+
+fn cbor_encode_null() -> string {
+    return "f6";
+}
+
+// Major Type 4: Array of 0 items -> 0x80
+fn cbor_encode_empty_array() -> string {
+    return "80";
+}
+
+// Major Type 5: Map of 0 pairs -> 0xa0
+fn cbor_encode_empty_map() -> string {
+    return "a0";
+}
+
+// Extracts major type from hex byte (0..7)
+fn cbor_get_major_type_from_byte_val(byte_val: int) -> int {
+    return byte_val / 32;
+}
+
+fn main() -> int {
+    // RFC 8949 Appendix A: Unsigned Integers
+    let v_0 = cbor_encode_uint_small(0);
+    assert(v_0 == "00");
+
+    let v_1 = cbor_encode_uint_small(1);
+    assert(v_1 == "01");
+
+    let v_10 = cbor_encode_uint_small(10);
+    assert(v_10 == "0a");
+
+    let v_23 = cbor_encode_uint_small(23);
+    assert(v_23 == "17");
+
+    // RFC 8949 Appendix A: Negative Integers
+    let vn_1 = cbor_encode_nint_small(-1);
+    assert(vn_1 == "20");
+
+    let vn_10 = cbor_encode_nint_small(-10);
+    assert(vn_10 == "29");
+
+    let vn_24 = cbor_encode_nint_small(-24);
+    assert(vn_24 == "37");
+
+    // RFC 8949 Appendix A: Booleans and Null
+    let b_false = cbor_encode_bool(false);
+    assert(b_false == "f4");
+
+    let b_true = cbor_encode_bool(true);
+    assert(b_true == "f5");
+
+    let n_null = cbor_encode_null();
+    assert(n_null == "f6");
+
+    // RFC 8949 Appendix A: Empty Containers
+    let arr_0 = cbor_encode_empty_array();
+    assert(arr_0 == "80");
+
+    let map_0 = cbor_encode_empty_map();
+    assert(map_0 == "a0");
+
+    // Major type inspection
+    let type_uint = cbor_get_major_type_from_byte_val(10);
+    assert(type_uint == 0);
+
+    let type_nint = cbor_get_major_type_from_byte_val(33); // 0x21
+    assert(type_nint == 1);
+
+    let type_arr = cbor_get_major_type_from_byte_val(128); // 0x80
+    assert(type_arr == 4);
+
+    let type_map = cbor_get_major_type_from_byte_val(160); // 0xa0
+    assert(type_map == 5);
+
+    let type_simple = cbor_get_major_type_from_byte_val(245); // 0xf5
+    assert(type_simple == 7);
+
+    return 0;
+}
