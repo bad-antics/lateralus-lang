@@ -1,0 +1,205 @@
+// ===================================================================
+// examples/aho_corasick_tutorial.ltl
+// -------------------------------------------------------------------
+// Demonstration of Aho-Corasick Multi-Pattern Matching in Lateralus.
+//
+// Real-World Applications:
+// 1. Web Application Firewall (WAF) & Deep Packet Inspection (DPI).
+// 2. Multi-Keyword Sensitive Content Moderation and Threat Hunting.
+// 3. Genomic Bioinformatics: Simultaneous screening of multiple DNA markers.
+// ===================================================================
+
+fn make_ac_node(node_id) {
+    let node = dict()
+    node["id"] = node_id
+    node["keys"] = []
+    node["next_ids"] = []
+    node["fail"] = 0
+    node["output"] = []
+    return node
+}
+
+fn get_child(node, ch) {
+    let keys = node["keys"]
+    let next_ids = node["next_ids"]
+    let i = 0
+    let n = len(keys)
+    while i < n {
+        if keys[i] == ch {
+            return next_ids[i]
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+fn put_child(node, ch, child_id) {
+    node["keys"] = push(node["keys"], ch)
+    node["next_ids"] = push(node["next_ids"], child_id)
+}
+
+pub fn create_firewall_scanner() {
+    let ac = dict()
+    let root = make_ac_node(0)
+    ac["nodes"] = [root]
+    return ac
+}
+
+pub fn add_threat_signature(ac, signature) {
+    let nodes = ac["nodes"]
+    let curr_id = 0
+    let m = len(signature)
+    let i = 0
+
+    while i < m {
+        let ch = signature[i]
+        let curr_node = nodes[curr_id]
+        let next_id = get_child(curr_node, ch)
+
+        if next_id != -1 {
+            curr_id = next_id
+        } else {
+            let new_id = len(nodes)
+            let new_node = make_ac_node(new_id)
+            nodes = push(nodes, new_node)
+            ac["nodes"] = nodes
+            put_child(curr_node, ch, new_id)
+            curr_id = new_id
+        }
+        i = i + 1
+    }
+
+    let end_node = nodes[curr_id]
+    end_node["output"] = push(end_node["output"], signature)
+}
+
+pub fn compile_scanner(ac) {
+    let nodes = ac["nodes"]
+    let queue = []
+    let root = nodes[0]
+
+    let next_ids = root["next_ids"]
+    let i = 0
+    while i < len(next_ids) {
+        let child_id = next_ids[i]
+        nodes[child_id]["fail"] = 0
+        queue = push(queue, child_id)
+        i = i + 1
+    }
+
+    let q_head = 0
+    while q_head < len(queue) {
+        let u_id = queue[q_head]
+        q_head = q_head + 1
+        let u_node = nodes[u_id]
+
+        let u_keys = u_node["keys"]
+        let u_nexts = u_node["next_ids"]
+        let k = 0
+        while k < len(u_keys) {
+            let ch = u_keys[k]
+            let v_id = u_nexts[k]
+            let v_node = nodes[v_id]
+
+            let f_id = u_node["fail"]
+            let matched_fail = -1
+            while f_id != 0 and matched_fail == -1 {
+                let candidate = get_child(nodes[f_id], ch)
+                if candidate != -1 {
+                    matched_fail = candidate
+                } else {
+                    f_id = nodes[f_id]["fail"]
+                }
+            }
+
+            if matched_fail == -1 {
+                let root_child = get_child(nodes[0], ch)
+                if root_child != -1 and root_child != v_id {
+                    matched_fail = root_child
+                } else {
+                    matched_fail = 0
+                }
+            }
+
+            v_node["fail"] = matched_fail
+
+            let fail_outputs = nodes[matched_fail]["output"]
+            let p = 0
+            while p < len(fail_outputs) {
+                v_node["output"] = push(v_node["output"], fail_outputs[p])
+                p = p + 1
+            }
+
+            queue = push(queue, v_id)
+            k = k + 1
+        }
+    }
+}
+
+pub fn scan_payload(ac, payload) {
+    let nodes = ac["nodes"]
+    let curr_id = 0
+    let alerts = []
+    let n = len(payload)
+    let i = 0
+
+    while i < n {
+        let ch = payload[i]
+
+        while curr_id != 0 and get_child(nodes[curr_id], ch) == -1 {
+            curr_id = nodes[curr_id]["fail"]
+        }
+
+        let next_id = get_child(nodes[curr_id], ch)
+        if next_id != -1 {
+            curr_id = next_id
+        } else {
+            curr_id = 0
+        }
+
+        let matched = nodes[curr_id]["output"]
+        let k = 0
+        while k < len(matched) {
+            alerts = push(alerts, matched[k])
+            k = k + 1
+        }
+        i = i + 1
+    }
+
+    return alerts
+}
+
+pub fn main() {
+    print("=================================================================")
+    print("   Lateralus Standard Library: Aho-Corasick DPI Firewall Demo    ")
+    print("=================================================================")
+
+    let scanner = create_firewall_scanner()
+
+    // Register Web Application Security Signatures
+    add_threat_signature(scanner, "SELECT")
+    add_threat_signature(scanner, "UNION")
+    add_threat_signature(scanner, "DROP")
+    add_threat_signature(scanner, "script")
+    add_threat_signature(scanner, "alert")
+    add_threat_signature(scanner, "eval")
+
+    compile_scanner(scanner)
+    print("WAF Signatures compiled into Aho-Corasick Automaton.")
+
+    // Test Incoming HTTP Request Payloads
+    let clean_payload = "GET /api/v1/user/profile HTTP/1.1"
+    let clean_alerts = scan_payload(scanner, clean_payload)
+    print("Payload 1 Scan (Clean): Found " + str(len(clean_alerts)) + " alerts.")
+
+    let malicious_payload = "GET /search?q=1 UNION SELECT 1,2,password FROM users WHERE alert(1) HTTP/1.1"
+    let attacks = scan_payload(scanner, malicious_payload)
+    print("Payload 2 Scan (Malicious): Found " + str(len(attacks)) + " threat signatures:")
+    let i = 0
+    while i < len(attacks) {
+        print("  [ALERT] Triggered Signature: " + attacks[i])
+        i = i + 1
+    }
+
+    print("Aho-Corasick DPI completed in a single O(N) pass across all signatures.")
+}

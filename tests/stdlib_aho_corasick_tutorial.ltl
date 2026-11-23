@@ -1,0 +1,243 @@
+// ===================================================================
+// tests/stdlib_aho_corasick_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for Aho-Corasick Multi-Pattern String Matching,
+// Trie construction, BFS failure link resolution, and stream searching.
+// ===================================================================
+
+fn make_ac_node(node_id) {
+    let node = dict()
+    node["id"] = node_id
+    node["keys"] = []
+    node["next_ids"] = []
+    node["fail"] = 0
+    node["output"] = []
+    return node
+}
+
+fn get_child(node, ch) {
+    let keys = node["keys"]
+    let next_ids = node["next_ids"]
+    let i = 0
+    let n = len(keys)
+    while i < n {
+        if keys[i] == ch {
+            return next_ids[i]
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+fn put_child(node, ch, child_id) {
+    node["keys"] = push(node["keys"], ch)
+    node["next_ids"] = push(node["next_ids"], child_id)
+}
+
+pub fn create_aho_corasick() {
+    let ac = dict()
+    let root = make_ac_node(0)
+    ac["nodes"] = [root]
+    return ac
+}
+
+pub fn ac_insert(ac, pattern) {
+    let nodes = ac["nodes"]
+    let curr_id = 0
+    let m = len(pattern)
+    let i = 0
+
+    while i < m {
+        let ch = pattern[i]
+        let curr_node = nodes[curr_id]
+        let next_id = get_child(curr_node, ch)
+
+        if next_id != -1 {
+            curr_id = next_id
+        } else {
+            let new_id = len(nodes)
+            let new_node = make_ac_node(new_id)
+            nodes = push(nodes, new_node)
+            ac["nodes"] = nodes
+            put_child(curr_node, ch, new_id)
+            curr_id = new_id
+        }
+        i = i + 1
+    }
+
+    let end_node = nodes[curr_id]
+    end_node["output"] = push(end_node["output"], pattern)
+}
+
+pub fn ac_build_failure_links(ac) {
+    let nodes = ac["nodes"]
+    let queue = []
+    let root = nodes[0]
+
+    let next_ids = root["next_ids"]
+    let i = 0
+    while i < len(next_ids) {
+        let child_id = next_ids[i]
+        nodes[child_id]["fail"] = 0
+        queue = push(queue, child_id)
+        i = i + 1
+    }
+
+    let q_head = 0
+    while q_head < len(queue) {
+        let u_id = queue[q_head]
+        q_head = q_head + 1
+        let u_node = nodes[u_id]
+
+        let u_keys = u_node["keys"]
+        let u_nexts = u_node["next_ids"]
+        let k = 0
+        while k < len(u_keys) {
+            let ch = u_keys[k]
+            let v_id = u_nexts[k]
+            let v_node = nodes[v_id]
+
+            let f_id = u_node["fail"]
+            let matched_fail = -1
+            while f_id != 0 and matched_fail == -1 {
+                let candidate = get_child(nodes[f_id], ch)
+                if candidate != -1 {
+                    matched_fail = candidate
+                } else {
+                    f_id = nodes[f_id]["fail"]
+                }
+            }
+
+            if matched_fail == -1 {
+                let root_child = get_child(nodes[0], ch)
+                if root_child != -1 and root_child != v_id {
+                    matched_fail = root_child
+                } else {
+                    matched_fail = 0
+                }
+            }
+
+            v_node["fail"] = matched_fail
+
+            // Inherit output matches from the failure target
+            let fail_outputs = nodes[matched_fail]["output"]
+            let p = 0
+            while p < len(fail_outputs) {
+                v_node["output"] = push(v_node["output"], fail_outputs[p])
+                p = p + 1
+            }
+
+            queue = push(queue, v_id)
+            k = k + 1
+        }
+    }
+}
+
+pub fn ac_search(ac, text) {
+    let nodes = ac["nodes"]
+    let curr_id = 0
+    let matches = []
+    let n = len(text)
+    let i = 0
+
+    while i < n {
+        let ch = text[i]
+
+        while curr_id != 0 and get_child(nodes[curr_id], ch) == -1 {
+            curr_id = nodes[curr_id]["fail"]
+        }
+
+        let next_id = get_child(nodes[curr_id], ch)
+        if next_id != -1 {
+            curr_id = next_id
+        } else {
+            curr_id = 0
+        }
+
+        let curr_outputs = nodes[curr_id]["output"]
+        let k = 0
+        while k < len(curr_outputs) {
+            matches = push(matches, curr_outputs[k])
+            k = k + 1
+        }
+        i = i + 1
+    }
+
+    return matches
+}
+
+// -------------------------------------------------------------------
+// Verification Tests
+// -------------------------------------------------------------------
+
+pub fn test_classic_ushers() {
+    let ac = create_aho_corasick()
+    ac_insert(ac, "he")
+    ac_insert(ac, "she")
+    ac_insert(ac, "his")
+    ac_insert(ac, "hers")
+    ac_build_failure_links(ac)
+
+    let matches = ac_search(ac, "ushers")
+    // "ushers" contains "she" at index 1, "he" at index 2, "hers" at index 2
+    assert(len(matches) == 3, "Expected 3 matches in 'ushers'")
+
+    let found_she = false
+    let found_he = false
+    let found_hers = false
+    let i = 0
+    while i < len(matches) {
+        let m = matches[i]
+        if m == "she" { found_she = true }
+        if m == "he" { found_he = true }
+        if m == "hers" { found_hers = true }
+        i = i + 1
+    }
+
+    assert(found_she == true, "Must detect 'she'")
+    assert(found_he == true, "Must detect 'he'")
+    assert(found_hers == true, "Must detect 'hers'")
+}
+
+pub fn test_overlapping_nested() {
+    let ac = create_aho_corasick()
+    ac_insert(ac, "a")
+    ac_insert(ac, "aa")
+    ac_insert(ac, "aaa")
+    ac_build_failure_links(ac)
+
+    let matches = ac_search(ac, "aaa")
+    // index 0: 'a'
+    // index 1: 'aa', 'a'
+    // index 2: 'aaa', 'aa', 'a'
+    // Total matches: 1 + 2 + 3 = 6
+    assert(len(matches) == 6, "Expected 6 matches in 'aaa'")
+}
+
+pub fn test_no_match() {
+    let ac = create_aho_corasick()
+    ac_insert(ac, "apple")
+    ac_insert(ac, "banana")
+    ac_build_failure_links(ac)
+
+    let matches = ac_search(ac, "cherry orange grape")
+    assert(len(matches) == 0, "Expected 0 matches")
+}
+
+pub fn test_single_character() {
+    let ac = create_aho_corasick()
+    ac_insert(ac, "x")
+    ac_insert(ac, "y")
+    ac_build_failure_links(ac)
+
+    let matches = ac_search(ac, "axbyc")
+    assert(len(matches) == 2, "Expected 'x' and 'y'")
+}
+
+pub fn main() {
+    test_classic_ushers()
+    test_overlapping_nested()
+    test_no_match()
+    test_single_character()
+    print("All Aho-Corasick verification tests passed successfully!")
+}
