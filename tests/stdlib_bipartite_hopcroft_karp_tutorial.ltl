@@ -1,0 +1,216 @@
+// ===================================================================
+// tests/stdlib_bipartite_hopcroft_karp_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for Hopcroft-Karp Bipartite Matching, O(E sqrt(V))
+// layered BFS/DFS augmentations, and maximum cardinality bounds.
+// ===================================================================
+
+pub fn new_bipartite_graph(nu) {
+    let adj = dict()
+    let i = 0
+    while i < nu {
+        let list = dict()
+        list["len"] = 0
+        adj[i] = list
+        i = i + 1
+    }
+    return adj
+}
+
+pub fn add_bipartite_edge(adj, u, v) {
+    let l_u = adj[u]
+    let sz = l_u["len"]
+    l_u[sz] = v
+    l_u["len"] = sz + 1
+}
+
+pub fn bfs_hopcroft(adj, nu, nv, pair_u, pair_v, dist_u, state) {
+    let inf = 1000000000
+    let queue = dict()
+    let head = 0
+    let tail = 0
+
+    let u = 0
+    while u < nu {
+        if pair_u[u] == -1 {
+            dist_u[u] = 0
+            queue[tail] = u
+            tail = tail + 1
+        } else {
+            dist_u[u] = inf
+        }
+        u = u + 1
+    }
+
+    state["dist_nil"] = inf
+
+    while head < tail {
+        u = queue[head]
+        head = head + 1
+
+        if dist_u[u] < state["dist_nil"] {
+            let neighbors = adj[u]
+            let deg = neighbors["len"]
+            let i = 0
+            while i < deg {
+                let v = neighbors[i]
+                let matched_u = pair_v[v]
+                if matched_u == -1 {
+                    state["dist_nil"] = dist_u[u] + 1
+                } else {
+                    if dist_u[matched_u] == inf {
+                        dist_u[matched_u] = dist_u[u] + 1
+                        queue[tail] = matched_u
+                        tail = tail + 1
+                    }
+                }
+                i = i + 1
+            }
+        }
+    }
+
+    if state["dist_nil"] != inf {
+        return 1
+    }
+    return 0
+}
+
+pub fn dfs_hopcroft(u, adj, pair_u, pair_v, dist_u, state) {
+    let inf = 1000000000
+    let neighbors = adj[u]
+    let deg = neighbors["len"]
+    let i = 0
+    while i < deg {
+        let v = neighbors[i]
+        let matched_u = pair_v[v]
+
+        if matched_u == -1 {
+            if state["dist_nil"] == dist_u[u] + 1 {
+                pair_v[v] = u
+                pair_u[u] = v
+                return 1
+            }
+        } else {
+            if dist_u[matched_u] == dist_u[u] + 1 {
+                if dfs_hopcroft(matched_u, adj, pair_u, pair_v, dist_u, state) == 1 {
+                    pair_v[v] = u
+                    pair_u[u] = v
+                    return 1
+                }
+            }
+        }
+        i = i + 1
+    }
+
+    dist_u[u] = inf
+    return 0
+}
+
+pub fn max_bipartite_matching(adj, nu, nv) {
+    let pair_u = dict()
+    let dist_u = dict()
+    let u = 0
+    while u < nu {
+        pair_u[u] = -1
+        dist_u[u] = 0
+        u = u + 1
+    }
+
+    let pair_v = dict()
+    let v = 0
+    while v < nv {
+        pair_v[v] = -1
+        v = v + 1
+    }
+
+    let state = dict()
+    state["dist_nil"] = 1000000000
+
+    let matching = 0
+    while bfs_hopcroft(adj, nu, nv, pair_u, pair_v, dist_u, state) == 1 {
+        u = 0
+        while u < nu {
+            if pair_u[u] == -1 {
+                if dfs_hopcroft(u, adj, pair_u, pair_v, dist_u, state) == 1 {
+                    matching = matching + 1
+                }
+            }
+            u = u + 1
+        }
+    }
+
+    let result = dict()
+    result["size"] = matching
+    result["pair_u"] = pair_u
+    result["pair_v"] = pair_v
+    return result
+}
+
+// -------------------------------------------------------------------
+// Verification Tests
+// -------------------------------------------------------------------
+
+pub fn test_classic_four_by_four() {
+    // 4 workers (0..3) and 4 tasks (0..3):
+    // Worker 0: Task 0, 1
+    // Worker 1: Task 1, 2
+    // Worker 2: Task 2, 3
+    // Worker 3: Task 0, 3
+    let nu = 4
+    let nv = 4
+    let g = new_bipartite_graph(nu)
+    add_bipartite_edge(g, 0, 0)
+    add_bipartite_edge(g, 0, 1)
+    add_bipartite_edge(g, 1, 1)
+    add_bipartite_edge(g, 1, 2)
+    add_bipartite_edge(g, 2, 2)
+    add_bipartite_edge(g, 2, 3)
+    add_bipartite_edge(g, 3, 0)
+    add_bipartite_edge(g, 3, 3)
+
+    let res = max_bipartite_matching(g, nu, nv)
+    assert(res["size"] == 4, "Perfect matching of size 4 exists")
+
+    // Verify all workers and tasks are assigned uniquely
+    let pu = res["pair_u"]
+    let pv = res["pair_v"]
+    let i = 0
+    while i < 4 {
+        assert(pu[i] != -1, "Worker matched")
+        assert(pv[pu[i]] == i, "Bidirectional pairing matches")
+        i = i + 1
+    }
+}
+
+pub fn test_bottleneck_graph() {
+    // 3 workers (0, 1, 2) competing for a single task (0)
+    let nu = 3
+    let nv = 1
+    let g = new_bipartite_graph(nu)
+    add_bipartite_edge(g, 0, 0)
+    add_bipartite_edge(g, 1, 0)
+    add_bipartite_edge(g, 2, 0)
+
+    let res = max_bipartite_matching(g, nu, nv)
+    assert(res["size"] == 1, "Bottleneck: only 1 task can be matched")
+}
+
+pub fn test_disconnected_components() {
+    // Left: 0, 1. Right: 0, 1. Edge: 0-0. (1 and 1 isolated)
+    let nu = 2
+    let nv = 2
+    let g = new_bipartite_graph(nu)
+    add_bipartite_edge(g, 0, 0)
+
+    let res = max_bipartite_matching(g, nu, nv)
+    assert(res["size"] == 1, "Only single edge matches")
+    assert(res["pair_u"][0] == 0, "0 matches 0")
+    assert(res["pair_u"][1] == -1, "1 is unmatched")
+}
+
+pub fn main() {
+    test_classic_four_by_four()
+    test_bottleneck_graph()
+    test_disconnected_components()
+    print("All Hopcroft-Karp verification tests passed successfully!")
+}
