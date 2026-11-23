@@ -35,6 +35,16 @@ class TestLiterals:
         assert ts[0].kind  == TK.INT
         assert ts[0].value == 10
 
+    def test_octal(self):
+        ts = tokens("0o755")
+        assert ts[0].kind  == TK.INT
+        assert ts[0].value == 493
+
+    def test_octal_uppercase(self):
+        ts = tokens("0O17")
+        assert ts[0].kind  == TK.INT
+        assert ts[0].value == 15
+
     def test_float(self):
         ts = tokens("3.14")
         assert ts[0].kind  == TK.FLOAT
