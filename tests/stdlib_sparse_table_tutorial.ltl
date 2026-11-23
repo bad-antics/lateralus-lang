@@ -1,0 +1,160 @@
+// ===================================================================
+// tests/stdlib_sparse_table_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for Sparse Table (ST Table), O(n log n) dynamic
+// programming precomputation, and O(1) Range Minimum/Maximum Query (RMQ).
+// ===================================================================
+
+fn min_val(a, b) {
+    if a < b {
+        return a
+    }
+    return b
+}
+
+fn max_val(a, b) {
+    if a > b {
+        return a
+    }
+    return b
+}
+
+fn compute_log2(val) {
+    let k = 0
+    let p = 1
+    while p * 2 <= val {
+        p = p * 2
+        k = k + 1
+    }
+    return k
+}
+
+pub fn build_sparse_table(arr, is_min) {
+    let n = len(arr)
+    let pow2 = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
+    let max_k = compute_log2(n) + 1
+
+    let st = dict()
+    let row0 = dict()
+    let j = 0
+    while j < n {
+        row0[j] = arr[j]
+        j = j + 1
+    }
+    st[0] = row0
+
+    let i = 1
+    while i < max_k {
+        let prev_row = st[i - 1]
+        let curr_row = dict()
+        let half_step = pow2[i - 1]
+        let full_step = pow2[i]
+
+        let c = 0
+        while c + full_step <= n {
+            let left_v = prev_row[c]
+            let right_v = prev_row[c + half_step]
+            if is_min {
+                curr_row[c] = min_val(left_v, right_v)
+            } else {
+                curr_row[c] = max_val(left_v, right_v)
+            }
+            c = c + 1
+        }
+        st[i] = curr_row
+        i = i + 1
+    }
+
+    let result = dict()
+    result["st"] = st
+    result["n"] = n
+    result["pow2"] = pow2
+    result["is_min"] = is_min
+    return result
+}
+
+pub fn query_sparse_table(st_data, left, right) {
+    let st = st_data["st"]
+    let pow2 = st_data["pow2"]
+    let is_min = st_data["is_min"]
+
+    let range_len = right - left + 1
+    let k = compute_log2(range_len)
+    let step = pow2[k]
+
+    let row = st[k]
+    let left_ans = row[left]
+    let right_ans = row[right - step + 1]
+
+    if is_min {
+        return min_val(left_ans, right_ans)
+    } else {
+        return max_val(left_ans, right_ans)
+    }
+}
+
+// -------------------------------------------------------------------
+// Verification Tests
+// -------------------------------------------------------------------
+
+pub fn test_basic_rmq_min() {
+    let arr = [1, 3, -2, 8, -7, 10, 5, 2]
+    let st_min = build_sparse_table(arr, true)
+
+    assert(query_sparse_table(st_min, 0, 7) == -7, "Global minimum must be -7")
+    assert(query_sparse_table(st_min, 0, 1) == 1, "Min of [1, 3] is 1")
+    assert(query_sparse_table(st_min, 1, 3) == -2, "Min of [3, -2, 8] is -2")
+    assert(query_sparse_table(st_min, 5, 7) == 2, "Min of [10, 5, 2] is 2")
+    assert(query_sparse_table(st_min, 4, 4) == -7, "Single element query min is -7")
+    assert(query_sparse_table(st_min, 3, 5) == -7, "Min of [8, -7, 10] is -7")
+}
+
+pub fn test_basic_rmq_max() {
+    let arr = [1, 3, -2, 8, -7, 10, 5, 2]
+    let st_max = build_sparse_table(arr, false)
+
+    assert(query_sparse_table(st_max, 0, 7) == 10, "Global maximum must be 10")
+    assert(query_sparse_table(st_max, 0, 3) == 8, "Max of [1, 3, -2, 8] is 8")
+    assert(query_sparse_table(st_max, 2, 4) == 8, "Max of [-2, 8, -7] is 8")
+    assert(query_sparse_table(st_max, 4, 6) == 10, "Max of [-7, 10, 5] is 10")
+    assert(query_sparse_table(st_max, 6, 7) == 5, "Max of [5, 2] is 5")
+    assert(query_sparse_table(st_max, 1, 1) == 3, "Single element query max is 3")
+}
+
+pub fn test_single_element_array() {
+    let arr = [42]
+    let st_min = build_sparse_table(arr, true)
+    let st_max = build_sparse_table(arr, false)
+
+    assert(query_sparse_table(st_min, 0, 0) == 42, "Single item min is 42")
+    assert(query_sparse_table(st_max, 0, 0) == 42, "Single item max is 42")
+}
+
+pub fn test_monotonic_array() {
+    let arr = [10, 20, 30, 40, 50]
+    let st_min = build_sparse_table(arr, true)
+    let st_max = build_sparse_table(arr, false)
+
+    assert(query_sparse_table(st_min, 1, 3) == 20, "Min of [20, 30, 40] is 20")
+    assert(query_sparse_table(st_max, 1, 3) == 40, "Max of [20, 30, 40] is 40")
+    assert(query_sparse_table(st_min, 0, 4) == 10, "Global min is 10")
+    assert(query_sparse_table(st_max, 0, 4) == 50, "Global max is 50")
+}
+
+pub fn test_uniform_elements() {
+    let arr = [9, 9, 9, 9, 9]
+    let st_min = build_sparse_table(arr, true)
+    let st_max = build_sparse_table(arr, false)
+
+    assert(query_sparse_table(st_min, 0, 4) == 9, "Uniform min is 9")
+    assert(query_sparse_table(st_max, 2, 4) == 9, "Uniform max is 9")
+}
+
+pub fn main() {
+    test_basic_rmq_min()
+    test_basic_rmq_max()
+    test_single_element_array()
+    test_monotonic_array()
+    test_uniform_elements()
+    print("All Sparse Table RMQ verification tests passed successfully!")
+}
