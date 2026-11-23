@@ -1,0 +1,168 @@
+// ===================================================================
+// examples/kdtree_tutorial.ltl
+// -------------------------------------------------------------------
+// Practical Application: Smart City Emergency First-Responder Station
+// Dispatch & POI Spatial Indexing using 2D KD-Tree Nearest Neighbor.
+// ===================================================================
+
+pub fn new_kdtree() {
+    let tree = dict()
+    tree["root"] = -1
+    tree["nodes"] = dict()
+    tree["count"] = 0
+    return tree
+}
+
+pub fn dist_sq(x1, y1, x2, y2) {
+    let dx = x1 - x2
+    let dy = y1 - y2
+    return dx * dx + dy * dy
+}
+
+pub fn insert_kd_node(tree, curr_id, new_id, depth) {
+    if curr_id == -1 {
+        return new_id
+    }
+
+    let curr = tree["nodes"][curr_id]
+    let new_node = tree["nodes"][new_id]
+    let axis = depth % 2
+
+    if axis == 0 {
+        if new_node["x"] < curr["x"] {
+            curr["left"] = insert_kd_node(tree, curr["left"], new_id, depth + 1)
+        } else {
+            curr["right"] = insert_kd_node(tree, curr["right"], new_id, depth + 1)
+        }
+    } else {
+        if new_node["y"] < curr["y"] {
+            curr["left"] = insert_kd_node(tree, curr["left"], new_id, depth + 1)
+        } else {
+            curr["right"] = insert_kd_node(tree, curr["right"], new_id, depth + 1)
+        }
+    }
+
+    return curr_id
+}
+
+pub fn insert_point(tree, x, y) {
+    let id = tree["count"]
+    let node = dict()
+    node["id"] = id
+    node["x"] = x
+    node["y"] = y
+    node["left"] = -1
+    node["right"] = -1
+
+    tree["nodes"][id] = node
+    tree["count"] = id + 1
+
+    tree["root"] = insert_kd_node(tree, tree["root"], id, 0)
+    return id
+}
+
+pub fn search_nn_recursive(tree, curr_id, qx, qy, depth, best) {
+    if curr_id == -1 {
+        return 0
+    }
+
+    let curr = tree["nodes"][curr_id]
+    let d = dist_sq(curr["x"], curr["y"], qx, qy)
+
+    if d < best["dist"] {
+        best["dist"] = d
+        best["best_id"] = curr_id
+        best["best_x"] = curr["x"]
+        best["best_y"] = curr["y"]
+    }
+
+    let axis = depth % 2
+    let diff = 0
+    let first_branch = -1
+    let second_branch = -1
+
+    if axis == 0 {
+        diff = qx - curr["x"]
+        if diff < 0 {
+            first_branch = curr["left"]
+            second_branch = curr["right"]
+        } else {
+            first_branch = curr["right"]
+            second_branch = curr["left"]
+        }
+    } else {
+        diff = qy - curr["y"]
+        if diff < 0 {
+            first_branch = curr["left"]
+            second_branch = curr["right"]
+        } else {
+            first_branch = curr["right"]
+            second_branch = curr["left"]
+        }
+    }
+
+    search_nn_recursive(tree, first_branch, qx, qy, depth + 1, best)
+
+    if diff * diff < best["dist"] {
+        search_nn_recursive(tree, second_branch, qx, qy, depth + 1, best)
+    }
+
+    return 0
+}
+
+pub fn find_nearest_neighbor(tree, qx, qy) {
+    let best = dict()
+    best["dist"] = 2000000000
+    best["best_id"] = -1
+    best["best_x"] = 0
+    best["best_y"] = 0
+
+    search_nn_recursive(tree, tree["root"], qx, qy, 0, best)
+    return best
+}
+
+pub fn main() {
+    print("=== Municipal 911 Emergency First-Responder Dispatch Engine ===")
+
+    // Spatial coordinates (in 100-meter grid blocks across metropolitan area)
+    // Station 0: Downtown Central (20, 30)
+    // Station 1: North Harbor (50, 80)
+    // Station 2: West Tech Park (10, 60)
+    // Station 3: South Bay (40, 10)
+    // Station 4: East Industrial Zone (80, 45)
+    // Station 5: Airport Logistics Terminal (90, 75)
+    let city_map = new_kdtree()
+    insert_point(city_map, 20, 30)
+    insert_point(city_map, 50, 80)
+    insert_point(city_map, 10, 60)
+    insert_point(city_map, 40, 10)
+    insert_point(city_map, 80, 45)
+    insert_point(city_map, 90, 75)
+
+    print("6 regional response stations indexed into 2D KD-Tree.")
+
+    // Emergency Incident Alpha reported at Grid (15, 55) near West Tech Park
+    print("Incident Alpha reported at coordinates (15, 55):")
+    let dispatch_alpha = find_nearest_neighbor(city_map, 15, 55)
+    print("Closest dispatch station ID:")
+    print(dispatch_alpha["best_id"])
+    print("Station coordinates:")
+    print(dispatch_alpha["best_x"])
+    print(dispatch_alpha["best_y"])
+
+    // Verify Station 2 at (10, 60) is the closest
+    assert(dispatch_alpha["best_id"] == 2, "Station 2 at (10, 60) dispatched to Incident Alpha")
+    assert(dispatch_alpha["dist"] == 5 * 5 + 5 * 5, "Distance squared is 50")
+
+    // Emergency Incident Beta reported at Grid (85, 70) near Airport Terminal
+    print("Incident Beta reported at coordinates (85, 70):")
+    let dispatch_beta = find_nearest_neighbor(city_map, 85, 70)
+    print("Closest dispatch station ID:")
+    print(dispatch_beta["best_id"])
+
+    // Verify Station 5 at (90, 75) is closest
+    assert(dispatch_beta["best_id"] == 5, "Station 5 at (90, 75) dispatched to Incident Beta")
+    assert(dispatch_beta["dist"] == 5 * 5 + 5 * 5, "Distance squared is 50")
+
+    print("Emergency response dispatch completed with optimal sub-linear O(log n) efficiency!")
+}
