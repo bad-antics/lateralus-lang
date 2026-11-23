@@ -65,6 +65,13 @@ class TestPythonTranspiler:
         assert "if" in r.python_src
         assert "else" in r.python_src
 
+    def test_empty_block_emits_pass(self):
+        # Regression: empty {} bodies produced invalid Python (IndentationError)
+        for src in ("if x > 0 { }", "while x { }", "for i in xs { }"):
+            r = check(src)
+            assert r.ok, src
+            assert "pass" in r.python_src, src
+
     def test_while_loop(self):
         r = check("while i < 10 { i += 1 }")
         assert r.ok
