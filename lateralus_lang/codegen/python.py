@@ -234,6 +234,7 @@ class PythonTranspiler(ASTVisitor):
         self._w += "E = _math.e"
         self._w += "chr = _builtins.chr"
         self._w += "ord = _builtins.ord"
+        self._w += "def panic(msg): raise LtlError(str(msg))"
         self._w += "none = None    # Lateralus alias for Python None"
         self._w += "null = None    # Lateralus alias for Python None"
         self._w += "keys = lambda d: list(d.keys())"
