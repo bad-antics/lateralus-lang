@@ -1,0 +1,198 @@
+// Advent of Code 2024 · Day 17 · Chronospatial Computer
+// Three-bit computer: 8 opcodes, combo operands. Part 1: run the program and
+// join its output. Part 2: smallest A that makes the program output itself.
+// Opcodes verified against https://adventofcode.com/2024/day/17
+// Self-verifying with @test blocks.
+
+let SAMPLE = "Register A: 729
+Register B: 0
+Register C: 0
+Program: 0,1,5,4,3,0"
+
+// adv=0 bxl=1 bst=2 jnz=3 bxc=4 out=5 bdv=6 cdv=7
+fn combo(op: int, a: int, b: int, c: int) -> int {
+    if op <= 3 { return op }
+    if op == 4 { return a }
+    if op == 5 { return b }
+    if op == 6 { return c }
+    return 0
+}
+
+// Returns [output, finalA]; output is a list of ints, guarded against runaway.
+fn run(a0: int, b0: int, c0: int, prog: list) -> list {
+    let a = a0
+    let b = b0
+    let c = c0
+    let ip = 0
+    let out = []
+    let steps = 0
+    while ip < len(prog) && steps < 200000 {
+        let op = prog[ip]
+        let arg = prog[ip + 1]
+        let cb = combo(arg, a, b, c)
+        if op == 0 {
+            a = int(a / pow2(cb))
+            ip = ip + 2
+        } else if op == 1 {
+            b = bxor(b, arg)
+            ip = ip + 2
+        } else if op == 2 {
+            b = cb % 8
+            ip = ip + 2
+        } else if op == 3 {
+            if a != 0 { ip = arg } else { ip = ip + 2 }
+        } else if op == 4 {
+            b = bxor(b, c)
+            ip = ip + 2
+        } else if op == 5 {
+            out = out + [cb % 8]
+            ip = ip + 2
+        } else if op == 6 {
+            b = int(a / pow2(cb))
+            ip = ip + 2
+        } else if op == 7 {
+            c = int(a / pow2(cb))
+            ip = ip + 2
+        } else {
+            ip = ip + 2
+        }
+        steps = steps + 1
+    }
+    return [out, a]
+}
+
+fn pow2(n: int) -> int {
+    let v = 1
+    let i = 0
+    while i < n { v = v * 2; i = i + 1 }
+    return v
+}
+
+// bitwise xor, done by hand (Lateralus has no ^ operator for ints).
+fn bxor(x: int, y: int) -> int {
+    let result = 0
+    let place = 1
+    let p = x
+    let q = y
+    while p > 0 || q > 0 {
+        let xb = p % 2
+        let yb = q % 2
+        if xb != yb { result = result + place }
+        p = int(p / 2)
+        q = int(q / 2)
+        place = place * 2
+    }
+    return result
+}
+
+fn parse(text: str) -> list {
+    let a = 0
+    let b = 0
+    let c = 0
+    let prog = []
+    for line in str_split(text, "\n") {
+        let l = str_trim(line)
+        if len(l) > 0 {
+            if slice(l, 0, 10) == "Register A" { a = last_num(l) }
+            if slice(l, 0, 10) == "Register B" { b = last_num(l) }
+            if slice(l, 0, 10) == "Register C" { c = last_num(l) }
+            if slice(l, 0, 7) == "Program" {
+                for tok in str_split(slice(l, 9, len(l)), ",") {
+                    let t = str_trim(tok)
+                    if len(t) > 0 { prog = prog + [int(t)] }
+                }
+            }
+        }
+    }
+    return [a, b, c, prog]
+}
+
+// last integer on a line, e.g. "Register A: 729" -> 729
+fn last_num(s: str) -> int {
+    let digits = ""
+    let i = 0
+    while i < len(s) {
+        let ch = slice(s, i, i + 1)
+        if ch == "0" || ch == "1" || ch == "2" || ch == "3" || ch == "4" || ch == "5" || ch == "6" || ch == "7" || ch == "8" || ch == "9" { digits = digits + ch } else { digits = "" }
+        i = i + 1
+    }
+    if len(digits) == 0 { return 0 }
+    return int(digits)
+}
+
+fn join(xs: list) -> str {
+    let s = ""
+    let i = 0
+    while i < len(xs) {
+        if i > 0 { s = s + "," }
+        s = s + str(xs[i])
+        i = i + 1
+    }
+    return s
+}
+
+fn part1(text: str) -> str {
+    let p = parse(text)
+    let res = run(p[0], p[1], p[2], p[3])
+    return join(res[0])
+}
+
+// Search byte-by-byte from the least significant octal digit upward:
+// appending one output element per level keeps the search tractable.
+fn part2(text: str) -> int {
+    let p = parse(text)
+    let prog = p[3]
+    let candidates = [0]
+    let level = 1
+    while level <= len(prog) {
+        let next = []
+        for base in candidates {
+            let d = 0
+            while d < 8 {
+                let a = base * 8 + d
+                let res = run(a, 0, 0, prog)
+                let outs = res[0]
+                if len(outs) == level {
+                    let want = slice(prog, len(prog) - level, len(prog))
+                    let ok = true
+                    let i = 0
+                    while i < level {
+                        if outs[i] != want[i] { ok = false }
+                        i = i + 1
+                    }
+                    if ok { next = next + [a] }
+                }
+                d = d + 1
+            }
+        }
+        candidates = next
+        level = level + 1
+    }
+    let best = -1
+    for a in candidates {
+        if best < 0 || a < best { best = a }
+    }
+    return best
+}
+
+@test
+fn test_part1() {
+    assert_eq(part1(SAMPLE), "4,6,3,5,6,3,5,2,1,0")
+}
+
+@test
+fn test_part2_small() {
+    // program 0,3,5,4,3,0 with A=117440 outputs itself (per the puzzle statement)
+    let text = "Register A: 2024\nRegister B: 0\nRegister C: 0\nProgram: 0,3,5,4,3,0"
+    // A=2024 on this program builds the output one octal digit at a time:
+    assert_eq(part1(text), "5,7,3,0")
+    // A=117440 makes the program print itself (per the puzzle statement):
+    assert_eq(part2(text), 117440)
+}
+
+fn main() {
+    print("Day 17 Part 1: " + part1(SAMPLE))
+    print("Day 17 Part 2 (self-printing sample): " + str(part2("Register A: 2024\nRegister B: 0\nRegister C: 0\nProgram: 0,3,5,4,3,0")))
+}
+
+main()
