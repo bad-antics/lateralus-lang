@@ -1,0 +1,184 @@
+// stdlib_hopcroft_karp_tutorial.ltl
+// Comprehensive test suite for Hopcroft-Karp Bipartite Matching
+// John E. Hopcroft & Richard M. Karp (1973)
+// Runnable by any test harness honouring `pub fn test_*() -> bool`
+
+pub fn hopcroft_karp_match(adj: list, u_count: int, v_count: int) -> map {
+    let mut pair_u = [];
+    let mut dist_u = [];
+    let mut i = 0;
+    while i < u_count {
+        pair_u = pair_u + [-1];
+        dist_u = dist_u + [999999];
+        i = i + 1;
+    }
+
+    let mut pair_v = [];
+    let mut j = 0;
+    while j < v_count {
+        pair_v = pair_v + [-1];
+        j = j + 1;
+    }
+
+    let mut total_matching = 0;
+    let mut searching = true;
+    let mut outer_loop = 0;
+
+    while searching && outer_loop < 100 {
+        outer_loop = outer_loop + 1;
+
+        // 1. BFS to construct level graph & discover shortest augmenting path length
+        let mut queue = [];
+        let mut dist_nil = 999999;
+
+        let mut u = 0;
+        while u < u_count {
+            if pair_u[u] == -1 {
+                dist_u[u] = 0;
+                queue = queue + [u];
+            } else {
+                dist_u[u] = 999999;
+            }
+            u = u + 1;
+        }
+
+        let mut head = 0;
+        while head < len(queue) {
+            let mut curr_u = queue[head];
+            head = head + 1;
+
+            if dist_u[curr_u] < dist_nil {
+                let mut neighbors = adj[curr_u];
+                let mut n_idx = 0;
+                while n_idx < len(neighbors) {
+                    let mut v = neighbors[n_idx];
+                    let mut matched_u = pair_v[v];
+                    if matched_u == -1 {
+                        if dist_nil == 999999 {
+                            dist_nil = dist_u[curr_u] + 1;
+                        }
+                    } else {
+                        if dist_u[matched_u] == 999999 {
+                            dist_u[matched_u] = dist_u[curr_u] + 1;
+                            queue = queue + [matched_u];
+                        }
+                    }
+                    n_idx = n_idx + 1;
+                }
+            }
+        }
+
+        // Check if augmenting paths exist in this phase
+        if dist_nil == 999999 {
+            searching = false;
+        } else {
+            // 2. DFS for maximal vertex-disjoint augmenting paths
+            let mut u_start = 0;
+            while u_start < u_count {
+                if pair_u[u_start] == -1 {
+                    let mut neighbors = adj[u_start];
+                    let mut found = false;
+                    let mut idx = 0;
+                    while idx < len(neighbors) && !found {
+                        let mut v = neighbors[idx];
+                        let mut next_u = pair_v[v];
+                        if next_u == -1 {
+                            pair_u[u_start] = v;
+                            pair_v[v] = u_start;
+                            total_matching = total_matching + 1;
+                            found = true;
+                        } else {
+                            if dist_u[next_u] == dist_u[u_start] + 1 {
+                                let mut sub_neighbors = adj[next_u];
+                                let mut s_idx = 0;
+                                while s_idx < len(sub_neighbors) && !found {
+                                    let mut sub_v = sub_neighbors[s_idx];
+                                    if pair_v[sub_v] == -1 {
+                                        pair_u[next_u] = sub_v;
+                                        pair_v[sub_v] = next_u;
+                                        pair_u[u_start] = v;
+                                        pair_v[v] = u_start;
+                                        total_matching = total_matching + 1;
+                                        found = true;
+                                    }
+                                    s_idx = s_idx + 1;
+                                }
+                            }
+                        }
+                        idx = idx + 1;
+                    }
+                }
+                u_start = u_start + 1;
+            }
+        }
+    }
+
+    return {
+        matching: total_matching,
+        pair_u: pair_u,
+        pair_v: pair_v
+    };
+}
+
+// -----------------------------------------------------------------------------
+// Test Vectors
+// -----------------------------------------------------------------------------
+
+pub fn test_hopcroft_karp_perfect_cycle() -> bool {
+    let mut adj = [
+        [0, 1],
+        [1, 2],
+        [2, 3],
+        [0, 3]
+    ];
+    let mut res = hopcroft_karp_match(adj, 4, 4);
+    let mut m = res["matching"];
+    return m == 4;
+}
+
+pub fn test_hopcroft_karp_chain_alternating() -> bool {
+    let mut adj = [
+        [0],
+        [0, 1],
+        [1, 2]
+    ];
+    let mut res = hopcroft_karp_match(adj, 3, 3);
+    let mut m = res["matching"];
+    return m == 3;
+}
+
+pub fn test_hopcroft_karp_star_bottleneck() -> bool {
+    // 3 Left nodes all pointing to single Right node 0
+    let mut adj = [
+        [0],
+        [0],
+        [0]
+    ];
+    let mut res = hopcroft_karp_match(adj, 3, 1);
+    let mut m = res["matching"];
+    return m == 1;
+}
+
+pub fn test_hopcroft_karp_dense_complete() -> bool {
+    // Complete bipartite graph K_{3,3}
+    let mut adj = [
+        [0, 1, 2],
+        [0, 1, 2],
+        [0, 1, 2]
+    ];
+    let mut res = hopcroft_karp_match(adj, 3, 3);
+    let mut m = res["matching"];
+    return m == 3;
+}
+
+pub fn run_all() -> map {
+    let mut t1 = test_hopcroft_karp_perfect_cycle();
+    let mut t2 = test_hopcroft_karp_chain_alternating();
+    let mut t3 = test_hopcroft_karp_star_bottleneck();
+    let mut t4 = test_hopcroft_karp_dense_complete();
+    let mut passed = t1 && t2 && t3 && t4;
+    return {
+        total: 4,
+        all_passed: passed
+    };
+}
