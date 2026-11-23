@@ -320,6 +320,12 @@ class PythonTranspiler(ASTVisitor):
         self._w += "    if a == b: raise AssertionError(msg or f'assert_ne failed: {a!r} == {b!r}')"
         self._w += "def assert_true(v, msg=None):"
         self._w += "    if not v: raise AssertionError(msg or f'assert_true failed: {v!r}')"
+        self._w += "def assert_throws(exc, fn, msg=None):"
+        self._w += "    try: fn()"
+        self._w += "    except exc: return"
+        self._w += "    except Exception as e: raise AssertionError(msg or f'assert_throws: wrong exception {type(e).__name__}: {e}')"
+        self._w += "    raise AssertionError(msg or 'assert_throws: no exception raised')"
+        self._w += "def type_of(v):               return type(v)"
         self._w += ""
         # Lateralus exception type aliases (map to Python equivalents)
         self._w += "# ── Exception type aliases ──────────────────────────────"

@@ -32,6 +32,16 @@ class TestBasicCompilation:
         assert r.ok
         assert r.python_src is not None
 
+    def test_assert_throws_in_preamble(self):
+        r = check('fn main() { assert_throws(ValueError, fn() { throw ValueError("x") }) }')
+        assert r.ok
+        assert "def assert_throws" in r.python_src
+
+    def test_type_of_alias_in_preamble(self):
+        r = check('fn main() { println(type_of(5)) }')
+        assert r.ok
+        assert "def type_of" in r.python_src
+
     def test_let_decl_check(self):
         r = check("let x = 10", target=Target.CHECK)
         assert r.ok
