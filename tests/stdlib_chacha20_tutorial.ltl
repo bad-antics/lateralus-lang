@@ -1,0 +1,74 @@
+// Canonical test vectors for stdlib/chacha20 tutorial (RFC 8439 / RFC 7539).
+
+import chacha20
+
+pub fn test_rfc8439_keystream_block() -> bool {
+    // RFC 8439 Section 2.3.2: 256-bit key from 0x00 to 0x1f
+    let key = [
+        0, 1, 2, 3, 4, 5, 6, 7,
+        8, 9, 10, 11, 12, 13, 14, 15,
+        16, 17, 18, 19, 20, 21, 22, 23,
+        24, 25, 26, 27, 28, 29, 30, 31
+    ]
+
+    // Nonce: 12 bytes: 00:00:00:00:00:00:00:4a:00:00:00:00
+    let nonce = [0, 0, 0, 0, 0, 0, 0, 74, 0, 0, 0, 0]
+    let counter = 1
+
+    let ks = chacha20_block(key, nonce, counter)
+    if len(ks) != 64 { return false }
+
+    // First word little-endian: 0x22, 0x4f, 0x51, 0xf3
+    if ks[0] != 34 { return false }
+    if ks[1] != 79 { return false }
+    if ks[2] != 81 { return false }
+    if ks[3] != 243 { return false }
+
+    // Last word little-endian: 0xf0, 0x7d, 0x41, 0xb7
+    if ks[60] != 240 { return false }
+    if ks[61] != 125 { return false }
+    if ks[62] != 65 { return false }
+    if ks[63] != 183 { return false }
+
+    return true
+}
+
+pub fn test_chacha20_symmetric_roundtrip() -> bool {
+    let key = [
+        10, 20, 30, 40, 50, 60, 70, 80,
+        90, 100, 110, 120, 130, 140, 150, 160,
+        170, 180, 190, 200, 210, 220, 230, 240,
+        250, 5, 15, 25, 35, 45, 55, 65
+    ]
+    let nonce = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    let counter = 1
+
+    // Plaintext spanning multiple blocks (70 bytes > 64 byte block size)
+    let plaintext = []
+    let i = 0
+    while i < 70 {
+        plaintext = plaintext + [(i * 7) % 256]
+        i = i + 1
+    }
+
+    // Encrypt
+    let ciphertext = chacha20_xor(key, nonce, counter, plaintext)
+    if len(ciphertext) != 70 { return false }
+
+    // Ciphertext must differ from plaintext
+    if ciphertext[0] == plaintext[0] && ciphertext[1] == plaintext[1] {
+        return false
+    }
+
+    // Decrypt (XOR is involutionary)
+    let decrypted = chacha20_xor(key, nonce, counter, ciphertext)
+    if len(decrypted) != 70 { return false }
+
+    let j = 0
+    while j < 70 {
+        if decrypted[j] != plaintext[j] { return false }
+        j = j + 1
+    }
+
+    return true
+}
