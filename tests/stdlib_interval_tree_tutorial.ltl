@@ -1,0 +1,165 @@
+// ===================================================================
+// tests/stdlib_interval_tree_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for Augmented Interval Tree, subtree max_high
+// maintenance, O(log n) overlap query, and boundary collision checks.
+// ===================================================================
+
+pub fn new_interval_tree() {
+    let tree = dict()
+    tree["root"] = -1
+    tree["nodes"] = dict()
+    tree["count"] = 0
+    return tree
+}
+
+pub fn intervals_overlap(l1, h1, l2, h2) {
+    if l1 <= h2 && l2 <= h1 {
+        return 1
+    }
+    return 0
+}
+
+pub fn update_max_high(tree, node_id) {
+    let node = tree["nodes"][node_id]
+    let m = node["high"]
+
+    let l = node["left"]
+    if l != -1 {
+        let l_max = tree["nodes"][l]["max_high"]
+        if l_max > m {
+            m = l_max
+        }
+    }
+
+    let r = node["right"]
+    if r != -1 {
+        let r_max = tree["nodes"][r]["max_high"]
+        if r_max > m {
+            m = r_max
+        }
+    }
+
+    node["max_high"] = m
+}
+
+pub fn insert_node(tree, curr_id, new_id) {
+    if curr_id == -1 {
+        return new_id
+    }
+
+    let curr = tree["nodes"][curr_id]
+    let new_node = tree["nodes"][new_id]
+
+    if new_node["low"] < curr["low"] {
+        curr["left"] = insert_node(tree, curr["left"], new_id)
+    } else {
+        curr["right"] = insert_node(tree, curr["right"], new_id)
+    }
+
+    update_max_high(tree, curr_id)
+    return curr_id
+}
+
+pub fn insert_interval(tree, low, high) {
+    let id = tree["count"]
+    let node = dict()
+    node["id"] = id
+    node["low"] = low
+    node["high"] = high
+    node["max_high"] = high
+    node["left"] = -1
+    node["right"] = -1
+
+    tree["nodes"][id] = node
+    tree["count"] = id + 1
+
+    tree["root"] = insert_node(tree, tree["root"], id)
+    return id
+}
+
+pub fn search_overlap(tree, q_low, q_high) {
+    let curr_id = tree["root"]
+
+    while curr_id != -1 {
+        let node = tree["nodes"][curr_id]
+        if intervals_overlap(node["low"], node["high"], q_low, q_high) == 1 {
+            return curr_id
+        }
+
+        let l_id = node["left"]
+        if l_id != -1 && tree["nodes"][l_id]["max_high"] >= q_low {
+            curr_id = l_id
+        } else {
+            curr_id = node["right"]
+        }
+    }
+
+    return -1
+}
+
+// -------------------------------------------------------------------
+// Verification Tests
+// -------------------------------------------------------------------
+
+pub fn test_classic_clrs_intervals() {
+    // CLRS standard set of intervals:
+    // [15, 20], [10, 30], [17, 19], [5, 20], [12, 15], [30, 40]
+    let tree = new_interval_tree()
+    let id0 = insert_interval(tree, 15, 20)
+    let id1 = insert_interval(tree, 10, 30)
+    let id2 = insert_interval(tree, 17, 19)
+    let id3 = insert_interval(tree, 5, 20)
+    let id4 = insert_interval(tree, 12, 15)
+    let id5 = insert_interval(tree, 30, 40)
+
+    // Check root max_high covers entire tree (maximum is 40)
+    let root = tree["root"]
+    assert(tree["nodes"][root]["max_high"] == 40, "Root max_high must be 40")
+
+    // Query [14, 16]: overlaps with [15, 20] (id 0) or [10, 30] or [12, 15]
+    let found = search_overlap(tree, 14, 16)
+    assert(found != -1, "Overlap found for [14, 16]")
+    let n_found = tree["nodes"][found]
+    assert(intervals_overlap(n_found["low"], n_found["high"], 14, 16) == 1, "Verified overlap")
+
+    // Query [21, 23]: overlaps with [10, 30] (id 1)
+    let f2 = search_overlap(tree, 21, 23)
+    assert(f2 != -1, "Overlap found for [21, 23]")
+    let n2 = tree["nodes"][f2]
+    assert(n2["low"] <= 23 && 21 <= n2["high"], "Overlaps with [10, 30]")
+
+    // Query [45, 50]: completely disjoint, must return -1
+    let f3 = search_overlap(tree, 45, 50)
+    assert(f3 == -1, "No overlap for disjoint query [45, 50]")
+}
+
+pub fn test_point_boundary_touching() {
+    let tree = new_interval_tree()
+    insert_interval(tree, 10, 20)
+    insert_interval(tree, 30, 40)
+
+    // Touching endpoint at 20: [20, 25] overlaps [10, 20] at exactly point 20
+    let f1 = search_overlap(tree, 20, 25)
+    assert(f1 != -1, "Point boundary overlap at 20")
+
+    // Gap [21, 29]: between 20 and 30, no overlap
+    let f2 = search_overlap(tree, 21, 29)
+    assert(f2 == -1, "Gap between intervals yields -1")
+}
+
+pub fn test_single_interval() {
+    let tree = new_interval_tree()
+    insert_interval(tree, 100, 200)
+
+    assert(search_overlap(tree, 50, 99) == -1, "Before interval")
+    assert(search_overlap(tree, 150, 160) != -1, "Contained within interval")
+    assert(search_overlap(tree, 201, 300) == -1, "After interval")
+}
+
+pub fn main() {
+    test_classic_clrs_intervals()
+    test_point_boundary_touching()
+    test_single_interval()
+    print("All Interval Tree verification tests passed successfully!")
+}
