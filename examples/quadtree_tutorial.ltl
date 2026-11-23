@@ -1,0 +1,279 @@
+// ===================================================================
+// examples/quadtree_tutorial.ltl
+// -------------------------------------------------------------------
+// Demonstration of Quadtree Spatial Partition in Lateralus.
+// Powers autonomous UAV drone flight geofencing & airspace waypoint search.
+// ===================================================================
+
+pub fn qt_rect(min_x: int, min_y: int, max_x: int, max_y: int) -> dict {
+    let mut r = {}
+    r["min_x"] = min_x
+    r["min_y"] = min_y
+    r["max_x"] = max_x
+    r["max_y"] = max_y
+    return r
+}
+
+pub fn qt_rect_contains_pt(r: dict, x: int, y: int) -> bool {
+    if x < r["min_x"] or x > r["max_x"] {
+        return false
+    }
+    if y < r["min_y"] or y > r["max_y"] {
+        return false
+    }
+    return true
+}
+
+pub fn qt_rect_intersects(a: dict, b: dict) -> bool {
+    if a["max_x"] < b["min_x"] or a["min_x"] > b["max_x"] {
+        return false
+    }
+    if a["max_y"] < b["min_y"] or a["min_y"] > b["max_y"] {
+        return false
+    }
+    return true
+}
+
+pub fn qt_create(boundary: dict, capacity: int) -> dict {
+    let mut tree = {}
+    tree["capacity"] = capacity
+
+    let mut boundaries = [qt_rect(0, 0, 0, 0), boundary]
+    let mut is_divided = [false, false]
+    let mut pts_x = [[], []]
+    let mut pts_y = [[], []]
+    let mut pts_id = [[], []]
+    let mut child_nw = [0, 0]
+    let mut child_ne = [0, 0]
+    let mut child_sw = [0, 0]
+    let mut child_se = [0, 0]
+
+    tree["boundaries"] = boundaries
+    tree["is_divided"] = is_divided
+    tree["pts_x"] = pts_x
+    tree["pts_y"] = pts_y
+    tree["pts_id"] = pts_id
+    tree["child_nw"] = child_nw
+    tree["child_ne"] = child_ne
+    tree["child_sw"] = child_sw
+    tree["child_se"] = child_se
+    tree["root"] = 1
+    return tree
+}
+
+pub fn qt_subdivide(tree: dict, node: int) {
+    let mut boundaries = tree["boundaries"]
+    let mut is_divided = tree["is_divided"]
+    let mut pts_x = tree["pts_x"]
+    let mut pts_y = tree["pts_y"]
+    let mut pts_id = tree["pts_id"]
+    let mut child_nw = tree["child_nw"]
+    let mut child_ne = tree["child_ne"]
+    let mut child_sw = tree["child_sw"]
+    let mut child_se = tree["child_se"]
+
+    let b = boundaries[node]
+    let min_x = b["min_x"]
+    let min_y = b["min_y"]
+    let max_x = b["max_x"]
+    let max_y = b["max_y"]
+    let mid_x = (min_x + max_x) / 2
+    let mid_y = (min_y + max_y) / 2
+
+    let nw_rect = qt_rect(min_x, mid_y, mid_x, max_y)
+    let ne_rect = qt_rect(mid_x, mid_y, max_x, max_y)
+    let sw_rect = qt_rect(min_x, min_y, mid_x, mid_y)
+    let se_rect = qt_rect(mid_x, min_y, max_x, mid_y)
+
+    let nw_idx = boundaries.len()
+    boundaries.push(nw_rect)
+    is_divided.push(false)
+    pts_x.push([])
+    pts_y.push([])
+    pts_id.push([])
+    child_nw.push(0)
+    child_ne.push(0)
+    child_sw.push(0)
+    child_se.push(0)
+
+    let ne_idx = boundaries.len()
+    boundaries.push(ne_rect)
+    is_divided.push(false)
+    pts_x.push([])
+    pts_y.push([])
+    pts_id.push([])
+    child_nw.push(0)
+    child_ne.push(0)
+    child_sw.push(0)
+    child_se.push(0)
+
+    let sw_idx = boundaries.len()
+    boundaries.push(sw_rect)
+    is_divided.push(false)
+    pts_x.push([])
+    pts_y.push([])
+    pts_id.push([])
+    child_nw.push(0)
+    child_ne.push(0)
+    child_sw.push(0)
+    child_se.push(0)
+
+    let se_idx = boundaries.len()
+    boundaries.push(se_rect)
+    is_divided.push(false)
+    pts_x.push([])
+    pts_y.push([])
+    pts_id.push([])
+    child_nw.push(0)
+    child_ne.push(0)
+    child_sw.push(0)
+    child_se.push(0)
+
+    child_nw[node] = nw_idx
+    child_ne[node] = ne_idx
+    child_sw[node] = sw_idx
+    child_se[node] = se_idx
+    is_divided[node] = true
+}
+
+pub fn qt_insert(tree: dict, node: int, x: int, y: int, id: int) -> bool {
+    let boundaries = tree["boundaries"]
+    if not qt_rect_contains_pt(boundaries[node], x, y) {
+        return false
+    }
+
+    let is_divided = tree["is_divided"]
+    if not is_divided[node] {
+        let mut pts_x = tree["pts_x"]
+        let mut pts_y = tree["pts_y"]
+        let mut pts_id = tree["pts_id"]
+        let cur_x = pts_x[node]
+
+        if cur_x.len() < tree["capacity"] {
+            let mut nx = pts_x[node]
+            let mut ny = pts_y[node]
+            let mut nid = pts_id[node]
+            nx.push(x)
+            ny.push(y)
+            nid.push(id)
+            pts_x[node] = nx
+            pts_y[node] = ny
+            pts_id[node] = nid
+            return true
+        }
+
+        qt_subdivide(tree, node)
+
+        let old_x = pts_x[node]
+        let old_y = pts_y[node]
+        let old_id = pts_id[node]
+        pts_x[node] = []
+        pts_y[node] = []
+        pts_id[node] = []
+
+        let n = old_x.len()
+        let mut i = 0
+        while i < n {
+            qt_insert_into_children(tree, node, old_x[i], old_y[i], old_id[i])
+            i = i + 1
+        }
+    }
+
+    return qt_insert_into_children(tree, node, x, y, id)
+}
+
+pub fn qt_insert_into_children(tree: dict, node: int, x: int, y: int, id: int) -> bool {
+    let child_nw = tree["child_nw"]
+    let child_ne = tree["child_ne"]
+    let child_sw = tree["child_sw"]
+    let child_se = tree["child_se"]
+
+    if qt_insert(tree, child_nw[node], x, y, id) {
+        return true
+    }
+    if qt_insert(tree, child_ne[node], x, y, id) {
+        return true
+    }
+    if qt_insert(tree, child_sw[node], x, y, id) {
+        return true
+    }
+    if qt_insert(tree, child_se[node], x, y, id) {
+        return true
+    }
+    return false
+}
+
+pub fn qt_query(tree: dict, node: int, range_rect: dict, results: list) {
+    let boundaries = tree["boundaries"]
+    if not qt_rect_intersects(boundaries[node], range_rect) {
+        return
+    }
+
+    let is_divided = tree["is_divided"]
+    if not is_divided[node] {
+        let pts_x = tree["pts_x"]
+        let pts_y = tree["pts_y"]
+        let pts_id = tree["pts_id"]
+
+        let xs = pts_x[node]
+        let ys = pts_y[node]
+        let ids = pts_id[node]
+        let n = xs.len()
+
+        let mut i = 0
+        while i < n {
+            if qt_rect_contains_pt(range_rect, xs[i], ys[i]) {
+                results.push(ids[i])
+            }
+            i = i + 1
+        }
+        return
+    }
+
+    let child_nw = tree["child_nw"]
+    let child_ne = tree["child_ne"]
+    let child_sw = tree["child_sw"]
+    let child_se = tree["child_se"]
+
+    qt_query(tree, child_nw[node], range_rect, results)
+    qt_query(tree, child_ne[node], range_rect, results)
+    qt_query(tree, child_sw[node], range_rect, results)
+    qt_query(tree, child_se[node], range_rect, results)
+}
+
+pub fn qt_search(tree: dict, range_rect: dict) -> list {
+    let mut results = []
+    qt_query(tree, tree["root"], range_rect, results)
+    return results
+}
+
+fn main() {
+    print("=== UAV Flight Corridor Quadtree Geofencing Engine ===")
+    // Total flight airspace: [0, 0] to [1000, 1000] (meters)
+    let airspace = qt_rect(0, 0, 1000, 1000)
+    let qt = qt_create(airspace, 4)
+
+    // Register active navigation beacons and surveillance telemetry points
+    qt_insert(qt, 1, 120, 150, 101)  // Air Corridor Entrance Alpha
+    qt_insert(qt, 1, 140, 180, 102)  // Communication Relay 1
+    qt_insert(qt, 1, 160, 130, 103)  // Weather Radar Station
+    qt_insert(qt, 1, 750, 800, 104)  // Remote Landing Zone
+    qt_insert(qt, 1, 800, 820, 105)  // Mountain Transmission Tower
+
+    // Drone current forward scanning camera window: [100, 100] to [200, 200]
+    let drone_scan_cone = qt_rect(100, 100, 200, 200)
+    print("Scanning forward flight sector for navigation waypoints...")
+
+    let in_range = qt_search(qt, drone_scan_cone)
+    print("Detected Waypoints in Forward Cone:")
+    print(in_range.len())
+
+    let mut i = 0
+    while i < in_range.len() {
+        print("Waypoint ID:")
+        print(in_range[i])
+        i = i + 1
+    }
+}
+
+main()

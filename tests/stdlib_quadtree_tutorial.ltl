@@ -1,0 +1,317 @@
+// ===================================================================
+// tests/stdlib_quadtree_tutorial.ltl
+// -------------------------------------------------------------------
+// Complete test suite for Quadtree Spatial Partition in Lateralus.
+// Features 2D recursive quadrant subdivision, bucket capacity splitting,
+// and sublinear spatial range window queries.
+// Raphael Finkel and Jon Louis Bentley (1974).
+// ===================================================================
+
+pub fn qt_rect(min_x: int, min_y: int, max_x: int, max_y: int) -> dict {
+    let mut r = {}
+    r["min_x"] = min_x
+    r["min_y"] = min_y
+    r["max_x"] = max_x
+    r["max_y"] = max_y
+    return r
+}
+
+pub fn qt_rect_contains_pt(r: dict, x: int, y: int) -> bool {
+    if x < r["min_x"] or x > r["max_x"] {
+        return false
+    }
+    if y < r["min_y"] or y > r["max_y"] {
+        return false
+    }
+    return true
+}
+
+pub fn qt_rect_intersects(a: dict, b: dict) -> bool {
+    if a["max_x"] < b["min_x"] or a["min_x"] > b["max_x"] {
+        return false
+    }
+    if a["max_y"] < b["min_y"] or a["min_y"] > b["max_y"] {
+        return false
+    }
+    return true
+}
+
+pub fn qt_create(boundary: dict, capacity: int) -> dict {
+    let mut tree = {}
+    tree["capacity"] = capacity
+
+    // Index 0 is sentinel
+    let mut boundaries = [qt_rect(0, 0, 0, 0), boundary]
+    let mut is_divided = [false, false]
+    let mut pts_x = [[], []]
+    let mut pts_y = [[], []]
+    let mut pts_id = [[], []]
+    let mut child_nw = [0, 0]
+    let mut child_ne = [0, 0]
+    let mut child_sw = [0, 0]
+    let mut child_se = [0, 0]
+
+    tree["boundaries"] = boundaries
+    tree["is_divided"] = is_divided
+    tree["pts_x"] = pts_x
+    tree["pts_y"] = pts_y
+    tree["pts_id"] = pts_id
+    tree["child_nw"] = child_nw
+    tree["child_ne"] = child_ne
+    tree["child_sw"] = child_sw
+    tree["child_se"] = child_se
+    tree["root"] = 1
+    return tree
+}
+
+pub fn qt_subdivide(tree: dict, node: int) {
+    let mut boundaries = tree["boundaries"]
+    let mut is_divided = tree["is_divided"]
+    let mut pts_x = tree["pts_x"]
+    let mut pts_y = tree["pts_y"]
+    let mut pts_id = tree["pts_id"]
+    let mut child_nw = tree["child_nw"]
+    let mut child_ne = tree["child_ne"]
+    let mut child_sw = tree["child_sw"]
+    let mut child_se = tree["child_se"]
+
+    let b = boundaries[node]
+    let min_x = b["min_x"]
+    let min_y = b["min_y"]
+    let max_x = b["max_x"]
+    let max_y = b["max_y"]
+    let mid_x = (min_x + max_x) / 2
+    let mid_y = (min_y + max_y) / 2
+
+    let nw_rect = qt_rect(min_x, mid_y, mid_x, max_y)
+    let ne_rect = qt_rect(mid_x, mid_y, max_x, max_y)
+    let sw_rect = qt_rect(min_x, min_y, mid_x, mid_y)
+    let se_rect = qt_rect(mid_x, min_y, max_x, mid_y)
+
+    let nw_idx = boundaries.len()
+    boundaries.push(nw_rect)
+    is_divided.push(false)
+    pts_x.push([])
+    pts_y.push([])
+    pts_id.push([])
+    child_nw.push(0)
+    child_ne.push(0)
+    child_sw.push(0)
+    child_se.push(0)
+
+    let ne_idx = boundaries.len()
+    boundaries.push(ne_rect)
+    is_divided.push(false)
+    pts_x.push([])
+    pts_y.push([])
+    pts_id.push([])
+    child_nw.push(0)
+    child_ne.push(0)
+    child_sw.push(0)
+    child_se.push(0)
+
+    let sw_idx = boundaries.len()
+    boundaries.push(sw_rect)
+    is_divided.push(false)
+    pts_x.push([])
+    pts_y.push([])
+    pts_id.push([])
+    child_nw.push(0)
+    child_ne.push(0)
+    child_sw.push(0)
+    child_se.push(0)
+
+    let se_idx = boundaries.len()
+    boundaries.push(se_rect)
+    is_divided.push(false)
+    pts_x.push([])
+    pts_y.push([])
+    pts_id.push([])
+    child_nw.push(0)
+    child_ne.push(0)
+    child_sw.push(0)
+    child_se.push(0)
+
+    child_nw[node] = nw_idx
+    child_ne[node] = ne_idx
+    child_sw[node] = sw_idx
+    child_se[node] = se_idx
+    is_divided[node] = true
+}
+
+pub fn qt_insert(tree: dict, node: int, x: int, y: int, id: int) -> bool {
+    let boundaries = tree["boundaries"]
+    if not qt_rect_contains_pt(boundaries[node], x, y) {
+        return false
+    }
+
+    let is_divided = tree["is_divided"]
+    if not is_divided[node] {
+        let mut pts_x = tree["pts_x"]
+        let mut pts_y = tree["pts_y"]
+        let mut pts_id = tree["pts_id"]
+        let cur_x = pts_x[node]
+
+        if cur_x.len() < tree["capacity"] {
+            let mut nx = pts_x[node]
+            let mut ny = pts_y[node]
+            let mut nid = pts_id[node]
+            nx.push(x)
+            ny.push(y)
+            nid.push(id)
+            pts_x[node] = nx
+            pts_y[node] = ny
+            pts_id[node] = nid
+            return true
+        }
+
+        qt_subdivide(tree, node)
+
+        // Redistribute existing points into new children
+        let old_x = pts_x[node]
+        let old_y = pts_y[node]
+        let old_id = pts_id[node]
+        pts_x[node] = []
+        pts_y[node] = []
+        pts_id[node] = []
+
+        let n = old_x.len()
+        let mut i = 0
+        while i < n {
+            qt_insert_into_children(tree, node, old_x[i], old_y[i], old_id[i])
+            i = i + 1
+        }
+    }
+
+    return qt_insert_into_children(tree, node, x, y, id)
+}
+
+pub fn qt_insert_into_children(tree: dict, node: int, x: int, y: int, id: int) -> bool {
+    let child_nw = tree["child_nw"]
+    let child_ne = tree["child_ne"]
+    let child_sw = tree["child_sw"]
+    let child_se = tree["child_se"]
+
+    if qt_insert(tree, child_nw[node], x, y, id) {
+        return true
+    }
+    if qt_insert(tree, child_ne[node], x, y, id) {
+        return true
+    }
+    if qt_insert(tree, child_sw[node], x, y, id) {
+        return true
+    }
+    if qt_insert(tree, child_se[node], x, y, id) {
+        return true
+    }
+    return false
+}
+
+pub fn qt_query(tree: dict, node: int, range_rect: dict, results: list) {
+    let boundaries = tree["boundaries"]
+    if not qt_rect_intersects(boundaries[node], range_rect) {
+        return
+    }
+
+    let is_divided = tree["is_divided"]
+    if not is_divided[node] {
+        let pts_x = tree["pts_x"]
+        let pts_y = tree["pts_y"]
+        let pts_id = tree["pts_id"]
+
+        let xs = pts_x[node]
+        let ys = pts_y[node]
+        let ids = pts_id[node]
+        let n = xs.len()
+
+        let mut i = 0
+        while i < n {
+            if qt_rect_contains_pt(range_rect, xs[i], ys[i]) {
+                results.push(ids[i])
+            }
+            i = i + 1
+        }
+        return
+    }
+
+    let child_nw = tree["child_nw"]
+    let child_ne = tree["child_ne"]
+    let child_sw = tree["child_sw"]
+    let child_se = tree["child_se"]
+
+    qt_query(tree, child_nw[node], range_rect, results)
+    qt_query(tree, child_ne[node], range_rect, results)
+    qt_query(tree, child_sw[node], range_rect, results)
+    qt_query(tree, child_se[node], range_rect, results)
+}
+
+pub fn qt_search(tree: dict, range_rect: dict) -> list {
+    let mut results = []
+    qt_query(tree, tree["root"], range_rect, results)
+    return results
+}
+
+// -------------------------------------------------------------------
+// Smoke tests and Golden Test Vectors
+// -------------------------------------------------------------------
+
+pub fn test_qt_rect_predicates() -> bool {
+    let r1 = qt_rect(0, 0, 100, 100)
+    let r2 = qt_rect(50, 50, 150, 150)
+    let r3 = qt_rect(200, 200, 300, 300)
+
+    if not qt_rect_contains_pt(r1, 50, 50) {
+        return false
+    }
+    if qt_rect_contains_pt(r1, 150, 50) {
+        return false
+    }
+    if not qt_rect_intersects(r1, r2) {
+        return false
+    }
+    if qt_rect_intersects(r1, r3) {
+        return false
+    }
+    return true
+}
+
+pub fn test_qt_subdivision_and_range_query() -> bool {
+    // Canvas: [0, 0] to [100, 100], Capacity 4
+    let boundary = qt_rect(0, 0, 100, 100)
+    let qt = qt_create(boundary, 4)
+
+    // Insert 6 points to force quadrant subdivision
+    qt_insert(qt, 1, 10, 10, 1)  // SW
+    qt_insert(qt, 1, 15, 15, 2)  // SW
+    qt_insert(qt, 1, 20, 20, 3)  // SW
+    qt_insert(qt, 1, 80, 80, 4)  // NE
+    qt_insert(qt, 1, 85, 85, 5)  // NE
+    qt_insert(qt, 1, 10, 80, 6)  // NW
+
+    // Query southwest region: [0, 0] to [30, 30]
+    let q_sw = qt_rect(0, 0, 30, 30)
+    let res_sw = qt_search(qt, q_sw)
+
+    // Should find exactly 3 points (1, 2, 3)
+    if res_sw.len() != 3 {
+        return false
+    }
+
+    // Query northeast region: [70, 70] to [100, 100]
+    let q_ne = qt_rect(70, 70, 100, 100)
+    let res_ne = qt_search(qt, q_ne)
+
+    // Should find exactly 2 points (4, 5)
+    if res_ne.len() != 2 {
+        return false
+    }
+
+    // Query empty southeast region: [60, 0] to [100, 40]
+    let q_se = qt_rect(60, 0, 100, 40)
+    let res_se = qt_search(qt, q_se)
+    if res_se.len() != 0 {
+        return false
+    }
+
+    return true
+}
