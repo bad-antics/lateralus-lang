@@ -202,3 +202,94 @@ class TestDependencyResolver:
         resolver = DependencyResolver(tmp_path)
         resolver.install(lock)
         assert (tmp_path / "ltl_modules").exists()
+
+
+class TestStaticRegistryAndVendorMVP:
+    def test_deterministic_tarball_reproducible_sha256(self, tmp_path):
+        from tools.registry.registry import build_deterministic_tarball
+
+        proj_a = scaffold_project("repro-pkg", tmp_path / "a")
+        proj_b = scaffold_project("repro-pkg", tmp_path / "b")
+        files = ["lateralus.toml", "src/main.ltl", "tests/test_main.ltl", "README.md"]
+
+        bytes_a, sha_a = build_deterministic_tarball(proj_a, files)
+        bytes_b, sha_b = build_deterministic_tarball(proj_b, files)
+
+        assert sha_a.startswith("sha256-")
+        assert sha_a == sha_b
+        assert bytes_a == bytes_b
+
+    def test_publish_and_add_unpacks_to_vendor_with_sha256_pin(self, tmp_path):
+        from lateralus_lang.package_manager import (
+            LOCK_FILE,
+            VENDOR_DIR,
+            add_dependency,
+            publish_package,
+        )
+        from tools.registry.registry import RegistryIndex
+
+        reg_dir = tmp_path / "static_registry"
+        lib_dir = scaffold_project("math-utils", tmp_path / "src_pkgs")
+
+        pub_info = publish_package(lib_dir, registry_url=str(reg_dir))
+        assert pub_info["name"] == "math-utils"
+        assert pub_info["version"] == "0.1.0"
+        assert pub_info["integrity"].startswith("sha256-")
+        assert (reg_dir / "index.json").exists()
+        assert (reg_dir / "packages" / "math-utils" / "math-utils-0.1.0.tar.gz").exists()
+
+        idx = RegistryIndex.from_file(reg_dir / "index.json")
+        entry = idx.resolve_version("math-utils", "^0.1.0")
+        assert entry is not None
+        assert entry.normalized_integrity == pub_info["integrity"]
+
+        app_dir = scaffold_project("consumer-app", tmp_path / "workspace")
+        vendored = add_dependency(
+            app_dir,
+            "math-utils",
+            version="^0.1.0",
+            registry_url=str(reg_dir),
+        )
+        assert vendored == app_dir / VENDOR_DIR / "math-utils"
+        assert (vendored / "src" / "main.ltl").exists()
+        assert (vendored / MANIFEST_FILE).exists()
+
+        lock = LockFile.from_file(app_dir / LOCK_FILE)
+        assert "math-utils" in lock.entries
+        assert lock.entries["math-utils"].version == "0.1.0"
+        assert lock.entries["math-utils"].integrity == pub_info["integrity"]
+
+    def test_tampered_tarball_raises_integrity_error(self, tmp_path):
+        from lateralus_lang.package_manager import add_dependency, publish_package
+        from tools.registry.registry import IntegrityError
+
+        reg_dir = tmp_path / "tampered_registry"
+        lib_dir = scaffold_project("crypto-box", tmp_path / "pkgs")
+        publish_package(lib_dir, registry_url=str(reg_dir))
+
+        tarball_path = reg_dir / "packages" / "crypto-box" / "crypto-box-0.1.0.tar.gz"
+        tarball_path.write_bytes(tarball_path.read_bytes() + b"corrupted")
+
+        app_dir = scaffold_project("victim-app", tmp_path / "ws")
+        raised = False
+        try:
+            add_dependency(app_dir, "crypto-box", registry_url=str(reg_dir))
+        except IntegrityError:
+            raised = True
+        assert raised, "Expected IntegrityError on tampered tarball"
+
+    def test_rebuild_index_from_static_tarballs(self, tmp_path):
+        from lateralus_lang.package_manager import publish_package
+        from tools.registry.registry import rebuild_index
+
+        reg_dir = tmp_path / "rebuild_reg"
+        lib_dir = scaffold_project("codec-lite", tmp_path / "pkgs")
+        pub_info = publish_package(lib_dir, registry_url=str(reg_dir))
+
+        (reg_dir / "index.json").unlink()
+        rebuilt = rebuild_index(reg_dir)
+        entry = rebuilt.resolve_version("codec-lite", "0.1.0")
+        assert entry is not None
+        assert entry.normalized_integrity == pub_info["integrity"]
+        assert (reg_dir / "index.json").exists()
+
