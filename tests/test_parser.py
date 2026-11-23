@@ -13,6 +13,7 @@ from lateralus_lang.ast_nodes import (
     ForStmt,
     IfStmt,
     LetDecl,
+    LambdaExpr,
     Literal,
     MatchStmt,
     Program,
@@ -92,6 +93,23 @@ class TestLetDecl:
         p = ast("const PI: float = 3.14")
         stmt = p.body[0]
         assert stmt.is_const is True
+
+
+class TestLambda:
+    def test_arrow_lambda(self):
+        p = ast("let f = (x) => x * 2")
+        stmt = p.body[0]
+        assert isinstance(stmt.value, LambdaExpr)
+        assert stmt.value.params[0].name == "x"
+
+    def test_arrow_lambda_multi_param(self):
+        p = ast("let f = (a, b) => a + b")
+        stmt = p.body[0]
+        assert [x.name for x in stmt.value.params] == ["a", "b"]
+
+    def test_paren_expr_still_works(self):
+        p = ast("let y = (1 + 2)")
+        assert isinstance(p.body[0].value, BinOp)
 
 
 class TestIfStmt:
