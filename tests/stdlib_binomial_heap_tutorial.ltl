@@ -1,0 +1,367 @@
+// ===================================================================
+// tests/stdlib_binomial_heap_tutorial.ltl
+// -------------------------------------------------------------------
+// Complete test suite for Binomial Heap in Lateralus.
+// Features binary arithmetic isomorphism, ripple-carry meld in O(log n),
+// and exact priority queue operations.
+// Jean Vuillemin (1978).
+// ===================================================================
+
+pub fn bin_create() -> dict {
+    let mut heap = {}
+    heap["head"] = 0
+    heap["count"] = 0
+
+    // Index 0 represents null node
+    let mut keys = [0]
+    let mut values = [0]
+    let mut parent = [0]
+    let mut child = [0]
+    let mut sibling = [0]
+    let mut degree = [0]
+
+    heap["keys"] = keys
+    heap["values"] = values
+    heap["parent"] = parent
+    heap["child"] = child
+    heap["sibling"] = sibling
+    heap["degree"] = degree
+
+    return heap
+}
+
+pub fn bin_link(heap: dict, y: int, z: int) {
+    let mut parent = heap["parent"]
+    let mut child = heap["child"]
+    let mut sibling = heap["sibling"]
+    let mut degree = heap["degree"]
+
+    parent[y] = z
+    sibling[y] = child[z]
+    child[z] = y
+    let d = degree[z]
+    degree[z] = d + 1
+}
+
+pub fn bin_merge_roots(heap: dict, h1: int, h2: int) -> int {
+    if h1 == 0 {
+        return h2
+    }
+    if h2 == 0 {
+        return h1
+    }
+
+    let degree = heap["degree"]
+    let mut sibling = heap["sibling"]
+
+    let mut p1 = h1
+    let mut p2 = h2
+    let mut head = 0
+    let mut tail = 0
+
+    if degree[p1] <= degree[p2] {
+        head = p1
+        tail = p1
+        p1 = sibling[p1]
+    } else {
+        head = p2
+        tail = p2
+        p2 = sibling[p2]
+    }
+
+    while p1 != 0 and p2 != 0 {
+        if degree[p1] <= degree[p2] {
+            sibling[tail] = p1
+            tail = p1
+            p1 = sibling[p1]
+        } else {
+            sibling[tail] = p2
+            tail = p2
+            p2 = sibling[p2]
+        }
+    }
+
+    if p1 != 0 {
+        sibling[tail] = p1
+    } else {
+        sibling[tail] = p2
+    }
+
+    return head
+}
+
+pub fn bin_meld(heap: dict, h1: int, h2: int) -> int {
+    let mut new_head = bin_merge_roots(heap, h1, h2)
+    if new_head == 0 {
+        return 0
+    }
+
+    let degree = heap["degree"]
+    let keys = heap["keys"]
+    let mut sibling = heap["sibling"]
+
+    let mut prev = 0
+    let mut curr = new_head
+    let mut next = sibling[curr]
+
+    while next != 0 {
+        let mut condition = false
+        if degree[curr] != degree[next] {
+            condition = true
+        } else {
+            let next_next = sibling[next]
+            if next_next != 0 and degree[next_next] == degree[curr] {
+                condition = true
+            }
+        }
+
+        if condition {
+            prev = curr
+            curr = next
+        } else {
+            if keys[curr] <= keys[next] {
+                sibling[curr] = sibling[next]
+                bin_link(heap, next, curr)
+            } else {
+                if prev == 0 {
+                    new_head = next
+                } else {
+                    sibling[prev] = next
+                }
+                bin_link(heap, curr, next)
+                curr = next
+            }
+        }
+        next = sibling[curr]
+    }
+
+    return new_head
+}
+
+pub fn bin_insert(heap: dict, key: int, val: int) -> int {
+    let mut keys = heap["keys"]
+    let mut values = heap["values"]
+    let mut parent = heap["parent"]
+    let mut child = heap["child"]
+    let mut sibling = heap["sibling"]
+    let mut degree = heap["degree"]
+
+    let u = keys.len()
+    keys.push(key)
+    values.push(val)
+    parent.push(0)
+    child.push(0)
+    sibling.push(0)
+    degree.push(0)
+
+    let head = heap["head"]
+    let new_head = bin_meld(heap, head, u)
+    heap["head"] = new_head
+
+    let count = heap["count"]
+    heap["count"] = count + 1
+    return u
+}
+
+pub fn bin_get_min_key(heap: dict) -> int {
+    let head = heap["head"]
+    if head == 0 {
+        return -1
+    }
+
+    let keys = heap["keys"]
+    let sibling = heap["sibling"]
+
+    let mut min_val = keys[head]
+    let mut curr = sibling[head]
+
+    while curr != 0 {
+        if keys[curr] < min_val {
+            min_val = keys[curr]
+        }
+        curr = sibling[curr]
+    }
+    return min_val
+}
+
+pub fn bin_extract_min(heap: dict) -> dict {
+    let mut res = {}
+    res["key"] = -1
+    res["val"] = -1
+
+    let head = heap["head"]
+    if head == 0 {
+        return res
+    }
+
+    let keys = heap["keys"]
+    let values = heap["values"]
+    let mut parent = heap["parent"]
+    let child = heap["child"]
+    let mut sibling = heap["sibling"]
+
+    // Find root with minimum key
+    let mut min_node = head
+    let mut min_prev = 0
+    let mut prev = head
+    let mut curr = sibling[head]
+
+    while curr != 0 {
+        if keys[curr] < keys[min_node] {
+            min_node = curr
+            min_prev = prev
+        }
+        prev = curr
+        curr = sibling[curr]
+    }
+
+    res["key"] = keys[min_node]
+    res["val"] = values[min_node]
+
+    // Remove min_node from root list
+    if min_prev == 0 {
+        heap["head"] = sibling[min_node]
+    } else {
+        sibling[min_prev] = sibling[min_node]
+    }
+
+    // Reverse children of min_node to form an ascending degree root list
+    let mut child_curr = child[min_node]
+    let mut reversed_head = 0
+
+    while child_curr != 0 {
+        let next_child = sibling[child_curr]
+        parent[child_curr] = 0
+        sibling[child_curr] = reversed_head
+        reversed_head = child_curr
+        child_curr = next_child
+    }
+
+    let current_head = heap["head"]
+    let new_head = bin_meld(heap, current_head, reversed_head)
+    heap["head"] = new_head
+
+    let count = heap["count"]
+    heap["count"] = count - 1
+    return res
+}
+
+pub fn bin_decrease_key(heap: dict, x: int, new_key: int) -> bool {
+    let mut keys = heap["keys"]
+    let mut values = heap["values"]
+    let parent = heap["parent"]
+
+    if new_key > keys[x] {
+        return false
+    }
+
+    keys[x] = new_key
+    let mut curr = x
+    let mut p = parent[curr]
+
+    while p != 0 and keys[curr] < keys[p] {
+        // Bubble up by swapping key and val
+        let temp_k = keys[curr]
+        keys[curr] = keys[p]
+        keys[p] = temp_k
+
+        let temp_v = values[curr]
+        values[curr] = values[p]
+        values[p] = temp_v
+
+        curr = p
+        p = parent[curr]
+    }
+
+    return true
+}
+
+// -------------------------------------------------------------------
+// Smoke tests and Golden Test Vectors
+// -------------------------------------------------------------------
+
+pub fn test_bin_heap_basic_sort() -> bool {
+    let heap = bin_create()
+    bin_insert(heap, 40, 4)
+    bin_insert(heap, 10, 1)
+    bin_insert(heap, 30, 3)
+    bin_insert(heap, 50, 5)
+    bin_insert(heap, 20, 2)
+
+    if heap["count"] != 5 {
+        return false
+    }
+
+    let e1 = bin_extract_min(heap)
+    let e2 = bin_extract_min(heap)
+    let e3 = bin_extract_min(heap)
+    let e4 = bin_extract_min(heap)
+    let e5 = bin_extract_min(heap)
+
+    if e1["key"] != 10 or e1["val"] != 1 {
+        return false
+    }
+    if e2["key"] != 20 or e2["val"] != 2 {
+        return false
+    }
+    if e3["key"] != 30 or e3["val"] != 3 {
+        return false
+    }
+    if e4["key"] != 40 or e4["val"] != 4 {
+        return false
+    }
+    if e5["key"] != 50 or e5["val"] != 5 {
+        return false
+    }
+
+    if heap["count"] != 0 {
+        return false
+    }
+    return true
+}
+
+pub fn test_bin_heap_decrease_key() -> bool {
+    let heap = bin_create()
+    let mut n1 = bin_insert(heap, 100, 10)
+    let mut n2 = bin_insert(heap, 200, 20)
+    let mut n3 = bin_insert(heap, 300, 30)
+
+    let ok = bin_decrease_key(heap, n3, 25)
+    if not ok {
+        return false
+    }
+
+    let min_k = bin_get_min_key(heap)
+    if min_k != 25 {
+        return false
+    }
+
+    let first = bin_extract_min(heap)
+    if first["key"] != 25 or first["val"] != 30 {
+        return false
+    }
+    return true
+}
+
+pub fn test_bin_heap_meld_invariants() -> bool {
+    let h1 = bin_create()
+    bin_insert(h1, 15, 1)
+    bin_insert(h1, 25, 2)
+
+    let h2 = bin_create()
+    bin_insert(h2, 10, 3)
+    bin_insert(h2, 35, 4)
+
+    // Meld root lists of h1 and h2
+    let merged_head = bin_meld(h1, h1["head"], h2["head"])
+    h1["head"] = merged_head
+    h1["count"] = 4
+
+    let m1 = bin_extract_min(h1)
+    let m2 = bin_extract_min(h1)
+
+    if m1["key"] != 10 or m2["key"] != 15 {
+        return false
+    }
+    return true
+}
