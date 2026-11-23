@@ -1,0 +1,221 @@
+// ===================================================================
+// tests/stdlib_fenwick_tree_2d_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for Two-Dimensional Binary Indexed Tree (2D BIT /
+// Fenwick Tree) supporting O(log n * log m) subgrid prefix updates
+// and 2D Inclusion-Exclusion rectangular range sum queries.
+// ===================================================================
+
+pub fn new_fenwick2d(rows, cols) {
+    let tree = dict()
+    tree["rows"] = rows
+    tree["cols"] = cols
+    let grid = dict()
+    let r = 0
+    while r <= rows {
+        let row_dict = dict()
+        let c = 0
+        while c <= cols {
+            row_dict[c] = 0
+            c = c + 1
+        }
+        grid[r] = row_dict
+        r = r + 1
+    }
+    tree["tree"] = grid
+    return tree
+}
+
+pub fn fenwick2d_update(tree, r, c, delta) {
+    let rows = tree["rows"]
+    let cols = tree["cols"]
+    let mut_r = r
+    while mut_r <= rows {
+        let mut_c = c
+        while mut_c <= cols {
+            let curr = tree["tree"][mut_r][mut_c]
+            tree["tree"][mut_r][mut_c] = curr + delta
+            let low_c = mut_c & (0 - mut_c)
+            mut_c = mut_c + low_c
+        }
+        let low_r = mut_r & (0 - mut_r)
+        mut_r = mut_r + low_r
+    }
+    return true
+}
+
+pub fn fenwick2d_query(tree, r, c) {
+    if r <= 0 {
+        return 0
+    }
+    if c <= 0 {
+        return 0
+    }
+    let rows = tree["rows"]
+    let cols = tree["cols"]
+    if r > rows {
+        r = rows
+    }
+    if c > cols {
+        c = cols
+    }
+    let total = 0
+    let mut_r = r
+    while mut_r > 0 {
+        let mut_c = c
+        while mut_c > 0 {
+            let cell = tree["tree"][mut_r][mut_c]
+            total = total + cell
+            let low_c = mut_c & (0 - mut_c)
+            mut_c = mut_c - low_c
+        }
+        let low_r = mut_r & (0 - mut_r)
+        mut_r = mut_r - low_r
+    }
+    return total
+}
+
+pub fn fenwick2d_range_sum(tree, r1, c1, r2, c2) {
+    let s_all = fenwick2d_query(tree, r2, c2)
+    let s_top = fenwick2d_query(tree, r1 - 1, c2)
+    let s_left = fenwick2d_query(tree, r2, c1 - 1)
+    let s_corner = fenwick2d_query(tree, r1 - 1, c1 - 1)
+    return s_all - s_top - s_left + s_corner
+}
+
+// -------------------------------------------------------------------
+// Verification Tests
+// -------------------------------------------------------------------
+
+pub fn test_fenwick2d_empty_query() -> bool {
+    let tree = new_fenwick2d(5, 5)
+    let q = fenwick2d_query(tree, 3, 3)
+    if q != 0 {
+        return false
+    }
+    let r_sum = fenwick2d_range_sum(tree, 1, 1, 5, 5)
+    if r_sum != 0 {
+        return false
+    }
+    return true
+}
+
+pub fn test_fenwick2d_single_point() -> bool {
+    let tree = new_fenwick2d(4, 4)
+    fenwick2d_update(tree, 2, 3, 42)
+
+    // Prefix containing (2, 3)
+    if fenwick2d_query(tree, 2, 3) != 42 {
+        return false
+    }
+    if fenwick2d_query(tree, 4, 4) != 42 {
+        return false
+    }
+
+    // Prefixes strictly before (2, 3)
+    if fenwick2d_query(tree, 1, 4) != 0 {
+        return false
+    }
+    if fenwick2d_query(tree, 4, 2) != 0 {
+        return false
+    }
+
+    // Exact cell range sum
+    if fenwick2d_range_sum(tree, 2, 3, 2, 3) != 42 {
+        return false
+    }
+    return true
+}
+
+pub fn test_fenwick2d_subgrid_range_sum() -> bool {
+    let tree = new_fenwick2d(3, 3)
+    // Setup a 3x3 matrix:
+    // [ 1, 2, 3 ]
+    // [ 4, 5, 6 ]
+    // [ 7, 8, 9 ]
+    fenwick2d_update(tree, 1, 1, 1)
+    fenwick2d_update(tree, 1, 2, 2)
+    fenwick2d_update(tree, 1, 3, 3)
+    fenwick2d_update(tree, 2, 1, 4)
+    fenwick2d_update(tree, 2, 2, 5)
+    fenwick2d_update(tree, 2, 3, 6)
+    fenwick2d_update(tree, 3, 1, 7)
+    fenwick2d_update(tree, 3, 2, 8)
+    fenwick2d_update(tree, 3, 3, 9)
+
+    // Total matrix sum: sum(1..9) = 45
+    if fenwick2d_query(tree, 3, 3) != 45 {
+        return false
+    }
+
+    // Top-left 2x2 sum: 1 + 2 + 4 + 5 = 12
+    if fenwick2d_query(tree, 2, 2) != 12 {
+        return false
+    }
+    if fenwick2d_range_sum(tree, 1, 1, 2, 2) != 12 {
+        return false
+    }
+
+    // Center subgrid: (2, 2) = 5
+    if fenwick2d_range_sum(tree, 2, 2, 2, 2) != 5 {
+        return false
+    }
+
+    // Bottom-right 2x2: 5 + 6 + 8 + 9 = 28
+    if fenwick2d_range_sum(tree, 2, 2, 3, 3) != 28 {
+        return false
+    }
+
+    // Row 2 sum: 4 + 5 + 6 = 15
+    if fenwick2d_range_sum(tree, 2, 1, 2, 3) != 15 {
+        return false
+    }
+
+    // Col 3 sum: 3 + 6 + 9 = 18
+    if fenwick2d_range_sum(tree, 1, 3, 3, 3) != 18 {
+        return false
+    }
+
+    return true
+}
+
+pub fn test_fenwick2d_dynamic_mutation() -> bool {
+    let tree = new_fenwick2d(4, 4)
+    fenwick2d_update(tree, 2, 2, 10)
+    if fenwick2d_range_sum(tree, 2, 2, 2, 2) != 10 {
+        return false
+    }
+
+    // Dynamic additive increment +15
+    fenwick2d_update(tree, 2, 2, 15)
+    if fenwick2d_range_sum(tree, 2, 2, 2, 2) != 25 {
+        return false
+    }
+
+    // Negative modification (decrement -5)
+    fenwick2d_update(tree, 2, 2, 0 - 5)
+    if fenwick2d_range_sum(tree, 2, 2, 2, 2) != 20 {
+        return false
+    }
+    if fenwick2d_query(tree, 4, 4) != 20 {
+        return false
+    }
+
+    return true
+}
+
+pub fn run_all_fenwick2d_tests() -> bool {
+    if not test_fenwick2d_empty_query() {
+        return false
+    }
+    if not test_fenwick2d_single_point() {
+        return false
+    }
+    if not test_fenwick2d_subgrid_range_sum() {
+        return false
+    }
+    if not test_fenwick2d_dynamic_mutation() {
+        return false
+    }
+    return true
+}
