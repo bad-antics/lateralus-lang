@@ -1,0 +1,333 @@
+// ===================================================================
+// tests/stdlib_dancing_links_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for Donald Knuth's Dancing Links (DLX) &
+// Algorithm X solving exact cover problems with O(1) circular list
+// pointer dancing and minimum branching factor heuristics.
+// ===================================================================
+
+pub fn new_dlx(num_cols) {
+    let dlx = dict()
+    dlx["nodes"] = dict()
+    dlx["sz"] = num_cols + 1
+    dlx["num_cols"] = num_cols
+
+    // Root node 0
+    let root = dict()
+    root["left"] = num_cols
+    root["right"] = 1
+    root["up"] = 0
+    root["down"] = 0
+    root["col"] = 0
+    root["row"] = 0
+    root["size"] = 0
+    dlx["nodes"][0] = root
+
+    // Column headers 1..num_cols
+    let c = 1
+    while c <= num_cols {
+        let col_node = dict()
+        col_node["left"] = c - 1
+        col_node["right"] = c + 1
+        if c == num_cols {
+            col_node["right"] = 0
+        }
+        col_node["up"] = c
+        col_node["down"] = c
+        col_node["col"] = c
+        col_node["row"] = 0
+        col_node["size"] = 0
+        dlx["nodes"][c] = col_node
+        c = c + 1
+    }
+    return dlx
+}
+
+pub fn dlx_add_row(dlx, row_id, cols_list, num_elems) {
+    if num_elems <= 0 {
+        return true
+    }
+    let first_id = -1
+    let k = 0
+    while k < num_elems {
+        let c = cols_list[k]
+        let new_id = dlx["sz"]
+        dlx["sz"] = new_id + 1
+
+        let col_head = dlx["nodes"][c]
+        let up_id = col_head["up"]
+
+        let node = dict()
+        node["col"] = c
+        node["row"] = row_id
+        node["down"] = c
+        node["up"] = up_id
+
+        // Vertical link
+        dlx["nodes"][up_id]["down"] = new_id
+        col_head["up"] = new_id
+        col_head["size"] = col_head["size"] + 1
+
+        // Horizontal link
+        if first_id == -1 {
+            first_id = new_id
+            node["left"] = new_id
+            node["right"] = new_id
+        } else {
+            let left_id = dlx["nodes"][first_id]["left"]
+            node["left"] = left_id
+            node["right"] = first_id
+            dlx["nodes"][left_id]["right"] = new_id
+            dlx["nodes"][first_id]["left"] = new_id
+        }
+
+        dlx["nodes"][new_id] = node
+        k = k + 1
+    }
+    return true
+}
+
+pub fn dlx_cover(dlx, c) {
+    let c_node = dlx["nodes"][c]
+    let r_id = c_node["right"]
+    let l_id = c_node["left"]
+    dlx["nodes"][r_id]["left"] = l_id
+    dlx["nodes"][l_id]["right"] = r_id
+
+    let i = c_node["down"]
+    while i != c {
+        let i_node = dlx["nodes"][i]
+        let j = i_node["right"]
+        while j != i {
+            let j_node = dlx["nodes"][j]
+            let u_id = j_node["up"]
+            let d_id = j_node["down"]
+            dlx["nodes"][d_id]["up"] = u_id
+            dlx["nodes"][u_id]["down"] = d_id
+            let col_id = j_node["col"]
+            dlx["nodes"][col_id]["size"] = dlx["nodes"][col_id]["size"] - 1
+            j = j_node["right"]
+        }
+        i = i_node["down"]
+    }
+    return true
+}
+
+pub fn dlx_uncover(dlx, c) {
+    let c_node = dlx["nodes"][c]
+    let i = c_node["up"]
+    while i != c {
+        let i_node = dlx["nodes"][i]
+        let j = i_node["left"]
+        while j != i {
+            let j_node = dlx["nodes"][j]
+            let col_id = j_node["col"]
+            dlx["nodes"][col_id]["size"] = dlx["nodes"][col_id]["size"] + 1
+            let u_id = j_node["up"]
+            let d_id = j_node["down"]
+            dlx["nodes"][d_id]["up"] = j
+            dlx["nodes"][u_id]["down"] = j
+            j = j_node["left"]
+        }
+        i = i_node["up"]
+    }
+    let r_id = c_node["right"]
+    let l_id = c_node["left"]
+    dlx["nodes"][r_id]["left"] = c
+    dlx["nodes"][l_id]["right"] = c
+    return true
+}
+
+pub fn dlx_solve(dlx, solution, depth) {
+    // If root.right == 0, matrix is empty -> exact cover found!
+    if dlx["nodes"][0]["right"] == 0 {
+        solution["depth"] = depth
+        return true
+    }
+
+    // Choose column with minimum size (Knuth's S-heuristic)
+    let best_c = dlx["nodes"][0]["right"]
+    let min_size = dlx["nodes"][best_c]["size"]
+    let curr_c = dlx["nodes"][best_c]["right"]
+    while curr_c != 0 {
+        let curr_sz = dlx["nodes"][curr_c]["size"]
+        if curr_sz < min_size {
+            min_size = curr_sz
+            best_c = curr_c
+        }
+        curr_c = dlx["nodes"][curr_c]["right"]
+    }
+
+    if min_size == 0 {
+        return false
+    }
+
+    dlx_cover(dlx, best_c)
+
+    let r = dlx["nodes"][best_c]["down"]
+    while r != best_c {
+        solution[depth] = dlx["nodes"][r]["row"]
+
+        let j = dlx["nodes"][r]["right"]
+        while j != r {
+            dlx_cover(dlx, dlx["nodes"][j]["col"])
+            j = dlx["nodes"][j]["right"]
+        }
+
+        if dlx_solve(dlx, solution, depth + 1) {
+            return true
+        }
+
+        let back_j = dlx["nodes"][r]["left"]
+        while back_j != r {
+            dlx_uncover(dlx, dlx["nodes"][back_j]["col"])
+            back_j = dlx["nodes"][back_j]["left"]
+        }
+
+        r = dlx["nodes"][r]["down"]
+    }
+
+    dlx_uncover(dlx, best_c)
+    return false
+}
+
+// -------------------------------------------------------------------
+// Verification Tests
+// -------------------------------------------------------------------
+
+pub fn test_dlx_empty_init() -> bool {
+    let dlx = new_dlx(4)
+    if dlx["nodes"][0]["right"] != 1 {
+        return false
+    }
+    if dlx["nodes"][0]["left"] != 4 {
+        return false
+    }
+    if dlx["nodes"][1]["size"] != 0 {
+        return false
+    }
+    return true
+}
+
+pub fn test_dlx_knuth_exact_cover() -> bool {
+    // Classic 7-column Exact Cover example from Knuth (2000):
+    // Universe: {1, 2, 3, 4, 5, 6, 7}
+    // Row 1: {3, 5, 6}
+    // Row 2: {1, 4, 7}
+    // Row 3: {2, 3, 6}
+    // Row 4: {1, 4}
+    // Row 5: {2, 7}
+    // Row 6: {4, 5, 7}
+    // Exact cover partition: Row 1 {3, 5, 6} + Row 4 {1, 4} + Row 5 {2, 7} covers all {1..7} exactly once!
+    let dlx = new_dlx(7)
+
+    let r1 = dict()
+    r1[0] = 3
+    r1[1] = 5
+    r1[2] = 6
+    dlx_add_row(dlx, 1, r1, 3)
+
+    let r2 = dict()
+    r2[0] = 1
+    r2[1] = 4
+    r2[2] = 7
+    dlx_add_row(dlx, 2, r2, 3)
+
+    let r3 = dict()
+    r3[0] = 2
+    r3[1] = 3
+    r3[2] = 6
+    dlx_add_row(dlx, 3, r3, 3)
+
+    let r4 = dict()
+    r4[0] = 1
+    r4[1] = 4
+    dlx_add_row(dlx, 4, r4, 2)
+
+    let r5 = dict()
+    r5[0] = 2
+    r5[1] = 7
+    dlx_add_row(dlx, 5, r5, 2)
+
+    let r6 = dict()
+    r6[0] = 4
+    r6[1] = 5
+    r6[2] = 7
+    dlx_add_row(dlx, 6, r6, 3)
+
+    let sol = dict()
+    let found = dlx_solve(dlx, sol, 0)
+    if not found {
+        return false
+    }
+    if sol["depth"] != 3 {
+        return false
+    }
+
+    // Verify selected rows are {1, 4, 5}
+    let has_r1 = false
+    let has_r4 = false
+    let has_r5 = false
+    let i = 0
+    while i < sol["depth"] {
+        let row_val = sol[i]
+        if row_val == 1 {
+            has_r1 = true
+        }
+        if row_val == 4 {
+            has_r4 = true
+        }
+        if row_val == 5 {
+            has_r5 = true
+        }
+        i = i + 1
+    }
+
+    if not has_r1 {
+        return false
+    }
+    if not has_r4 {
+        return false
+    }
+    if not has_r5 {
+        return false
+    }
+
+    return true
+}
+
+pub fn test_dlx_unsatisfiable() -> bool {
+    // 3 columns:
+    // Row 1: {1}
+    // Row 2: {1, 2}
+    // Column 3 is never covered!
+    let dlx = new_dlx(3)
+    let r1 = dict()
+    r1[0] = 1
+    dlx_add_row(dlx, 1, r1, 1)
+
+    let r2 = dict()
+    r2[0] = 1
+    r2[1] = 2
+    dlx_add_row(dlx, 2, r2, 2)
+
+    let sol = dict()
+    let found = dlx_solve(dlx, sol, 0)
+    if found {
+        return false
+    }
+    return true
+}
+
+pub fn run_all_dlx_tests() -> bool {
+    if not test_dlx_empty_init() {
+        return false
+    }
+    if not test_dlx_knuth_exact_cover() {
+        return false
+    }
+    if not test_dlx_unsatisfiable() {
+        return false
+    }
+    return true
+}
