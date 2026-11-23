@@ -363,6 +363,9 @@ class Lexer:
         if ch == "#":
             self._skip_line_comment()
             return
+        if ch == "-" and self._peek() == "-":
+            self._skip_line_comment()
+            return
 
         # Raw string r"…"
         if ch == "r" and self._peek() == '"':
