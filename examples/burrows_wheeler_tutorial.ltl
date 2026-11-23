@@ -1,0 +1,184 @@
+// ===================================================================
+// examples/burrows_wheeler_tutorial.ltl
+// -------------------------------------------------------------------
+// Demonstration of Burrows-Wheeler Transform (BWT) in Lateralus.
+// Features text entropy reduction, clustering for bzip2, and
+// exact LF-mapping inversion.
+// ===================================================================
+
+pub fn rot_cmp(text: str, i: int, j: int, n: int) -> int {
+    let mut k = 0
+    while k < n {
+        let pos1 = (i + k) % n
+        let pos2 = (j + k) % n
+        let c1 = text[pos1]
+        let c2 = text[pos2]
+        if c1 < c2 {
+            return -1
+        }
+        if c1 > c2 {
+            return 1
+        }
+        k = k + 1
+    }
+    return 0
+}
+
+pub fn bwt_transform(text: str) -> dict {
+    let mut res = {}
+    let n = text.len()
+    if n == 0 {
+        res["transformed"] = ""
+        res["primary_index"] = 0
+        return res
+    }
+
+    let mut shifts = []
+    let mut i = 0
+    while i < n {
+        shifts.push(i)
+        i = i + 1
+    }
+
+    let mut p = 1
+    while p < n {
+        let key = shifts[p]
+        let mut q = p - 1
+        let mut moving = true
+        while moving and q >= 0 {
+            let prev = shifts[q]
+            if rot_cmp(text, key, prev, n) < 0 {
+                shifts[q + 1] = prev
+                q = q - 1
+            } else {
+                moving = false
+            }
+        }
+        shifts[q + 1] = key
+        p = p + 1
+    }
+
+    let mut transformed = ""
+    let mut primary_index = 0
+    let mut r = 0
+    while r < n {
+        let shift = shifts[r]
+        if shift == 0 {
+            primary_index = r
+        }
+        let last_pos = (shift + n - 1) % n
+        transformed = transformed + text[last_pos]
+        r = r + 1
+    }
+
+    res["transformed"] = transformed
+    res["primary_index"] = primary_index
+    return res
+}
+
+pub fn bwt_inverse(transformed: str, primary_index: int) -> str {
+    let n = transformed.len()
+    if n == 0 {
+        return ""
+    }
+
+    let mut counts = {}
+    let mut rank = []
+    let mut i = 0
+    while i < n {
+        let ch = transformed[i]
+        let mut current_cnt = 0
+        if contains(counts, ch) {
+            current_cnt = counts[ch]
+        }
+        rank.push(current_cnt)
+        counts[ch] = current_cnt + 1
+        i = i + 1
+    }
+
+    let mut distinct_chars = keys(counts)
+    let m = distinct_chars.len()
+    let mut a = 1
+    while a < m {
+        let k = distinct_chars[a]
+        let mut b = a - 1
+        let mut moving = true
+        while moving and b >= 0 {
+            let prev = distinct_chars[b]
+            if k < prev {
+                distinct_chars[b + 1] = prev
+                b = b - 1
+            } else {
+                moving = false
+            }
+        }
+        distinct_chars[b + 1] = k
+        a = a + 1
+    }
+
+    let mut c_offsets = {}
+    let mut total_offset = 0
+    let mut d = 0
+    while d < m {
+        let ch = distinct_chars[d]
+        c_offsets[ch] = total_offset
+        let cnt = counts[ch]
+        total_offset = total_offset + cnt
+        d = d + 1
+    }
+
+    let mut next_row = []
+    let mut j = 0
+    while j < n {
+        let ch = transformed[j]
+        let base_off = c_offsets[ch]
+        let r_val = rank[j]
+        next_row.push(base_off + r_val)
+        j = j + 1
+    }
+
+    let mut reconstructed_chars = []
+    let mut curr = primary_index
+    let mut step = 0
+    while step < n {
+        let ch = transformed[curr]
+        reconstructed_chars.push(ch)
+        curr = next_row[curr]
+        step = step + 1
+    }
+
+    let mut original = ""
+    let mut idx = n - 1
+    while idx >= 0 {
+        original = original + reconstructed_chars[idx]
+        idx = idx - 1
+    }
+
+    return original
+}
+
+fn main() {
+    print("=== Burrows-Wheeler Transform Engine ===")
+    let input_text = "banana$"
+    print("Input Text: ")
+    print(input_text)
+
+    let transform_res = bwt_transform(input_text)
+    let transformed = transform_res["transformed"]
+    let p_idx = transform_res["primary_index"]
+
+    print("Transformed L-Column: ")
+    print(transformed)
+    print("Primary Index: ")
+    print(p_idx)
+
+    let inverted = bwt_inverse(transformed, p_idx)
+    print("Inverted Text: ")
+    print(inverted)
+
+    let match_exact = (inverted == input_text)
+    print("Exact Lossless Verification: ")
+    print(match_exact)
+}
+
+main()
