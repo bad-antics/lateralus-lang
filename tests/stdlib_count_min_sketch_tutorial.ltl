@@ -1,0 +1,196 @@
+// ===================================================================
+// tests/stdlib_count_min_sketch_tutorial.ltl
+// -------------------------------------------------------------------
+// Complete test suite for Count-Min Sketch (CMS) in Lateralus.
+// Sub-linear space probabilistic stream frequency estimation and
+// heavy hitter detection. Cormode & Muthukrishnan (2005).
+// ===================================================================
+
+pub fn cms_create(depth: int, width: int) -> dict {
+    let mut sketch = {}
+    let mut table = []
+    let mut seeds_a = [10007, 20011, 30013, 40009, 50021, 60017, 70001, 80021]
+    let mut seeds_b = [12345, 67891, 23456, 78912, 34567, 89123, 45678, 91234]
+
+    let mut i = 0
+    while i < depth {
+        let mut row = []
+        let mut j = 0
+        while j < width {
+            row.push(0)
+            j = j + 1
+        }
+        table.push(row)
+        i = i + 1
+    }
+
+    sketch["table"] = table
+    sketch["depth"] = depth
+    sketch["width"] = width
+    sketch["seeds_a"] = seeds_a
+    sketch["seeds_b"] = seeds_b
+    sketch["total"] = 0
+    return sketch
+}
+
+pub fn cms_hash(seed_a: int, seed_b: int, key: int, width: int) -> int {
+    let p = 2147483647
+    let mut h = (seed_a * key + seed_b) % p
+    if h < 0 {
+        h = 0 - h
+    }
+    return h % width
+}
+
+pub fn cms_update(sketch: dict, key: int, count: int) -> bool {
+    let depth = sketch["depth"]
+    let width = sketch["width"]
+    let mut table = sketch["table"]
+    let seeds_a = sketch["seeds_a"]
+    let seeds_b = sketch["seeds_b"]
+
+    let mut row_idx = 0
+    while row_idx < depth {
+        let col = cms_hash(seeds_a[row_idx], seeds_b[row_idx], key, width)
+        let mut row = table[row_idx]
+        row[col] = row[col] + count
+        table[row_idx] = row
+        row_idx = row_idx + 1
+    }
+
+    sketch["table"] = table
+    let total = sketch["total"]
+    sketch["total"] = total + count
+    return true
+}
+
+pub fn cms_query(sketch: dict, key: int) -> int {
+    let depth = sketch["depth"]
+    let width = sketch["width"]
+    let table = sketch["table"]
+    let seeds_a = sketch["seeds_a"]
+    let seeds_b = sketch["seeds_b"]
+
+    let mut min_val = 2147483647
+    let mut row_idx = 0
+    while row_idx < depth {
+        let col = cms_hash(seeds_a[row_idx], seeds_b[row_idx], key, width)
+        let row = table[row_idx]
+        let val = row[col]
+        if val < min_val {
+            min_val = val
+        }
+        row_idx = row_idx + 1
+    }
+
+    return min_val
+}
+
+pub fn cms_merge(s1: dict, s2: dict) -> dict {
+    let depth = s1["depth"]
+    let width = s1["width"]
+    let res = cms_create(depth, width)
+
+    let t1 = s1["table"]
+    let t2 = s2["table"]
+    let mut t_res = res["table"]
+
+    let mut r = 0
+    while r < depth {
+        let row1 = t1[r]
+        let row2 = t2[r]
+        let mut row_res = t_res[r]
+        let mut c = 0
+        while c < width {
+            row_res[c] = row1[c] + row2[c]
+            c = c + 1
+        }
+        t_res[r] = row_res
+        r = r + 1
+    }
+
+    res["table"] = t_res
+    let tot1 = s1["total"]
+    let tot2 = s2["total"]
+    res["total"] = tot1 + tot2
+    return res
+}
+
+// -------------------------------------------------------------------
+// Smoke tests and Golden Test Vectors
+// -------------------------------------------------------------------
+
+pub fn test_cms_basic_single_key() -> bool {
+    let cms = cms_create(4, 32)
+    cms_update(cms, 42, 1)
+
+    let est = cms_query(cms, 42)
+    if est != 1 {
+        return false
+    }
+
+    let non_existent = cms_query(cms, 9999)
+    if non_existent != 0 {
+        return false
+    }
+
+    cms_update(cms, 42, 4)
+    if cms_query(cms, 42) != 5 {
+        return false
+    }
+    return true
+}
+
+pub fn test_cms_multiple_keys_and_ordering() -> bool {
+    let cms = cms_create(4, 64)
+
+    // Stream distribution:
+    // key 100: 5 occurrences
+    // key 200: 25 occurrences
+    // key 300: 100 occurrences
+    cms_update(cms, 100, 5)
+    cms_update(cms, 200, 25)
+    cms_update(cms, 300, 100)
+
+    let q100 = cms_query(cms, 100)
+    let q200 = cms_query(cms, 200)
+    let q300 = cms_query(cms, 300)
+
+    // Fundamental invariant: estimated >= actual
+    if q100 < 5 or q200 < 25 or q300 < 100 {
+        return false
+    }
+
+    // Heavy hitter ordering preserved
+    if not (q100 < q200 and q200 < q300) {
+        return false
+    }
+    return true
+}
+
+pub fn test_cms_merge_distributed_streams() -> bool {
+    let node1 = cms_create(4, 32)
+    let node2 = cms_create(4, 32)
+
+    cms_update(node1, 7, 15)
+    cms_update(node1, 8, 30)
+
+    cms_update(node2, 7, 25)
+    cms_update(node2, 8, 10)
+
+    let aggregated = cms_merge(node1, node2)
+
+    let est7 = cms_query(aggregated, 7)
+    let est8 = cms_query(aggregated, 8)
+
+    // Expected: 7 has 15 + 25 = 40; 8 has 30 + 10 = 40
+    if est7 < 40 or est8 < 40 {
+        return false
+    }
+
+    let total = aggregated["total"]
+    if total != 80 {
+        return false
+    }
+    return true
+}
