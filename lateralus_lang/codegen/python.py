@@ -232,6 +232,48 @@ class PythonTranspiler(ASTVisitor):
         self._w += "ceil = _math.ceil"
         self._w += "PI = _math.pi"
         self._w += "E = _math.e"
+        self._w += "TAU = getattr(_math, 'tau', 6.283185307179586)"
+        self._w += "if not hasattr(_math, 'TAU'): setattr(_math, 'TAU', TAU)"
+        self._w += "if not hasattr(_math, 'INF'): setattr(_math, 'INF', float('inf'))"
+        self._w += "if not hasattr(_math, 'NAN'): setattr(_math, 'NAN', float('nan'))"
+        self._w += "if not hasattr(_math, 'lerp'): setattr(_math, 'lerp', lambda a, b, t: a + (b - a) * t)"
+        self._w += "def _fib(n):"
+        self._w += "    if n <= 0: return 0"
+        self._w += "    a, b = 0, 1"
+        self._w += "    for _ in range(int(n) - 1): a, b = b, a + b"
+        self._w += "    return b"
+        self._w += "if not hasattr(_math, 'fibonacci'): setattr(_math, 'fibonacci', _fib)"
+        self._w += "lerp = getattr(_math, 'lerp')"
+        self._w += "fibonacci = getattr(_math, 'fibonacci')"
+        self._w += "import re as _re"
+        self._w += "def regex_match(p, s):"
+        self._w += "    m = _re.search(p, s)"
+        self._w += "    return {'matched': True, 'groups': list(m.groups()), 'start': m.start(), 'end': m.end(), 'named_groups': m.groupdict()} if m else {'matched': False, 'groups': [], 'start': -1, 'end': -1, 'named_groups': {}}"
+        self._w += "def regex_match_all(p, s):"
+        self._w += "    return [{'matched': True, 'groups': list(m.groups()), 'start': m.start(), 'end': m.end(), 'named_groups': m.groupdict()} for m in _re.finditer(p, s)]"
+        self._w += "def regex_replace(p, s, r): return _re.sub(p, r, s, count=1)"
+        self._w += "def regex_replace_all(p, s, r): return _re.sub(p, r, s)"
+        self._w += "def regex_split(p, s): return _re.split(p, s)"
+        self._w += "class _RegexModule:"
+        self._w += "    match = staticmethod(regex_match)"
+        self._w += "    match_all = staticmethod(regex_match_all)"
+        self._w += "    is_match = staticmethod(lambda p, s: bool(_re.search(p, s)))"
+        self._w += "    find_first = staticmethod(lambda p, s: (lambda m: s[m.start():m.end()] if m else '')(_re.search(p, s)))"
+        self._w += "    find_all = staticmethod(lambda p, s: [s[m.start():m.end()] for m in _re.finditer(p, s)])"
+        self._w += "    replace = staticmethod(regex_replace)"
+        self._w += "    replace_all = staticmethod(regex_replace_all)"
+        self._w += "    split = staticmethod(regex_split)"
+        self._w += "    groups = staticmethod(lambda p, s: list(_re.search(p, s).groups()) if _re.search(p, s) else [])"
+        self._w += "    named_groups = staticmethod(lambda p, s: _re.search(p, s).groupdict() if (_re.search(p, s) and _re.search(p, s).groupdict()) else {})"
+        self._w += "    is_email = staticmethod(lambda s: bool(_re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$', s)))"
+        self._w += "    is_url = staticmethod(lambda s: bool(_re.match(r'^https?://[\\w.-]+(:[0-9]+)?(/[\\w./-]*)?$', s)))"
+        self._w += "    is_ipv4 = staticmethod(lambda s: bool(_re.match(r'^(\\d{1,3}\\.){3}\\d{1,3}$', s)))"
+        self._w += "    is_hex = staticmethod(lambda s: bool(_re.match(r'^(0x)?[0-9a-fA-F]+$', s)))"
+        self._w += "    is_integer = staticmethod(lambda s: bool(_re.match(r'^-?[0-9]+$', s)))"
+        self._w += "    is_float = staticmethod(lambda s: bool(_re.match(r'^-?[0-9]+\\.?[0-9]*([eE][+-]?[0-9]+)?$', s)))"
+        self._w += "    is_identifier = staticmethod(lambda s: bool(_re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', s)))"
+        self._w += "    escape = staticmethod(_re.escape)"
+        self._w += "_regex = _RegexModule()"
         self._w += "chr = _builtins.chr"
         self._w += "ord = _builtins.ord"
         self._w += "none = None    # Lateralus alias for Python None"
@@ -873,6 +915,8 @@ class PythonTranspiler(ASTVisitor):
             "stdlib.time":      "_time",
             "random":           "__import__('random')",
             "stdlib.random":    "__import__('random')",
+            "regex":            "_regex",
+            "stdlib.regex":     "_regex",
             "polyglot":         "lateralus.polyglot",
             # Lateralus package stdlib modules
             "science":          "lateralus_lang.science",
@@ -880,6 +924,16 @@ class PythonTranspiler(ASTVisitor):
             "data":             "lateralus_lang.data",
             "crypto":           "lateralus_lang.crypto_engine",
         }
+        if node.items:
+            target = _alias_map.get(node.path) or (_alias_map.get(node.path.split(".", 1)[1]) if node.path.startswith("stdlib.") else None)
+            if target:
+                for item in node.items:
+                    self._w += f"{item} = getattr({target}, {item!r}, globals().get({item!r}))"
+                return
+            py_path = node.path.replace(".", ".")
+            items_str = ", ".join(node.items)
+            self._w += f"from {py_path} import {items_str}"
+            return
         if node.path in _alias_map:
             target = _alias_map[node.path]
             if target.startswith("__import__"):
