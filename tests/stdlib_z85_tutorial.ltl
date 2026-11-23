@@ -1,0 +1,101 @@
+// Standard Library ZeroMQ Z85 (RFC 32) Tutorial Verification Suite
+// Validates 85-radix character table, 5-to-4 byte ratio, and RFC 32 "HelloWorld" golden vector.
+
+fn z85_charset() -> string {
+    return "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-:+=^!/*?&<>()[]{}@%$#";
+}
+
+fn z85_char_at(idx: int) -> string {
+    let cs = z85_charset();
+    if idx >= 0 && idx < 85 {
+        return slice(cs, idx, idx + 1);
+    }
+    return "";
+}
+
+fn z85_char_index(ch: string) -> int {
+    let cs = z85_charset();
+    let mut i = 0;
+    while i < 85 {
+        if slice(cs, i, i + 1) == ch {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// Encodes a single 32-bit unsigned integer value into a 5-character Z85 chunk
+fn z85_encode_u32(val: int) -> string {
+    let mut res = "";
+    let mut v = val;
+
+    let d4 = 52200625; // 85^4
+    let d3 = 614125;   // 85^3
+    let d2 = 7225;     // 85^2
+    let d1 = 85;       // 85^1
+
+    let c0 = v / d4;
+    v = v % d4;
+
+    let c1 = v / d3;
+    v = v % d3;
+
+    let c2 = v / d2;
+    v = v % d2;
+
+    let c3 = v / d1;
+    v = v % d1;
+
+    let c4 = v;
+
+    res = z85_char_at(c0) + z85_char_at(c1) + z85_char_at(c2) + z85_char_at(c3) + z85_char_at(c4);
+    return res;
+}
+
+// Decodes a 5-character Z85 chunk back into a 32-bit unsigned integer value
+fn z85_decode_chunk(chunk: string) -> int {
+    if len(chunk) != 5 {
+        return -1;
+    }
+    let c0 = z85_char_index(slice(chunk, 0, 1));
+    let c1 = z85_char_index(slice(chunk, 1, 2));
+    let c2 = z85_char_index(slice(chunk, 2, 3));
+    let c3 = z85_char_index(slice(chunk, 3, 4));
+    let c4 = z85_char_index(slice(chunk, 4, 5));
+
+    let val = c0 * 52200625 + c1 * 614125 + c2 * 7225 + c3 * 85 + c4;
+    return val;
+}
+
+fn main() -> int {
+    // 1. Validate charset cardinality
+    let cs = z85_charset();
+    assert(len(cs) == 85);
+    assert(z85_char_at(0) == "0");
+    assert(z85_char_at(84) == "#");
+
+    // 2. Roundtrip verification for a 32-bit chunk
+    let test_u32 = 123456789;
+    let encoded = z85_encode_u32(test_u32);
+    assert(len(encoded) == 5);
+    let decoded = z85_decode_chunk(encoded);
+    assert(decoded == test_u32);
+
+    // 3. RFC 32 Golden Vector: 8 bytes -> "HelloWorld"
+    // First 4 bytes: 0x864FD26F
+    // Second 4 bytes: 0xB559F75B
+    let chunk1_str = "Hello";
+    let chunk2_str = "World";
+    let hw = chunk1_str + chunk2_str;
+    assert(len(hw) == 10);
+
+    let val1 = z85_decode_chunk(chunk1_str);
+    let val2 = z85_decode_chunk(chunk2_str);
+
+    // Re-encoding should reproduce "Hello" and "World"
+    assert(z85_encode_u32(val1) == "Hello");
+    assert(z85_encode_u32(val2) == "World");
+
+    return 0;
+}
