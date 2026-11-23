@@ -1,0 +1,122 @@
+// ===================================================================
+// examples/convex_hull_trick_tutorial.ltl
+// -------------------------------------------------------------------
+// Practical Application: Energy Grid Tiered Production Profit
+// Envelope & Dynamic Tariff Optimization via Li Chao Tree (CHT).
+// ===================================================================
+
+pub fn new_cht(max_coord) {
+    let tree = dict()
+    tree["max_coord"] = max_coord
+    tree["lines"] = dict()
+    return tree
+}
+
+pub fn make_line(m, c) {
+    let line = dict()
+    line["m"] = m
+    line["c"] = c
+    return line
+}
+
+pub fn eval_line(line, x) {
+    if line == nil {
+        return 0 - 999999999
+    }
+    return line["m"] * x + line["c"]
+}
+
+pub fn cht_insert(tree, u, l, r, new_line) {
+    if tree["lines"][u] == nil {
+        tree["lines"][u] = new_line
+        return true
+    }
+
+    let mid = (l + r) / 2
+    let new_mid = eval_line(new_line, mid)
+    let curr_mid = eval_line(tree["lines"][u], mid)
+
+    if new_mid > curr_mid {
+        let temp = tree["lines"][u]
+        tree["lines"][u] = new_line
+        new_line = temp
+    }
+
+    if l == r {
+        return true
+    }
+
+    let new_left = eval_line(new_line, l)
+    let curr_left = eval_line(tree["lines"][u], l)
+    if new_left > curr_left {
+        cht_insert(tree, 2 * u, l, mid, new_line)
+        return true
+    }
+
+    let new_right = eval_line(new_line, r)
+    let curr_right = eval_line(tree["lines"][u], r)
+    if new_right > curr_right {
+        cht_insert(tree, 2 * u + 1, mid + 1, r, new_line)
+        return true
+    }
+
+    return true
+}
+
+pub fn cht_add_line(tree, m, c) {
+    let line = make_line(m, c)
+    let max_c = tree["max_coord"]
+    cht_insert(tree, 1, 0, max_c, line)
+    return true
+}
+
+pub fn cht_query(tree, u, l, r, x) {
+    let ans = eval_line(tree["lines"][u], x)
+    if l == r {
+        return ans
+    }
+
+    let mid = (l + r) / 2
+    if x <= mid {
+        let child_ans = cht_query(tree, 2 * u, l, mid, x)
+        if child_ans > ans {
+            ans = child_ans
+        }
+    } else {
+        let child_ans = cht_query(tree, 2 * u + 1, mid + 1, r, x)
+        if child_ans > ans {
+            ans = child_ans
+        }
+    }
+    return ans
+}
+
+pub fn cht_get_max(tree, x) {
+    let max_c = tree["max_coord"]
+    return cht_query(tree, 1, 0, max_c, x)
+}
+
+pub fn run_energy_tariff_pipeline() {
+    // Coordinate domain: 0 to 100 Gigawatt-hours demand
+    let grid_market = new_cht(100)
+
+    // Strategy 1 (Solar & Storage Base): Revenue = 15*x + 200
+    cht_add_line(grid_market, 15, 200)
+
+    // Strategy 2 (Peaker Gas Plant): Revenue = 40*x - 300
+    cht_add_line(grid_market, 40, 0 - 300)
+
+    // Strategy 3 (Nuclear Steady State): Revenue = 5*x + 800
+    cht_add_line(grid_market, 5, 800)
+
+    // Evaluate Optimal Tariff Revenue at different load points:
+    let rev_at_10 = cht_get_max(grid_market, 10)  // Low demand
+    let rev_at_30 = cht_get_max(grid_market, 30)  // Medium load
+    let rev_at_80 = cht_get_max(grid_market, 80)  // Peak demand
+
+    let report = dict()
+    report["rev_at_10"] = rev_at_10
+    report["rev_at_30"] = rev_at_30
+    report["rev_at_80"] = rev_at_80
+    return report
+}
