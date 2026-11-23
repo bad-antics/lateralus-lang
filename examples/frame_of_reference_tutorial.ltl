@@ -1,0 +1,95 @@
+// ===================================================================
+// examples/frame_of_reference_tutorial.ltl
+//
+// Tutorial: Frame of Reference (FoR) & Delta-of-Delta Time-Series
+// Integer Compression using Lateralus `stdlib/frame_of_reference.ltl`.
+//
+// Demonstrates:
+// 1. FoR min-subtraction integer compression on clustered telemetry.
+// 2. Residual bit-width minimization (e.g. 64-bit int -> 4-bit deltas).
+// 3. Gorilla-style delta-of-delta second-order difference encoding.
+// 4. Memory footprint savings on high-frequency timestamp streams.
+// 5. Exact lossless round-trip reconstruction.
+// ===================================================================
+
+import frame_of_reference
+
+fn lists_equal(a: list, b: list) -> bool {
+    if len(a) != len(b) {
+        return false
+    }
+    let i = 0
+    while i < len(a) {
+        if a[i] != b[i] {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+pub fn main() {
+    print("=== Lateralus Frame of Reference (FoR) Tutorial ===")
+
+    // Part 1: Frame of Reference (FoR) on Clustered Integers
+    // High-value base integers (e.g. process IDs, memory addresses)
+    let memory_pages = [
+        4194304, 4194305, 4194307, 4194304, 4194312,
+        4194306, 4194309, 4194315, 4194308, 4194304
+    ]
+
+    print("--- 1. Frame of Reference Encoding ---")
+    print("Raw integer count: " + str(len(memory_pages)))
+
+    let for_enc = frame_of_reference_encode(memory_pages)
+    let base_ref = for_enc["ref"]
+    let bit_w = for_enc["bit_width"]
+    let deltas = for_enc["deltas"]
+
+    print("Reference baseline (min): " + str(base_ref))
+    print("Residual bit-width required: " + str(bit_w) + " bits (down from 64 bits)")
+
+    let for_dec = frame_of_reference_decode(for_enc)
+    let for_ok = lists_equal(for_dec, memory_pages)
+    if for_ok {
+        print("[VERIFIED] FoR lossless round-trip reconstruction matches original!")
+    } else {
+        print("[FAILED] FoR decode mismatch.")
+    }
+
+    // Part 2: Gorilla Delta-of-Delta for Time-Series Timestamps
+    print("--- 2. Gorilla Delta-of-Delta Timestamp Encoding ---")
+    // Periodic telemetry timestamps with microsecond network jitter:
+    let timestamps = [
+        1700000000, 1700000010, 1700000020, 1700000032, 1700000041,
+        1700000051, 1700000060, 1700000070, 1700000080, 1700000090
+    ]
+
+    print("Timestamp sample count: " + str(len(timestamps)))
+
+    let dod_enc = frame_of_reference_encode_dod(timestamps)
+    let first_ts = dod_enc["first"]
+    let init_delta = dod_enc["second_delta"]
+    let dods = dod_enc["dods"]
+
+    print("Epoch base (first): " + str(first_ts))
+    print("Initial rate (second_delta): " + str(init_delta) + " seconds")
+    print("Second-order differences (dods count): " + str(len(dods)))
+
+    // Print first few dod values to observe near-zero clustering
+    let d_i = 0
+    while d_i < len(dods) {
+        print("  dod[" + str(d_i) + "] = " + str(dods[d_i]))
+        d_i = d_i + 1
+    }
+
+    let dod_dec = frame_of_reference_decode_dod(dod_enc)
+    let dod_ok = lists_equal(dod_dec, timestamps)
+    if dod_ok {
+        print("[VERIFIED] Delta-of-delta lossless reconstruction matches original!")
+    } else {
+        print("[FAILED] Delta-of-delta decode mismatch.")
+    }
+
+    print("=== Frame of Reference Tutorial Completed Successfully ===")
+}

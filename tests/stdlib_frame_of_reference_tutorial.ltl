@@ -1,0 +1,118 @@
+// tests/stdlib_frame_of_reference_tutorial.ltl
+// Pinned test vectors and invariants for stdlib/frame_of_reference.ltl
+
+import frame_of_reference
+
+fn lists_equal(a: list, b: list) -> bool {
+    if len(a) != len(b) {
+        return false
+    }
+    let i = 0
+    while i < len(a) {
+        if a[i] != b[i] {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+pub fn test_for_empty_list() -> bool {
+    let empty: list = []
+    let enc = frame_of_reference_encode(empty)
+    if enc["ref"] != 0 || len(enc["deltas"]) != 0 || enc["bit_width"] != 0 {
+        return false
+    }
+    let dec = frame_of_reference_decode(enc)
+    return lists_equal(dec, empty)
+}
+
+pub fn test_for_monochromatic() -> bool {
+    let vals = [5000, 5000, 5000, 5000]
+    let enc = frame_of_reference_encode(vals)
+    if enc["ref"] != 5000 {
+        return false
+    }
+    if enc["bit_width"] != 1 {
+        return false
+    }
+    let deltas = enc["deltas"]
+    let i = 0
+    while i < len(deltas) {
+        if deltas[i] != 0 {
+            return false
+        }
+        i = i + 1
+    }
+    let dec = frame_of_reference_decode(enc)
+    return lists_equal(dec, vals)
+}
+
+pub fn test_for_clustered_integers() -> bool {
+    let vals = [1000000, 1000005, 1000002, 1000010, 1000001]
+    let enc = frame_of_reference_encode(vals)
+    if enc["ref"] != 1000000 {
+        return false
+    }
+    // Max delta is 10. bit_width(10) == 4 (since 10 in binary is 1010)
+    if enc["bit_width"] != 4 {
+        return false
+    }
+    let dec = frame_of_reference_decode(enc)
+    return lists_equal(dec, vals)
+}
+
+pub fn test_dod_constant_rate_stream() -> bool {
+    let timestamps = [1000, 1010, 1020, 1030, 1040, 1050]
+    let enc = frame_of_reference_encode_dod(timestamps)
+    if enc["first"] != 1000 {
+        return false
+    }
+    if enc["second_delta"] != 10 {
+        return false
+    }
+    let dods = enc["dods"]
+    if len(dods) != 4 {
+        return false
+    }
+    // Under constant rate, all second-order differences must be 0
+    let i = 0
+    while i < len(dods) {
+        if dods[i] != 0 {
+            return false
+        }
+        i = i + 1
+    }
+    let dec = frame_of_reference_decode_dod(enc)
+    return lists_equal(dec, timestamps)
+}
+
+pub fn test_dod_jittered_time_series() -> bool {
+    let ts = [100, 110, 122, 131, 145]
+    let enc = frame_of_reference_encode_dod(ts)
+    if enc["first"] != 100 || enc["second_delta"] != 10 {
+        return false
+    }
+    let dods = enc["dods"]
+    // d1 = 12 - 10 = +2
+    // d2 = 9 - 12 = -3
+    // d3 = 14 - 9 = +5
+    if len(dods) != 3 {
+        return false
+    }
+    if dods[0] != 2 || dods[1] != -3 || dods[2] != 5 {
+        return false
+    }
+    let dec = frame_of_reference_decode_dod(enc)
+    return lists_equal(dec, ts)
+}
+
+pub fn test_dod_single_element() -> bool {
+    let single = [1700000000]
+    let enc = frame_of_reference_encode_dod(single)
+    if enc["first"] != 1700000000 {
+        return false
+    }
+    let dec = frame_of_reference_decode_dod(enc)
+    return lists_equal(dec, single)
+}
