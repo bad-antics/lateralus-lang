@@ -1,0 +1,208 @@
+// ===================================================================
+// examples/fractional_cascading_tutorial.ltl
+// -------------------------------------------------------------------
+// Multi-Layer GIS Geo-Spatial Elevation & Polygon Boundary Classifier
+// -------------------------------------------------------------------
+// Real-world demonstration of Fractional Cascading locating target
+// elevation coordinates across heterogeneous GIS layers in optimal
+// O(log n + k) time without redundant binary search restarts.
+// ===================================================================
+
+pub fn fc_binary_search(vals: list, key: int) -> int {
+    let mut low = 0
+    let mut high = vals.len()
+    while low < high {
+        let mid = low + (high - low) / 2
+        if vals[mid] >= key {
+            high = mid
+        } else {
+            low = mid + 1
+        }
+    }
+    return low
+}
+
+pub fn fc_build(catalogues: list) -> dict {
+    let mut fc = {}
+    let k = catalogues.len()
+    let mut m_vals = []
+    let mut m_orig = []
+    let mut m_down = []
+
+    let mut i = 0
+    while i < k {
+        m_vals.push([])
+        m_orig.push([])
+        m_down.push([])
+        i = i + 1
+    }
+
+    let bottom_arr = catalogues[k - 1]
+    let mut b_vals = []
+    let mut b_orig = []
+    let mut b_down = []
+    let mut bi = 0
+    while bi < bottom_arr.len() {
+        b_vals.push(bottom_arr[bi])
+        b_orig.push(bi)
+        b_down.push(0)
+        bi = bi + 1
+    }
+    m_vals[k - 1] = b_vals
+    m_orig[k - 1] = b_orig
+    m_down[k - 1] = b_down
+
+    let mut layer = k - 2
+    while layer >= 0 {
+        let orig_list = catalogues[layer]
+        let down_vals = m_vals[layer + 1]
+
+        let mut sample_vals = []
+        let mut sample_indices = []
+        let mut si = 0
+        while si < down_vals.len() {
+            sample_vals.push(down_vals[si])
+            sample_indices.push(si)
+            si = si + 2
+        }
+
+        let mut merged_vals = []
+        let mut merged_orig = []
+        let mut merged_down = []
+
+        let mut p1 = 0
+        let mut p2 = 0
+        let n1 = orig_list.len()
+        let n2 = sample_vals.len()
+
+        while p1 < n1 or p2 < n2 {
+            if p2 >= n2 or (p1 < n1 and orig_list[p1] <= sample_vals[p2]) {
+                let v = orig_list[p1]
+                merged_vals.push(v)
+                merged_orig.push(p1)
+                if p2 < n2 {
+                    merged_down.push(sample_indices[p2])
+                } else {
+                    merged_down.push(down_vals.len())
+                }
+                p1 = p1 + 1
+            } else {
+                let v = sample_vals[p2]
+                merged_vals.push(v)
+                merged_orig.push(p1)
+                merged_down.push(sample_indices[p2])
+                p2 = p2 + 1
+            }
+        }
+
+        m_vals[layer] = merged_vals
+        m_orig[layer] = merged_orig
+        m_down[layer] = merged_down
+        layer = layer - 1
+    }
+
+    fc["m_vals"] = m_vals
+    fc["m_orig"] = m_orig
+    fc["m_down"] = m_down
+    fc["num_catalogues"] = k
+    fc["catalogues"] = catalogues
+    return fc
+}
+
+pub fn fc_query(fc: dict, key: int) -> list {
+    let k = fc["num_catalogues"]
+    let m_vals = fc["m_vals"]
+    let m_orig = fc["m_orig"]
+    let m_down = fc["m_down"]
+
+    let mut results = []
+
+    let top_vals = m_vals[0]
+    let mut pos = fc_binary_search(top_vals, key)
+
+    let top_orig = m_orig[0]
+    if pos < top_vals.len() {
+        results.push(top_orig[pos])
+    } else {
+        let catalogues = fc["catalogues"]
+        let first_cat = catalogues[0]
+        results.push(first_cat.len())
+    }
+
+    let mut layer = 0
+    while layer < k - 1 {
+        let cur_down = m_down[layer]
+        let next_vals = m_vals[layer + 1]
+        let next_orig = m_orig[layer + 1]
+        let catalogues = fc["catalogues"]
+        let next_cat = catalogues[layer + 1]
+
+        let mut candidate = 0
+        if pos < cur_down.len() {
+            candidate = cur_down[pos]
+        } else {
+            candidate = next_vals.len()
+        }
+
+        let mut next_pos = candidate
+        if next_pos > 0 and next_pos - 1 < next_vals.len() {
+            if next_vals[next_pos - 1] >= key {
+                next_pos = next_pos - 1
+            }
+        }
+        if next_pos < next_vals.len() {
+            if next_vals[next_pos] < key {
+                next_pos = next_pos + 1
+            }
+        }
+
+        if next_pos < next_vals.len() {
+            results.push(next_orig[next_pos])
+        } else {
+            results.push(next_cat.len())
+        }
+
+        pos = next_pos
+        layer = layer + 1
+    }
+
+    return results
+}
+
+// -------------------------------------------------------------------
+// Pipeline Demo: LiDAR Point Cloud Multi-Layer Elevation Stratification
+// -------------------------------------------------------------------
+
+pub fn simulate_gis_stratification() -> bool {
+    // 4 GIS layers representing elevation thresholds (meters):
+    // Layer 0: Topographic terrain contours [100, 250, 500, 1000]
+    // Layer 1: Hydrographic flood levels    [80, 220, 480, 950]
+    // Layer 2: Canopy forest altitude zones [150, 300, 600, 1200]
+    // Layer 3: Geological rock stratas      [50, 200, 400, 800]
+    let layer0 = [100, 250, 500, 1000]
+    let layer1 = [80, 220, 480, 950]
+    let layer2 = [150, 300, 600, 1200]
+    let layer3 = [50, 200, 400, 800]
+
+    let gis_db = fc_build([layer0, layer1, layer2, layer3])
+
+    // Incoming LiDAR beam measurement at altitude 230 meters:
+    // Layer 0: >= 230 is 250 (idx 1)
+    // Layer 1: >= 230 is 480 (idx 2)
+    // Layer 2: >= 230 is 300 (idx 1)
+    // Layer 3: >= 230 is 400 (idx 2)
+    let strata = fc_query(gis_db, 230)
+
+    if strata[0] != 1 or strata[1] != 2 or strata[2] != 1 or strata[3] != 2 {
+        return false
+    }
+
+    return true
+}
+
+pub fn main() -> int {
+    if simulate_gis_stratification() {
+        return 0
+    }
+    return 1
+}
