@@ -466,7 +466,7 @@ def main(argv=None) -> int:
             _print_errors(result)
             return 1
         # Inject a test-runner tail into the generated Python
-        runner = """
+        runner = r"""
 import time as _test_time
 _passed = _failed = 0
 for _fn in _LATERALUS_TESTS:
@@ -482,7 +482,7 @@ for _fn in _LATERALUS_TESTS:
         _failed += 1
 print(f"\n  {_passed} passed  {_failed} failed")
 """
-        py_src = result.code + "\n" + runner
+        py_src = (result.python_src or "") + "\n" + runner
         import pathlib
         import subprocess
         import tempfile
