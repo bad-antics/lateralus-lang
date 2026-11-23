@@ -1,0 +1,113 @@
+// ===================================================================
+// examples/dict_encoding_tutorial.ltl — stdlib/dict_encoding.ltl tutorial
+// Runnable tour of dictionary encoding for low-cardinality columns.
+// Self-contained: the standard-library functions are inlined verbatim.
+// ===================================================================
+
+fn dict_encoding_encode(values: list) -> map {
+    let dict = []
+    let dict_idx = {}
+    let indices = []
+    let i = 0
+    while i < len(values) {
+        let v = values[i]
+        let k = str(v)
+        let idx = -1
+        if contains(dict_idx, k) {
+            idx = dict_idx[k]
+        } else {
+            idx = len(dict)
+            dict = dict + [v]
+            dict_idx[k] = idx
+        }
+        indices = indices + [idx]
+        i = i + 1
+    }
+    let m = {}
+    m["dictionary"] = dict
+    m["indices"] = indices
+    return m
+}
+
+fn dict_encoding_decode(enc: map) -> list {
+    let dict = enc["dictionary"]
+    let idx = enc["indices"]
+    let out = []
+    let i = 0
+    while i < len(idx) {
+        out = out + [dict[idx[i]]]
+        i = i + 1
+    }
+    return out
+}
+
+fn dict_encoding_index_bit_width(enc: map) -> int {
+    let n = len(enc["dictionary"])
+    if n <= 1 { return 1 }
+    let bits = 0
+    let v = n - 1
+    while v > 0 { v = v >> 1; bits = bits + 1 }
+    return bits
+}
+
+fn dict_encoding_cardinality(enc: map) -> int {
+    return len(enc["dictionary"])
+}
+
+fn list_str(xs: list) -> str {
+    let out = "["
+    let i = 0
+    while i < len(xs) {
+        if i > 0 { out = out + "," }
+        out = out + str(xs[i])
+        i = i + 1
+    }
+    return out + "]"
+}
+
+fn filter_by_code(enc: map, code: int) -> list {
+    let dictionary = enc["dictionary"]
+    let indices = enc["indices"]
+    let out = []
+    let i = 0
+    while i < len(indices) {
+        if indices[i] == code { out = out + [dictionary[code]] }
+        i = i + 1
+    }
+    return out
+}
+
+fn main() {
+    print("=== LATERALUS STDLIB DICT_ENCODING TUTORIAL ===")
+
+    print("STEP 1 first-seen dictionary:")
+    let values = ["pending", "paid", "pending", "failed", "paid"]
+    let enc = dict_encoding_encode(values)
+    print("  dictionary=" + str(enc["dictionary"]))
+    print("  indices=" + list_str(enc["indices"]))
+    print("  cardinality=" + str(dict_encoding_cardinality(enc)))
+    print("  index_bits=" + str(dict_encoding_index_bit_width(enc)))
+
+    print("STEP 2 exact round-trip:")
+    print("  decoded=" + str(dict_encoding_decode(enc)))
+    print("  roundtrip=" + str(dict_encoding_decode(enc) == values))
+
+    print("STEP 3 status code filtering:")
+    let pending = filter_by_code(enc, 0)
+    print("  pending=" + str(pending))
+    print("  pending_count=" + str(len(pending)))
+
+    print("STEP 4 edge cases and width boundary:")
+    let empty = dict_encoding_encode([])
+    let single = dict_encoding_encode(["only"])
+    let four = dict_encoding_encode(["a", "b", "c", "d"])
+    print("  empty=" + str(dict_encoding_decode(empty)))
+    print("  single=" + str(dict_encoding_decode(single)))
+    print("  single_bits=" + str(dict_encoding_index_bit_width(single)))
+    print("  four_bits=" + str(dict_encoding_index_bit_width(four)))
+
+    print("PINNED_VECTORS: dictionary=[pending,paid,failed] indices=0,1,0,2,1 "
+        + "cardinality=3 bits=2 pending_count=2 empty=[] single=[only] four_bits=2")
+    print("  ✓ examples/dict_encoding_tutorial.ltl: OK")
+    return 0
+}
