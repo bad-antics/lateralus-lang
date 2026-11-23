@@ -1,0 +1,213 @@
+// examples/edmonds_blossom_tutorial.ltl
+// Practical Application: Resilient P2P Mesh Cluster Full-Duplex Link Pairing
+// Demonstrating Edmonds' Blossom Algorithm on an odd-cycle general mesh graph.
+
+fn find_lca(base: list, parent: list, match: list, u: int, v: int) -> int {
+    var visited: list = []
+    var i: int = 0
+    while i < len(base) {
+        visited.append(false)
+        i = i + 1
+    }
+    
+    var curr_u: int = u
+    var curr_v: int = v
+    var done: bool = false
+    var lca: int = 0
+    
+    while !done {
+        curr_u = base[curr_u]
+        visited[curr_u] = true
+        if match[curr_u] == -1 {
+            done = true
+        } else {
+            curr_u = parent[match[curr_u]]
+        }
+    }
+    
+    done = false
+    while !done {
+        curr_v = base[curr_v]
+        if visited[curr_v] {
+            lca = curr_v
+            done = true
+        } else {
+            curr_v = parent[match[curr_v]]
+        }
+    }
+    return lca
+}
+
+fn mark_blossom(lca: int, u: int, base: list, parent: list, match: list, blossom: list) -> void {
+    var curr: int = u
+    while base[curr] != lca {
+        var v: int = match[curr]
+        blossom[base[curr]] = true
+        blossom[base[v]] = true
+        curr = parent[v]
+    }
+}
+
+fn contract_blossom(lca: int, u: int, v: int, base: list, parent: list, match: list, q: list, types: list) -> void {
+    var blossom: list = []
+    var i: int = 0
+    while i < len(base) {
+        blossom.append(false)
+        i = i + 1
+    }
+    
+    mark_blossom(lca, u, base, parent, match, blossom)
+    mark_blossom(lca, v, base, parent, match, blossom)
+    
+    if base[u] != lca {
+        parent[u] = v
+    }
+    if base[v] != lca {
+        parent[v] = u
+    }
+    
+    i = 0
+    while i < len(base) {
+        if blossom[base[i]] {
+            base[i] = lca
+            if types[i] == 1 {
+                types[i] = 0
+                q.append(i)
+            }
+        }
+        i = i + 1
+    }
+}
+
+fn find_augmenting_path(n: int, adj: list, match: list) -> int {
+    var parent: list = []
+    var base: list = []
+    var types: list = []
+    var q: list = []
+    
+    var i: int = 0
+    while i < n {
+        parent.append(-1)
+        base.append(i)
+        types.append(-1)
+        i = i + 1
+    }
+    
+    var root: int = 0
+    while root < n {
+        if match[root] == -1 {
+            q.append(root)
+            types[root] = 0
+        }
+        root = root + 1
+    }
+    
+    var head: int = 0
+    var aug_end: int = -1
+    
+    while head < len(q) && aug_end == -1 {
+        var u: int = q[head]
+        head = head + 1
+        
+        var neighbors: list = adj[u]
+        var j: int = 0
+        while j < len(neighbors) && aug_end == -1 {
+            var v: int = neighbors[j]
+            if base[u] != base[v] && match[u] != v {
+                if v == root || (match[v] != -1 && parent[match[v]] != -1) {
+                    var lca: int = find_lca(base, parent, match, u, v)
+                    contract_blossom(lca, u, v, base, parent, match, q, types)
+                } else if parent[v] == -1 {
+                    parent[v] = u
+                    if match[v] == -1 {
+                        aug_end = v
+                    } else {
+                        parent[match[v]] = v
+                        types[match[v]] = 0
+                        q.append(match[v])
+                    }
+                }
+            }
+            j = j + 1
+        }
+    }
+    
+    if aug_end != -1 {
+        var curr: int = aug_end
+        while curr != -1 {
+            var prev_u: int = parent[curr]
+            var next_v: int = -1
+            if prev_u != -1 {
+                next_v = match[prev_u]
+            }
+            match[curr] = prev_u
+            if prev_u != -1 {
+                match[prev_u] = curr
+            }
+            curr = next_v
+        }
+        return 1
+    }
+    return 0
+}
+
+fn edmonds_blossom(n: int, edges: list) -> map {
+    var adj: list = []
+    var match: list = []
+    var i: int = 0
+    while i < n {
+        var empty_list: list = []
+        adj.append(empty_list)
+        match.append(-1)
+        i = i + 1
+    }
+    
+    var e_idx: int = 0
+    while e_idx < len(edges) {
+        var edge: list = edges[e_idx]
+        var u: int = edge[0]
+        var v: int = edge[1]
+        var adj_u: list = adj[u]
+        var adj_v: list = adj[v]
+        adj_u.append(v)
+        adj_v.append(u)
+        e_idx = e_idx + 1
+    }
+    
+    var matches: int = 0
+    var augmented: int = 1
+    while augmented == 1 {
+        augmented = find_augmenting_path(n, adj, match)
+        if augmented == 1 {
+            matches = matches + 1
+        }
+    }
+    
+    return {
+        count: matches,
+        assignment: match
+    }
+}
+
+fn main() -> int {
+    // 6-node general P2P network topology containing odd cycles (triangle 0-1-2)
+    // plus tails: 0-3, 3-4, 4-5, 5-2
+    var edges: list = [
+        [0, 1],
+        [1, 2],
+        [2, 0],
+        [0, 3],
+        [3, 4],
+        [4, 5],
+        [5, 2]
+    ]
+    
+    var res: map = edmonds_blossom(6, edges)
+    var match_count: int = res.count
+    var assignment: list = res.assignment
+    
+    print("P2P Mesh Cluster Edmonds' Blossom Pairing:")
+    print("Maximum Pairs Matched:")
+    print(match_count)
+    return 0
+}
