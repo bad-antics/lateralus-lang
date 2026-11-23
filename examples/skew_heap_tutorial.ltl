@@ -1,0 +1,152 @@
+// ===================================================================
+// examples/skew_heap_tutorial.ltl
+// -------------------------------------------------------------------
+// Distributed Event Log Stream Re-sequencer using Skew Heap
+// -------------------------------------------------------------------
+// Demonstration of Skew Heap merging out-of-order distributed log
+// streams with zero structural metadata and unconditional child swapping
+// in amortized O(log n) time per event.
+// ===================================================================
+
+pub fn skew_create() -> dict {
+    let mut tree = {}
+    let mut val = []
+    let mut left = []
+    let mut right = []
+
+    val.push(0)
+    left.push(0)
+    right.push(0)
+
+    tree["val"] = val
+    tree["left"] = left
+    tree["right"] = right
+    return tree
+}
+
+pub fn skew_meld(tree: dict, u: int, v: int) -> int {
+    if u == 0 {
+        return v
+    }
+    if v == 0 {
+        return u
+    }
+
+    let mut node_u = u
+    let mut node_v = v
+
+    let val = tree["val"]
+    if val[node_u] > val[node_v] {
+        let tmp = node_u
+        node_u = node_v
+        node_v = tmp
+    }
+
+    let right = tree["right"]
+    let merged_right = skew_meld(tree, right[node_u], node_v)
+
+    let left = tree["left"]
+    let old_left = left[node_u]
+
+    let mut new_left = tree["left"]
+    let mut new_right = tree["right"]
+
+    new_left[node_u] = merged_right
+    new_right[node_u] = old_left
+
+    tree["left"] = new_left
+    tree["right"] = new_right
+
+    return node_u
+}
+
+pub fn skew_insert(tree: dict, root: int, key: int) -> int {
+    let mut val = tree["val"]
+    let mut left = tree["left"]
+    let mut right = tree["right"]
+
+    let node = val.len()
+    val.push(key)
+    left.push(0)
+    right.push(0)
+
+    tree["val"] = val
+    tree["left"] = left
+    tree["right"] = right
+
+    return skew_meld(tree, root, node)
+}
+
+pub fn skew_find_min(tree: dict, root: int) -> int {
+    if root == 0 {
+        return -1
+    }
+    let val = tree["val"]
+    return val[root]
+}
+
+pub fn skew_delete_min(tree: dict, root: int) -> list {
+    if root == 0 {
+        return [0, -1]
+    }
+    let val = tree["val"]
+    let min_val = val[root]
+
+    let left = tree["left"]
+    let right = tree["right"]
+    let l_child = left[root]
+    let r_child = right[root]
+
+    let new_root = skew_meld(tree, l_child, r_child)
+    return [new_root, min_val]
+}
+
+// -------------------------------------------------------------------
+// Pipeline Demo: Multi-Channel Microservice Out-of-Order Log Aggregator
+// -------------------------------------------------------------------
+
+pub fn simulate_log_resequencing() -> bool {
+    let tree = skew_create()
+
+    // Channel 1: Ingesting distributed events with microsecond timestamps
+    let mut ch1 = 0
+    ch1 = skew_insert(tree, ch1, 1050) // Payment authorized
+    ch1 = skew_insert(tree, ch1, 1010) // User cart created
+    ch1 = skew_insert(tree, ch1, 1080) // Receipt generated
+
+    // Channel 2: Parallel Kafka partition events
+    let mut ch2 = 0
+    ch2 = skew_insert(tree, ch2, 1025) // Inventory reserved
+    ch2 = skew_insert(tree, ch2, 1005) // User login successful
+    ch2 = skew_insert(tree, ch2, 1060) // Order confirmation email queued
+
+    // Channel amalgamation: Meld both priority streams into a unified stream
+    let mut unified_stream = skew_meld(tree, ch1, ch2)
+
+    // The earliest chronological event must be 1005 (User login)
+    if skew_find_min(tree, unified_stream) != 1005 {
+        return false
+    }
+
+    // Verify sequential strictly monotonic chronological replay
+    let expected_order = [1005, 1010, 1025, 1050, 1060, 1080]
+    let mut i = 0
+    while i < expected_order.len() {
+        let res = skew_delete_min(tree, unified_stream)
+        unified_stream = res[0]
+        let ts = res[1]
+        if ts != expected_order[i] {
+            return false
+        }
+        i = i + 1
+    }
+
+    return unified_stream == 0
+}
+
+pub fn main() -> int {
+    if simulate_log_resequencing() {
+        return 0
+    }
+    return 1
+}
