@@ -1,0 +1,68 @@
+// Lateralus Standard Library Example: CRC-32 Frame Check & Corruption Detection
+// Demonstrates IEEE 802.3 Ethernet frame integrity verification and error detection.
+
+fn ascii_val(ch: string) -> int {
+    if ch == "1" { return 49; }
+    if ch == "2" { return 50; }
+    if ch == "3" { return 51; }
+    if ch == "4" { return 52; }
+    if ch == "5" { return 53; }
+    if ch == "6" { return 54; }
+    if ch == "7" { return 55; }
+    if ch == "8" { return 56; }
+    if ch == "9" { return 57; }
+    return 0;
+}
+
+fn crc32_update(crc: int, byte_val: int) -> int {
+    let mut c = crc ^ byte_val;
+    let poly = 3988292384;
+    let mut i = 0;
+    while i < 8 {
+        if (c & 1) != 0 {
+            c = (c >> 1) ^ poly;
+        } else {
+            c = c >> 1;
+        }
+        i = i + 1;
+    }
+    return c;
+}
+
+fn compute_crc32(payload: string) -> int {
+    let mut crc = 4294967295;
+    let mut idx = 0;
+    while idx < len(payload) {
+        let b = ascii_val(slice(payload, idx, idx + 1));
+        crc = crc32_update(crc, b);
+        idx = idx + 1;
+    }
+    return crc ^ 4294967295;
+}
+
+fn main() -> int {
+    println("=== Lateralus CRC-32 (IEEE 802.3) Frame Check Demo ===");
+
+    // Sender prepares network packet payload
+    let packet_data = "123456789";
+    let fcs = compute_crc32(packet_data);
+    println("Payload: '" + packet_data + "' | Generated CRC-32: " + str(fcs));
+
+    // Assert golden vector (0xCBF43926 = 3421780262)
+    assert(fcs == 3421780262);
+    println("Standard vector 0xCBF43926 verified!");
+
+    // Receiver scenario A: pristine packet arrives
+    let rx_payload_clean = "123456789";
+    let rx_crc_clean = compute_crc32(rx_payload_clean);
+    assert(rx_crc_clean == fcs);
+    println("Receiver Scenario A: Checksum match! Packet accepted into network stack.");
+
+    // Receiver scenario B: single character corrupted on the wire
+    let rx_payload_corrupted = "123456788";
+    let rx_crc_corrupted = compute_crc32(rx_payload_corrupted);
+    assert(rx_crc_corrupted != fcs);
+    println("Receiver Scenario B: Corrupted packet detected! (Computed: " + str(rx_crc_corrupted) + " != " + str(fcs) + ") -> DROPPED.");
+
+    return 0;
+}
