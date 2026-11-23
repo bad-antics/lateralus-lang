@@ -1,0 +1,187 @@
+// ===================================================================
+// examples/two_sat_tutorial.ltl
+// -------------------------------------------------------------------
+// Demonstration of 2-SAT Solver in Lateralus.
+// Resolves package manager dependency constraints and version conflicts.
+// ===================================================================
+
+pub fn two_sat_create(n: int) -> dict {
+    let mut ts = {}
+    ts["n"] = n
+
+    let mut adj = []
+    let total_nodes = 2 * n + 2
+    let mut i = 0
+    while i < total_nodes {
+        adj.push([])
+        i = i + 1
+    }
+
+    ts["adj"] = adj
+    return ts
+}
+
+pub fn two_sat_add_clause(ts: dict, u: int, u_val: bool, v: int, v_val: bool) {
+    let mut adj = ts["adj"]
+
+    let mut u_node = 2 * u
+    let mut not_u = 2 * u + 1
+    if not u_val {
+        u_node = 2 * u + 1
+        not_u = 2 * u
+    }
+
+    let mut v_node = 2 * v
+    let mut not_v = 2 * v + 1
+    if not v_val {
+        v_node = 2 * v + 1
+        not_v = 2 * v
+    }
+
+    let mut not_u_edges = adj[not_u]
+    not_u_edges.push(v_node)
+    adj[not_u] = not_u_edges
+
+    let mut not_v_edges = adj[not_v]
+    not_v_edges.push(u_node)
+    adj[not_v] = not_v_edges
+}
+
+pub fn tarjan_dfs(u: int, adj: list, dfn: list, low: list, in_stack: list, stack: list, scc_id: list, state: dict) {
+    let mut timer = state["timer"]
+    timer = timer + 1
+    state["timer"] = timer
+
+    dfn[u] = timer
+    low[u] = timer
+    stack.push(u)
+    in_stack[u] = true
+
+    let u_edges = adj[u]
+    let n_edges = u_edges.len()
+    let mut i = 0
+    while i < n_edges {
+        let v = u_edges[i]
+        if dfn[v] == 0 {
+            tarjan_dfs(v, adj, dfn, low, in_stack, stack, scc_id, state)
+            if low[v] < low[u] {
+                low[u] = low[v]
+            }
+        } else {
+            if in_stack[v] {
+                if dfn[v] < low[u] {
+                    low[u] = dfn[v]
+                }
+            }
+        }
+        i = i + 1
+    }
+
+    if dfn[u] == low[u] {
+        let mut scc_count = state["scc_count"]
+        scc_count = scc_count + 1
+        state["scc_count"] = scc_count
+
+        let mut done = false
+        while not done {
+            let last_idx = stack.len() - 1
+            let top_node = stack[last_idx]
+            let _ = stack.pop()
+            in_stack[top_node] = false
+            scc_id[top_node] = scc_count
+            if top_node == u {
+                done = true
+            }
+        }
+    }
+}
+
+pub fn two_sat_solve(ts: dict) -> dict {
+    let n = ts["n"]
+    let adj = ts["adj"]
+    let total_nodes = 2 * n + 2
+
+    let mut dfn = []
+    let mut low = []
+    let mut in_stack = []
+    let mut scc_id = []
+    let mut stack = []
+
+    let mut i = 0
+    while i < total_nodes {
+        dfn.push(0)
+        low.push(0)
+        in_stack.push(false)
+        scc_id.push(0)
+        i = i + 1
+    }
+
+    let mut state = {}
+    state["timer"] = 0
+    state["scc_count"] = 0
+
+    let mut node = 2
+    while node < total_nodes {
+        if dfn[node] == 0 {
+            tarjan_dfs(node, adj, dfn, low, in_stack, stack, scc_id, state)
+        }
+        node = node + 1
+    }
+
+    let mut satisfiable = true
+    let mut assignment = [false]
+
+    let mut var_idx = 1
+    while var_idx <= n {
+        let pos_scc = scc_id[2 * var_idx]
+        let neg_scc = scc_id[2 * var_idx + 1]
+
+        if pos_scc == neg_scc {
+            satisfiable = false
+        }
+
+        let is_true = (pos_scc < neg_scc)
+        assignment.push(is_true)
+        var_idx = var_idx + 1
+    }
+
+    let mut res = {}
+    res["satisfiable"] = satisfiable
+    res["assignment"] = assignment
+    return res
+}
+
+fn main() {
+    print("=== Package Dependency Conflict Resolver (2-SAT) ===")
+    // 3 candidate packages:
+    // 1: Database Engine v2
+    // 2: Cache Proxy v3
+    // 3: Legacy Storage Bridge
+
+    let solver = two_sat_create(3)
+
+    // Constraint 1: Must install Database (1) OR Cache Proxy (2)
+    two_sat_add_clause(solver, 1, true, 2, true)
+
+    // Constraint 2: Cache Proxy (2) requires Legacy Bridge (3) => (not 2 or 3)
+    two_sat_add_clause(solver, 2, false, 3, true)
+
+    // Constraint 3: Database (1) and Legacy Bridge (3) mutually conflict => (not 1 or not 3)
+    two_sat_add_clause(solver, 1, false, 3, false)
+
+    let result = two_sat_solve(solver)
+    print("Is Dependency System Satisfiable:")
+    print(result["satisfiable"])
+
+    if result["satisfiable"] {
+        let assign = result["assignment"]
+        print("Install Database v2:")
+        print(assign[1])
+        print("Install Cache Proxy v3:")
+        print(assign[2])
+        print("Install Legacy Bridge:")
+        print(assign[3])
+    }
+}
+
+main()
