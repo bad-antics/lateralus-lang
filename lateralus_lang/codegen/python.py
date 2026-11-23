@@ -1515,7 +1515,14 @@ class PythonTranspiler(ASTVisitor):
             all_args = ", ".join(filter(None, [args, kwargs]))
             return f"{self._expr(node.callee)}({all_args})"
         if isinstance(node, IndexExpr):
-            return f"{self._expr(node.obj)}[{self._expr(node.index)}]"
+            idx = node.index
+            if isinstance(idx, RangeExpr):
+                # data[lo..hi] / data[lo..<hi] — spec'd slice syntax
+                end = self._expr(idx.end)
+                if idx.inclusive:
+                    end = f"({end} + 1)"
+                return f"{self._expr(node.obj)}[{self._expr(idx.start)}:{end}]"
+            return f"{self._expr(node.obj)}[{self._expr(idx)}]"
         if isinstance(node, FieldExpr):
             return f"{self._expr(node.obj)}.{node.field}"
         if isinstance(node, LambdaExpr):

@@ -76,6 +76,15 @@ class TestPythonTranspiler:
         assert "for" in r.python_src
         assert "in" in r.python_src
 
+    def test_range_index_emits_slice(self):
+        # Regression: data[0..<n] emitted data[range(0,n)] -> TypeError
+        r = check("let y = xs[0..<n]")
+        assert r.ok
+        assert "xs[0:n]" in r.python_src
+        r2 = check("let y = xs[1..3]")
+        assert r2.ok
+        assert "xs[1:(3 + 1)]" in r2.python_src
+
     def test_pipeline_operator(self):
         r = check("let y = x |> double")
         assert r.ok
