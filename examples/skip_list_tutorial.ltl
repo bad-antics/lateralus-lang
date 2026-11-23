@@ -1,0 +1,157 @@
+// ===================================================================
+// examples/skip_list_tutorial.ltl
+// -------------------------------------------------------------------
+// Practical example demonstrating Skip List multi-level express lanes
+// for an in-memory high-throughput gaming leaderboard index (Redis ZSET).
+// ===================================================================
+
+pub fn create_skip_list(max_level) {
+    let sl = dict()
+    sl["max_level"] = max_level
+    sl["current_level"] = 1
+    sl["seed"] = 42
+
+    let head = dict()
+    head["key"] = -999999999
+    head["val"] = nil
+    head["forward"] = dict()
+
+    let lvl = 0
+    while lvl < max_level {
+        head["forward"][lvl] = -1
+        lvl = lvl + 1
+    }
+
+    sl["nodes"] = [head]
+    return sl
+}
+
+pub fn skip_list_search(sl, target_key) {
+    let curr_idx = 0
+    let lvl = sl["current_level"] - 1
+
+    while lvl >= 0 {
+        let done = false
+        while not done {
+            let next_idx = sl["nodes"][curr_idx]["forward"][lvl]
+            if next_idx != -1 and sl["nodes"][next_idx]["key"] < target_key {
+                curr_idx = next_idx
+            } else {
+                done = true
+            }
+        }
+        lvl = lvl - 1
+    }
+
+    let candidate = sl["nodes"][curr_idx]["forward"][0]
+    if candidate != -1 and sl["nodes"][candidate]["key"] == target_key {
+        return sl["nodes"][candidate]["val"]
+    }
+
+    return nil
+}
+
+pub fn skip_list_insert(sl, key, val, forced_level) {
+    let update = dict()
+    let curr_idx = 0
+    let lvl = sl["max_level"] - 1
+
+    while lvl >= 0 {
+        let done = false
+        while not done {
+            let next_idx = sl["nodes"][curr_idx]["forward"][lvl]
+            if next_idx != -1 and sl["nodes"][next_idx]["key"] < key {
+                curr_idx = next_idx
+            } else {
+                done = true
+            }
+        }
+        update[lvl] = curr_idx
+        lvl = lvl - 1
+    }
+
+    let candidate = sl["nodes"][curr_idx]["forward"][0]
+    if candidate != -1 and sl["nodes"][candidate]["key"] == key {
+        sl["nodes"][candidate]["val"] = val
+        return true
+    }
+
+    let new_lvl = forced_level
+    if new_lvl <= 0 {
+        new_lvl = 1
+    }
+    if new_lvl > sl["max_level"] {
+        new_lvl = sl["max_level"]
+    }
+
+    if new_lvl > sl["current_level"] {
+        let l = sl["current_level"]
+        while l < new_lvl {
+            update[l] = 0
+            l = l + 1
+        }
+        sl["current_level"] = new_lvl
+    }
+
+    let new_node = dict()
+    new_node["key"] = key
+    new_node["val"] = val
+    new_node["forward"] = dict()
+
+    let node_idx = len(sl["nodes"])
+
+    let l = 0
+    while l < new_lvl {
+        let prev_idx = update[l]
+        new_node["forward"][l] = sl["nodes"][prev_idx]["forward"][l]
+        sl["nodes"][prev_idx]["forward"][l] = node_idx
+        l = l + 1
+    }
+
+    while l < sl["max_level"] {
+        new_node["forward"][l] = -1
+        l = l + 1
+    }
+
+    sl["nodes"] = push(sl["nodes"], new_node)
+    return true
+}
+
+pub fn skip_list_to_list(sl) {
+    let res = []
+    let curr = sl["nodes"][0]["forward"][0]
+    while curr != -1 {
+        res = push(res, sl["nodes"][curr]["key"])
+        curr = sl["nodes"][curr]["forward"][0]
+    }
+    return res
+}
+
+pub fn main() {
+    print("=== In-Memory Real-Time Leaderboard Index (Skip List) ===")
+    print("Populating high-throughput sorted player rank index...")
+
+    let sl = create_skip_list(4)
+
+    // Inserting player scores (key: score, val: player handle)
+    skip_list_insert(sl, 1200, "alice_crypto", 1)
+    skip_list_insert(sl, 2400, "bob_miner", 2)
+    skip_list_insert(sl, 3600, "carol_node", 3)
+    skip_list_insert(sl, 4800, "dave_staker", 2)
+    skip_list_insert(sl, 6000, "eve_validator", 4)
+
+    print("Active Skip List Tower Height:")
+    print(sl["current_level"])
+
+    print("Querying Player at Score 3600:")
+    let p3600 = skip_list_search(sl, 3600)
+    print(p3600)
+
+    print("Querying Non-Existent Score 9999:")
+    let p9999 = skip_list_search(sl, 9999)
+    print(p9999 == nil)
+
+    print("Ordered Leaderboard Scores (Lowest to Highest):")
+    let ordered_scores = skip_list_to_list(sl)
+    print(ordered_scores)
+}

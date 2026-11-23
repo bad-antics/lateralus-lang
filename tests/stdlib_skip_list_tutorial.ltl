@@ -1,0 +1,227 @@
+// ===================================================================
+// tests/stdlib_skip_list_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for the Skip List probabilistic data structure,
+// multi-level forward pointers, express lanes, and O(log n) search.
+// ===================================================================
+
+pub fn create_skip_list(max_level) {
+    let sl = dict()
+    sl["max_level"] = max_level
+    sl["current_level"] = 1
+    sl["seed"] = 42
+
+    // Head sentinel node at index 0
+    let head = dict()
+    head["key"] = -999999999
+    head["val"] = nil
+    head["forward"] = dict()
+
+    let lvl = 0
+    while lvl < max_level {
+        head["forward"][lvl] = -1
+        lvl = lvl + 1
+    }
+
+    sl["nodes"] = [head]
+    return sl
+}
+
+pub fn skip_list_search(sl, target_key) {
+    let curr_idx = 0
+    let lvl = sl["current_level"] - 1
+
+    while lvl >= 0 {
+        let done = false
+        while not done {
+            let next_idx = sl["nodes"][curr_idx]["forward"][lvl]
+            if next_idx != -1 and sl["nodes"][next_idx]["key"] < target_key {
+                curr_idx = next_idx
+            } else {
+                done = true
+            }
+        }
+        lvl = lvl - 1
+    }
+
+    let candidate = sl["nodes"][curr_idx]["forward"][0]
+    if candidate != -1 and sl["nodes"][candidate]["key"] == target_key {
+        return sl["nodes"][candidate]["val"]
+    }
+
+    return nil
+}
+
+pub fn skip_list_insert(sl, key, val, forced_level) {
+    let update = dict()
+    let curr_idx = 0
+    let lvl = sl["max_level"] - 1
+
+    while lvl >= 0 {
+        let done = false
+        while not done {
+            let next_idx = sl["nodes"][curr_idx]["forward"][lvl]
+            if next_idx != -1 and sl["nodes"][next_idx]["key"] < key {
+                curr_idx = next_idx
+            } else {
+                done = true
+            }
+        }
+        update[lvl] = curr_idx
+        lvl = lvl - 1
+    }
+
+    let candidate = sl["nodes"][curr_idx]["forward"][0]
+    if candidate != -1 and sl["nodes"][candidate]["key"] == key {
+        // Key exists, update value
+        sl["nodes"][candidate]["val"] = val
+        return true
+    }
+
+    let new_lvl = forced_level
+    if new_lvl <= 0 {
+        new_lvl = 1
+    }
+    if new_lvl > sl["max_level"] {
+        new_lvl = sl["max_level"]
+    }
+
+    if new_lvl > sl["current_level"] {
+        let l = sl["current_level"]
+        while l < new_lvl {
+            update[l] = 0
+            l = l + 1
+        }
+        sl["current_level"] = new_lvl
+    }
+
+    let new_node = dict()
+    new_node["key"] = key
+    new_node["val"] = val
+    new_node["forward"] = dict()
+
+    let node_idx = len(sl["nodes"])
+
+    let l = 0
+    while l < new_lvl {
+        let prev_idx = update[l]
+        new_node["forward"][l] = sl["nodes"][prev_idx]["forward"][l]
+        sl["nodes"][prev_idx]["forward"][l] = node_idx
+        l = l + 1
+    }
+
+    while l < sl["max_level"] {
+        new_node["forward"][l] = -1
+        l = l + 1
+    }
+
+    sl["nodes"] = push(sl["nodes"], new_node)
+    return true
+}
+
+pub fn skip_list_to_list(sl) {
+    let res = []
+    let curr = sl["nodes"][0]["forward"][0]
+    while curr != -1 {
+        res = push(res, sl["nodes"][curr]["key"])
+        curr = sl["nodes"][curr]["forward"][0]
+    }
+    return res
+}
+
+pub fn test_skip_list_insert_and_search() -> bool {
+    let sl = create_skip_list(4)
+    skip_list_insert(sl, 10, 100, 1)
+    skip_list_insert(sl, 20, 200, 2)
+    skip_list_insert(sl, 30, 300, 1)
+    skip_list_insert(sl, 40, 400, 3)
+    skip_list_insert(sl, 50, 500, 2)
+
+    if skip_list_search(sl, 30) != 300 {
+        return false
+    }
+    if skip_list_search(sl, 50) != 500 {
+        return false
+    }
+    if skip_list_search(sl, 10) != 100 {
+        return false
+    }
+    if skip_list_search(sl, 99) != nil {
+        return false
+    }
+
+    return true
+}
+
+pub fn test_skip_list_sorted_traversal() -> bool {
+    let sl = create_skip_list(4)
+    skip_list_insert(sl, 35, "35", 1)
+    skip_list_insert(sl, 10, "10", 2)
+    skip_list_insert(sl, 50, "50", 1)
+    skip_list_insert(sl, 20, "20", 3)
+    skip_list_insert(sl, 40, "40", 2)
+
+    let items = skip_list_to_list(sl)
+    if len(items) != 5 {
+        return false
+    }
+    if items[0] != 10 or items[1] != 20 or items[2] != 35 or items[3] != 40 or items[4] != 50 {
+        return false
+    }
+
+    return true
+}
+
+pub fn test_skip_list_update_existing_key() -> bool {
+    let sl = create_skip_list(4)
+    skip_list_insert(sl, 15, "alpha", 1)
+    skip_list_insert(sl, 15, "beta", 1)
+
+    if skip_list_search(sl, 15) != "beta" {
+        return false
+    }
+    let items = skip_list_to_list(sl)
+    if len(items) != 1 {
+        return false
+    }
+
+    return true
+}
+
+pub fn test_skip_list_multi_level_express_lanes() -> bool {
+    let sl = create_skip_list(4)
+    skip_list_insert(sl, 10, "ten", 1)
+    skip_list_insert(sl, 20, "twenty", 3)
+    skip_list_insert(sl, 30, "thirty", 2)
+    skip_list_insert(sl, 40, "forty", 4)
+
+    // Current level should have been raised to 4
+    if sl["current_level"] != 4 {
+        return false
+    }
+
+    // Level 3 express lane from head (0) points directly to node 40 (idx 4)
+    if sl["nodes"][0]["forward"][3] != 4 {
+        return false
+    }
+
+    if skip_list_search(sl, 40) != "forty" {
+        return false
+    }
+
+    return true
+}
+
+pub fn test_skip_list_single_element() -> bool {
+    let sl = create_skip_list(4)
+    skip_list_insert(sl, 42, "answer", 1)
+
+    if skip_list_search(sl, 42) != "answer" {
+        return false
+    }
+    if skip_list_search(sl, 41) != nil {
+        return false
+    }
+
+    return true
+}
