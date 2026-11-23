@@ -547,10 +547,30 @@ class Lexer:
                         self._advance()
                         expr_src += self._advance()
                         continue
+                    if c in ('"', "'"):
+                        # nested string/char literal inside the expression —
+                        # skip to its close so quotes/braces inside don't
+                        # terminate the interpolation early
+                        quote = c
+                        expr_src += self._advance()
+                        while self._pos < len(self._src):
+                            c2 = self._cur()
+                            if c2 == "\\":
+                                expr_src += self._advance()
+                                if self._pos < len(self._src):
+                                    expr_src += self._advance()
+                                continue
+                            expr_src += self._advance()
+                            if c2 == quote:
+                                break
+                        continue
                     if c == "{": depth += 1
                     if c == "}": depth -= 1
                     if depth > 0: expr_src += c
                     self._advance()
+                if depth > 0:
+                    raise LexError("Unterminated string interpolation",
+                                   self._file, line, col)
                 parts.append(("expr", expr_src))
             elif ch == "{{":
                 buf += "{"; self._advance(); self._advance()
