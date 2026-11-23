@@ -1,0 +1,299 @@
+// ===================================================================
+// tests/stdlib_treap_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for Cartesian Randomized Search Tree (Treap)
+// maintaining dual invariants: Binary Search Tree keys and Max-Heap
+// randomized priorities with O(log n) expected tree height.
+// ===================================================================
+
+pub fn new_treap() {
+    let tree = dict()
+    tree["root"] = -1
+    tree["nodes"] = dict()
+    tree["next_id"] = 0
+    return tree
+}
+
+pub fn treap_rotate_right(tree, y) {
+    let y_node = tree["nodes"][y]
+    let x = y_node["left"]
+    let x_node = tree["nodes"][x]
+    y_node["left"] = x_node["right"]
+    x_node["right"] = y
+    return x
+}
+
+pub fn treap_rotate_left(tree, x) {
+    let x_node = tree["nodes"][x]
+    let y = x_node["right"]
+    let y_node = tree["nodes"][y]
+    x_node["right"] = y_node["left"]
+    y_node["left"] = x
+    return y
+}
+
+pub fn treap_insert_node(tree, curr_id, new_id) {
+    if curr_id == -1 {
+        return new_id
+    }
+    let curr = tree["nodes"][curr_id]
+    let new_node = tree["nodes"][new_id]
+
+    if new_node["key"] < curr["key"] {
+        curr["left"] = treap_insert_node(tree, curr["left"], new_id)
+        let left_id = curr["left"]
+        let left_node = tree["nodes"][left_id]
+        if left_node["priority"] > curr["priority"] {
+            curr_id = treap_rotate_right(tree, curr_id)
+        }
+    } else {
+        if new_node["key"] > curr["key"] {
+            curr["right"] = treap_insert_node(tree, curr["right"], new_id)
+            let right_id = curr["right"]
+            let right_node = tree["nodes"][right_id]
+            if right_node["priority"] > curr["priority"] {
+                curr_id = treap_rotate_left(tree, curr_id)
+            }
+        } else {
+            curr["val"] = new_node["val"]
+        }
+    }
+    return curr_id
+}
+
+pub fn treap_insert(tree, key, priority, val) {
+    let new_id = tree["next_id"]
+    tree["next_id"] = new_id + 1
+    let node = dict()
+    node["id"] = new_id
+    node["key"] = key
+    node["priority"] = priority
+    node["val"] = val
+    node["left"] = -1
+    node["right"] = -1
+    tree["nodes"][new_id] = node
+    tree["root"] = treap_insert_node(tree, tree["root"], new_id)
+    return true
+}
+
+pub fn treap_search(tree, key) {
+    let curr_id = tree["root"]
+    while curr_id != -1 {
+        let node = tree["nodes"][curr_id]
+        if key == node["key"] {
+            return node["val"]
+        }
+        if key < node["key"] {
+            curr_id = node["left"]
+        } else {
+            curr_id = node["right"]
+        }
+    }
+    return nil
+}
+
+pub fn treap_verify_heap(tree, curr_id) {
+    if curr_id == -1 {
+        return true
+    }
+    let curr = tree["nodes"][curr_id]
+    if curr["left"] != -1 {
+        let left_node = tree["nodes"][curr["left"]]
+        if left_node["priority"] > curr["priority"] {
+            return false
+        }
+        if not treap_verify_heap(tree, curr["left"]) {
+            return false
+        }
+    }
+    if curr["right"] != -1 {
+        let right_node = tree["nodes"][curr["right"]]
+        if right_node["priority"] > curr["priority"] {
+            return false
+        }
+        if not treap_verify_heap(tree, curr["right"]) {
+            return false
+        }
+    }
+    return true
+}
+
+pub fn treap_verify_bst(tree, curr_id, min_key, max_key) {
+    if curr_id == -1 {
+        return true
+    }
+    let curr = tree["nodes"][curr_id]
+    let key = curr["key"]
+    if min_key != nil {
+        if key <= min_key {
+            return false
+        }
+    }
+    if max_key != nil {
+        if key >= max_key {
+            return false
+        }
+    }
+    if not treap_verify_bst(tree, curr["left"], min_key, key) {
+        return false
+    }
+    if not treap_verify_bst(tree, curr["right"], key, max_key) {
+        return false
+    }
+    return true
+}
+
+// -------------------------------------------------------------------
+// Verification Tests
+// -------------------------------------------------------------------
+
+pub fn test_treap_empty_search() -> bool {
+    let tree = new_treap()
+    let res = treap_search(tree, 50)
+    if res != nil {
+        return false
+    }
+    if not treap_verify_heap(tree, tree["root"]) {
+        return false
+    }
+    return true
+}
+
+pub fn test_treap_single_node() -> bool {
+    let tree = new_treap()
+    treap_insert(tree, 42, 99, 1000)
+    if treap_search(tree, 42) != 1000 {
+        return false
+    }
+    if treap_search(tree, 43) != nil {
+        return false
+    }
+    if not treap_verify_heap(tree, tree["root"]) {
+        return false
+    }
+    if not treap_verify_bst(tree, tree["root"], nil, nil) {
+        return false
+    }
+    return true
+}
+
+pub fn test_treap_rotations_and_dual_invariants() -> bool {
+    let tree = new_treap()
+    // Insert with predetermined priorities designed to trigger rotations
+    // Insert (10, priority 50)
+    treap_insert(tree, 10, 50, 100)
+    // Insert (5, priority 80) -> left child has higher priority, triggers Right Rotate
+    treap_insert(tree, 5, 80, 200)
+    // Root must now be node with key 5 (highest priority 80)
+    let root = tree["nodes"][tree["root"]]
+    if root["key"] != 5 {
+        return false
+    }
+    if root["priority"] != 80 {
+        return false
+    }
+
+    // Insert (15, priority 90) -> right child of 10, then rotates left above 10, then above 5!
+    treap_insert(tree, 15, 90, 300)
+    let new_root = tree["nodes"][tree["root"]]
+    if new_root["key"] != 15 {
+        return false
+    }
+    if new_root["priority"] != 90 {
+        return false
+    }
+
+    // Verify BST order
+    if not treap_verify_bst(tree, tree["root"], nil, nil) {
+        return false
+    }
+    // Verify Heap order
+    if not treap_verify_heap(tree, tree["root"]) {
+        return false
+    }
+
+    // Verify searches
+    if treap_search(tree, 5) != 200 {
+        return false
+    }
+    if treap_search(tree, 10) != 100 {
+        return false
+    }
+    if treap_search(tree, 15) != 300 {
+        return false
+    }
+    if treap_search(tree, 999) != nil {
+        return false
+    }
+
+    return true
+}
+
+pub fn test_treap_multi_element_sequence() -> bool {
+    let tree = new_treap()
+    // Insert a sequence of 7 items
+    treap_insert(tree, 50, 10, 500)
+    treap_insert(tree, 30, 20, 300)
+    treap_insert(tree, 70, 70, 700)
+    treap_insert(tree, 20, 85, 200) // triggers rotations
+    treap_insert(tree, 40, 15, 400)
+    treap_insert(tree, 60, 95, 600) // highest priority -> should become root
+    treap_insert(tree, 80, 25, 800)
+
+    let root = tree["nodes"][tree["root"]]
+    if root["key"] != 60 {
+        return false
+    }
+    if root["priority"] != 95 {
+        return false
+    }
+
+    // Verify all keys retrieve correctly
+    if treap_search(tree, 20) != 200 {
+        return false
+    }
+    if treap_search(tree, 30) != 300 {
+        return false
+    }
+    if treap_search(tree, 40) != 400 {
+        return false
+    }
+    if treap_search(tree, 50) != 500 {
+        return false
+    }
+    if treap_search(tree, 60) != 600 {
+        return false
+    }
+    if treap_search(tree, 70) != 700 {
+        return false
+    }
+    if treap_search(tree, 80) != 800 {
+        return false
+    }
+
+    // Dual invariants hold
+    if not treap_verify_bst(tree, tree["root"], nil, nil) {
+        return false
+    }
+    if not treap_verify_heap(tree, tree["root"]) {
+        return false
+    }
+
+    return true
+}
+
+pub fn run_all_treap_tests() -> bool {
+    if not test_treap_empty_search() {
+        return false
+    }
+    if not test_treap_single_node() {
+        return false
+    }
+    if not test_treap_rotations_and_dual_invariants() {
+        return false
+    }
+    if not test_treap_multi_element_sequence() {
+        return false
+    }
+    return true
+}

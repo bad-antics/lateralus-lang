@@ -1,0 +1,120 @@
+// ===================================================================
+// examples/treap_tutorial.ltl
+// -------------------------------------------------------------------
+// Practical Application: In-Memory Financial Order Execution Priority
+// Queue & Real-Time Ledger Indexing using Treap (Cartesian Tree).
+// ===================================================================
+
+pub fn new_treap() {
+    let tree = dict()
+    tree["root"] = -1
+    tree["nodes"] = dict()
+    tree["next_id"] = 0
+    return tree
+}
+
+pub fn treap_rotate_right(tree, y) {
+    let y_node = tree["nodes"][y]
+    let x = y_node["left"]
+    let x_node = tree["nodes"][x]
+    y_node["left"] = x_node["right"]
+    x_node["right"] = y
+    return x
+}
+
+pub fn treap_rotate_left(tree, x) {
+    let x_node = tree["nodes"][x]
+    let y = x_node["right"]
+    let y_node = tree["nodes"][y]
+    x_node["right"] = y_node["left"]
+    y_node["left"] = x
+    return y
+}
+
+pub fn treap_insert_node(tree, curr_id, new_id) {
+    if curr_id == -1 {
+        return new_id
+    }
+    let curr = tree["nodes"][curr_id]
+    let new_node = tree["nodes"][new_id]
+
+    if new_node["key"] < curr["key"] {
+        curr["left"] = treap_insert_node(tree, curr["left"], new_id)
+        let left_id = curr["left"]
+        let left_node = tree["nodes"][left_id]
+        if left_node["priority"] > curr["priority"] {
+            curr_id = treap_rotate_right(tree, curr_id)
+        }
+    } else {
+        if new_node["key"] > curr["key"] {
+            curr["right"] = treap_insert_node(tree, curr["right"], new_id)
+            let right_id = curr["right"]
+            let right_node = tree["nodes"][right_id]
+            if right_node["priority"] > curr["priority"] {
+                curr_id = treap_rotate_left(tree, curr_id)
+            }
+        } else {
+            curr["val"] = new_node["val"]
+        }
+    }
+    return curr_id
+}
+
+pub fn treap_insert(tree, key, priority, val) {
+    let new_id = tree["next_id"]
+    tree["next_id"] = new_id + 1
+    let node = dict()
+    node["id"] = new_id
+    node["key"] = key
+    node["priority"] = priority
+    node["val"] = val
+    node["left"] = -1
+    node["right"] = -1
+    tree["nodes"][new_id] = node
+    tree["root"] = treap_insert_node(tree, tree["root"], new_id)
+    return true
+}
+
+pub fn treap_search(tree, key) {
+    let curr_id = tree["root"]
+    while curr_id != -1 {
+        let node = tree["nodes"][curr_id]
+        if key == node["key"] {
+            return node["val"]
+        }
+        if key < node["key"] {
+            curr_id = node["left"]
+        } else {
+            curr_id = node["right"]
+        }
+    }
+    return nil
+}
+
+pub fn run_exchange_order_book_pipeline() {
+    let order_book = new_treap()
+
+    // Key: Order ID sequence (BST searchable in O(log n))
+    // Priority: Execution urgency / Fee priority basis points (Max-Heap top priority)
+    // Val: Order Details (Symbol, Quantity, Price)
+    treap_insert(order_book, 1001, 15, "BUY 100 BTC @ 92100")
+    treap_insert(order_book, 1002, 35, "BUY 500 ETH @ 3420")
+    treap_insert(order_book, 1003, 10, "SELL 50 SOL @ 195")
+    treap_insert(order_book, 1004, 80, "BUY 2000 BTC @ 92250 (VIP WHALE)") // High priority promotion
+    treap_insert(order_book, 1005, 45, "BUY 300 AVAX @ 38")
+    treap_insert(order_book, 1006, 95, "SELL 1000 BTC @ 92200 (MARKET MAKER ARB)") // Highest priority!
+
+    // Instant O(1) top-of-book execution candidate:
+    let top_order_id = order_book["root"]
+    let top_order = order_book["nodes"][top_order_id]
+
+    // Point lookup for specific audit order 1003
+    let audit_1003 = treap_search(order_book, 1003)
+
+    let report = dict()
+    report["top_priority_key"] = top_order["key"]
+    report["top_priority_weight"] = top_order["priority"]
+    report["top_priority_desc"] = top_order["val"]
+    report["audit_1003"] = audit_1003
+    return report
+}
