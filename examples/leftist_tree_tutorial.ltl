@@ -1,0 +1,186 @@
+// ===================================================================
+// examples/leftist_tree_tutorial.ltl
+// -------------------------------------------------------------------
+// Multi-Cluster Workload Priority Queue Melder & Preemption Engine
+// -------------------------------------------------------------------
+// Demonstration of Leftist Trees merging distributed heterogeneous
+// job queues in guaranteed worst-case O(log n) time without cluster
+// rebalancing overhead or complete queue rebuilds.
+// ===================================================================
+
+pub fn leftist_create() -> dict {
+    let mut tree = {}
+    let mut val = []
+    let mut left = []
+    let mut right = []
+    let mut npl = []
+
+    val.push(0)
+    left.push(0)
+    right.push(0)
+    npl.push(0)
+
+    tree["val"] = val
+    tree["left"] = left
+    tree["right"] = right
+    tree["npl"] = npl
+    return tree
+}
+
+pub fn leftist_get_npl(tree: dict, u: int) -> int {
+    if u == 0 {
+        return 0
+    }
+    let npl = tree["npl"]
+    return npl[u]
+}
+
+pub fn leftist_meld(tree: dict, u: int, v: int) -> int {
+    if u == 0 {
+        return v
+    }
+    if v == 0 {
+        return u
+    }
+
+    let mut node_u = u
+    let mut node_v = v
+
+    let val = tree["val"]
+    if val[node_u] > val[node_v] {
+        let tmp = node_u
+        node_u = node_v
+        node_v = tmp
+    }
+
+    let mut right = tree["right"]
+    let next_r = leftist_meld(tree, right[node_u], node_v)
+    right = tree["right"]
+    right[node_u] = next_r
+    tree["right"] = right
+
+    let mut left = tree["left"]
+    let l_child = left[node_u]
+    let r_child = right[node_u]
+
+    let npl_l = leftist_get_npl(tree, l_child)
+    let npl_r = leftist_get_npl(tree, r_child)
+
+    if npl_l < npl_r {
+        left[node_u] = r_child
+        right[node_u] = l_child
+        tree["left"] = left
+        tree["right"] = right
+    }
+
+    let updated_r = right[node_u]
+    let mut npl_arr = tree["npl"]
+    npl_arr[node_u] = leftist_get_npl(tree, updated_r) + 1
+    tree["npl"] = npl_arr
+
+    return node_u
+}
+
+pub fn leftist_insert(tree: dict, root: int, key: int) -> int {
+    let mut val = tree["val"]
+    let mut left = tree["left"]
+    let mut right = tree["right"]
+    let mut npl = tree["npl"]
+
+    let node = val.len()
+    val.push(key)
+    left.push(0)
+    right.push(0)
+    npl.push(1)
+
+    tree["val"] = val
+    tree["left"] = left
+    tree["right"] = right
+    tree["npl"] = npl
+
+    return leftist_meld(tree, root, node)
+}
+
+pub fn leftist_find_min(tree: dict, root: int) -> int {
+    if root == 0 {
+        return -1
+    }
+    let val = tree["val"]
+    return val[root]
+}
+
+pub fn leftist_delete_min(tree: dict, root: int) -> list {
+    if root == 0 {
+        return [0, -1]
+    }
+    let val = tree["val"]
+    let min_val = val[root]
+
+    let left = tree["left"]
+    let right = tree["right"]
+    let l_child = left[root]
+    let r_child = right[root]
+
+    let new_root = leftist_meld(tree, l_child, r_child)
+    return [new_root, min_val]
+}
+
+// -------------------------------------------------------------------
+// Pipeline Demo: Multi-Cluster Batch Job Queue Melder
+// -------------------------------------------------------------------
+
+pub fn simulate_cluster_federation() -> bool {
+    let tree = leftist_create()
+
+    // Cluster Alpha Workload Queue (Job priority: lower number = higher urgency)
+    let mut cluster_alpha = 0
+    cluster_alpha = leftist_insert(tree, cluster_alpha, 12) // Urgent GPU Training checkpoint
+    cluster_alpha = leftist_insert(tree, cluster_alpha, 45) // Batch report generation
+    cluster_alpha = leftist_insert(tree, cluster_alpha, 85) // Archival compression
+
+    // Cluster Beta Workload Queue (Separate Kubernetes Zone)
+    let mut cluster_beta = 0
+    cluster_beta = leftist_insert(tree, cluster_beta, 5)   // Critical hotfix rollout
+    cluster_beta = leftist_insert(tree, cluster_beta, 30)  // User streaming transcoding
+    cluster_beta = leftist_insert(tree, cluster_beta, 90)  // Analytics telemetry ingest
+
+    // Emergency failover / Workload consolidation:
+    // Meld Cluster Alpha and Cluster Beta priority queues in O(log n)
+    let mut federated_queue = leftist_meld(tree, cluster_alpha, cluster_beta)
+
+    // The most urgent global task must be 5 (from Cluster Beta)
+    if leftist_find_min(tree, federated_queue) != 5 {
+        return false
+    }
+
+    // Sequentially dispatch top 3 urgent tasks across federated resources
+    let res1 = leftist_delete_min(tree, federated_queue)
+    federated_queue = res1[0]
+    let task1 = res1[1]
+
+    let res2 = leftist_delete_min(tree, federated_queue)
+    federated_queue = res2[0]
+    let task2 = res2[1]
+
+    let res3 = leftist_delete_min(tree, federated_queue)
+    federated_queue = res3[0]
+    let task3 = res3[1]
+
+    if task1 != 5 or task2 != 12 or task3 != 30 {
+        return false
+    }
+
+    // Remaining urgent task should be 45 (from Cluster Alpha)
+    if leftist_find_min(tree, federated_queue) != 45 {
+        return false
+    }
+
+    return true
+}
+
+pub fn main() -> int {
+    if simulate_cluster_federation() {
+        return 0
+    }
+    return 1
+}
