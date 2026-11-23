@@ -1,0 +1,71 @@
+// examples/smtp_tutorial.ltl
+// Demonstrates RFC 5321 ESMTP client protocol commands, response line parsing,
+// SASL authentication (AUTH PLAIN & AUTH LOGIN), message body dot-stuffing,
+// and complete session orchestration using stdlib/smtp.ltl.
+
+import stdlib.smtp
+
+fn main() {
+    println("=== RFC 5321 ESMTP Protocol Tutorial ===")
+
+    // 1. Response Line Parsing
+    let single = parse_line("250 OK\r\n")
+    let continued = parse_line("250-STARTTLS\r\n")
+    println("Single-line reply code: " + str(single[0]) + " more: " + str(single[2]))
+    println("Continued reply code: " + str(continued[0]) + " more: " + str(continued[2]))
+
+    // 2. Command Emission
+    println("EHLO: " + trim(cmd_ehlo("client.example.com")))
+    println("MAIL FROM: " + trim(cmd_mail_from("sender@example.com")))
+    println("RCPT TO: " + trim(cmd_rcpt_to("recipient@example.com")))
+    println("DATA: " + trim(cmd_data()))
+    println("QUIT: " + trim(cmd_quit()))
+
+    // 3. SASL Authentication
+    let plain = auth_plain("postmaster", "secret123")
+    let login_steps = auth_login("postmaster", "secret123")
+    println("AUTH PLAIN: " + trim(plain))
+    println("AUTH LOGIN steps: " + str(len(login_steps)))
+
+    // 4. Message Body Dot-Stuffing (RFC 5321 §4.5.2)
+    let raw_email = "Subject: Status Report\nFrom: sender@example.com\n\n.Leading dot line\nNormal line"
+    let stuffed = encode_body(raw_email)
+    println("Dot-stuffed body length: " + str(len(stuffed)))
+
+    // 5. Complete SMTP Session Orchestration
+    let state = {}
+    state["idx"] = 0
+    state["sent"] = []
+
+    let server_replies = [
+        "220 mail.example.com ESMTP Postfix\r\n",
+        "250-mail.example.com\r\n",
+        "250-PIPELINING\r\n",
+        "250 8BITMIME\r\n",
+        "250 2.1.0 Sender ok\r\n",
+        "250 2.1.5 Recipient ok\r\n",
+        "354 Start mail input; end with <CRLF>.<CRLF>\r\n",
+        "250 2.0.0 Ok: queued as 4QhT1s5vLbz9bC8\r\n"
+    ]
+
+    fn mock_send(cmd: str) {
+        state["sent"] = state["sent"] + [cmd]
+    }
+
+    fn mock_recv() -> str {
+        let r = server_replies[state["idx"]]
+        state["idx"] = state["idx"] + 1
+        return r
+    }
+
+    let transport = {}
+    transport["send"] = mock_send
+    transport["recv_line"] = mock_recv
+
+    let res = send_mail(transport, "sender@example.com", ["recipient@example.com"], raw_email)
+    println("Session succeeded: " + str(res[0]))
+    println("Session status: " + res[1])
+    println("Commands transmitted: " + str(len(state["sent"])))
+}
+
+main()
