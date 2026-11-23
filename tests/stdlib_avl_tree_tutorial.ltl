@@ -1,0 +1,289 @@
+// tests/stdlib_avl_tree_tutorial.ltl
+// Comprehensive Golden Test Vectors for AVL Self-Balancing Binary Search Tree
+
+fn max_val(a: int, b: int) -> int {
+    if a > b {
+        return a
+    }
+    return b
+}
+
+fn get_height(nodes: list, idx: int) -> int {
+    if idx == -1 {
+        return 0
+    }
+    var node: map = nodes[idx]
+    var h: int = node.height
+    return h
+}
+
+fn get_balance(nodes: list, idx: int) -> int {
+    if idx == -1 {
+        return 0
+    }
+    var node: map = nodes[idx]
+    var l_idx: int = node.left
+    var r_idx: int = node.right
+    return get_height(nodes, l_idx) - get_height(nodes, r_idx)
+}
+
+fn update_height(nodes: list, idx: int) -> void {
+    var node: map = nodes[idx]
+    var l_idx: int = node.left
+    var r_idx: int = node.right
+    var hl: int = get_height(nodes, l_idx)
+    var hr: int = get_height(nodes, r_idx)
+    node.height = 1 + max_val(hl, hr)
+}
+
+fn right_rotate(nodes: list, y: int) -> int {
+    var node_y: map = nodes[y]
+    var x: int = node_y.left
+    var node_x: map = nodes[x]
+    var t2: int = node_x.right
+    
+    node_x.right = y
+    node_y.left = t2
+    
+    update_height(nodes, y)
+    update_height(nodes, x)
+    
+    return x
+}
+
+fn left_rotate(nodes: list, x: int) -> int {
+    var node_x: map = nodes[x]
+    var y: int = node_x.right
+    var node_y: map = nodes[y]
+    var t2: int = node_y.left
+    
+    node_y.left = x
+    node_x.right = t2
+    
+    update_height(nodes, x)
+    update_height(nodes, y)
+    
+    return y
+}
+
+fn avl_insert_rec(nodes: list, curr: int, new_idx: int) -> int {
+    if curr == -1 {
+        return new_idx
+    }
+    
+    var node_curr: map = nodes[curr]
+    var node_new: map = nodes[new_idx]
+    var key_curr: int = node_curr.key
+    var key_new: int = node_new.key
+    
+    if key_new < key_curr {
+        var l_idx: int = node_curr.left
+        node_curr.left = avl_insert_rec(nodes, l_idx, new_idx)
+    } else if key_new > key_curr {
+        var r_idx: int = node_curr.right
+        node_curr.right = avl_insert_rec(nodes, r_idx, new_idx)
+    } else {
+        node_curr.val = node_new.val
+        return curr
+    }
+    
+    update_height(nodes, curr)
+    var balance: int = get_balance(nodes, curr)
+    
+    var l_sub: int = node_curr.left
+    var r_sub: int = node_curr.right
+    
+    // LL Case
+    if balance > 1 {
+        var left_node: map = nodes[l_sub]
+        var left_key: int = left_node.key
+        if key_new < left_key {
+            return right_rotate(nodes, curr)
+        }
+        if key_new > left_key {
+            node_curr.left = left_rotate(nodes, l_sub)
+            return right_rotate(nodes, curr)
+        }
+    }
+    
+    // RR Case
+    if balance < -1 {
+        var right_node: map = nodes[r_sub]
+        var right_key: int = right_node.key
+        if key_new > right_key {
+            return left_rotate(nodes, curr)
+        }
+        if key_new < right_key {
+            node_curr.right = right_rotate(nodes, r_sub)
+            return left_rotate(nodes, curr)
+        }
+    }
+    
+    return curr
+}
+
+fn avl_insert(tree: map, key: int, val: int) -> void {
+    var nodes: list = tree.nodes
+    var new_idx: int = len(nodes)
+    var new_node: map = {
+        key: key,
+        val: val,
+        height: 1,
+        left: -1,
+        right: -1
+    }
+    nodes.append(new_node)
+    
+    var root: int = tree.root
+    tree.root = avl_insert_rec(nodes, root, new_idx)
+    var c: int = tree.count
+    tree.count = c + 1
+}
+
+fn avl_search(tree: map, key: int) -> int {
+    var nodes: list = tree.nodes
+    var curr: int = tree.root
+    while curr != -1 {
+        var node: map = nodes[curr]
+        var k: int = node.key
+        if key == k {
+            var v: int = node.val
+            return v
+        } else if key < k {
+            curr = node.left
+        } else {
+            curr = node.right
+        }
+    }
+    return -1
+}
+
+fn avl_inorder_rec(nodes: list, curr: int, out: list) -> void {
+    if curr == -1 {
+        return
+    }
+    var node: map = nodes[curr]
+    var l: int = node.left
+    var r: int = node.right
+    avl_inorder_rec(nodes, l, out)
+    var k: int = node.key
+    out.append(k)
+    avl_inorder_rec(nodes, r, out)
+}
+
+fn avl_inorder(tree: map) -> list {
+    var out: list = []
+    var nodes: list = tree.nodes
+    var root: int = tree.root
+    avl_inorder_rec(nodes, root, out)
+    return out
+}
+
+fn create_avl_tree() -> map {
+    var empty_nodes: list = []
+    return {
+        root: -1,
+        count: 0,
+        nodes: empty_nodes
+    }
+}
+
+fn test_monotone_increasing_rr_rotations() -> void {
+    // Inserting 10, 20, 30, 40, 50, 60, 70 in increasing order.
+    // Unbalanced BST would have height 7.
+    // AVL tree must self-balance to height <= 4.
+    var tree: map = create_avl_tree()
+    avl_insert(tree, 10, 100)
+    avl_insert(tree, 20, 200)
+    avl_insert(tree, 30, 300)
+    avl_insert(tree, 40, 400)
+    avl_insert(tree, 50, 500)
+    avl_insert(tree, 60, 600)
+    avl_insert(tree, 70, 700)
+    
+    var h: int = get_height(tree.nodes, tree.root)
+    assert h <= 4
+    
+    var keys: list = avl_inorder(tree)
+    assert len(keys) == 7
+    assert keys[0] == 10
+    assert keys[6] == 70
+}
+
+fn test_monotone_decreasing_ll_rotations() -> void {
+    // Inserting 70, 60, 50, 40, 30, 20, 10 in decreasing order.
+    // Unbalanced BST would have height 7.
+    // AVL tree must self-balance to height <= 4.
+    var tree: map = create_avl_tree()
+    avl_insert(tree, 70, 7)
+    avl_insert(tree, 60, 6)
+    avl_insert(tree, 50, 5)
+    avl_insert(tree, 40, 4)
+    avl_insert(tree, 30, 3)
+    avl_insert(tree, 20, 2)
+    avl_insert(tree, 10, 1)
+    
+    var h: int = get_height(tree.nodes, tree.root)
+    assert h <= 4
+    
+    var keys: list = avl_inorder(tree)
+    assert len(keys) == 7
+    assert keys[0] == 10
+    assert keys[6] == 70
+}
+
+fn test_lr_double_rotation() -> void {
+    // Inserting 30, 10, 20 triggers Left-Right double rotation.
+    // Root must become 20, left 10, right 30. Height = 2.
+    var tree: map = create_avl_tree()
+    avl_insert(tree, 30, 3)
+    avl_insert(tree, 10, 1)
+    avl_insert(tree, 20, 2)
+    
+    var h: int = get_height(tree.nodes, tree.root)
+    assert h == 2
+    
+    var root_node: map = tree.nodes[tree.root]
+    assert root_node.key == 20
+}
+
+fn test_rl_double_rotation() -> void {
+    // Inserting 10, 30, 20 triggers Right-Left double rotation.
+    // Root must become 20, left 10, right 30. Height = 2.
+    var tree: map = create_avl_tree()
+    avl_insert(tree, 10, 1)
+    avl_insert(tree, 30, 3)
+    avl_insert(tree, 20, 2)
+    
+    var h: int = get_height(tree.nodes, tree.root)
+    assert h == 2
+    
+    var root_node: map = tree.nodes[tree.root]
+    assert root_node.key == 20
+}
+
+fn test_search_and_updates() -> void {
+    var tree: map = create_avl_tree()
+    avl_insert(tree, 50, 500)
+    avl_insert(tree, 25, 250)
+    avl_insert(tree, 75, 750)
+    
+    assert avl_search(tree, 25) == 250
+    assert avl_search(tree, 50) == 500
+    assert avl_search(tree, 75) == 750
+    assert avl_search(tree, 999) == -1
+    
+    // Update existing key
+    avl_insert(tree, 25, 255)
+    assert avl_search(tree, 25) == 255
+}
+
+fn main() -> int {
+    test_monotone_increasing_rr_rotations()
+    test_monotone_decreasing_ll_rotations()
+    test_lr_double_rotation()
+    test_rl_double_rotation()
+    test_search_and_updates()
+    print("All AVL Tree standard library golden tests passed successfully!")
+    return 0
+}
