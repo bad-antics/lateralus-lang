@@ -480,15 +480,27 @@ for _fn in _LATERALUS_TESTS:
         _ms = (_test_time.perf_counter() - _t0) * 1000
         print(f"  \033[91m✗\033[0m  {_fn.__name__}  ({_ms:.2f}ms)  →  {_e}")
         _failed += 1
-print(f"\n  {_passed} passed  {_failed} failed")
+print(f"\\n  {_passed} passed  {_failed} failed")
 """
-        py_src = result.code + "\n" + runner
+        # Bug fix: CompileResult has no `code` attribute — the generated
+        # Python source lives in `python_src` (see compiler.py:85).
+        # The old line crashed every `lateralus test` invocation with
+        # AttributeError: 'CompileResult' object has no attribute 'code'.
+        py_src = result.python_src + "\n" + runner
+        import os
         import pathlib
         import subprocess
         import tempfile
         tmp = tempfile.NamedTemporaryFile(suffix=".py", delete=False, mode="w")
         tmp.write(py_src); tmp.close()
-        ret = subprocess.run([sys.executable, tmp.name]).returncode
+        # The generated code imports `lateralus_lang.*`, and the temp file
+        # lives in /tmp, so its own directory is not on sys.path. Point
+        # PYTHONPATH at the directory containing this package (the repo
+        # root when run from a checkout) so the import resolves.
+        env = dict(os.environ)
+        pkg_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        env["PYTHONPATH"] = pkg_parent + os.pathsep + env.get("PYTHONPATH", "")
+        ret = subprocess.run([sys.executable, tmp.name], env=env).returncode
         pathlib.Path(tmp.name).unlink(missing_ok=True)
         return ret
 
