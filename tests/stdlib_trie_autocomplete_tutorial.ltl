@@ -1,0 +1,232 @@
+// ===================================================================
+// tests/stdlib_trie_autocomplete_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for Trie (Prefix Tree) data structure, prefix search,
+// frequency scoring, and autocompletion suggestions.
+// ===================================================================
+
+fn make_trie_node(node_id) {
+    let node = dict()
+    node["id"] = node_id
+    node["keys"] = []
+    node["next_ids"] = []
+    node["is_end"] = false
+    node["freq"] = 0
+    node["word"] = ""
+    return node
+}
+
+fn get_child_id(node, ch) {
+    let keys = node["keys"]
+    let next_ids = node["next_ids"]
+    let i = 0
+    let n = len(keys)
+    while i < n {
+        if keys[i] == ch {
+            return next_ids[i]
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+fn put_child(node, ch, child_id) {
+    node["keys"] = push(node["keys"], ch)
+    node["next_ids"] = push(node["next_ids"], child_id)
+}
+
+pub fn create_trie() {
+    let trie = dict()
+    let root = make_trie_node(0)
+    trie["nodes"] = [root]
+    return trie
+}
+
+pub fn trie_insert(trie, word, freq) {
+    let nodes = trie["nodes"]
+    let curr_id = 0
+    let n = len(word)
+    let i = 0
+
+    while i < n {
+        let ch = word[i]
+        let curr_node = nodes[curr_id]
+        let next_id = get_child_id(curr_node, ch)
+
+        if next_id != -1 {
+            curr_id = next_id
+        } else {
+            let new_id = len(nodes)
+            let new_node = make_trie_node(new_id)
+            nodes = push(nodes, new_node)
+            trie["nodes"] = nodes
+            put_child(curr_node, ch, new_id)
+            curr_id = new_id
+        }
+        i = i + 1
+    }
+
+    let end_node = nodes[curr_id]
+    end_node["is_end"] = true
+    end_node["freq"] = freq
+    end_node["word"] = word
+}
+
+pub fn trie_search(trie, word) {
+    let nodes = trie["nodes"]
+    let curr_id = 0
+    let n = len(word)
+    let i = 0
+
+    while i < n {
+        let ch = word[i]
+        let curr_node = nodes[curr_id]
+        let next_id = get_child_id(curr_node, ch)
+
+        if next_id == -1 {
+            return false
+        }
+        curr_id = next_id
+        i = i + 1
+    }
+
+    let end_node = nodes[curr_id]
+    return end_node["is_end"]
+}
+
+pub fn trie_starts_with(trie, prefix) {
+    let nodes = trie["nodes"]
+    let curr_id = 0
+    let n = len(prefix)
+    let i = 0
+
+    while i < n {
+        let ch = prefix[i]
+        let curr_node = nodes[curr_id]
+        let next_id = get_child_id(curr_node, ch)
+
+        if next_id == -1 {
+            return false
+        }
+        curr_id = next_id
+        i = i + 1
+    }
+
+    return true
+}
+
+fn collect_words_dfs(nodes, curr_id, results) {
+    let curr_node = nodes[curr_id]
+    if curr_node["is_end"] {
+        results = push(results, curr_node["word"])
+    }
+
+    let next_ids = curr_node["next_ids"]
+    let i = 0
+    let n = len(next_ids)
+    while i < n {
+        let nxt = next_ids[i]
+        results = collect_words_dfs(nodes, nxt, results)
+        i = i + 1
+    }
+    return results
+}
+
+pub fn trie_autocomplete(trie, prefix) {
+    let nodes = trie["nodes"]
+    let curr_id = 0
+    let n = len(prefix)
+    let i = 0
+
+    while i < n {
+        let ch = prefix[i]
+        let curr_node = nodes[curr_id]
+        let next_id = get_child_id(curr_node, ch)
+
+        if next_id == -1 {
+            return []
+        }
+        curr_id = next_id
+        i = i + 1
+    }
+
+    let results = []
+    return collect_words_dfs(nodes, curr_id, results)
+}
+
+// -------------------------------------------------------------------
+// Verification Tests
+// -------------------------------------------------------------------
+
+pub fn test_basic_search() {
+    let trie = create_trie()
+    trie_insert(trie, "apple", 10)
+    trie_insert(trie, "app", 5)
+    trie_insert(trie, "application", 8)
+    trie_insert(trie, "banana", 12)
+
+    assert(trie_search(trie, "apple") == true, "apple should exist")
+    assert(trie_search(trie, "app") == true, "app should exist")
+    assert(trie_search(trie, "application") == true, "application should exist")
+    assert(trie_search(trie, "banana") == true, "banana should exist")
+
+    assert(trie_search(trie, "appl") == false, "prefix appl is not a full word")
+    assert(trie_search(trie, "orange") == false, "orange was never inserted")
+    assert(trie_search(trie, "ban") == false, "ban is prefix not word")
+}
+
+pub fn test_starts_with_prefix() {
+    let trie = create_trie()
+    trie_insert(trie, "code", 20)
+    trie_insert(trie, "coder", 15)
+    trie_insert(trie, "coding", 30)
+
+    assert(trie_starts_with(trie, "co") == true, "co is prefix")
+    assert(trie_starts_with(trie, "code") == true, "code is prefix")
+    assert(trie_starts_with(trie, "coder") == true, "coder is prefix")
+    assert(trie_starts_with(trie, "coding") == true, "coding is prefix")
+    assert(trie_starts_with(trie, "codex") == false, "codex does not exist")
+    assert(trie_starts_with(trie, "da") == false, "da prefix does not exist")
+}
+
+pub fn test_autocomplete_collection() {
+    let trie = create_trie()
+    trie_insert(trie, "rust", 100)
+    trie_insert(trie, "ruby", 80)
+    trie_insert(trie, "rubicon", 40)
+    trie_insert(trie, "lateralus", 200)
+
+    let ru_matches = trie_autocomplete(trie, "ru")
+    assert(len(ru_matches) == 3, "Prefix 'ru' should yield rust, ruby, rubicon")
+
+    let rub_matches = trie_autocomplete(trie, "rub")
+    assert(len(rub_matches) == 2, "Prefix 'rub' should yield ruby, rubicon")
+
+    let lat_matches = trie_autocomplete(trie, "lat")
+    assert(len(lat_matches) == 1, "Prefix 'lat' should yield lateralus")
+    assert(lat_matches[0] == "lateralus", "Should match lateralus exactly")
+
+    let missing = trie_autocomplete(trie, "py")
+    assert(len(missing) == 0, "Prefix 'py' should return empty array")
+}
+
+pub fn test_empty_string_and_single_char() {
+    let trie = create_trie()
+    trie_insert(trie, "a", 1)
+    trie_insert(trie, "ab", 2)
+
+    assert(trie_search(trie, "a") == true, "Single char 'a' should be found")
+    assert(trie_search(trie, "ab") == true, "'ab' should be found")
+    assert(trie_search(trie, "b") == false, "'b' should not be found")
+
+    let all_a = trie_autocomplete(trie, "a")
+    assert(len(all_a) == 2, "Autocomplete 'a' should return ['a', 'ab']")
+}
+
+pub fn main() {
+    test_basic_search()
+    test_starts_with_prefix()
+    test_autocomplete_collection()
+    test_empty_string_and_single_char()
+    print("All Trie & Autocomplete verification tests passed successfully!")
+}
