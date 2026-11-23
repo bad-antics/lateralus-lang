@@ -999,6 +999,9 @@ class Parser:
             if isinstance(t.value, list):   # interpolated
                 return InterpolatedStr(span=span, parts=t.value)
             return Literal(span=span, value=t.value, kind="str")
+        if self._check(TK.CHAR):
+            self._advance()
+            return Literal(span=span, value=t.value, kind="char")
 
         # 'self' keyword
         if self._check(TK.KW_SELF):

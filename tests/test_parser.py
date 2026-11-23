@@ -93,6 +93,18 @@ class TestLetDecl:
         stmt = p.body[0]
         assert stmt.is_const is True
 
+    def test_char_literal(self):
+        p = ast("let c = 'a'")
+        stmt = p.body[0]
+        assert isinstance(stmt.value, Literal)
+        assert stmt.value.kind == "char"
+        assert stmt.value.value == "a"
+
+    def test_char_literal_escape(self):
+        p = ast("let nl = '\\n'")
+        stmt = p.body[0]
+        assert stmt.value.value == "\n"
+
 
 class TestIfStmt:
     def test_simple_if(self):
