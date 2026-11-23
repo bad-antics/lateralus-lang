@@ -208,6 +208,25 @@ class Parser:
         """Check if the NEXT token (after current) matches the given kind."""
         return self._peek(1).kind == kind
 
+    def _arrow_lambda_ahead(self) -> bool:
+        """True when the '(' at the cursor closes on a ')' followed by '=>'."""
+        depth = 0
+        i = self._pos
+        while i < len(self._tokens):
+            k = self._tokens[i].kind
+            if k == TK.LPAREN:
+                depth += 1
+            elif k == TK.RPAREN:
+                depth -= 1
+                if depth == 0:
+                    j = i + 1
+                    return (j < len(self._tokens)
+                            and self._tokens[j].kind == TK.FAT_ARROW)
+            elif k == TK.EOF:
+                return False
+            i += 1
+        return False
+
     def _match(self, *kinds: TK) -> Optional[Token]:
         if self._cur().kind in kinds:
             return self._advance()
@@ -1107,6 +1126,15 @@ class Parser:
                 sname = self._advance().value   # consume name
                 return self._parse_struct_literal(sname, span)
             self._advance(); return Ident(span=span, name=t.value)
+
+        # Arrow lambda: (params) => expr   (spec §6 pipeline examples)
+        if self._check(TK.LPAREN) and self._arrow_lambda_ahead():
+            self._advance()   # consume '('
+            params = self._parse_params()
+            self._expect(TK.RPAREN)
+            self._expect(TK.FAT_ARROW, "expected '=>' in lambda")
+            body = self._parse_expr()
+            return LambdaExpr(span=span, params=params, body=body)
 
         # Parenthesised expr or tuple
         if self._match(TK.LPAREN):
