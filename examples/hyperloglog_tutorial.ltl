@@ -1,0 +1,203 @@
+// ===================================================================
+// examples/hyperloglog_tutorial.ltl
+// -------------------------------------------------------------------
+// Multi-Region Edge CDN Unique Visitor (UV) Aggregator using HLL
+// -------------------------------------------------------------------
+// Real-world demonstration of HyperLogLog computing distinct user
+// counts across distributed geographic edge regions with lossless
+// O(m) register merging and sub-linear memory footprint.
+// ===================================================================
+
+pub fn hll_pow2(k: int) -> int {
+    let mut res = 1
+    let mut i = 0
+    while i < k {
+        res = res * 2
+        i = i + 1
+    }
+    return res
+}
+
+pub fn hll_create(p: int) -> dict {
+    let mut hll = {}
+    let m = hll_pow2(p)
+    let mut registers = []
+    let mut i = 0
+    while i < m {
+        registers.push(0)
+        i = i + 1
+    }
+
+    hll["p"] = p
+    hll["m"] = m
+    hll["registers"] = registers
+    return hll
+}
+
+pub fn hll_hash(key: int) -> int {
+    let p = 2147483647
+    let mut h = (key * 2654435761 + 1013904223) % p
+    if h < 0 {
+        h = 0 - h
+    }
+    return h
+}
+
+pub fn hll_clz(w: int) -> int {
+    let mut count = 1
+    let mut temp = w
+    if temp == 0 {
+        return 32
+    }
+    while temp > 0 and (temp % 2 == 0) {
+        count = count + 1
+        temp = temp / 2
+    }
+    return count
+}
+
+pub fn hll_add(hll: dict, key: int) -> bool {
+    let m = hll["m"]
+    let mut registers = hll["registers"]
+
+    let h = hll_hash(key)
+    let j = h % m
+    let w = h / m
+    let rank = hll_clz(w)
+
+    if rank > registers[j] {
+        registers[j] = rank
+        hll["registers"] = registers
+    }
+    return true
+}
+
+pub fn hll_count(hll: dict) -> int {
+    let m = hll["m"]
+    let registers = hll["registers"]
+
+    let mut zeros = 0
+    let mut i = 0
+    while i < m {
+        if registers[i] == 0 {
+            zeros = zeros + 1
+        }
+        i = i + 1
+    }
+
+    if zeros > 0 and zeros >= (m / 2) {
+        let active = m - zeros
+        let est_lc = (m * active) / zeros
+        if est_lc == 0 and active > 0 {
+            return 1
+        }
+        return est_lc
+    }
+
+    let scale = 1048576
+    let mut sum_scaled = 0
+    let mut j = 0
+    while j < m {
+        let r = registers[j]
+        let p2 = hll_pow2(r)
+        sum_scaled = sum_scaled + (scale / p2)
+        j = j + 1
+    }
+
+    if sum_scaled == 0 {
+        return 0
+    }
+
+    let num = 709 * m * m
+    let est = (num / 1000) * (scale / sum_scaled)
+
+    if zeros > 0 and est < (m * 5 / 2) {
+        let active = m - zeros
+        return (m * active) / zeros
+    }
+
+    return est
+}
+
+pub fn hll_merge(h1: dict, h2: dict) -> dict {
+    let m = h1["m"]
+    let p = h1["p"]
+    let res = hll_create(p)
+
+    let r1 = h1["registers"]
+    let r2 = h2["registers"]
+    let mut r_res = res["registers"]
+
+    let mut i = 0
+    while i < m {
+        let v1 = r1[i]
+        let v2 = r2[i]
+        if v1 >= v2 {
+            r_res[i] = v1
+        } else {
+            r_res[i] = v2
+        }
+        i = i + 1
+    }
+    res["registers"] = r_res
+    return res
+}
+
+// -------------------------------------------------------------------
+// Pipeline Demo: Edge CDN Multi-Region Unique Visitor Analytics
+// -------------------------------------------------------------------
+
+pub fn simulate_edge_cdn_analytics() -> bool {
+    // 64 registers per region
+    let edge_us = hll_create(6)
+    let edge_eu = hll_create(6)
+
+    // User session traffic in US region (user IDs 1001 to 1040)
+    let mut u = 1001
+    while u <= 1040 {
+        hll_add(edge_us, u)
+        u = u + 1
+    }
+
+    // Repeated visits from loyal users in US region
+    hll_add(edge_us, 1001)
+    hll_add(edge_us, 1005)
+
+    // User session traffic in EU region (overlapping users 1030..1070)
+    let mut e = 1030
+    while e <= 1070 {
+        hll_add(edge_eu, e)
+        e = e + 1
+    }
+
+    // Query regional distinct counts
+    let us_uv = hll_count(edge_us)
+    let eu_uv = hll_count(edge_eu)
+
+    // Regional checks: 40 unique in US, 41 unique in EU
+    if us_uv < 25 or us_uv > 65 {
+        return false
+    }
+    if eu_uv < 25 or eu_uv > 65 {
+        return false
+    }
+
+    // Central Data Warehouse: Merge regional sketches via max-registers
+    let global_hll = hll_merge(edge_us, edge_eu)
+    let global_uv = hll_count(global_hll)
+
+    // Global unique users: 1001 to 1070 = exactly 70 distinct users
+    // Global estimate should comfortably reflect union deduplication
+    if global_uv < 45 or global_uv > 95 {
+        return false
+    }
+
+    return true
+}
+
+pub fn main() -> int {
+    if simulate_edge_cdn_analytics() {
+        return 0
+    }
+    return 1
+}
