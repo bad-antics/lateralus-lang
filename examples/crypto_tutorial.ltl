@@ -1,0 +1,69 @@
+// examples/crypto_tutorial.ltl
+// Runnable companion for docs/blog/stdlib-crypto-tutorial.ltlml
+// Verify: PYTHONPATH=. python -m lateralus_lang run examples/crypto_tutorial.ltl
+
+import crypto;
+
+fn check(name: str, got: str, want: str) -> bool {
+    if got == want {
+        println("PASS " + name);
+        return true;
+    }
+    println("FAIL " + name + ": got " + got + " want " + want);
+    return false;
+}
+
+fn main() -> int {
+    let ok = true;
+
+    // ── Hashing ──────────────────────────────────────────────
+    // sha256("abc") — FIPS 180-4 known answer
+    ok = check("sha256(abc)", crypto.sha256("abc"),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad") && ok;
+
+    // md5("abc") — RFC 1321 known answer
+    ok = check("md5(abc)", crypto.md5("abc"),
+        "900150983cd24fb0d6963f7d28e17f72") && ok;
+
+    ok = check("sha512(abc)", crypto.sha512("abc"),
+        "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f") && ok;
+
+    // blake2b with 16-byte digest
+    ok = check("blake2b(abc,16)", crypto.blake2b("abc", 16),
+        "cf4ab791c62b8d2b2109c90275287816") && ok;
+
+    // hash_data dispatch
+    ok = check("hash_data md5", crypto.hash_data("abc", "md5"),
+        "900150983cd24fb0d6963f7d28e17f72") && ok;
+
+    // ── HMAC ─────────────────────────────────────────────────
+    // HMAC-SHA256(key="key", msg="msg") — RFC 4231-style known answer
+    let sig = crypto.hmac_sign("key", "msg", "sha256");
+    ok = check("hmac_sign", sig,
+        "2d93cbc1be167bcb1637a4a23cbff01a7878f0c50ee833954ea5221bb1b8c628") && ok;
+    ok = check("hmac_verify good", str(crypto.hmac_verify("key", "msg", sig, "sha256")), "True") && ok;
+    ok = check("hmac_verify bad", str(crypto.hmac_verify("key", "msg", "00", "sha256")), "False") && ok;
+
+    // ── Encoding ─────────────────────────────────────────────
+    ok = check("to_hex", crypto.to_hex("hi"), "6869") && ok;
+    ok = check("from_hex", crypto.from_hex("6869"), "hi") && ok;
+    ok = check("to_base64", crypto.to_base64("hi"), "aGk=") && ok;
+    ok = check("from_base64", crypto.from_base64("aGk="), "hi") && ok;
+    // round-trip
+    let rt = crypto.from_base64(crypto.to_base64("round-trip me"));
+    ok = check("base64 round-trip", rt, "round-trip me") && ok;
+
+    // ── Password hashing (PBKDF2-HMAC-SHA256) ────────────────
+    let stored = crypto.hash_password("hunter2");
+    ok = check("verify_password good", str(crypto.verify_password("hunter2", stored)), "True") && ok;
+    ok = check("verify_password bad", str(crypto.verify_password("wrong", stored)), "False") && ok;
+    // stored is a dict: hash, salt, iterations, algorithm
+    println("stored keys: " + str(stored["algorithm"]) + " iters=" + str(stored["iterations"]));
+
+    if ok {
+        println("ALL CHECKS PASSED");
+        return 0;
+    }
+    println("SOME CHECKS FAILED");
+    return 1;
+}
