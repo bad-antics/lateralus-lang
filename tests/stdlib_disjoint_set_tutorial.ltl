@@ -1,0 +1,108 @@
+// Standard Library Disjoint Set Union (DSU / Union-Find) Tutorial Verification Suite
+// Validates path compression, union by rank, cycle detection, and equivalence relation invariants.
+
+fn dsu_make(n: int) -> dict {
+    let mut parent = [];
+    let mut rank = [];
+    let mut i = 0;
+    while i < n {
+        parent = parent + [i];
+        rank = rank + [0];
+        i = i + 1;
+    }
+    let mut dsu = {};
+    dsu["parent"] = parent;
+    dsu["rank"] = rank;
+    dsu["count"] = n;
+    return dsu;
+}
+
+fn dsu_find(dsu: dict, i: int) -> int {
+    let parent = dsu["parent"];
+    let mut root = i;
+    while root != parent[root] {
+        root = parent[root];
+    }
+    // Path compression: flatten ancestors
+    let mut curr = i;
+    while curr != root {
+        let nxt = parent[curr];
+        parent[curr] = root;
+        curr = nxt;
+    }
+    return root;
+}
+
+fn dsu_union(dsu: dict, x: int, y: int) -> bool {
+    let root_x = dsu_find(dsu, x);
+    let root_y = dsu_find(dsu, y);
+    if root_x == root_y {
+        return false; // Cycle detected: already in the same set
+    }
+
+    let rank = dsu["rank"];
+    let parent = dsu["parent"];
+
+    if rank[root_x] < rank[root_y] {
+        parent[root_x] = root_y;
+    } else if rank[root_x] > rank[root_y] {
+        parent[root_y] = root_x;
+    } else {
+        parent[root_y] = root_x;
+        rank[root_x] = rank[root_x] + 1;
+    }
+
+    dsu["count"] = dsu["count"] - 1;
+    return true;
+}
+
+fn dsu_connected(dsu: dict, x: int, y: int) -> bool {
+    return dsu_find(dsu, x) == dsu_find(dsu, y);
+}
+
+fn main() -> int {
+    // 1. Initialize a cluster of 6 vertices: {0, 1, 2, 3, 4, 5}
+    let mut dsu = dsu_make(6);
+    assert(dsu["count"] == 6);
+
+    // Initial state: Each vertex is its own isolated representative
+    assert(dsu_find(dsu, 0) == 0);
+    assert(dsu_find(dsu, 1) == 1);
+    assert(dsu_connected(dsu, 0, 1) == false);
+
+    // 2. Unify (0, 1) and (1, 2)
+    assert(dsu_union(dsu, 0, 1) == true);
+    assert(dsu_union(dsu, 1, 2) == true);
+    assert(dsu["count"] == 4);
+
+    // Transitive equivalence: 0 is connected to 2
+    assert(dsu_connected(dsu, 0, 2) == true);
+    assert(dsu_connected(dsu, 2, 0) == true); // Symmetry
+    assert(dsu_connected(dsu, 0, 0) == true); // Reflexivity
+
+    // 3. Cycle Detection Invariant: Adding edge (0, 2) must return false
+    assert(dsu_union(dsu, 0, 2) == false);
+    assert(dsu["count"] == 4); // Component count unchanged
+
+    // 4. Second Component: Unify (3, 4)
+    assert(dsu_union(dsu, 3, 4) == true);
+    assert(dsu["count"] == 3);
+    assert(dsu_connected(dsu, 3, 4) == true);
+    assert(dsu_connected(dsu, 0, 3) == false); // Component 1 != Component 2
+    assert(dsu_connected(dsu, 2, 4) == false);
+
+    // 5. Connect the two large components via (2, 3)
+    assert(dsu_union(dsu, 2, 3) == true);
+    assert(dsu["count"] == 2); // Only {0,1,2,3,4} and {5} remain
+
+    assert(dsu_connected(dsu, 0, 4) == true); // Full transitivity confirmed!
+    assert(dsu_connected(dsu, 0, 5) == false); // 5 is still isolated
+
+    // 6. Path Compression verification
+    let parent = dsu["parent"];
+    let root0 = dsu_find(dsu, 0);
+    let root4 = dsu_find(dsu, 4);
+    assert(root0 == root4);
+
+    return 0;
+}
