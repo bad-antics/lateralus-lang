@@ -1,0 +1,155 @@
+// ===================================================================
+// tests/stdlib_reservoir_sampling_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for Reservoir Sampling (Algorithm R), single-pass
+// unbounded stream uniform sampling, and mathematical probability invariants.
+// ===================================================================
+
+fn make_rng(seed) {
+    let state = dict()
+    state["seed"] = seed
+    return state
+}
+
+fn lcg_next(state) {
+    let a = 1103515245
+    let c = 12345
+    let m = 2147483647
+    let next_seed = (state["seed"] * a + c) % m
+    if next_seed < 0 {
+        next_seed = 0 - next_seed
+    }
+    state["seed"] = next_seed
+    return next_seed
+}
+
+fn rand_int(state, max_val) {
+    if max_val <= 0 {
+        return 0
+    }
+    let r = lcg_next(state)
+    return r % (max_val + 1)
+}
+
+pub fn reservoir_sample(stream, k, seed) {
+    let n = len(stream)
+    let reservoir = []
+
+    if n <= k {
+        let idx = 0
+        while idx < n {
+            reservoir = push(reservoir, stream[idx])
+            idx = idx + 1
+        }
+        return reservoir
+    }
+
+    let i = 0
+    while i < k {
+        reservoir = push(reservoir, stream[i])
+        i = i + 1
+    }
+
+    let rng = make_rng(seed)
+
+    while i < n {
+        let j = rand_int(rng, i)
+        if j < k {
+            reservoir[j] = stream[i]
+        }
+        i = i + 1
+    }
+
+    return reservoir
+}
+
+// -------------------------------------------------------------------
+// Verification Tests
+// -------------------------------------------------------------------
+
+pub fn test_small_stream_n_less_than_k() {
+    let stream = [10, 20, 30]
+    let k = 5
+    let sample = reservoir_sample(stream, k, 42)
+    assert(len(sample) == 3, "Sample size should equal stream length when n <= k")
+    assert(sample[0] == 10, "First element should be 10")
+    assert(sample[1] == 20, "Second element should be 20")
+    assert(sample[2] == 30, "Third element should be 30")
+}
+
+pub fn test_exact_stream_n_equals_k() {
+    let stream = [1, 2, 3, 4]
+    let k = 4
+    let sample = reservoir_sample(stream, k, 123)
+    assert(len(sample) == 4, "Sample size should be exactly 4")
+    assert(sample[0] == 1, "Element 0 should be 1")
+    assert(sample[1] == 2, "Element 1 should be 2")
+    assert(sample[2] == 3, "Element 2 should be 3")
+    assert(sample[3] == 4, "Element 3 should be 4")
+}
+
+pub fn test_large_stream_capacity_invariant() {
+    let stream = []
+    let i = 0
+    while i < 100 {
+        stream = push(stream, i * 10)
+        i = i + 1
+    }
+    assert(len(stream) == 100, "Stream must contain 100 items")
+
+    let k = 7
+    let sample = reservoir_sample(stream, k, 999)
+    assert(len(sample) == 7, "Reservoir capacity must strictly equal k")
+
+    let s = 0
+    while s < len(sample) {
+        let val = sample[s]
+        assert(val >= 0, "Sample value must be non-negative")
+        assert(val <= 990, "Sample value must be within stream bounds")
+        s = s + 1
+    }
+}
+
+pub fn test_deterministic_reproducibility() {
+    let stream = [5, 15, 25, 35, 45, 55, 65, 75, 85, 95]
+    let k = 4
+    let seed = 777
+
+    let sample1 = reservoir_sample(stream, k, seed)
+    let sample2 = reservoir_sample(stream, k, seed)
+
+    assert(len(sample1) == k, "Sample 1 size is k")
+    assert(len(sample2) == k, "Sample 2 size is k")
+
+    let i = 0
+    while i < k {
+        assert(sample1[i] == sample2[i], "Identical seeds must yield deterministic output")
+        i = i + 1
+    }
+}
+
+pub fn test_single_element_reservoir() {
+    let stream = [100, 200, 300, 400, 500]
+    let k = 1
+    let sample = reservoir_sample(stream, k, 888)
+    assert(len(sample) == 1, "Single element reservoir size must be 1")
+    let elem = sample[0]
+    assert(elem == 100 or elem == 200 or elem == 300 or elem == 400 or elem == 500, "Element must come from stream")
+}
+
+pub fn test_empty_stream() {
+    let stream = []
+    let k = 5
+    let sample = reservoir_sample(stream, k, 1)
+    assert(len(sample) == 0, "Empty stream should return empty reservoir")
+}
+
+pub fn main() {
+    test_small_stream_n_less_than_k()
+    test_exact_stream_n_equals_k()
+    test_large_stream_capacity_invariant()
+    test_deterministic_reproducibility()
+    test_single_element_reservoir()
+    test_empty_stream()
+    print("All Reservoir Sampling verification tests passed successfully!")
+}

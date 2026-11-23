@@ -1,0 +1,100 @@
+// ===================================================================
+// examples/reservoir_sampling_tutorial.ltl
+// -------------------------------------------------------------------
+// Demonstration of Reservoir Sampling (Algorithm R) in Lateralus.
+//
+// Real-World Applications:
+// 1. Financial Anti-Money Laundering (AML) Audit: Uniform sub-sampling of live transaction streams.
+// 2. High-Throughput IoT Telemetry: Uniform sensor log collection across unbounded metrics.
+// 3. Machine Learning Batch Sampling: Constant-memory single-pass sample from massive datasets.
+// ===================================================================
+
+fn make_rng(seed) {
+    let state = dict()
+    state["seed"] = seed
+    return state
+}
+
+fn lcg_next(state) {
+    let a = 1103515245
+    let c = 12345
+    let m = 2147483647
+    let next_seed = (state["seed"] * a + c) % m
+    if next_seed < 0 {
+        next_seed = 0 - next_seed
+    }
+    state["seed"] = next_seed
+    return next_seed
+}
+
+fn rand_int(state, max_val) {
+    if max_val <= 0 {
+        return 0
+    }
+    let r = lcg_next(state)
+    return r % (max_val + 1)
+}
+
+pub fn reservoir_sample(stream, k, seed) {
+    let n = len(stream)
+    let reservoir = []
+
+    if n <= k {
+        let idx = 0
+        while idx < n {
+            reservoir = push(reservoir, stream[idx])
+            idx = idx + 1
+        }
+        return reservoir
+    }
+
+    let i = 0
+    while i < k {
+        reservoir = push(reservoir, stream[i])
+        i = i + 1
+    }
+
+    let rng = make_rng(seed)
+
+    while i < n {
+        let j = rand_int(rng, i)
+        if j < k {
+            reservoir[j] = stream[i]
+        }
+        i = i + 1
+    }
+
+    return reservoir
+}
+
+pub fn main() {
+    print("=================================================================")
+    print("   Lateralus Standard Library: Reservoir Sampling Stream Demo    ")
+    print("=================================================================")
+
+    // Simulate an unbounded stream of 50 incoming financial transaction IDs
+    let transaction_stream = []
+    let t = 0
+    while t < 50 {
+        transaction_stream = push(transaction_stream, 100000 + t)
+        t = t + 1
+    }
+
+    let audit_quota = 5
+    let rng_seed = 42
+
+    print("Total incoming stream transactions: " + str(len(transaction_stream)))
+    print("Regulatory compliance audit quota (k): " + str(audit_quota))
+
+    // Perform single-pass uniform sampling
+    let audited_batch = reservoir_sample(transaction_stream, audit_quota, rng_seed)
+
+    print("Audited Transactions Selected (Uniform P = k/n):")
+    let idx = 0
+    while idx < len(audited_batch) {
+        print("  [Sample #" + str(idx + 1) + "] TxID: " + str(audited_batch[idx]))
+        idx = idx + 1
+    }
+
+    print("Reservoir sampling completed in strict O(n) single pass with O(k) memory.")
+}
