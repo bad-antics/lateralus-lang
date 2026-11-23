@@ -500,6 +500,13 @@ class Lexer:
             raw = self._src[start:self._pos].replace("_", "")
             self._emit(TK.INT, int(raw[2:], 2), line, col)
             return
+        if self._cur() == "0" and self._peek() in "oO":
+            self._advance(); self._advance()
+            while self._cur() in "01234567_":
+                self._advance()
+            raw = self._src[start:self._pos].replace("_", "")
+            self._emit(TK.INT, int(raw[2:], 8), line, col)
+            return
         is_float = False
         while self._cur().isdigit() or self._cur() == "_":
             self._advance()
