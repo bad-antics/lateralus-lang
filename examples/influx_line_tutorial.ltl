@@ -1,0 +1,83 @@
+// ===================================================================
+// examples/influx_line_tutorial.ltl
+//
+// Tutorial: InfluxDB Line Protocol Serialization & Ingestion Parsing
+// using Lateralus `stdlib/influx_line.ltl`.
+//
+// Demonstrates:
+// 1. InfluxDB point representation (measurement, tags, fields, timestamp).
+// 2. Strict character escaping in tag keys/values and measurements.
+// 3. Typed field representation (int `i`, float, bool, quoted string).
+// 4. Batch time-series metric generation (CPU & Memory telemetry).
+// 5. Ingestion parsing and round-trip verification.
+// ===================================================================
+
+import influx_line
+
+pub fn main() {
+    print("=== Lateralus InfluxDB Line Protocol Tutorial ===")
+
+    // 1. Prepare Telemetry Dimensions & Metrics
+    let measurement = "system_telemetry"
+    let tags = [
+        ["cluster", "production-us-east"],
+        ["host", "worker-node-42"],
+        ["region", "us-east-1"]
+    ]
+    let fields = [
+        ["cpu_utilization_pct", "42.85"],
+        ["active_goroutines", influx_line_field_int(1250)],
+        ["healthy", influx_line_field_bool(true)],
+        ["status_note", influx_line_field_string("nominal load; no alarms")]
+    ]
+    let timestamp_ns = 1700000000987654321
+
+    print("Measurement: " + measurement)
+    print("Tag count: " + str(len(tags)))
+    print("Field count: " + str(len(fields)))
+    print("Timestamp (ns): " + str(timestamp_ns))
+
+    // 2. Format Point to Line Protocol Text
+    let line_str = influx_line_line(measurement, tags, fields, timestamp_ns)
+    print("Formatted InfluxDB Line:")
+    print("  " + line_str)
+
+    // 3. Demonstrate Escaped Identifiers
+    let escaped_measurement = "disk IO,ops"
+    let escaped_tags = [
+        ["mount point", "/var/lib=storage"]
+    ]
+    let escaped_fields = [
+        ["read ops/sec", "1240.5"],
+        ["queue length", influx_line_field_int(4)]
+    ]
+    let escaped_line = influx_line_line(escaped_measurement, escaped_tags, escaped_fields, 0)
+    print("Escaped Line (no timestamp):")
+    print("  " + escaped_line)
+
+    // 4. Ingestion Parsing & Round-Trip Validation
+    print("Parsing Line Protocol Text...")
+    let parsed = influx_line_parse_line(line_str)
+    if parsed == nil {
+        print("[ERROR] Failed to parse line protocol text.")
+        return
+    }
+
+    print("Parsed Result:")
+    print("  Measurement: " + parsed["measurement"])
+    print("  Parsed Tag Host: " + parsed["tags"][1][1])
+    print("  Parsed CPU Field: " + parsed["fields"][0][1])
+    print("  Parsed Timestamp: " + str(parsed["timestamp"]))
+
+    if parsed["measurement"] == measurement && parsed["timestamp"] == timestamp_ns {
+        print("[VERIFIED] InfluxDB line protocol round-trip parsed successfully!")
+    }
+
+    // 5. Parse Escaped Line
+    let parsed_escaped = influx_line_parse_line(escaped_line)
+    if parsed_escaped["measurement"] == escaped_measurement {
+        print("[VERIFIED] Escaped identifiers cleanly unescaped by parser!")
+    }
+
+    print("=== InfluxDB Line Tutorial Completed Successfully ===")
+}

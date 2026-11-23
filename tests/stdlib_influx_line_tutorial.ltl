@@ -1,0 +1,132 @@
+// tests/stdlib_influx_line_tutorial.ltl
+// Pinned test vectors and parsing invariants for stdlib/influx_line.ltl
+
+import influx_line
+
+pub fn test_minimal_point_roundtrip() -> bool {
+    let ln = influx_line_line("heartbeat", [], [["status", "1i"]], 0)
+    if ln != "heartbeat status=1i" {
+        return false
+    }
+    let p = influx_line_parse_line(ln)
+    if p["measurement"] != "heartbeat" {
+        return false
+    }
+    if len(p["tags"]) != 0 {
+        return false
+    }
+    let fields = p["fields"]
+    if len(fields) != 1 || fields[0][0] != "status" || fields[0][1] != "1i" {
+        return false
+    }
+    if p["timestamp"] != 0 {
+        return false
+    }
+    return true
+}
+
+pub fn test_multi_tag_and_timestamp_point() -> bool {
+    let tags = [["host", "edge-gateway-01"], ["region", "us-west-2"]]
+    let fields = [
+        ["temperature", "23.4"],
+        ["uptime_sec", influx_line_field_int(86400)],
+        ["healthy", influx_line_field_bool(true)]
+    ]
+    let ts = 1700000000123456789
+
+    let ln = influx_line_line("sensor_node", tags, fields, ts)
+    let p = influx_line_parse_line(ln)
+
+    if p["measurement"] != "sensor_node" {
+        return false
+    }
+    if len(p["tags"]) != 2 {
+        return false
+    }
+    if p["tags"][0][0] != "host" || p["tags"][0][1] != "edge-gateway-01" {
+        return false
+    }
+    if p["tags"][1][0] != "region" || p["tags"][1][1] != "us-west-2" {
+        return false
+    }
+    if len(p["fields"]) != 3 {
+        return false
+    }
+    if p["fields"][0][0] != "temperature" || p["fields"][0][1] != "23.4" {
+        return false
+    }
+    if p["fields"][1][0] != "uptime_sec" || p["fields"][1][1] != "86400i" {
+        return false
+    }
+    if p["fields"][2][0] != "healthy" || p["fields"][2][1] != "true" {
+        return false
+    }
+    if p["timestamp"] != ts {
+        return false
+    }
+    return true
+}
+
+pub fn test_escaping_rules_in_identifiers() -> bool {
+    // Escaping spaces and commas in measurement
+    let m = "disk space,io"
+    let tags = [["mount point", "/data vol=1"]]
+    let fields = [["free bytes", influx_line_field_int(1048576)]]
+
+    let ln = influx_line_line(m, tags, fields, 0)
+    // Measurement escapes comma and space: disk\ space\,io
+    // Tag key escapes space: mount\ point
+    // Tag val escapes space and equals: /data\ vol\=1
+    // Field key escapes space: free\ bytes
+    let p = influx_line_parse_line(ln)
+    if p["measurement"] != "disk space,io" {
+        return false
+    }
+    if p["tags"][0][0] != "mount point" || p["tags"][0][1] != "/data vol=1" {
+        return false
+    }
+    if p["fields"][0][0] != "free bytes" || p["fields"][0][1] != "1048576i" {
+        return false
+    }
+    return true
+}
+
+pub fn test_string_field_with_quotes() -> bool {
+    let msg = "disk alert: \"drive almost full\""
+    let fields = [
+        ["error_msg", influx_line_field_string(msg)],
+        ["severity", influx_line_field_int(2)]
+    ]
+    let ln = influx_line_line("alerts", [["service", "storage"]], fields, 1000)
+
+    let p = influx_line_parse_line(ln)
+    if p["measurement"] != "alerts" {
+        return false
+    }
+    if len(p["fields"]) != 2 {
+        return false
+    }
+    // String fields preserve quotes in parse output
+    let parsed_val = p["fields"][0][1]
+    if len(parsed_val) <= 2 {
+        return false
+    }
+    return true
+}
+
+pub fn test_field_format_helpers() -> bool {
+    if influx_line_field_int(42) != "42i" {
+        return false
+    }
+    if influx_line_field_bool(true) != "true" || influx_line_field_bool(false) != "false" {
+        return false
+    }
+    if influx_line_field_float("99.99") != "99.99" {
+        return false
+    }
+    let q = influx_line_field_string("simple")
+    if q != "\"simple\"" {
+        return false
+    }
+    return true
+}
