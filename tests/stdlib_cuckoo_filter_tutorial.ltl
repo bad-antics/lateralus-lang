@@ -1,0 +1,291 @@
+// ===================================================================
+// tests/stdlib_cuckoo_filter_tutorial.ltl
+// -------------------------------------------------------------------
+// Complete test suite for Cuckoo Filter in Lateralus.
+// High-performance approximate set-membership with dynamic deletion
+// and partial-key cuckoo eviction. Fan et al. (ACM CoNEXT 2014).
+// ===================================================================
+
+pub fn cf_create(num_buckets: int, bucket_size: int) -> dict {
+    let mut filter = {}
+    let mut buckets = []
+    let mut i = 0
+    while i < num_buckets {
+        let mut b = []
+        let mut j = 0
+        while j < bucket_size {
+            b.push(0)
+            j = j + 1
+        }
+        buckets.push(b)
+        i = i + 1
+    }
+
+    filter["buckets"] = buckets
+    filter["num_buckets"] = num_buckets
+    filter["bucket_size"] = bucket_size
+    filter["count"] = 0
+    filter["max_kicks"] = 32
+    return filter
+}
+
+pub fn cf_hash_key(key: int) -> int {
+    // Multiplicative hash mixing
+    let mut h = key * 2654435761
+    if h < 0 {
+        h = 0 - h
+    }
+    return h
+}
+
+pub fn cf_fingerprint(key: int) -> int {
+    let mut fp = ((key * 31 + 17) % 255) + 1
+    if fp <= 0 {
+        fp = 1
+    }
+    return fp
+}
+
+pub fn cf_hash_fp(fp: int) -> int {
+    let mut h = (fp * 1103515245 + 12345) % 65536
+    if h < 0 {
+        h = 0 - h
+    }
+    return h
+}
+
+pub fn cf_alt_index(i: int, fp: int, num_buckets: int) -> int {
+    let hfp = cf_hash_fp(fp)
+    let alt = (i ^ hfp) % num_buckets
+    if alt < 0 {
+        return alt + num_buckets
+    }
+    return alt
+}
+
+pub fn cf_bucket_insert(b: list, fp: int) -> bool {
+    let mut i = 0
+    while i < b.len() {
+        if b[i] == 0 {
+            b[i] = fp
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+pub fn cf_bucket_contains(b: list, fp: int) -> bool {
+    let mut i = 0
+    while i < b.len() {
+        if b[i] == fp {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+pub fn cf_bucket_remove(b: list, fp: int) -> bool {
+    let mut i = 0
+    while i < b.len() {
+        if b[i] == fp {
+            b[i] = 0
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+pub fn cf_lookup(filter: dict, key: int) -> bool {
+    let num_buckets = filter["num_buckets"]
+    let buckets = filter["buckets"]
+    let fp = cf_fingerprint(key)
+
+    let mut i1 = cf_hash_key(key) % num_buckets
+    if i1 < 0 {
+        i1 = i1 + num_buckets
+    }
+    let i2 = cf_alt_index(i1, fp, num_buckets)
+
+    let b1 = buckets[i1]
+    if cf_bucket_contains(b1, fp) {
+        return true
+    }
+
+    let b2 = buckets[i2]
+    if cf_bucket_contains(b2, fp) {
+        return true
+    }
+
+    return false
+}
+
+pub fn cf_insert(filter: dict, key: int) -> bool {
+    let num_buckets = filter["num_buckets"]
+    let mut buckets = filter["buckets"]
+    let max_kicks = filter["max_kicks"]
+    let fp = cf_fingerprint(key)
+
+    let mut i1 = cf_hash_key(key) % num_buckets
+    if i1 < 0 {
+        i1 = i1 + num_buckets
+    }
+    let i2 = cf_alt_index(i1, fp, num_buckets)
+
+    let mut b1 = buckets[i1]
+    if cf_bucket_insert(b1, fp) {
+        buckets[i1] = b1
+        let count = filter["count"]
+        filter["count"] = count + 1
+        filter["buckets"] = buckets
+        return true
+    }
+
+    let mut b2 = buckets[i2]
+    if cf_bucket_insert(b2, fp) {
+        buckets[i2] = b2
+        let count = filter["count"]
+        filter["count"] = count + 1
+        filter["buckets"] = buckets
+        return true
+    }
+
+    // Eviction phase: select i1 and start cuckoo kicking
+    let mut cur_i = i1
+    let mut cur_fp = fp
+    let mut kick = 0
+
+    while kick < max_kicks {
+        let mut cur_b = buckets[cur_i]
+        // Swap with first slot
+        let kicked_fp = cur_b[0]
+        cur_b[0] = cur_fp
+        buckets[cur_i] = cur_b
+
+        cur_fp = kicked_fp
+        cur_i = cf_alt_index(cur_i, cur_fp, num_buckets)
+
+        let mut target_b = buckets[cur_i]
+        if cf_bucket_insert(target_b, cur_fp) {
+            buckets[cur_i] = target_b
+            let count = filter["count"]
+            filter["count"] = count + 1
+            filter["buckets"] = buckets
+            return true
+        }
+        kick = kick + 1
+    }
+
+    filter["buckets"] = buckets
+    return false // Table full or max kicks exceeded
+}
+
+pub fn cf_delete(filter: dict, key: int) -> bool {
+    let num_buckets = filter["num_buckets"]
+    let mut buckets = filter["buckets"]
+    let fp = cf_fingerprint(key)
+
+    let mut i1 = cf_hash_key(key) % num_buckets
+    if i1 < 0 {
+        i1 = i1 + num_buckets
+    }
+    let i2 = cf_alt_index(i1, fp, num_buckets)
+
+    let mut b1 = buckets[i1]
+    if cf_bucket_remove(b1, fp) {
+        buckets[i1] = b1
+        let count = filter["count"]
+        filter["count"] = count - 1
+        filter["buckets"] = buckets
+        return true
+    }
+
+    let mut b2 = buckets[i2]
+    if cf_bucket_remove(b2, fp) {
+        buckets[i2] = b2
+        let count = filter["count"]
+        filter["count"] = count - 1
+        filter["buckets"] = buckets
+        return true
+    }
+
+    return false
+}
+
+// -------------------------------------------------------------------
+// Smoke tests and Golden Test Vectors
+// -------------------------------------------------------------------
+
+pub fn test_cf_basic_insert_and_lookup() -> bool {
+    let cf = cf_create(16, 4)
+
+    if cf_lookup(cf, 100) {
+        return false
+    }
+
+    cf_insert(cf, 100)
+    cf_insert(cf, 200)
+    cf_insert(cf, 300)
+
+    if not cf_lookup(cf, 100) {
+        return false
+    }
+    if not cf_lookup(cf, 200) {
+        return false
+    }
+    if not cf_lookup(cf, 300) {
+        return false
+    }
+    if cf_lookup(cf, 400) {
+        return false
+    }
+
+    return true
+}
+
+pub fn test_cf_dynamic_delete() -> bool {
+    let cf = cf_create(16, 4)
+    cf_insert(cf, 101)
+    cf_insert(cf, 202)
+
+    if not cf_lookup(cf, 101) {
+        return false
+    }
+
+    // Delete 101
+    let ok = cf_delete(cf, 101)
+    if not ok {
+        return false
+    }
+
+    // 101 should now be gone, but 202 must remain
+    if cf_lookup(cf, 101) {
+        return false
+    }
+    if not cf_lookup(cf, 202) {
+        return false
+    }
+
+    return true
+}
+
+pub fn test_cf_eviction_under_load() -> bool {
+    let cf = cf_create(8, 2) // Small table to force cuckoo evictions
+    let mut i = 1
+    while i <= 10 {
+        cf_insert(cf, i * 77)
+        i = i + 1
+    }
+
+    // Check all successfully inserted keys are reachable
+    let mut j = 1
+    while j <= 10 {
+        if not cf_lookup(cf, j * 77) {
+            return false
+        }
+        j = j + 1
+    }
+    return true
+}

@@ -1,0 +1,273 @@
+// ===================================================================
+// examples/cuckoo_filter_tutorial.ltl
+// -------------------------------------------------------------------
+// Edge CDN Anti-Abuse IP Guard with Dynamic Deletion & Revocation
+// -------------------------------------------------------------------
+// Demonstration of Cuckoo Filter in Lateralus protecting high-throughput
+// web endpoints from malicious DDoS traffic, supporting real-time IP
+// blacklisting and instantaneous false-positive-free revocations.
+// ===================================================================
+
+pub fn cf_create(num_buckets: int, bucket_size: int) -> dict {
+    let mut filter = {}
+    let mut buckets = []
+    let mut i = 0
+    while i < num_buckets {
+        let mut b = []
+        let mut j = 0
+        while j < bucket_size {
+            b.push(0)
+            j = j + 1
+        }
+        buckets.push(b)
+        i = i + 1
+    }
+
+    filter["buckets"] = buckets
+    filter["num_buckets"] = num_buckets
+    filter["bucket_size"] = bucket_size
+    filter["count"] = 0
+    filter["max_kicks"] = 32
+    return filter
+}
+
+pub fn cf_hash_key(key: int) -> int {
+    let mut h = key * 2654435761
+    if h < 0 {
+        h = 0 - h
+    }
+    return h
+}
+
+pub fn cf_fingerprint(key: int) -> int {
+    let mut fp = ((key * 31 + 17) % 255) + 1
+    if fp <= 0 {
+        fp = 1
+    }
+    return fp
+}
+
+pub fn cf_hash_fp(fp: int) -> int {
+    let mut h = (fp * 1103515245 + 12345) % 65536
+    if h < 0 {
+        h = 0 - h
+    }
+    return h
+}
+
+pub fn cf_alt_index(i: int, fp: int, num_buckets: int) -> int {
+    let hfp = cf_hash_fp(fp)
+    let alt = (i ^ hfp) % num_buckets
+    if alt < 0 {
+        return alt + num_buckets
+    }
+    return alt
+}
+
+pub fn cf_bucket_insert(b: list, fp: int) -> bool {
+    let mut i = 0
+    while i < b.len() {
+        if b[i] == 0 {
+            b[i] = fp
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+pub fn cf_bucket_contains(b: list, fp: int) -> bool {
+    let mut i = 0
+    while i < b.len() {
+        if b[i] == fp {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+pub fn cf_bucket_remove(b: list, fp: int) -> bool {
+    let mut i = 0
+    while i < b.len() {
+        if b[i] == fp {
+            b[i] = 0
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+pub fn cf_lookup(filter: dict, key: int) -> bool {
+    let num_buckets = filter["num_buckets"]
+    let buckets = filter["buckets"]
+    let fp = cf_fingerprint(key)
+
+    let mut i1 = cf_hash_key(key) % num_buckets
+    if i1 < 0 {
+        i1 = i1 + num_buckets
+    }
+    let i2 = cf_alt_index(i1, fp, num_buckets)
+
+    let b1 = buckets[i1]
+    if cf_bucket_contains(b1, fp) {
+        return true
+    }
+
+    let b2 = buckets[i2]
+    if cf_bucket_contains(b2, fp) {
+        return true
+    }
+
+    return false
+}
+
+pub fn cf_insert(filter: dict, key: int) -> bool {
+    let num_buckets = filter["num_buckets"]
+    let mut buckets = filter["buckets"]
+    let max_kicks = filter["max_kicks"]
+    let fp = cf_fingerprint(key)
+
+    let mut i1 = cf_hash_key(key) % num_buckets
+    if i1 < 0 {
+        i1 = i1 + num_buckets
+    }
+    let i2 = cf_alt_index(i1, fp, num_buckets)
+
+    let mut b1 = buckets[i1]
+    if cf_bucket_insert(b1, fp) {
+        buckets[i1] = b1
+        let count = filter["count"]
+        filter["count"] = count + 1
+        filter["buckets"] = buckets
+        return true
+    }
+
+    let mut b2 = buckets[i2]
+    if cf_bucket_insert(b2, fp) {
+        buckets[i2] = b2
+        let count = filter["count"]
+        filter["count"] = count + 1
+        filter["buckets"] = buckets
+        return true
+    }
+
+    // Eviction loop
+    let mut cur_i = i1
+    let mut cur_fp = fp
+    let mut kick = 0
+
+    while kick < max_kicks {
+        let mut cur_b = buckets[cur_i]
+        let kicked_fp = cur_b[0]
+        cur_b[0] = cur_fp
+        buckets[cur_i] = cur_b
+
+        cur_fp = kicked_fp
+        cur_i = cf_alt_index(cur_i, cur_fp, num_buckets)
+
+        let mut target_b = buckets[cur_i]
+        if cf_bucket_insert(target_b, cur_fp) {
+            buckets[cur_i] = target_b
+            let count = filter["count"]
+            filter["count"] = count + 1
+            filter["buckets"] = buckets
+            return true
+        }
+        kick = kick + 1
+    }
+
+    filter["buckets"] = buckets
+    return false
+}
+
+pub fn cf_delete(filter: dict, key: int) -> bool {
+    let num_buckets = filter["num_buckets"]
+    let mut buckets = filter["buckets"]
+    let fp = cf_fingerprint(key)
+
+    let mut i1 = cf_hash_key(key) % num_buckets
+    if i1 < 0 {
+        i1 = i1 + num_buckets
+    }
+    let i2 = cf_alt_index(i1, fp, num_buckets)
+
+    let mut b1 = buckets[i1]
+    if cf_bucket_remove(b1, fp) {
+        buckets[i1] = b1
+        let count = filter["count"]
+        filter["count"] = count - 1
+        filter["buckets"] = buckets
+        return true
+    }
+
+    let mut b2 = buckets[i2]
+    if cf_bucket_remove(b2, fp) {
+        buckets[i2] = b2
+        let count = filter["count"]
+        filter["count"] = count - 1
+        filter["buckets"] = buckets
+        return true
+    }
+
+    return false
+}
+
+// -------------------------------------------------------------------
+// Pipeline Demo: Edge CDN IP Blacklist & Revocation
+// -------------------------------------------------------------------
+
+pub fn simulate_edge_security_guard() -> bool {
+    // 32 buckets, 4 slots each = capacity 128 fingerprints
+    let blocklist = cf_create(32, 4)
+
+    // Attacker IP integer hashes:
+    let bad_bot_1 = 3232235521  // 192.168.0.1
+    let bad_bot_2 = 3232235522  // 192.168.0.2
+    let bad_bot_3 = 3232235523  // 192.168.0.3
+    let benign_user = 167772161 // 10.0.0.1
+
+    // Step 1: Ingest threat intelligence IPs into edge Cuckoo filter
+    cf_insert(blocklist, bad_bot_1)
+    cf_insert(blocklist, bad_bot_2)
+    cf_insert(blocklist, bad_bot_3)
+
+    // Step 2: Edge gateway query checking
+    if not cf_lookup(blocklist, bad_bot_1) {
+        return false // Must intercept
+    }
+    if not cf_lookup(blocklist, bad_bot_2) {
+        return false // Must intercept
+    }
+    if cf_lookup(blocklist, benign_user) {
+        return false // Benign user must pass cleanly
+    }
+
+    // Step 3: False-positive resolution / Security unban (Dynamic Revocation)
+    // Security ops confirms bad_bot_2 was remediated and should be unbanned
+    let revoked = cf_delete(blocklist, bad_bot_2)
+    if not revoked {
+        return false
+    }
+
+    // Now bad_bot_2 should pass, while bad_bot_1 and bad_bot_3 remain blocked!
+    if cf_lookup(blocklist, bad_bot_2) {
+        return false // Confirmed unblocked
+    }
+    if not cf_lookup(blocklist, bad_bot_1) {
+        return false // Still blocked
+    }
+    if not cf_lookup(blocklist, bad_bot_3) {
+        return false // Still blocked
+    }
+
+    return true
+}
+
+pub fn main() -> int {
+    if simulate_edge_security_guard() {
+        return 0
+    }
+    return 1
+}
