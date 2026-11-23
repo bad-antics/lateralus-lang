@@ -1078,6 +1078,9 @@ class PythonTranspiler(ASTVisitor):
         self._w += "continue"
 
     def visit_BlockStmt(self, node: BlockStmt):
+        if not node.stmts:
+            self._w += "pass"
+            return
         for stmt in node.stmts:
             stmt.accept(self)
 
