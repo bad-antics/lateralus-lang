@@ -9,6 +9,13 @@
 //
 // The compressor is a simple 16-bit hash-chain greedy matcher
 // (lz4-style "fast" mode); the decompressor is canonical.
+//
+// Output is accumulated in a growing byte buffer (buf_new / buf_put
+// / buf_finish) instead of `out = out + [b]`, which is O(n) per byte
+// in the transpiled code and makes multi-MB inputs quadratic. A
+// buffer is a 3-element list [buf, len, cap]; buf_put doubles the
+// capacity when full, so appends are O(1) amortised. The compressed
+// bytes are identical to the naive version.
 // ===================================================================
 
 let LZ4_MINMATCH   = 4
@@ -19,25 +26,54 @@ let LZ4_MF_LIMIT   = 12         // last match cannot start within 12 of end
 let LZ4_LAST_LITS  = 5          // last 5 bytes are always literals
 let LZ4_MAXD       = 65535
 
+fn buf_new(cap: int) -> list {
+    return [[0] * cap, 0, cap]
+}
+
+fn buf_put(b: list, x: int) -> list {
+    if b[1] == b[2] {
+        b[0] = b[0] + [0] * b[2]
+        b[2] = b[2] * 2
+    }
+    b[0][b[1]] = x
+    b[1] = b[1] + 1
+    return b
+}
+
+fn buf_put_list(b: list, xs: list) -> list {
+    let i = 0
+    while i < len(xs) {
+        b = buf_put(b, xs[i])
+        i = i + 1
+    }
+    return b
+}
+
+fn buf_finish(b: list) -> list {
+    return slice(b[0], 0, b[1])
+}
+
 fn hash4(buf: list, i: int) -> int {
     let v = buf[i] | (buf[i + 1] << 8)
           | (buf[i + 2] << 16) | (buf[i + 3] << 24)
-    // Knuth multiplicative hash → top LZ4_HASH_BITS bits.
+    // Knuth multiplicative hash -> top LZ4_HASH_BITS bits.
     return ((v * 2654435761) >> (32 - LZ4_HASH_BITS)) & LZ4_HASH_MASK
 }
 
-fn emit_var_len(out: list, v: int) -> list {
+// Writes v as a sequence of 255-byte chunks followed by a remainder
+// byte into the output buffer. Returns the buffer.
+fn emit_var_len(b: list, v: int) -> list {
     while v >= 255 {
-        out = out + [255]
+        b = buf_put(b, 255)
         v = v - 255
     }
-    return out + [v]
+    return buf_put(b, v)
 }
 
 /// Compress a byte list to an LZ4 block (no frame header).
 pub fn compress(src: list) -> list {
     let n = len(src)
-    let out = []
+    let b = buf_new(4096)
     let anchor = 0       // start of pending literals
     let i = 0
     if n < LZ4_MF_LIMIT + LZ4_LAST_LITS {
@@ -46,15 +82,14 @@ pub fn compress(src: list) -> list {
         let lit_len = n
         if lit_len >= 15 {
             tok = 0xf0
-            out = out + [tok]
-            out = emit_var_len(out, lit_len - 15)
+            b = buf_put(b, tok)
+            b = emit_var_len(b, lit_len - 15)
         } else {
             tok = (lit_len << 4) & 0xff
-            out = out + [tok]
+            b = buf_put(b, tok)
         }
-        let k = 0
-        while k < n { out = out + [src[k]]; k = k + 1 }
-        return out
+        b = buf_put_list(b, slice(src, 0, n))
+        return buf_finish(b)
     }
     // hash table: position of last occurrence for each 4-byte prefix
     let htab = []
@@ -84,15 +119,15 @@ pub fn compress(src: list) -> list {
             let t_m = mlen_t
             if t_m > 15 { t_m = 15 }
             let tok = ((t_lit << 4) | t_m) & 0xff
-            out = out + [tok]
-            if lit_len >= 15 { out = emit_var_len(out, lit_len - 15) }
+            b = buf_put(b, tok)
+            if lit_len >= 15 { b = emit_var_len(b, lit_len - 15) }
             // literals
-            let k2 = 0
-            while k2 < lit_len { out = out + [src[anchor + k2]]; k2 = k2 + 1 }
+            b = buf_put_list(b, slice(src, anchor, anchor + lit_len))
             // match offset (little-endian)
             let off = i - ref_pos
-            out = out + [off & 0xff, (off >> 8) & 0xff]
-            if mlen_t >= 15 { out = emit_var_len(out, mlen_t - 15) }
+            b = buf_put(b, off & 0xff)
+            b = buf_put(b, (off >> 8) & 0xff)
+            if mlen_t >= 15 { b = emit_var_len(b, mlen_t - 15) }
             i = i + mlen
             anchor = i
         } else {
@@ -104,21 +139,20 @@ pub fn compress(src: list) -> list {
     let tok = 0
     if lit_len >= 15 {
         tok = 0xf0
-        out = out + [tok]
-        out = emit_var_len(out, lit_len - 15)
+        b = buf_put(b, tok)
+        b = emit_var_len(b, lit_len - 15)
     } else {
         tok = (lit_len << 4) & 0xff
-        out = out + [tok]
+        b = buf_put(b, tok)
     }
-    let k3 = 0
-    while k3 < lit_len { out = out + [src[anchor + k3]]; k3 = k3 + 1 }
-    return out
+    b = buf_put_list(b, slice(src, anchor, anchor + lit_len))
+    return buf_finish(b)
 }
 
 /// Decompress an LZ4 block.
 pub fn decompress(src: list) -> list {
     let n = len(src)
-    let out = []
+    let b = buf_new(4096)
     let i = 0
     while i < n {
         let tok = src[i]
@@ -128,17 +162,16 @@ pub fn decompress(src: list) -> list {
         if lit_len == 15 {
             let more = true
             while more {
-                let b = src[i]
+                let x = src[i]
                 i = i + 1
-                lit_len = lit_len + b
-                if b != 255 { more = false }
+                lit_len = lit_len + x
+                if x != 255 { more = false }
             }
         }
         // -- literals
-        let k = 0
-        while k < lit_len { out = out + [src[i + k]]; k = k + 1 }
+        b = buf_put_list(b, slice(src, i, i + lit_len))
         i = i + lit_len
-        if i >= n { return out }
+        if i >= n { return buf_finish(b) }
         // -- match offset
         let off = src[i] | (src[i + 1] << 8)
         i = i + 2
@@ -154,10 +187,12 @@ pub fn decompress(src: list) -> list {
             }
         }
         mlen = mlen + LZ4_MINMATCH
-        // -- copy from history (byte-wise to support overlap / RLE)
-        let start = len(out) - off
+        // -- copy from history (byte-wise to support overlap / RLE).
+        // The read b[0][start + m] is evaluated before buf_put runs,
+        // so a buffer regrow mid-copy cannot corrupt the read.
+        let start = b[1] - off
         let m = 0
-        while m < mlen { out = out + [out[start + m]]; m = m + 1 }
+        while m < mlen { b = buf_put(b, b[0][start + m]); m = m + 1 }
     }
-    return out
+    return buf_finish(b)
 }
