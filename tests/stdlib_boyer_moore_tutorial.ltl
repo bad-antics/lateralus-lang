@@ -1,0 +1,139 @@
+// ===================================================================
+// tests/stdlib_boyer_moore_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for Boyer-Moore String Search algorithm (1977),
+// right-to-left scanning, bad character shift heuristic, and sublinear search.
+// ===================================================================
+
+fn find_last_occurrence(pattern, m, ch) {
+    let i = m - 1
+    while i >= 0 {
+        if pattern[i] == ch {
+            return i
+        }
+        i = i - 1
+    }
+    return -1
+}
+
+pub fn boyer_moore_search(text, pattern) {
+    let n = len(text)
+    let m = len(pattern)
+    if m == 0 or n < m {
+        return -1
+    }
+
+    let s = 0
+    while s <= (n - m) {
+        let j = m - 1
+
+        while j >= 0 and pattern[j] == text[s + j] {
+            j = j - 1
+        }
+
+        if j < 0 {
+            return s
+        } else {
+            let bad_ch = text[s + j]
+            let last_idx = find_last_occurrence(pattern, m, bad_ch)
+            let shift = j - last_idx
+            if shift < 1 {
+                shift = 1
+            }
+            s = s + shift
+        }
+    }
+
+    return -1
+}
+
+pub fn boyer_moore_search_all(text, pattern) {
+    let n = len(text)
+    let m = len(pattern)
+    let results = []
+    if m == 0 or n < m {
+        return results
+    }
+
+    let s = 0
+    while s <= (n - m) {
+        let j = m - 1
+        while j >= 0 and pattern[j] == text[s + j] {
+            j = j - 1
+        }
+
+        if j < 0 {
+            results = push(results, s)
+            let next_shift = 1
+            if s + m < n {
+                let next_ch = text[s + m]
+                let last_idx = find_last_occurrence(pattern, m, next_ch)
+                let cand_shift = m - last_idx
+                if cand_shift > 1 {
+                    next_shift = cand_shift
+                }
+            }
+            s = s + next_shift
+        } else {
+            let bad_ch = text[s + j]
+            let last_idx = find_last_occurrence(pattern, m, bad_ch)
+            let shift = j - last_idx
+            if shift < 1 {
+                shift = 1
+            }
+            s = s + shift
+        }
+    }
+
+    return results
+}
+
+// -------------------------------------------------------------------
+// Verification Tests
+// -------------------------------------------------------------------
+
+pub fn test_basic_occurrence() {
+    let text = "ABAAABCD"
+    let pattern = "ABC"
+    let pos = boyer_moore_search(text, pattern)
+    assert(pos == 4, "Pattern 'ABC' starts at index 4 in 'ABAAABCD'")
+}
+
+pub fn test_multiple_occurrences() {
+    let text = "AABAACAADAABAABA"
+    let pattern = "AABA"
+    let matches = boyer_moore_search_all(text, pattern)
+
+    assert(len(matches) == 3, "Expected 3 matches for 'AABA'")
+    assert(matches[0] == 0, "First match at index 0")
+    assert(matches[1] == 9, "Second match at index 9")
+    assert(matches[2] == 12, "Third match at index 12")
+}
+
+pub fn test_prefix_and_suffix() {
+    let text = "hello world"
+    assert(boyer_moore_search(text, "hello") == 0, "Prefix match at 0")
+    assert(boyer_moore_search(text, "world") == 6, "Suffix match at 6")
+    assert(boyer_moore_search(text, "lo wo") == 3, "Middle match at 3")
+}
+
+pub fn test_missing_and_longer_pattern() {
+    let text = "abcdef"
+    assert(boyer_moore_search(text, "xyz") == -1, "Missing pattern returns -1")
+    assert(boyer_moore_search(text, "abcdefgh") == -1, "Pattern longer than text returns -1")
+}
+
+pub fn test_repeated_chars() {
+    let text = "aaaa"
+    let matches = boyer_moore_search_all(text, "aa")
+    assert(len(matches) >= 2, "Overlapping repeated matches")
+}
+
+pub fn main() {
+    test_basic_occurrence()
+    test_multiple_occurrences()
+    test_prefix_and_suffix()
+    test_missing_and_longer_pattern()
+    test_repeated_chars()
+    print("All Boyer-Moore verification tests passed successfully!")
+}
