@@ -1,0 +1,265 @@
+// ===================================================================
+// tests/stdlib_suffix_automaton_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for Suffix Automaton (SAM) supporting linear
+// O(n) string indexing, distinct substring enumeration, and O(m)
+// pattern existence checking.
+// ===================================================================
+
+pub fn new_sam() {
+    let sam = dict()
+    sam["states"] = dict()
+    sam["sz"] = 1
+    sam["last"] = 0
+    
+    let init_state = dict()
+    init_state["len"] = 0
+    init_state["link"] = -1
+    init_state["next"] = dict()
+    sam["states"][0] = init_state
+    return sam
+}
+
+pub fn sam_extend(sam, ch) {
+    let cur = sam["sz"]
+    sam["sz"] = cur + 1
+
+    let cur_state = dict()
+    cur_state["len"] = sam["states"][sam["last"]]["len"] + 1
+    cur_state["link"] = -1
+    cur_state["next"] = dict()
+    sam["states"][cur] = cur_state
+
+    let p = sam["last"]
+    while p != -1 {
+        let p_state = sam["states"][p]
+        if p_state["next"][ch] != nil {
+            break
+        }
+        p_state["next"][ch] = cur
+        p = p_state["link"]
+    }
+
+    if p == -1 {
+        cur_state["link"] = 0
+    } else {
+        let p_state = sam["states"][p]
+        let q = p_state["next"][ch]
+        let q_state = sam["states"][q]
+        if p_state["len"] + 1 == q_state["len"] {
+            cur_state["link"] = q
+        } else {
+            let clone = sam["sz"]
+            sam["sz"] = clone + 1
+
+            let clone_state = dict()
+            clone_state["len"] = p_state["len"] + 1
+            clone_state["link"] = q_state["link"]
+            let copy_next = dict()
+            for key in q_state["next"] {
+                copy_next[key] = q_state["next"][key]
+            }
+            clone_state["next"] = copy_next
+            sam["states"][clone] = clone_state
+
+            while p != -1 {
+                let curr_p = sam["states"][p]
+                if curr_p["next"][ch] != q {
+                    break
+                }
+                curr_p["next"][ch] = clone
+                p = curr_p["link"]
+            }
+
+            q_state["link"] = clone
+            cur_state["link"] = clone
+        }
+    }
+
+    sam["last"] = cur
+    return cur
+}
+
+pub fn sam_count_distinct_substrings(sam) {
+    let total = 0
+    let sz = sam["sz"]
+    let u = 1
+    while u < sz {
+        let u_state = sam["states"][u]
+        let link_id = u_state["link"]
+        let link_len = 0
+        if link_id != -1 {
+            link_len = sam["states"][link_id]["len"]
+        }
+        let diff = u_state["len"] - link_len
+        total = total + diff
+        u = u + 1
+    }
+    return total
+}
+
+pub fn sam_contains(sam, pattern_chars, pat_len) {
+    let curr = 0
+    let i = 0
+    while i < pat_len {
+        let ch = pattern_chars[i]
+        let curr_state = sam["states"][curr]
+        let next_node = curr_state["next"][ch]
+        if next_node == nil {
+            return false
+        }
+        curr = next_node
+        i = i + 1
+    }
+    return true
+}
+
+// -------------------------------------------------------------------
+// Verification Tests
+// -------------------------------------------------------------------
+
+pub fn test_sam_empty() -> bool {
+    let sam = new_sam()
+    if sam["sz"] != 1 {
+        return false
+    }
+    if sam["last"] != 0 {
+        return false
+    }
+    if sam_count_distinct_substrings(sam) != 0 {
+        return false
+    }
+    return true
+}
+
+pub fn test_sam_abaa() -> bool {
+    let sam = new_sam()
+    // Feed string: "a", "b", "a", "a"
+    sam_extend(sam, "a")
+    sam_extend(sam, "b")
+    sam_extend(sam, "a")
+    sam_extend(sam, "a")
+
+    // Distinct substrings for "abaa":
+    // "a", "b", "ab", "ba", "aa", "aba", "baa", "abaa" -> exactly 8
+    let distinct_count = sam_count_distinct_substrings(sam)
+    if distinct_count != 8 {
+        return false
+    }
+
+    // Check states bound <= 2*n - 1 = 7
+    if sam["sz"] > 8 {
+        return false
+    }
+
+    // Existence tests
+    let pat_a = dict()
+    pat_a[0] = "a"
+    if not sam_contains(sam, pat_a, 1) {
+        return false
+    }
+
+    let pat_b = dict()
+    pat_b[0] = "b"
+    if not sam_contains(sam, pat_b, 1) {
+        return false
+    }
+
+    let pat_ab = dict()
+    pat_ab[0] = "a"
+    pat_ab[1] = "b"
+    if not sam_contains(sam, pat_ab, 2) {
+        return false
+    }
+
+    let pat_ba = dict()
+    pat_ba[0] = "b"
+    pat_ba[1] = "a"
+    if not sam_contains(sam, pat_ba, 2) {
+        return false
+    }
+
+    let pat_aa = dict()
+    pat_aa[0] = "a"
+    pat_aa[1] = "a"
+    if not sam_contains(sam, pat_aa, 2) {
+        return false
+    }
+
+    let pat_aba = dict()
+    pat_aba[0] = "a"
+    pat_aba[1] = "b"
+    pat_aba[2] = "a"
+    if not sam_contains(sam, pat_aba, 3) {
+        return false
+    }
+
+    let pat_baa = dict()
+    pat_baa[0] = "b"
+    pat_baa[1] = "a"
+    pat_baa[2] = "a"
+    if not sam_contains(sam, pat_baa, 3) {
+        return false
+    }
+
+    let pat_abaa = dict()
+    pat_abaa[0] = "a"
+    pat_abaa[1] = "b"
+    pat_abaa[2] = "a"
+    pat_abaa[3] = "a"
+    if not sam_contains(sam, pat_abaa, 4) {
+        return false
+    }
+
+    // Negative tests: non-occurring substrings
+    let pat_bb = dict()
+    pat_bb[0] = "b"
+    pat_bb[1] = "b"
+    if sam_contains(sam, pat_bb, 2) {
+        return false
+    }
+
+    let pat_bab = dict()
+    pat_bab[0] = "b"
+    pat_bab[1] = "a"
+    pat_bab[2] = "b"
+    if sam_contains(sam, pat_bab, 3) {
+        return false
+    }
+
+    let pat_c = dict()
+    pat_c[0] = "c"
+    if sam_contains(sam, pat_c, 1) {
+        return false
+    }
+
+    return true
+}
+
+pub fn test_sam_repeated_chars() -> bool {
+    let sam = new_sam()
+    // String "aaaa"
+    sam_extend(sam, "a")
+    sam_extend(sam, "a")
+    sam_extend(sam, "a")
+    sam_extend(sam, "a")
+
+    // Distinct substrings of "aaaa": "a", "aa", "aaa", "aaaa" -> 4
+    if sam_count_distinct_substrings(sam) != 4 {
+        return false
+    }
+    return true
+}
+
+pub fn run_all_sam_tests() -> bool {
+    if not test_sam_empty() {
+        return false
+    }
+    if not test_sam_abaa() {
+        return false
+    }
+    if not test_sam_repeated_chars() {
+        return false
+    }
+    return true
+}
