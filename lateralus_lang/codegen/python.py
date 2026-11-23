@@ -1686,8 +1686,19 @@ class PythonTranspiler(ASTVisitor):
         if isinstance(node, GuardExpr):
             return f"(None if not ({self._expr(node.condition)}) else True)"
         if isinstance(node, WhereClause):
-            binds = "; ".join(self._stmt_str(s) for s in node.bindings.stmts)
-            return f"(lambda: ({binds}, {self._expr(node.expr)})[-1])()"
+            self._lambda_counter += 1
+            fn_name = f"_ltl_where_{self._lambda_counter}"
+            saved = self._w
+            self._w = _W()
+            self._w += f"def {fn_name}():"
+            with self._w.indent():
+                for s in (node.bindings.stmts if hasattr(node.bindings, 'stmts') else [node.bindings]):
+                    s.accept(self)
+                self._w += f"return {self._expr(node.expr)}"
+            hoisted_code = self._w.getvalue()
+            self._w = saved
+            self._hoisted_lambdas.append(hoisted_code)
+            return f"{fn_name}()"
         if isinstance(node, SpreadExpr):
             return f"*{self._expr(node.value)}"
         if isinstance(node, TernaryExpr):
