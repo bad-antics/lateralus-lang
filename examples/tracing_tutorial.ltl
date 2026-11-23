@@ -1,0 +1,66 @@
+// ===================================================================
+// examples/tracing_tutorial.ltl
+//
+// Tutorial: Distributed Tracing & W3C Trace Context with Lateralus
+// stdlib/tracing.ltl (OpenTelemetry Compliant).
+//
+// Demonstrates:
+// 1. Initializing a Tracer with an Exporter and Sampler.
+// 2. Starting Root Spans and Child Spans across distributed components.
+// 3. Injecting and extracting W3C `traceparent` wire headers.
+// 4. Recording domain events, span attributes, and execution duration.
+// ===================================================================
+
+import tracing
+
+fn console_exporter(span: map) {
+    let ctx = span["ctx"]
+    print("  [SPAN EXPORTED] " + span["name"] +
+          " (trace=" + ctx["trace_id"] + ", span=" + ctx["span_id"] +
+          ", status=" + span["status"] + ", duration=" + str(tracing_duration_ns(span)) + "ns)")
+}
+
+pub fn main() {
+    print("=== Lateralus Distributed Tracing (OpenTelemetry) Tutorial ===")
+
+    // 1. Initialize Tracer for API Gateway service
+    let gateway_tracer = tracing_new_tracer("api-gateway", console_exporter, tracing_always_sample)
+
+    // 2. Client initiates incoming HTTP request (Root Span)
+    let gw_attrs = {}
+    gw_attrs["http.target"] = "/api/v1/checkout"
+    gw_attrs["http.client_ip"] = "192.168.1.100"
+
+    print("Step 1: Starting Root Span at API Gateway...")
+    let root_span = tracing_start(gateway_tracer, "POST /api/v1/checkout", nil, "server", gw_attrs)
+
+    // 3. Inject W3C traceparent into downstream RPC headers
+    let wire_header = tracing_traceparent(root_span["ctx"])
+    print("Step 2: Generated W3C traceparent HTTP header for RPC:")
+    print("  traceparent: " + wire_header)
+
+    // 4. Downstream Payment Service receives request and extracts context
+    print("Step 3: Payment Service receives header and resumes trace context...")
+    let extracted_parent_ctx = tracing_parse_traceparent(wire_header)
+
+    let payment_tracer = tracing_new_tracer("payment-service", console_exporter, tracing_always_sample)
+    let payment_attrs = {}
+    payment_attrs["payment.gateway"] = "stripe"
+    payment_attrs["payment.amount"] = 99.50
+
+    let payment_span = tracing_start(payment_tracer, "ProcessStripeCharge", extracted_parent_ctx, "internal", payment_attrs)
+
+    // 5. Add operational events to payment span
+    let ev_attrs = {}
+    ev_attrs["idempotency_key"] = "ik_908234"
+    tracing_add_event(payment_span, "ChargeInitiated", ev_attrs)
+
+    // Simulate work
+    tracing_set_attr(payment_span, "payment.transaction_id", "tx_live_7721")
+    tracing_end_ok(payment_span)
+
+    // Complete root span
+    tracing_end_ok(root_span)
+
+    print("=== Tracing tutorial demonstration completed successfully ===")
+}
