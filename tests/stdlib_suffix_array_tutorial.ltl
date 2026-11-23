@@ -1,0 +1,176 @@
+// ===================================================================
+// tests/stdlib_suffix_array_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for Suffix Array (SA) string index data structure,
+// lexicographical suffix sorting, and binary search substring matching.
+// ===================================================================
+
+fn compare_suffixes(text, n, i, j) {
+    let p = i
+    let q = j
+    while p < n and q < n {
+        let ch1 = text[p]
+        let ch2 = text[q]
+        if ch1 < ch2 {
+            return -1
+        }
+        if ch1 > ch2 {
+            return 1
+        }
+        p = p + 1
+        q = q + 1
+    }
+    if p == n and q == n {
+        return 0
+    }
+    if p == n {
+        return -1
+    }
+    return 1
+}
+
+pub fn build_suffix_array(text) {
+    let n = len(text)
+    let sa = []
+    let i = 0
+    while i < n {
+        sa = push(sa, i)
+        i = i + 1
+    }
+
+    let a = 1
+    while a < n {
+        let key = sa[a]
+        let b = a - 1
+        while b >= 0 {
+            let prev = sa[b]
+            if compare_suffixes(text, n, prev, key) > 0 {
+                sa[b + 1] = prev
+                b = b - 1
+            } else {
+                break
+            }
+        }
+        sa[b + 1] = key
+        a = a + 1
+    }
+
+    return sa
+}
+
+fn compare_prefix(text, n, start_idx, pattern, m) {
+    let i = 0
+    while i < m and (start_idx + i) < n {
+        let ch1 = text[start_idx + i]
+        let ch2 = pattern[i]
+        if ch1 < ch2 {
+            return -1
+        }
+        if ch1 > ch2 {
+            return 1
+        }
+        i = i + 1
+    }
+    if i == m {
+        return 0
+    }
+    return -1
+}
+
+pub fn sa_search(text, sa, pattern) {
+    let n = len(text)
+    let m = len(pattern)
+    if m == 0 or n == 0 {
+        return -1
+    }
+
+    let low = 0
+    let high = n - 1
+
+    while low <= high {
+        let mid = (low + high) / 2
+        let suffix_start = sa[mid]
+        let cmp = compare_prefix(text, n, suffix_start, pattern, m)
+
+        if cmp == 0 {
+            return suffix_start
+        }
+        if cmp < 0 {
+            low = mid + 1
+        } else {
+            high = mid - 1
+        }
+    }
+
+    return -1
+}
+
+// -------------------------------------------------------------------
+// Verification Tests
+// -------------------------------------------------------------------
+
+pub fn test_banana_golden_vector() {
+    let text = "banana"
+    let sa = build_suffix_array(text)
+
+    // Expected permutation: [5, 3, 1, 0, 4, 2]
+    // 5: "a"
+    // 3: "ana"
+    // 1: "anana"
+    // 0: "banana"
+    // 4: "na"
+    // 2: "nana"
+    assert(len(sa) == 6, "Length of SA must match string length")
+    assert(sa[0] == 5, "Rank 0 is 'a' (5)")
+    assert(sa[1] == 3, "Rank 1 is 'ana' (3)")
+    assert(sa[2] == 1, "Rank 2 is 'anana' (1)")
+    assert(sa[3] == 0, "Rank 3 is 'banana' (0)")
+    assert(sa[4] == 4, "Rank 4 is 'na' (4)")
+    assert(sa[5] == 2, "Rank 5 is 'nana' (2)")
+}
+
+pub fn test_substring_search() {
+    let text = "banana"
+    let sa = build_suffix_array(text)
+
+    let match_nan = sa_search(text, sa, "nan")
+    assert(match_nan == 2, "Substring 'nan' starts at index 2")
+
+    let match_ban = sa_search(text, sa, "ban")
+    assert(match_ban == 0, "Substring 'ban' starts at index 0")
+
+    let match_ana = sa_search(text, sa, "ana")
+    assert(match_ana == 3 or match_ana == 1, "Substring 'ana' is found at index 1 or 3")
+
+    let match_missing = sa_search(text, sa, "apple")
+    assert(match_missing == -1, "Missing substring must return -1")
+}
+
+pub fn test_repeated_characters() {
+    let text = "aaaa"
+    let sa = build_suffix_array(text)
+
+    // "a" (3), "aa" (2), "aaa" (1), "aaaa" (0)
+    assert(sa[0] == 3, "Shortest suffix 'a' ranks first")
+    assert(sa[1] == 2, "'aa' ranks second")
+    assert(sa[2] == 1, "'aaa' ranks third")
+    assert(sa[3] == 0, "Full 'aaaa' ranks fourth")
+}
+
+pub fn test_single_character() {
+    let text = "z"
+    let sa = build_suffix_array(text)
+    assert(len(sa) == 1, "Single char SA length is 1")
+    assert(sa[0] == 0, "Only suffix starts at 0")
+
+    assert(sa_search(text, sa, "z") == 0, "Search single char hit")
+    assert(sa_search(text, sa, "a") == -1, "Search miss")
+}
+
+pub fn main() {
+    test_banana_golden_vector()
+    test_substring_search()
+    test_repeated_characters()
+    test_single_character()
+    print("All Suffix Array verification tests passed successfully!")
+}
