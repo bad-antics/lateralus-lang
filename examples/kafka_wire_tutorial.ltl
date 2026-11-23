@@ -1,0 +1,89 @@
+// ===================================================================
+// examples/kafka_wire_tutorial.ltl
+//
+// Tutorial: Apache Kafka Binary Wire Protocol Codec & Framing
+// using Lateralus `stdlib/kafka_wire.ltl`.
+//
+// Demonstrates:
+// 1. Constructing a Kafka Request Header v2 (flexible framing).
+// 2. Encoding topics with COMPACT_STRING (len + 1 varint prefix).
+// 3. Framing request body with 4-byte big-endian length prefix.
+// 4. Parsing response frames and correlating request/response cycles.
+// 5. ZigZag varint numeric serialization.
+// ===================================================================
+
+import kafka_wire
+
+pub fn main() {
+    print("=== Lateralus Apache Kafka Wire Protocol Tutorial ===")
+
+    // 1. Prepare Request Header v2
+    // API_METADATA (key 3), version 12, correlation_id 77001
+    let api_key = kafka_wire_api_metadata()
+    let api_version = 12
+    let correlation_id = 77001
+    let client_id = "lateralus-analytics-worker"
+
+    print("Target API: METADATA (Key " + str(api_key) + ", Version " + str(api_version) + ")")
+    print("Correlation ID: " + str(correlation_id))
+    print("Client ID: " + client_id)
+
+    let header_bytes = kafka_wire_request_header_v2(api_key, api_version, correlation_id, client_id)
+    print("Header v2 length: " + str(len(header_bytes)) + " bytes")
+
+    // 2. Encode Metadata Request Body (Requested Topics Array)
+    // COMPACT_ARRAY of topics: uvarint count (2 topics + 1 = 3)
+    let topic_a = "telemetry.sensor.metrics"
+    let topic_b = "events.orders.stream"
+
+    let body_bytes = kafka_wire_enc_uvarint(3) // 2 elements + 1 in compact array
+                   + kafka_wire_enc_compact_string(topic_a)
+                   + kafka_wire_enc_uvarint(0) // empty tagged_fields per topic
+                   + kafka_wire_enc_compact_string(topic_b)
+                   + kafka_wire_enc_uvarint(0)
+                   + kafka_wire_enc_uvarint(0) // request body tagged_fields
+
+    print("Metadata body length: " + str(len(body_bytes)) + " bytes")
+
+    // 3. Frame Full Request Packet (Header + Body)
+    let packet_payload = header_bytes + body_bytes
+    let wire_frame = kafka_wire_frame_request(packet_payload)
+
+    print("Framed wire packet total bytes: " + str(len(wire_frame)))
+    let frame_len = kafka_wire_dec_i32(wire_frame, 0)[0]
+    print("Wire packet header length prefix: " + str(frame_len) + " bytes")
+
+    // 4. Simulate Broker Response Frame
+    let mock_response_body = kafka_wire_enc_i32(correlation_id)
+                           + kafka_wire_enc_i32(0) // throttle_time_ms = 0
+                           + kafka_wire_enc_compact_string("broker-101.internal")
+                           + kafka_wire_enc_i32(9092)
+
+    let mock_response_frame = kafka_wire_frame_request(mock_response_body)
+
+    // 5. Parse Response Frame and Correlate
+    let parsed_resp = kafka_wire_parse_response_frame(mock_response_frame, 0)
+    let resp_corr_id = parsed_resp[0]
+    let resp_payload = parsed_resp[1]
+
+    print("Received response frame:")
+    print("  Correlation ID: " + str(resp_corr_id))
+    print("  Payload bytes: " + str(len(resp_payload)))
+
+    if resp_corr_id == correlation_id {
+        print("[MATCH] Response correlation ID successfully matched outstanding request!")
+    } else {
+        print("[ERROR] Correlation ID mismatch.")
+    }
+
+    // 6. Demonstrate ZigZag Varint efficiency
+    let small_neg = -1
+    let large_neg = -1000000
+    let enc_small = kafka_wire_enc_varint(small_neg)
+    let enc_large = kafka_wire_enc_varint(large_neg)
+
+    print("ZigZag varint for -1: " + str(len(enc_small)) + " byte (value " + str(enc_small[0]) + ")")
+    print("ZigZag varint for -1000000: " + str(len(enc_large)) + " bytes")
+
+    print("=== Kafka Wire Tutorial Completed Successfully ===")
+}
