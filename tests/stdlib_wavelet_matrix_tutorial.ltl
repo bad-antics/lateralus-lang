@@ -1,0 +1,299 @@
+// ===================================================================
+// tests/stdlib_wavelet_matrix_tutorial.ltl
+// -------------------------------------------------------------------
+// Complete test suite for Wavelet Matrix in Lateralus.
+// Succinct data structure for large alphabet sequence representation,
+// O(log Sigma) access, rank, and range quantile queries.
+// Claude & Navarro (2012).
+// ===================================================================
+
+pub fn wm_pow2(k: int) -> int {
+    let mut res = 1
+    let mut i = 0
+    while i < k {
+        res = res * 2
+        i = i + 1
+    }
+    return res
+}
+
+pub fn wm_get_bit(val: int, bit_idx: int) -> int {
+    let p = wm_pow2(bit_idx)
+    return (val / p) % 2
+}
+
+pub fn wm_create(data: list, bits: int) -> dict {
+    let mut matrix = {}
+    let n = data.len()
+    let mut levels = []
+    let mut zeros = []
+
+    let mut current = []
+    let mut i = 0
+    while i < n {
+        current.push(data[i])
+        i = i + 1
+    }
+
+    let mut b = bits - 1
+    while b >= 0 {
+        let mut bits_level = []
+        let mut zeros_next = []
+        let mut ones_next = []
+        let mut z_count = 0
+
+        let mut idx = 0
+        while idx < n {
+            let val = current[idx]
+            let bit = wm_get_bit(val, b)
+            bits_level.push(bit)
+            if bit == 0 {
+                zeros_next.push(val)
+                z_count = z_count + 1
+            } else {
+                ones_next.push(val)
+            }
+            idx = idx + 1
+        }
+
+        levels.push(bits_level)
+        zeros.push(z_count)
+
+        // Stably reconstruct current array for next level
+        current = []
+        let mut zi = 0
+        while zi < zeros_next.len() {
+            current.push(zeros_next[zi])
+            zi = zi + 1
+        }
+        let mut oi = 0
+        while oi < ones_next.len() {
+            current.push(ones_next[oi])
+            oi = oi + 1
+        }
+
+        b = b - 1
+    }
+
+    matrix["levels"] = levels
+    matrix["zeros"] = zeros
+    matrix["bits"] = bits
+    matrix["size"] = n
+    return matrix
+}
+
+pub fn wm_rank_0(level_bits: list, i: int) -> int {
+    let mut count = 0
+    let mut idx = 0
+    while idx < i {
+        if level_bits[idx] == 0 {
+            count = count + 1
+        }
+        idx = idx + 1
+    }
+    return count
+}
+
+pub fn wm_rank_1(level_bits: list, i: int) -> int {
+    let mut count = 0
+    let mut idx = 0
+    while idx < i {
+        if level_bits[idx] == 1 {
+            count = count + 1
+        }
+        idx = idx + 1
+    }
+    return count
+}
+
+pub fn wm_access(matrix: dict, idx: int) -> int {
+    let levels = matrix["levels"]
+    let zeros = matrix["zeros"]
+    let bits = matrix["bits"]
+
+    let mut pos = idx
+    let mut result = 0
+
+    let mut level_idx = 0
+    while level_idx < bits {
+        let level_bits = levels[level_idx]
+        let z = zeros[level_idx]
+        let bit = level_bits[pos]
+        result = result * 2 + bit
+
+        if bit == 0 {
+            pos = wm_rank_0(level_bits, pos)
+        } else {
+            pos = z + wm_rank_1(level_bits, pos)
+        }
+        level_idx = level_idx + 1
+    }
+    return result
+}
+
+pub fn wm_rank(matrix: dict, val: int, idx: int) -> int {
+    let levels = matrix["levels"]
+    let zeros = matrix["zeros"]
+    let bits = matrix["bits"]
+
+    let mut pos = idx
+    let mut level_idx = 0
+    while level_idx < bits {
+        let bit_shift = bits - 1 - level_idx
+        let bit = wm_get_bit(val, bit_shift)
+        let level_bits = levels[level_idx]
+        let z = zeros[level_idx]
+
+        if bit == 0 {
+            pos = wm_rank_0(level_bits, pos)
+        } else {
+            pos = z + wm_rank_1(level_bits, pos)
+        }
+        level_idx = level_idx + 1
+    }
+
+    // Now pos is the prefix boundary in the fully sorted bottom level
+    // Find starting position of val in the bottom level
+    let mut start_pos = 0
+    level_idx = 0
+    while level_idx < bits {
+        let bit_shift = bits - 1 - level_idx
+        let bit = wm_get_bit(val, bit_shift)
+        let level_bits = levels[level_idx]
+        let z = zeros[level_idx]
+        if bit == 0 {
+            start_pos = wm_rank_0(level_bits, start_pos)
+        } else {
+            start_pos = z + wm_rank_1(level_bits, start_pos)
+        }
+        level_idx = level_idx + 1
+    }
+
+    if pos >= start_pos {
+        return pos - start_pos
+    }
+    return 0
+}
+
+pub fn wm_quantile(matrix: dict, l: int, r: int, k: int) -> int {
+    // Finds k-th smallest element (1-based, k=1 is smallest) in range [l, r)
+    let levels = matrix["levels"]
+    let zeros = matrix["zeros"]
+    let bits = matrix["bits"]
+
+    let mut cur_l = l
+    let mut cur_r = r
+    let mut cur_k = k
+    let mut result = 0
+
+    let mut level_idx = 0
+    while level_idx < bits {
+        let level_bits = levels[level_idx]
+        let z = zeros[level_idx]
+
+        let zeros_l = wm_rank_0(level_bits, cur_l)
+        let zeros_r = wm_rank_0(level_bits, cur_r)
+        let zeros_in_range = zeros_r - zeros_l
+
+        if cur_k <= zeros_in_range {
+            // Target element has 0 at this bit level
+            result = result * 2 + 0
+            cur_l = zeros_l
+            cur_r = zeros_r
+        } else {
+            // Target element has 1 at this bit level
+            result = result * 2 + 1
+            cur_k = cur_k - zeros_in_range
+            let ones_l = cur_l - zeros_l
+            let ones_r = cur_r - zeros_r
+            cur_l = z + ones_l
+            cur_r = z + ones_r
+        }
+        level_idx = level_idx + 1
+    }
+    return result
+}
+
+// -------------------------------------------------------------------
+// Smoke tests and Golden Test Vectors
+// -------------------------------------------------------------------
+
+pub fn test_wm_access() -> bool {
+    let data = [5, 4, 5, 5, 2, 1, 5, 6, 1, 3, 5, 0]
+    let wm = wm_create(data, 4) // values in [0, 15], 4 bits
+
+    let mut i = 0
+    while i < data.len() {
+        let val = wm_access(wm, i)
+        if val != data[i] {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+pub fn test_wm_rank() -> bool {
+    let data = [5, 4, 5, 5, 2, 1, 5, 6, 1, 3, 5, 0]
+    let wm = wm_create(data, 4)
+
+    // Prefix [0, 4) -> [5, 4, 5, 5]: rank(5, 4) == 3
+    let r1 = wm_rank(wm, 5, 4)
+    if r1 != 3 {
+        return false
+    }
+
+    // Prefix [0, 7) -> [5, 4, 5, 5, 2, 1, 5]: rank(5, 7) == 4
+    let r2 = wm_rank(wm, 5, 7)
+    if r2 != 4 {
+        return false
+    }
+
+    // Prefix [0, 12): rank(1, 12) == 2, rank(5, 12) == 5, rank(7, 12) == 0
+    let r3 = wm_rank(wm, 1, 12)
+    let r4 = wm_rank(wm, 5, 12)
+    let r5 = wm_rank(wm, 7, 12)
+    if r3 != 2 or r4 != 5 or r5 != 0 {
+        return false
+    }
+    return true
+}
+
+pub fn test_wm_quantile() -> bool {
+    // Sub-range [4, 11) is: [2, 1, 5, 6, 1, 3, 5]
+    // Sorted: [1, 1, 2, 3, 5, 5, 6]
+    let data = [5, 4, 5, 5, 2, 1, 5, 6, 1, 3, 5, 0]
+    let wm = wm_create(data, 4)
+
+    // k=1 (minimum) should be 1
+    let q1 = wm_quantile(wm, 4, 11, 1)
+    if q1 != 1 {
+        return false
+    }
+
+    // k=2 should be 1
+    let q2 = wm_quantile(wm, 4, 11, 2)
+    if q2 != 1 {
+        return false
+    }
+
+    // k=3 should be 2
+    let q3 = wm_quantile(wm, 4, 11, 3)
+    if q3 != 2 {
+        return false
+    }
+
+    // k=4 (median) should be 3
+    let q4 = wm_quantile(wm, 4, 11, 4)
+    if q4 != 3 {
+        return false
+    }
+
+    // k=7 (maximum) should be 6
+    let q7 = wm_quantile(wm, 4, 11, 7)
+    if q7 != 6 {
+        return false
+    }
+
+    return true
+}
