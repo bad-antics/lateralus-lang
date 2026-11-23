@@ -1,0 +1,246 @@
+// stdlib_octree_tutorial.ltl
+// Comprehensive test suite for Octree 3D Spatial Partitioning
+// Donald Meagher (1980)
+// Runnable by any test harness honouring `pub fn test_*() -> bool`
+
+pub fn box_contains_point(b: list, pt: list) -> bool {
+    let mut px = pt[0];
+    let mut py = pt[1];
+    let mut pz = pt[2];
+    if px >= b[0] && px <= b[3] && py >= b[1] && py <= b[4] && pz >= b[2] && pz <= b[5] {
+        return true;
+    }
+    return false;
+}
+
+pub fn boxes_intersect(b1: list, b2: list) -> bool {
+    if b1[3] < b2[0] || b1[0] > b2[3] {
+        return false;
+    }
+    if b1[4] < b2[1] || b1[1] > b2[4] {
+        return false;
+    }
+    if b1[5] < b2[2] || b1[2] > b2[5] {
+        return false;
+    }
+    return true;
+}
+
+pub fn create_octree(b: list, capacity: int) -> map {
+    return {
+        boundary: b,
+        capacity: capacity,
+        points: [],
+        divided: false,
+        children: []
+    };
+}
+
+pub fn octree_subdivide(node: map) -> map {
+    let mut b = node["boundary"];
+    let mut min_x = b[0];
+    let mut min_y = b[1];
+    let mut min_z = b[2];
+    let mut max_x = b[3];
+    let mut max_y = b[4];
+    let mut max_z = b[5];
+
+    let mut mid_x = (min_x + max_x) / 2;
+    let mut mid_y = (min_y + max_y) / 2;
+    let mut mid_z = (min_z + max_z) / 2;
+
+    let mut cap = node["capacity"];
+
+    // 8 Sub-boxes across (X, Y, Z) Cartesian quadrants
+    let mut b0 = [min_x, min_y, min_z, mid_x, mid_y, mid_z];
+    let mut b1 = [mid_x, min_y, min_z, max_x, mid_y, mid_z];
+    let mut b2 = [min_x, mid_y, min_z, mid_x, max_y, mid_z];
+    let mut b3 = [mid_x, mid_y, min_z, max_x, max_y, mid_z];
+    let mut b4 = [min_x, min_y, mid_z, mid_x, mid_y, max_z];
+    let mut b5 = [mid_x, min_y, mid_z, max_x, mid_y, max_z];
+    let mut b6 = [min_x, mid_y, mid_z, mid_x, max_y, max_z];
+    let mut b7 = [mid_x, mid_y, mid_z, max_x, max_y, max_z];
+
+    let mut c0 = create_octree(b0, cap);
+    let mut c1 = create_octree(b1, cap);
+    let mut c2 = create_octree(b2, cap);
+    let mut c3 = create_octree(b3, cap);
+    let mut c4 = create_octree(b4, cap);
+    let mut c5 = create_octree(b5, cap);
+    let mut c6 = create_octree(b6, cap);
+    let mut c7 = create_octree(b7, cap);
+
+    let mut kids = [c0, c1, c2, c3, c4, c5, c6, c7];
+
+    let mut old_pts = node["points"];
+    let mut i = 0;
+    while i < len(old_pts) {
+        let mut pt = old_pts[i];
+        let mut placed = false;
+        let mut k = 0;
+        while k < 8 && !placed {
+            let mut kid = kids[k];
+            if box_contains_point(kid["boundary"], pt) {
+                let mut kid_pts = kid["points"] + [pt];
+                kid["points"] = kid_pts;
+                kids[k] = kid;
+                placed = true;
+            }
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+
+    node["divided"] = true;
+    node["points"] = [];
+    node["children"] = kids;
+    return node;
+}
+
+pub fn octree_insert(node: map, pt: list) -> map {
+    let mut b = node["boundary"];
+    if !box_contains_point(b, pt) {
+        return node;
+    }
+
+    let mut is_div = node["divided"];
+    if !is_div {
+        let mut pts = node["points"];
+        let mut cap = node["capacity"];
+        if len(pts) < cap {
+            node["points"] = pts + [pt];
+            return node;
+        }
+        let mut split_node = octree_subdivide(node);
+        return octree_insert(split_node, pt);
+    }
+
+    let mut kids = node["children"];
+    let mut placed = false;
+    let mut k = 0;
+    while k < 8 && !placed {
+        let mut kid = kids[k];
+        if box_contains_point(kid["boundary"], pt) {
+            kids[k] = octree_insert(kid, pt);
+            placed = true;
+        }
+        k = k + 1;
+    }
+    node["children"] = kids;
+    return node;
+}
+
+pub fn octree_query_range(node: map, qbox: list) -> list {
+    let mut results = [];
+    let mut b = node["boundary"];
+    if !boxes_intersect(b, qbox) {
+        return results;
+    }
+
+    let mut is_div = node["divided"];
+    if !is_div {
+        let mut pts = node["points"];
+        let mut i = 0;
+        while i < len(pts) {
+            let mut pt = pts[i];
+            if box_contains_point(qbox, pt) {
+                results = results + [pt];
+            }
+            i = i + 1;
+        }
+        return results;
+    }
+
+    let mut kids = node["children"];
+    let mut k = 0;
+    while k < 8 {
+        let mut kid = kids[k];
+        let mut sub_res = octree_query_range(kid, qbox);
+        let mut j = 0;
+        while j < len(sub_res) {
+            results = results + [sub_res[j]];
+            j = j + 1;
+        }
+        k = k + 1;
+    }
+    return results;
+}
+
+// -----------------------------------------------------------------------------
+// Test Vectors
+// -----------------------------------------------------------------------------
+
+pub fn test_octree_containment_and_intersection() -> bool {
+    let mut b1 = [0, 0, 0, 100, 100, 100];
+    let mut pt_in = [50, 50, 50];
+    let mut pt_out = [120, 50, 50];
+    let mut c1 = box_contains_point(b1, pt_in);
+    let mut c2 = box_contains_point(b1, pt_out);
+
+    let mut b2 = [80, 80, 80, 150, 150, 150];
+    let mut b3 = [200, 200, 200, 300, 300, 300];
+    let mut i1 = boxes_intersect(b1, b2);
+    let mut i2 = boxes_intersect(b1, b3);
+
+    return c1 && !c2 && i1 && !i2;
+}
+
+pub fn test_octree_capacity_subdivide() -> bool {
+    let mut root_box = [0, 0, 0, 100, 100, 100];
+    let mut tree = create_octree(root_box, 2);
+
+    tree = octree_insert(tree, [10, 10, 10]);
+    tree = octree_insert(tree, [20, 20, 20]);
+    let mut div_before = tree["divided"];
+
+    // 3rd point triggers subdivision
+    tree = octree_insert(tree, [30, 30, 30]);
+    let mut div_after = tree["divided"];
+    let mut kids = tree["children"];
+
+    return !div_before && div_after && len(kids) == 8;
+}
+
+pub fn test_octree_range_query_filtering() -> bool {
+    let mut root_box = [0, 0, 0, 1000, 1000, 1000];
+    let mut tree = create_octree(root_box, 2);
+
+    // Target cluster in low quadrant
+    tree = octree_insert(tree, [50, 50, 50]);
+    tree = octree_insert(tree, [60, 60, 60]);
+    tree = octree_insert(tree, [70, 70, 70]);
+
+    // Distant points in opposite quadrants
+    tree = octree_insert(tree, [800, 800, 800]);
+    tree = octree_insert(tree, [900, 900, 900]);
+
+    let mut query_window = [0, 0, 0, 100, 100, 100];
+    let mut matched = octree_query_range(tree, query_window);
+    let mut count = len(matched);
+
+    return count == 3;
+}
+
+pub fn test_octree_empty_disjoint_region() -> bool {
+    let mut root_box = [0, 0, 0, 100, 100, 100];
+    let mut tree = create_octree(root_box, 4);
+    tree = octree_insert(tree, [10, 10, 10]);
+    tree = octree_insert(tree, [20, 20, 20]);
+
+    let mut query_empty = [300, 300, 300, 400, 400, 400];
+    let mut matched = octree_query_range(tree, query_empty);
+
+    return len(matched) == 0;
+}
+
+pub fn run_all() -> map {
+    let mut t1 = test_octree_containment_and_intersection();
+    let mut t2 = test_octree_capacity_subdivide();
+    let mut t3 = test_octree_range_query_filtering();
+    let mut t4 = test_octree_empty_disjoint_region();
+    let mut passed = t1 && t2 && t3 && t4;
+    return {
+        total: 4,
+        all_passed: passed
+    };
+}

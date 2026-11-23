@@ -1,0 +1,185 @@
+// examples/octree_tutorial.ltl
+// Systems Engineering Demonstration:
+// Autonomous Vehicle LiDAR 3D Point Cloud Perception & Obstacle Collision Detection via Octree
+
+pub fn box_contains_point(b: list, pt: list) -> bool {
+    let mut px = pt[0];
+    let mut py = pt[1];
+    let mut pz = pt[2];
+    if px >= b[0] && px <= b[3] && py >= b[1] && py <= b[4] && pz >= b[2] && pz <= b[5] {
+        return true;
+    }
+    return false;
+}
+
+pub fn boxes_intersect(b1: list, b2: list) -> bool {
+    if b1[3] < b2[0] || b1[0] > b2[3] {
+        return false;
+    }
+    if b1[4] < b2[1] || b1[1] > b2[4] {
+        return false;
+    }
+    if b1[5] < b2[2] || b1[2] > b2[5] {
+        return false;
+    }
+    return true;
+}
+
+pub fn create_octree(b: list, capacity: int) -> map {
+    return {
+        boundary: b,
+        capacity: capacity,
+        points: [],
+        divided: false,
+        children: []
+    };
+}
+
+pub fn octree_subdivide(node: map) -> map {
+    let mut b = node["boundary"];
+    let mut min_x = b[0];
+    let mut min_y = b[1];
+    let mut min_z = b[2];
+    let mut max_x = b[3];
+    let mut max_y = b[4];
+    let mut max_z = b[5];
+
+    let mut mid_x = (min_x + max_x) / 2;
+    let mut mid_y = (min_y + max_y) / 2;
+    let mut mid_z = (min_z + max_z) / 2;
+
+    let mut cap = node["capacity"];
+
+    let mut b0 = [min_x, min_y, min_z, mid_x, mid_y, mid_z];
+    let mut b1 = [mid_x, min_y, min_z, max_x, mid_y, mid_z];
+    let mut b2 = [min_x, mid_y, min_z, mid_x, max_y, mid_z];
+    let mut b3 = [mid_x, mid_y, min_z, max_x, max_y, mid_z];
+    let mut b4 = [min_x, min_y, mid_z, mid_x, mid_y, max_z];
+    let mut b5 = [mid_x, min_y, mid_z, max_x, mid_y, max_z];
+    let mut b6 = [min_x, mid_y, mid_z, mid_x, max_y, max_z];
+    let mut b7 = [mid_x, mid_y, mid_z, max_x, max_y, max_z];
+
+    let mut c0 = create_octree(b0, cap);
+    let mut c1 = create_octree(b1, cap);
+    let mut c2 = create_octree(b2, cap);
+    let mut c3 = create_octree(b3, cap);
+    let mut c4 = create_octree(b4, cap);
+    let mut c5 = create_octree(b5, cap);
+    let mut c6 = create_octree(b6, cap);
+    let mut c7 = create_octree(b7, cap);
+
+    let mut kids = [c0, c1, c2, c3, c4, c5, c6, c7];
+
+    let mut old_pts = node["points"];
+    let mut i = 0;
+    while i < len(old_pts) {
+        let mut pt = old_pts[i];
+        let mut placed = false;
+        let mut k = 0;
+        while k < 8 && !placed {
+            let mut kid = kids[k];
+            if box_contains_point(kid["boundary"], pt) {
+                let mut kid_pts = kid["points"] + [pt];
+                kid["points"] = kid_pts;
+                kids[k] = kid;
+                placed = true;
+            }
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+
+    node["divided"] = true;
+    node["points"] = [];
+    node["children"] = kids;
+    return node;
+}
+
+pub fn octree_insert(node: map, pt: list) -> map {
+    let mut b = node["boundary"];
+    if !box_contains_point(b, pt) {
+        return node;
+    }
+
+    let mut is_div = node["divided"];
+    if !is_div {
+        let mut pts = node["points"];
+        let mut cap = node["capacity"];
+        if len(pts) < cap {
+            node["points"] = pts + [pt];
+            return node;
+        }
+        let mut split_node = octree_subdivide(node);
+        return octree_insert(split_node, pt);
+    }
+
+    let mut kids = node["children"];
+    let mut placed = false;
+    let mut k = 0;
+    while k < 8 && !placed {
+        let mut kid = kids[k];
+        if box_contains_point(kid["boundary"], pt) {
+            kids[k] = octree_insert(kid, pt);
+            placed = true;
+        }
+        k = k + 1;
+    }
+    node["children"] = kids;
+    return node;
+}
+
+pub fn octree_query_range(node: map, qbox: list) -> list {
+    let mut results = [];
+    let mut b = node["boundary"];
+    if !boxes_intersect(b, qbox) {
+        return results;
+    }
+
+    let mut is_div = node["divided"];
+    if !is_div {
+        let mut pts = node["points"];
+        let mut i = 0;
+        while i < len(pts) {
+            let mut pt = pts[i];
+            if box_contains_point(qbox, pt) {
+                results = results + [pt];
+            }
+            i = i + 1;
+        }
+        return results;
+    }
+
+    let mut kids = node["children"];
+    let mut k = 0;
+    while k < 8 {
+        let mut kid = kids[k];
+        let mut sub_res = octree_query_range(kid, qbox);
+        let mut j = 0;
+        while j < len(sub_res) {
+            results = results + [sub_res[j]];
+            j = j + 1;
+        }
+        k = k + 1;
+    }
+    return results;
+}
+
+pub fn main() -> int {
+    // 3D Airspace surrounding the vehicle: [-500, -500, -50, 500, 500, 50]
+    let mut lidar_space = [-500, -500, -50, 500, 500, 50];
+    let mut spatial_index = create_octree(lidar_space, 4);
+
+    // Ingest stream of LiDAR point reflections
+    spatial_index = octree_insert(spatial_index, [25, 5, 0]);     // Pedestrian in forward path
+    spatial_index = octree_insert(spatial_index, [30, -2, 1]);    // Road barrier ahead
+    spatial_index = octree_insert(spatial_index, [28, 0, 0]);     // Cyclist
+    spatial_index = octree_insert(spatial_index, [-100, 200, 10]);// Background tree
+    spatial_index = octree_insert(spatial_index, [350, -400, 5]); // Distant building
+
+    // Forward Autonomous Emergency Braking (AEB) safety zone: [0, -10, -5, 50, 10, 5]
+    let mut aeb_safety_corridor = [0, -10, -5, 50, 10, 5];
+    let mut hazard_points = octree_query_range(spatial_index, aeb_safety_corridor);
+
+    let mut hazard_count = len(hazard_points);
+    return hazard_count;
+}
