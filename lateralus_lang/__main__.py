@@ -11,7 +11,23 @@ from .repl import start_repl
 from .repl_enhanced import start_repl as start_repl_enhanced
 
 
+def _configure_console_output():
+    """Prevent UnicodeEncodeError on legacy Windows console encodings."""
+    import sys
+
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(errors="backslashreplace")
+        except (LookupError, OSError, ValueError):
+            # Reconfiguration is unavailable for some redirected/custom streams.
+            pass
+
+
 def main(argv=None) -> int:
+    _configure_console_output()
     import argparse
 
     from . import __version__
