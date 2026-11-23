@@ -123,6 +123,14 @@ class TestComments:
         ts = tokens("42 /* block */ 43")
         assert [t.value for t in ts] == [42, 43]
 
+    def test_double_dash_comment_skipped(self):
+        ts = tokens("42 -- lua-style comment with ' apostrophe")
+        assert [t.value for t in ts] == [42]
+
+    def test_double_dash_comment_eol(self):
+        ts = tokens("-- full line comment\n43")
+        assert [t.value for t in ts] == [43]
+
     def test_unterminated_block_comment(self):
         with pytest.raises(LexError):
             lex("/* unterminated")
