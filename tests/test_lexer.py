@@ -133,3 +133,27 @@ class TestErrors:
         # @ and ? are now valid tokens in v1.1; use backtick which is never valid
         with pytest.raises(LexError):
             lex("`")
+
+
+class TestStringInterpolation:
+    def test_plain_string(self):
+        ts = tokens('"hello"')
+        assert ts[0].value == "hello"
+
+    def test_interpolation(self):
+        ts = tokens('"hi {name}"')
+        assert ts[0].value == [("str", "hi "), ("expr", "name"), ("str", "")]
+
+    def test_escaped_open_brace(self):
+        ts = tokens('"a{{b"')
+        assert ts[0].value == "a{b"
+
+    def test_escaped_close_brace(self):
+        ts = tokens('"a}}b"')
+        assert ts[0].value == "a}b"
+
+    def test_escaped_braces_with_interpolation(self):
+        ts = tokens('"a{{b}}c {1+2} d"')
+        assert ts[0].value == [
+            ("str", "a{b}c "), ("expr", "1+2"), ("str", " d"),
+        ]

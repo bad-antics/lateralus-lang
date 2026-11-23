@@ -552,8 +552,10 @@ class Lexer:
                     if depth > 0: expr_src += c
                     self._advance()
                 parts.append(("expr", expr_src))
-            elif ch == "{{":
+            elif ch == "{" and self._peek() == "{":
                 buf += "{"; self._advance(); self._advance()
+            elif ch == "}" and self._peek() == "}":
+                buf += "}"; self._advance(); self._advance()
             else:
                 buf += self._advance()
         parts.append(("str", buf))
