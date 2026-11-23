@@ -37,6 +37,7 @@ from ..ast_nodes import (
     CallExpr,
     CancelExpr,
     CastExpr,
+    DerefExpr,
     # v1.7 — conditional compilation
     CfgExpr,
     ChainExpr,
@@ -105,6 +106,8 @@ from ..ast_nodes import (
     TypePattern,
     UnaryOp,
     UnquoteExpr,
+    UnsafeBlock,
+    VolatileExpr,
     WhereClause,
     WhileStmt,
     WildcardPattern,
@@ -822,6 +825,43 @@ class PythonTranspiler(ASTVisitor):
         self._w += "            'lateralus.polyglot not found — '"
         self._w += "            'install the lateralus package or add it to PYTHONPATH')"
         self._w += ""
+        # Low-level pointer and memory shims
+        self._w += "class Ptr(int): pass"
+        self._w += "usize = int; isize = int"
+        self._w += "u8 = int; u16 = int; u32 = int; u64 = int"
+        self._w += "_SIMULATED_MEMORY = {}"
+        self._w += "def _ltl_deref(p): return _SIMULATED_MEMORY.get(int(p), 0)"
+        self._w += "def _ltl_set_deref(p, v): _SIMULATED_MEMORY[int(p)] = v"
+        self._w += "class _LtlMemShim:"
+        self._w += "    @staticmethod"
+        self._w += "    def align_up(addr, align): return (addr + align - 1) & ~(align - 1)"
+        self._w += "    @staticmethod"
+        self._w += "    def align_down(addr, align): return addr & ~(align - 1)"
+        self._w += "    @staticmethod"
+        self._w += "    def is_aligned(addr, align): return (addr & (align - 1)) == 0"
+        self._w += "    @staticmethod"
+        self._w += "    def copy(dst, src, n):"
+        self._w += "        for i in range(n): _SIMULATED_MEMORY[int(dst) + i] = _SIMULATED_MEMORY.get(int(src) + i, 0)"
+        self._w += "        return dst"
+        self._w += "    @staticmethod"
+        self._w += "    def set(dst, val, n):"
+        self._w += "        for i in range(n): _SIMULATED_MEMORY[int(dst) + i] = val & 0xFF"
+        self._w += "        return dst"
+        self._w += "    @staticmethod"
+        self._w += "    def zero(dst, n): return _LtlMemShim.set(dst, 0, n)"
+        self._w += "mem = _LtlMemShim()"
+        self._w += "class _LtlSysShim:"
+        self._w += "    @staticmethod"
+        self._w += "    def pause(): pass"
+        self._w += "    @staticmethod"
+        self._w += "    def mfence(): pass"
+        self._w += "    @staticmethod"
+        self._w += "    def lfence(): pass"
+        self._w += "    @staticmethod"
+        self._w += "    def sfence(): pass"
+        self._w += "    def __getattr__(self, name): return getattr(_sys, name)"
+        self._w += "_ltl_sys = _LtlSysShim()"
+        self._w += ""
 
         program.accept(self)
         return self._w.getvalue()
@@ -871,6 +911,10 @@ class PythonTranspiler(ASTVisitor):
             "stdlib.collections": "_builtins",
             "time":             "_time",
             "stdlib.time":      "_time",
+            "mem":              "mem",
+            "stdlib.mem":       "mem",
+            "sys":              "_ltl_sys",
+            "stdlib.sys":       "_ltl_sys",
             "random":           "__import__('random')",
             "stdlib.random":    "__import__('random')",
             "polyglot":         "lateralus.polyglot",
@@ -1078,8 +1122,17 @@ class PythonTranspiler(ASTVisitor):
         self._w += "continue"
 
     def visit_BlockStmt(self, node: BlockStmt):
+        if not node.stmts:
+            self._w += "pass"
+            return
         for stmt in node.stmts:
             stmt.accept(self)
+
+    def visit_UnsafeBlock(self, node: UnsafeBlock):
+        if node.body:
+            node.body.accept(self)
+        else:
+            self._w += "pass"
 
     def visit_ExprStmt(self, node: ExprStmt):
         code = self._expr(node.expr)
@@ -1089,7 +1142,12 @@ class PythonTranspiler(ASTVisitor):
     def visit_AssignStmt(self, node: AssignStmt):
         val = self._expr(node.value)
         self._flush_hoisted_lambdas()
-        self._w += f"{self._expr(node.target)} {node.op} {val}"
+        if isinstance(node.target, VolatileExpr) and isinstance(node.target.operand, DerefExpr):
+            self._w += f"_ltl_set_deref({self._expr(node.target.operand.operand)}, {val})"
+        elif isinstance(node.target, DerefExpr):
+            self._w += f"_ltl_set_deref({self._expr(node.target.operand)}, {val})"
+        else:
+            self._w += f"{self._expr(node.target)} {node.op} {val}"
 
     def visit_IfStmt(self, node: IfStmt):
         self._w += f"if {self._expr(node.condition)}:"
@@ -1557,6 +1615,10 @@ class PythonTranspiler(ASTVisitor):
             return f"await {self._expr(node.value)}"
         if isinstance(node, CastExpr):
             return f"{node.target.name}({self._expr(node.value)})"
+        if isinstance(node, DerefExpr):
+            return f"_ltl_deref({self._expr(node.operand)})"
+        if isinstance(node, VolatileExpr):
+            return self._expr(node.operand)
         if isinstance(node, RangeExpr):
             end_expr = self._expr(node.end)
             adj = " + 1" if node.inclusive else ""
