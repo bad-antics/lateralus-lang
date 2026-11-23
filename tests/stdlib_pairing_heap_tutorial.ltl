@@ -1,0 +1,248 @@
+// ===================================================================
+// tests/stdlib_pairing_heap_tutorial.ltl
+// -------------------------------------------------------------------
+// Complete test suite for Pairing Heap in Lateralus.
+// Self-adjusting heap structure with O(1) insert/meld and amortized
+// O(log n) delete_min via two-pass merging strategy.
+// Fredman, Sedgewick, Sleator, & Tarjan (1986).
+// ===================================================================
+
+pub fn pheap_create() -> dict {
+    let mut heap = {}
+    let mut val = []
+    let mut child = []
+    let mut sibling = []
+
+    // Index 0 represents nil
+    val.push(0)
+    child.push(0)
+    sibling.push(0)
+
+    heap["val"] = val
+    heap["child"] = child
+    heap["sibling"] = sibling
+    heap["root"] = 0
+    heap["size"] = 0
+    return heap
+}
+
+pub fn pheap_is_empty(heap: dict) -> bool {
+    let root = heap["root"]
+    return root == 0
+}
+
+pub fn pheap_find_min(heap: dict) -> int {
+    let root = heap["root"]
+    if root == 0 {
+        return -1
+    }
+    let val = heap["val"]
+    return val[root]
+}
+
+pub fn pheap_meld_nodes(heap: dict, u: int, v: int) -> int {
+    if u == 0 {
+        return v
+    }
+    if v == 0 {
+        return u
+    }
+
+    let val = heap["val"]
+    let mut child = heap["child"]
+    let mut sibling = heap["sibling"]
+
+    if val[u] <= val[v] {
+        sibling[v] = child[u]
+        child[u] = v
+        sibling[u] = 0
+        heap["child"] = child
+        heap["sibling"] = sibling
+        return u
+    } else {
+        sibling[u] = child[v]
+        child[v] = u
+        sibling[v] = 0
+        heap["child"] = child
+        heap["sibling"] = sibling
+        return v
+    }
+}
+
+pub fn pheap_insert(heap: dict, key: int) -> int {
+    let mut val = heap["val"]
+    let mut child = heap["child"]
+    let mut sibling = heap["sibling"]
+
+    let node_idx = val.len()
+    val.push(key)
+    child.push(0)
+    sibling.push(0)
+
+    heap["val"] = val
+    heap["child"] = child
+    heap["sibling"] = sibling
+
+    let root = heap["root"]
+    let new_root = pheap_meld_nodes(heap, root, node_idx)
+    heap["root"] = new_root
+
+    let size = heap["size"]
+    heap["size"] = size + 1
+    return node_idx
+}
+
+pub fn pheap_delete_min(heap: dict) -> int {
+    let root = heap["root"]
+    if root == 0 {
+        return -1
+    }
+
+    let val = heap["val"]
+    let min_val = val[root]
+
+    let child = heap["child"]
+    let first_child = child[root]
+
+    if first_child == 0 {
+        heap["root"] = 0
+        let size = heap["size"]
+        heap["size"] = size - 1
+        return min_val
+    }
+
+    // Collect all children of root and unlink their sibling pointers
+    let mut children = []
+    let mut curr = first_child
+    let mut sibling = heap["sibling"]
+
+    while curr != 0 {
+        let nxt = sibling[curr]
+        sibling[curr] = 0
+        children.push(curr)
+        curr = nxt
+    }
+    heap["sibling"] = sibling
+
+    // Pass 1: Pairwise merging from left to right
+    let mut paired = []
+    let num_children = children.len()
+    let mut i = 0
+    while i < num_children {
+        if i + 1 < num_children {
+            let m = pheap_meld_nodes(heap, children[i], children[i + 1])
+            paired.push(m)
+            i = i + 2
+        } else {
+            paired.push(children[i])
+            i = i + 1
+        }
+    }
+
+    // Pass 2: Cascade accumulation from right to left
+    let num_paired = paired.len()
+    let mut new_root = paired[num_paired - 1]
+    let mut j = num_paired - 2
+    while j >= 0 {
+        new_root = pheap_meld_nodes(heap, paired[j], new_root)
+        j = j - 1
+    }
+
+    heap["root"] = new_root
+    let size = heap["size"]
+    heap["size"] = size - 1
+    return min_val
+}
+
+// -------------------------------------------------------------------
+// Smoke tests and Golden Test Vectors
+// -------------------------------------------------------------------
+
+pub fn test_pheap_basic_insert_and_min() -> bool {
+    let heap = pheap_create()
+    if not pheap_is_empty(heap) {
+        return false
+    }
+
+    pheap_insert(heap, 40)
+    if pheap_find_min(heap) != 40 {
+        return false
+    }
+
+    pheap_insert(heap, 15)
+    if pheap_find_min(heap) != 15 {
+        return false
+    }
+
+    pheap_insert(heap, 30)
+    if pheap_find_min(heap) != 15 {
+        return false
+    }
+
+    pheap_insert(heap, 5)
+    if pheap_find_min(heap) != 5 {
+        return false
+    }
+
+    let min_extracted = pheap_delete_min(heap)
+    if min_extracted != 5 {
+        return false
+    }
+    if pheap_find_min(heap) != 15 {
+        return false
+    }
+
+    return true
+}
+
+pub fn test_pheap_heapsort_order() -> bool {
+    let heap = pheap_create()
+    let keys = [42, 17, 89, 5, 23, 1, 64, 12]
+
+    let mut i = 0
+    while i < keys.len() {
+        pheap_insert(heap, keys[i])
+        i = i + 1
+    }
+
+    let expected = [1, 5, 12, 17, 23, 42, 64, 89]
+    let mut idx = 0
+    while idx < expected.len() {
+        let extracted = pheap_delete_min(heap)
+        if extracted != expected[idx] {
+            return false
+        }
+        idx = idx + 1
+    }
+
+    if not pheap_is_empty(heap) {
+        return false
+    }
+    return true
+}
+
+pub fn test_pheap_duplicates() -> bool {
+    let heap = pheap_create()
+    pheap_insert(heap, 20)
+    pheap_insert(heap, 10)
+    pheap_insert(heap, 20)
+    pheap_insert(heap, 10)
+    pheap_insert(heap, 30)
+
+    if pheap_delete_min(heap) != 10 {
+        return false
+    }
+    if pheap_delete_min(heap) != 10 {
+        return false
+    }
+    if pheap_delete_min(heap) != 20 {
+        return false
+    }
+    if pheap_delete_min(heap) != 20 {
+        return false
+    }
+    if pheap_delete_min(heap) != 30 {
+        return false
+    }
+    return pheap_is_empty(heap)
+}
