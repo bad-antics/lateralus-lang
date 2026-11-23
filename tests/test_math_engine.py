@@ -195,6 +195,12 @@ class TestInterval:
         assert a.hi == 10.5
         assert a.mid == pytest.approx(10.0)
 
+    def test_exact_enclosure_large_floats(self):
+        for n in (2**52, 2**53):
+            x = Interval.exact(float(n))
+            result = (x + Interval.exact(1.0)) - x
+            assert result.contains(1.0)
+
 
 # -------------------------------------------------------------------------
 # Automatic differentiation
