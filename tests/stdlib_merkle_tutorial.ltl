@@ -1,0 +1,85 @@
+// tests/stdlib_merkle_tutorial.ltl
+// Pinned test vectors and cryptographic invariants for stdlib/merkle.ltl
+
+import merkle
+
+pub fn test_single_leaf_root() -> bool {
+    let t = merkle_build_default(["alpha"])
+    let expected = merkle_hash_leaf(merkle_default_hash, "alpha")
+    return t["root"] == expected
+}
+
+pub fn test_even_leaves_build_and_verify() -> bool {
+    let txs = ["tx0_alice_bob_10", "tx1_bob_charlie_5", "tx2_charlie_dave_2", "tx3_dave_alice_7"]
+    let t = merkle_build_default(txs)
+    let i = 0
+    while i < len(txs) {
+        let p = merkle_proof(t, i)
+        if not merkle_verify_default(t["root"], txs[i], p) {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+pub fn test_odd_leaves_build_and_verify() -> bool {
+    let txs = ["block_0", "block_1", "block_2", "block_3", "block_4"]
+    let t = merkle_build_default(txs)
+    let i = 0
+    while i < len(txs) {
+        let p = merkle_proof(t, i)
+        if not merkle_verify_default(t["root"], txs[i], p) {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+pub fn test_tampered_leaf_data_rejected() -> bool {
+    let txs = ["data_entry_a", "data_entry_b", "data_entry_c", "data_entry_d"]
+    let t = merkle_build_default(txs)
+    let p = merkle_proof(t, 2)
+    // Tampered payload with original proof must fail verification
+    if merkle_verify_default(t["root"], "data_entry_MALICIOUS", p) {
+        return false
+    }
+    return true
+}
+
+pub fn test_tampered_root_rejected() -> bool {
+    let txs = ["entry_1", "entry_2", "entry_3", "entry_4"]
+    let t = merkle_build_default(txs)
+    let p = merkle_proof(t, 0)
+    let forged_root = "0000000000000000"
+    if merkle_verify_default(forged_root, txs[0], p) {
+        return false
+    }
+    return true
+}
+
+pub fn test_diff_identical_trees_empty() -> bool {
+    let a = merkle_build_default(["k1", "k2", "k3", "k4"])
+    let b = merkle_build_default(["k1", "k2", "k3", "k4"])
+    let diffs = merkle_diff_leaves(a, b)
+    return len(diffs) == 0
+}
+
+pub fn test_diff_modified_leaves() -> bool {
+    let a = merkle_build_default(["k1", "k2", "k3", "k4"])
+    let b = merkle_build_default(["k1", "k2_modified", "k3", "k4_modified"])
+    let diffs = merkle_diff_leaves(a, b)
+    if len(diffs) != 2 {
+        return false
+    }
+    if diffs[0] != 1 || diffs[1] != 3 {
+        return false
+    }
+    return true
+}
+
+pub fn test_empty_tree() -> bool {
+    let t = merkle_build_default([])
+    return len(t["leaves"]) == 0
+}
