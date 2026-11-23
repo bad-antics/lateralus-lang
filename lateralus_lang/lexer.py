@@ -551,7 +551,12 @@ class Lexer:
                     if c == "}": depth -= 1
                     if depth > 0: expr_src += c
                     self._advance()
-                parts.append(("expr", expr_src))
+                if expr_src.strip() == "":
+                    # "{}" / "{ }" carry no expression — keep them literal so
+                    # templates like fmt.sprintf("{}", ...) survive codegen.
+                    parts.append(("str", "{" + expr_src + "}"))
+                else:
+                    parts.append(("expr", expr_src))
             elif ch == "{{":
                 buf += "{"; self._advance(); self._advance()
             else:
