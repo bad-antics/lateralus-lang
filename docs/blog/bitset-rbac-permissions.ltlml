@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Compact Permission Algebra with stdlib/bitset — Lateralus</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "Compact Permission Algebra with stdlib/bitset"
+author: na-op
+date: 2026-11-17
+abstract: Pack integer flags across 32-bit words with stdlib/bitset.ltl, compose RBAC roles via set algebra, and verify multi-word boundaries with pinned vectors.
+---
+
+## Representation
+
+`stdlib/bitset.ltl` stores a fixed-capacity bitset `[capacity, word_0, word_1, ...]` where each word
+packs 32 flags (`num_words = idiv(capacity + 31, 32)`). Out-of-range indices (`pos < 0` or `pos >= capacity`)
+are safely ignored by `set` and `clear`, and return `false` in `test`.
+
+## Core Operations & Set Algebra
+
+- **Point updates:** `set(bs, pos)`, `clear(bs, pos)`, `toggle(bs, pos)`, and `test(bs, pos)`.
+- **Algebra across words:** `union`, `intersection`, `difference`, `symmetric_difference`, and `is_subset` combine two bitsets across 32-bit word boundaries.
+- **Inspection:** `capacity(bs)`, `count(bs)`, `is_empty(bs)`, `to_list(bs)`, `to_binary_string(bs)`, and `to_string(bs)`.
+
+## Runnable Example (`examples/bitset_rbac.ltl`)
+
+```lateralus
+// Run from checkout with: python3 scripts/run_bitset_tutorial.py
+// Models compact RBAC permission sets across two 32-bit words (capacity = 64).
+
+fn main() {
+    // 0=READ, 1=WRITE, 2=DEPLOY, 33=AUDIT_LOG, 40=BILLING_ADMIN
+    let role_editor = from_list(64, [0, 1])
+    let role_ops = from_list(64, [0, 2, 33])
+
+    let combined = union(role_editor, role_ops)
+    let shared = intersection(role_editor, role_ops)
+    let ops_only = difference(role_ops, role_editor)
+    let xor_perms = symmetric_difference(role_editor, role_ops)
+
+    println("cap=" + str(capacity(combined)))
+    println("combined=" + to_string(combined))
+    println("shared=" + to_string(shared))
+    println("ops_only=" + to_string(ops_only))
+    println("xor=" + to_string(xor_perms))
+    println("editor_subset_combined=" + str(is_subset(role_editor, combined)))
+    println("ops_subset_editor=" + str(is_subset(role_ops, role_editor)))
+
+    // Grant temporary BILLING_ADMIN (40), verify, then toggle off
+    let elevated = set(combined, 40)
+    println("has_40_after_set=" + str(test(elevated, 40)))
+    let revoked = toggle(elevated, 40)
+    println("has_40_after_toggle=" + str(test(revoked, 40)))
+}
+```
+
+## Pinned Test Vector (`examples/bitset_rbac.expected.txt`)
+
+```
+cap=64
+combined=Bitset([0, 1, 2, 33])
+shared=Bitset([0])
+ops_only=Bitset([2, 33])
+xor=Bitset([1, 2, 33])
+editor_subset_combined=True
+ops_subset_editor=False
+has_40_after_set=True
+has_40_after_toggle=False
+```
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>
