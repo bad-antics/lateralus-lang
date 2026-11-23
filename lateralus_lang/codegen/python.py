@@ -397,6 +397,10 @@ class PythonTranspiler(ASTVisitor):
         self._w += "        if self.cause: ln.append(f'  caused by: {self.cause}')"
         self._w += "        return '\\n'.join(ln)"
         self._w += "    def __repr__(self): return f'LtlError({self.message!r})'"
+        self._w += "def _ltl_raise(v):"
+        self._w += "    if isinstance(v, type) and issubclass(v, BaseException): raise v()"
+        self._w += "    if isinstance(v, BaseException): raise v"
+        self._w += "    raise LtlError(str(v))"
         self._w += ""
         self._w += "# ── Complex numbers ─────────────────────────────────────────"
         self._w += "def complex_new(r, i=0.0): return complex(r, i)"
@@ -1186,8 +1190,7 @@ class PythonTranspiler(ASTVisitor):
     def visit_ThrowStmt(self, node: ThrowStmt):
         """throw expr  →  raise <expr>"""
         val = self._expr(node.value)
-        # If the thrown value looks like a call to an Error constructor, map it
-        self._w += f"raise {val}"
+        self._w += f"_ltl_raise({val})"
 
     def visit_EmitStmt(self, node: EmitStmt):
         """emit event(args)  →  _bus.emit('event', args...)"""

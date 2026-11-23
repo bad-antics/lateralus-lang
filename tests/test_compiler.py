@@ -32,6 +32,11 @@ class TestBasicCompilation:
         assert r.ok
         assert r.python_src is not None
 
+    def test_throw_uses_ltl_raise_helper(self):
+        r = check('fn main() { throw "err" }')
+        assert r.ok
+        assert "_ltl_raise(" in r.python_src
+
     def test_let_decl_check(self):
         r = check("let x = 10", target=Target.CHECK)
         assert r.ok
