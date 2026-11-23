@@ -1,0 +1,134 @@
+// Standard Library Floyd-Warshall All-Pairs Shortest Path Verification Suite
+// Validates O(V^3) dynamic programming matrix updates, negative edge handling, and diagonal negative cycle detection.
+
+fn floyd_warshall(n: int, edges: list) -> dict {
+    let INF = 1000000000;
+    let mut dist = [];
+    let mut i = 0;
+    while i < n {
+        let mut row = [];
+        let mut j = 0;
+        while j < n {
+            if i == j {
+                row = row + [0];
+            } else {
+                row = row + [INF];
+            }
+            j = j + 1;
+        }
+        dist = dist + [row];
+        i = i + 1;
+    }
+
+    let mut e_idx = 0;
+    while e_idx < len(edges) {
+        let e = edges[e_idx];
+        let u = e[0];
+        let v = e[1];
+        let w = e[2];
+        if w < dist[u][v] {
+            dist[u][v] = w;
+        }
+        e_idx = e_idx + 1;
+    }
+
+    let mut k = 0;
+    while k < n {
+        let mut r = 0;
+        while r < n {
+            let mut c = 0;
+            while c < n {
+                if dist[r][k] != INF && dist[k][c] != INF {
+                    let cand = dist[r][k] + dist[k][c];
+                    if cand < dist[r][c] {
+                        dist[r][c] = cand;
+                    }
+                }
+                c = c + 1;
+            }
+            r = r + 1;
+        }
+        k = k + 1;
+    }
+
+    let mut has_negative_cycle = false;
+    let mut diag = 0;
+    while diag < n {
+        if dist[diag][diag] < 0 {
+            has_negative_cycle = true;
+            diag = n;
+        } else {
+            diag = diag + 1;
+        }
+    }
+
+    let mut result = {};
+    result["dist"] = dist;
+    result["has_negative_cycle"] = has_negative_cycle;
+    return result;
+}
+
+fn main() -> int {
+    let INF = 1000000000;
+
+    // 1. Classical 4-Node Directed Weighted Graph
+    // 0 -> 1 (5), 0 -> 3 (10)
+    // 1 -> 2 (3)
+    // 2 -> 3 (1)
+    // Optimal 0 -> 3 is 0 -> 1 -> 2 -> 3 with cost 5 + 3 + 1 = 9 (vs direct edge 10)
+    let edges1 = [
+        [0, 1, 5],
+        [0, 3, 10],
+        [1, 2, 3],
+        [2, 3, 1]
+    ];
+
+    let res1 = floyd_warshall(4, edges1);
+    assert(res1["has_negative_cycle"] == false);
+    let d1 = res1["dist"];
+
+    // Check row 0:
+    assert(d1[0][0] == 0);
+    assert(d1[0][1] == 5);
+    assert(d1[0][2] == 8);
+    assert(d1[0][3] == 9);
+
+    // Check unreachable backward paths:
+    assert(d1[3][0] == INF);
+    assert(d1[2][0] == INF);
+
+    // 2. Negative Weight Edges without Negative Cycles
+    // 0 -> 1 (weight 4)
+    // 0 -> 2 (weight 1)
+    // 2 -> 1 (weight -2)  => 0 -> 2 -> 1 has cost 1 + (-2) = -1 < 4
+    let edges2 = [
+        [0, 1, 4],
+        [0, 2, 1],
+        [2, 1, -2]
+    ];
+    let res2 = floyd_warshall(3, edges2);
+    assert(res2["has_negative_cycle"] == false);
+    let d2 = res2["dist"];
+    assert(d2[0][1] == -1);
+
+    // 3. Graph With Negative-Weight Cycle
+    // 0 -> 1 (1)
+    // 1 -> 2 (2)
+    // 2 -> 0 (-5) => cycle 0 -> 1 -> 2 -> 0 has sum 1 + 2 - 5 = -2 < 0
+    let edges3 = [
+        [0, 1, 1],
+        [1, 2, 2],
+        [2, 0, -5]
+    ];
+    let res3 = floyd_warshall(3, edges3);
+    assert(res3["has_negative_cycle"] == true);
+
+    // 4. Single Node Base Case
+    let edges4 = [];
+    let res4 = floyd_warshall(1, edges4);
+    assert(res4["has_negative_cycle"] == false);
+    let d4 = res4["dist"];
+    assert(d4[0][0] == 0);
+
+    return 0;
+}
