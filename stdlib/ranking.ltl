@@ -151,10 +151,29 @@ pub fn df_get(df: list, term: str) -> int {
 // ---- IDF and BM25 -------------------------------------------------
 
 fn ln_approx(x: float) -> float {
-    // Series approximation good enough for IR scoring (x in (0, large]).
-    // Use ln(x) = 2 * atanh((x-1)/(x+1)) via Taylor of atanh.
+    // Natural log via range reduction + atanh Taylor series.
+    // The atanh series ln(x) = 2*atanh((x-1)/(x+1)) converges quickly only
+    // when x is near 1; for large x, (x-1)/(x+1) approaches 1 and a fixed
+    // 12-term truncation badly underestimates the result (e.g. ln(667.33)
+    // came out as 4.378 instead of 6.503).  To stay accurate across the full
+    // (0, large] range we first factor x = m * 2^e with m in [1, 2) (octave-
+    // style frexp reduction), evaluate the fast-converging series on m, then
+    // add e * ln(2).  This keeps every series argument in a well-behaved range.
     if x <= 0.0 { return -1.0e18 }
-    let y = (x - 1.0) / (x + 1.0)
+    let ln2 = 0.6931471805599453
+    // Reduce x into [1, 2) by pulling out powers of two.
+    let m = x
+    let e = 0
+    while m >= 2.0 {
+        m = m / 2.0
+        e = e + 1
+    }
+    while m < 1.0 {
+        m = m * 2.0
+        e = e - 1
+    }
+    // Series for ln(m), m in [1, 2): y = (m-1)/(m+1) in [0, 1/3).
+    let y = (m - 1.0) / (m + 1.0)
     let y2 = y * y
     let s = y
     let term = y
@@ -164,7 +183,7 @@ fn ln_approx(x: float) -> float {
         s = s + term / ((2 * i + 1) * 1.0)
         i = i + 1
     }
-    return 2.0 * s
+    return 2.0 * s + e * ln2
 }
 
 /// BM25 IDF with floor at 0: ln((N - df + 0.5)/(df + 0.5) + 1).
