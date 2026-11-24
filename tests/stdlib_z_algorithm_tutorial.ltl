@@ -1,0 +1,239 @@
+// ===================================================================
+// tests/stdlib_z_algorithm_tutorial.ltl
+// -------------------------------------------------------------------
+// Verification suite for Dan Gusfield's linear O(n) Z-Algorithm
+// supporting exact pattern matching and string period analysis.
+// ===================================================================
+
+pub fn compute_z(chars, n) {
+    let z = dict()
+    let idx = 0
+    while idx < n {
+        z[idx] = 0
+        idx = idx + 1
+    }
+    if n == 0 {
+        return z
+    }
+    z[0] = n
+
+    let l = 0
+    let r = 0
+    let i = 1
+    while i < n {
+        if i <= r {
+            let k = i - l
+            let remaining = r - i + 1
+            if z[k] < remaining {
+                z[i] = z[k]
+            } else {
+                l = i
+                while r < n {
+                    if chars[r] != chars[r - l] {
+                        break
+                    }
+                    r = r + 1
+                }
+                z[i] = r - l
+                r = r - 1
+            }
+        } else {
+            l = i
+            r = i
+            while r < n {
+                if chars[r] != chars[r - l] {
+                    break
+                }
+                r = r + 1
+            }
+            z[i] = r - l
+            r = r - 1
+        }
+        i = i + 1
+    }
+    return z
+}
+
+pub fn z_pattern_match(pattern, pat_len, text, text_len) {
+    let n = pat_len + 1 + text_len
+    let combined = dict()
+
+    let i = 0
+    while i < pat_len {
+        combined[i] = pattern[i]
+        i = i + 1
+    }
+    combined[pat_len] = "#"
+
+    let j = 0
+    while j < text_len {
+        combined[pat_len + 1 + j] = text[j]
+        j = j + 1
+    }
+
+    let z = compute_z(combined, n)
+    let matches = dict()
+    matches["count"] = 0
+
+    let k = pat_len + 1
+    while k < n {
+        if z[k] == pat_len {
+            let match_idx = k - (pat_len + 1)
+            let curr_cnt = matches["count"]
+            matches[curr_cnt] = match_idx
+            matches["count"] = curr_cnt + 1
+        }
+        k = k + 1
+    }
+    return matches
+}
+
+pub fn z_find_smallest_period(chars, n) {
+    if n <= 1 {
+        return n
+    }
+    let z = compute_z(chars, n)
+    let p = 1
+    while p < n {
+        if n % p == 0 {
+            if z[p] == n - p {
+                return p
+            }
+        }
+        p = p + 1
+    }
+    return n
+}
+
+// -------------------------------------------------------------------
+// Verification Tests
+// -------------------------------------------------------------------
+
+pub fn test_z_empty() -> bool {
+    let empty = dict()
+    let z = compute_z(empty, 0)
+    return true
+}
+
+pub fn test_z_canonical() -> bool {
+    // String "aabzaab" (length 7)
+    let s = dict()
+    s[0] = "a"
+    s[1] = "a"
+    s[2] = "b"
+    s[3] = "z"
+    s[4] = "a"
+    s[5] = "a"
+    s[6] = "b"
+
+    let z = compute_z(s, 7)
+    if z[0] != 7 {
+        return false
+    }
+    if z[1] != 1 {
+        return false
+    }
+    if z[2] != 0 {
+        return false
+    }
+    if z[3] != 0 {
+        return false
+    }
+    if z[4] != 3 {
+        return false
+    }
+    if z[5] != 1 {
+        return false
+    }
+    if z[6] != 0 {
+        return false
+    }
+    return true
+}
+
+pub fn test_z_pattern_match() -> bool {
+    // Pattern: "cat" (len 3)
+    let pat = dict()
+    pat[0] = "c"
+    pat[1] = "a"
+    pat[2] = "t"
+
+    // Text: "catxcat" (len 7) -> matches at 0 and 4
+    let txt = dict()
+    txt[0] = "c"
+    txt[1] = "a"
+    txt[2] = "t"
+    txt[3] = "x"
+    txt[4] = "c"
+    txt[5] = "a"
+    txt[6] = "t"
+
+    let matches = z_pattern_match(pat, 3, txt, 7)
+    if matches["count"] != 2 {
+        return false
+    }
+    if matches[0] != 0 {
+        return false
+    }
+    if matches[1] != 4 {
+        return false
+    }
+    return true
+}
+
+pub fn test_z_periodicity() -> bool {
+    // Periodic string: "abcabcabc" -> period 3
+    let s1 = dict()
+    s1[0] = "a"
+    s1[1] = "b"
+    s1[2] = "c"
+    s1[3] = "a"
+    s1[4] = "b"
+    s1[5] = "c"
+    s1[6] = "a"
+    s1[7] = "b"
+    s1[8] = "c"
+    if z_find_smallest_period(s1, 9) != 3 {
+        return false
+    }
+
+    // Homogeneous string: "aaaa" -> period 1
+    let s2 = dict()
+    s2[0] = "a"
+    s2[1] = "a"
+    s2[2] = "a"
+    s2[3] = "a"
+    if z_find_smallest_period(s2, 4) != 1 {
+        return false
+    }
+
+    // Aperiodic string: "abcdef" -> period 6
+    let s3 = dict()
+    s3[0] = "a"
+    s3[1] = "b"
+    s3[2] = "c"
+    s3[3] = "d"
+    s3[4] = "e"
+    s3[5] = "f"
+    if z_find_smallest_period(s3, 6) != 6 {
+        return false
+    }
+
+    return true
+}
+
+pub fn run_all_z_tests() -> bool {
+    if not test_z_empty() {
+        return false
+    }
+    if not test_z_canonical() {
+        return false
+    }
+    if not test_z_pattern_match() {
+        return false
+    }
+    if not test_z_periodicity() {
+        return false
+    }
+    return true
+}
