@@ -1372,9 +1372,12 @@ def main():
         parser.print_help()
 
 
-def _find_manifest() -> Optional[Path]:
-    """Find the project manifest (lateralus.toml or lateralus.json)."""
-    cwd = Path.cwd()
+def _find_manifest(start: Optional[Path] = None) -> Optional[Path]:
+    """Find the project manifest (lateralus.toml or lateralus.json).
+
+    Searches *start* (default: current working directory) for a manifest.
+    """
+    cwd = Path(start) if start is not None else Path.cwd()
     for name in (MANIFEST_FILE, MANIFEST_FILE_JSON):
         path = cwd / name
         if path.exists():
