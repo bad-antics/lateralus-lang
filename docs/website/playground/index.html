@@ -324,6 +324,28 @@
         #output .accent { color: var(--accent2); }
         #output .cyan { color: var(--cyber-blue); }
         #output .sep { color: var(--border); }
+        .tab-group {
+            margin-left: auto;
+            display: inline-flex;
+            gap: 6px;
+        }
+        .tab-btn {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text2);
+            border-radius: 6px;
+            padding: 2px 10px;
+            font-family: 'VT323', monospace;
+            font-size: 0.76rem;
+            cursor: pointer;
+            text-transform: none;
+        }
+        .tab-btn:hover { color: var(--text); border-color: var(--accent); }
+        .tab-btn.active {
+            background: rgba(124,92,252,0.18);
+            color: var(--text);
+            border-color: var(--accent);
+        }
 
         /* -- Status Bar -- */
         .statusbar {
@@ -425,6 +447,7 @@
 <div class="toolbar">
     <select class="example-select" id="exampleSelect">
         <option value="">Load example...</option>
+        <option value="wasm_live">WASM Host Bridge (println + http_get)</option>
         <option value="hello">Hello World</option>
         <option value="pipeline">Pipeline Operator</option>
         <option value="pattern">Pattern Matching</option>
@@ -445,18 +468,19 @@
         <option value="decorators">Decorators</option>
         <option value="comptime">Compile-Time Eval</option>
     </select>
-    <button class="btn btn-run" id="runBtn"><span class="icon">&#9654;</span> Run</button>
+    <button class="btn btn-run" id="runBtn"><span class="icon">&#9654;</span> Run WASM</button>
     <button class="btn" id="formatBtn">&#9095; Format</button>
+    <button class="btn" id="downloadWasmBtn">&#11015; .wasm</button>
     <button class="btn" id="shareBtn">&#128279; Share</button>
     <div class="toolbar-sep"></div>
-    <span class="toolbar-info">Ctrl+Enter to run</span>
+    <span class="toolbar-info">In-browser WASM -- Ctrl+Enter to run</span>
 </div>
 
 <!-- Main IDE -->
 <div class="main">
     <div class="editor-panel">
         <div class="panel-header">
-            <span class="dot dot-green"></span> editor — main.ltl
+            <span class="dot dot-green"></span> editor -- main.ltl
         </div>
         <div class="editor-wrap">
             <div class="line-numbers" id="lineNumbers">1</div>
@@ -465,18 +489,23 @@
     </div>
     <div class="output-panel">
         <div class="panel-header">
-            <span class="dot dot-cyan"></span> output
+            <span class="dot dot-cyan"></span> <span id="panelTitle">wasm output</span>
+            <div class="tab-group">
+                <button class="tab-btn active" id="tabOutput" type="button">Output</button>
+                <button class="tab-btn" id="tabWat" type="button">WAT (.wat)</button>
+                <button class="tab-btn" id="tabHex" type="button">WASM Hex</button>
+            </div>
         </div>
-        <pre id="output"><span class="info">Press &#9654; Run to execute your code.</span></pre>
+        <pre id="output"><span class="info">Press &#9654; Run WASM to compile and execute in-browser (zero server calls).</span></pre>
     </div>
 </div>
 
 <!-- Status Bar -->
 <div class="statusbar">
-    <div class="statusbar-item"><span class="status-dot"></span> Lateralus v3.0.1</div>
+    <div class="statusbar-item"><span class="status-dot"></span> Lateralus v3.2.0</div>
     <div class="statusbar-item" id="statusLines">Ln 1, Col 1</div>
     <div class="statusbar-item" id="statusChars">0 chars</div>
-    <div class="statusbar-item" style="margin-left: auto;">Playground — browser-side evaluation</div>
+    <div class="statusbar-item" id="statusRuntime" style="margin-left: auto;">lateralus wasm -- in-browser (offline-ready)</div>
 </div>
 
 <!-- Share Modal -->
@@ -489,10 +518,42 @@
     </div>
 </div>
 
+<script src="./wasm-shim.js"></script>
+<script src="./wasm-compiler.js"></script>
 <script>
 // -- Example Programs -----------------------------------------
 
 const EXAMPLES = {
+wasm_live: `// In-Browser WebAssembly Backend (lateralus wasm)
+// Compiles directly to WebAssembly 1.0 binary in your browser.
+// Zero code ever leaves your machine -- works 100% offline!
+
+import std::io
+
+fn fib(n: Int) -> Int {
+    if n <= 1 { return n }
+    return fib(n - 1) + fib(n - 2)
+}
+
+fn scale_and_offset(x: Int, factor: Int) -> Int {
+    return x * factor + 7
+}
+
+fn main() {
+    println("=== Lateralus In-Browser WASM Runtime ===")
+
+    for i in 0..8 {
+        println("  fib({i}) = {fib(i)}")
+    }
+
+    let piped = 10 |> fib |> scale_and_offset(3)
+    println("Pipeline 10 |> fib |> scale_and_offset(3) = {piped}")
+
+    // Browser host shim: maps env.http_get(ptr, len, out, cap) -> fetch()
+    let manifest = http_get("/manifest.json")
+    println("Host http_get('/manifest.json') -> {len(manifest)} bytes in WASM linear memory")
+}`,
+
 hello: `// Welcome to Lateralus!
 // A pipeline-native programming language.
 
@@ -1779,296 +1840,23 @@ fn main() {
 }`,
 };
 
-// -- Interpreter / Simulator ----------------------------------
-
-function simulateRun(code) {
-    const lines = [];
-    const start = performance.now();
-    const codeStr = code.trim();
-
-    if (codeStr.includes('Hello from Lateralus')) {
-        lines.push({ text: 'Hello from Lateralus! \u{1F300}', type: '' });
-        lines.push({ text: 'Welcome, World!', type: '' });
-        lines.push({ text: 'Lateralus Is Awesome', type: '' });
-    }
-    else if (codeStr.includes('Spending Report')) {
-        lines.push({ text: '=== Spending Report (> $20) ===', type: 'accent' });
-        lines.push({ text: '  tech: $778.99 (3 transactions)', type: '' });
-        lines.push({ text: '  food: $97.50 (2 transactions)', type: '' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: 'Average transaction: $130.03', type: '' });
-    }
-    else if (codeStr.includes('fn area') && codeStr.includes('Shape')) {
-        lines.push({ text: 'Circle (r=5) => area = 78.54', type: '' });
-        lines.push({ text: 'Square (10x10) => area = 100.00', type: '' });
-        lines.push({ text: 'Rectangle (3x7) => area = 21.00', type: '' });
-        lines.push({ text: 'Triangle (base=8, h=4) => area = 16.00', type: '' });
-        lines.push({ text: 'Large circle (r=150) => area = 70685.83', type: '' });
-    }
-    else if (codeStr.includes('Concurrent HTTP')) {
-        lines.push({ text: '=== Concurrent HTTP Fetcher ===', type: 'accent' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: '  Fetching https://api.github.com/repos/bad-antics/lateralus-lang...', type: 'info' });
-        lines.push({ text: '  Fetching https://httpbin.org/get...', type: 'info' });
-        lines.push({ text: '  Fetching https://httpbin.org/delay/1...', type: 'info' });
-        lines.push({ text: '  Fetching https://jsonplaceholder.typicode.com/posts/1...', type: 'info' });
-        lines.push({ text: '  Got 200 from https://api.github.com/... (4829 bytes)', type: '' });
-        lines.push({ text: '  Got 200 from https://httpbin.org/get (412 bytes)', type: '' });
-        lines.push({ text: '  Got 200 from https://httpbin.org/delay/1 (389 bytes)', type: '' });
-        lines.push({ text: '  Got 200 from https://jsonplaceholder... (292 bytes)', type: '' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: 'Completed: 4/4 succeeded', type: 'cyan' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: 'Total time: 1043ms', type: '' });
-        lines.push({ text: '(Sequential would be ~4x slower)', type: 'info' });
-    }
-    else if (codeStr.includes('impl Vec2') && !codeStr.includes('EntityKind')) {
-        lines.push({ text: 'a = (3.00, 4.00)', type: '' });
-        lines.push({ text: 'b = (1.00, 2.00)', type: '' });
-        lines.push({ text: '|a| = 5.00', type: '' });
-        lines.push({ text: 'a normalized = (0.60, 0.80)', type: '' });
-        lines.push({ text: 'a \u00b7 b = 11.00', type: '' });
-        lines.push({ text: 'a + b = (4.00, 6.00)', type: '' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: 'Pipelined result: (0.86, 0.51)', type: '' });
-    }
-    else if (codeStr.includes('find_pairs') && codeStr.includes('fib')) {
-        lines.push({ text: '=== Words (3+ letters, capitalized) ===', type: 'accent' });
-        lines.push({ text: '1. Spiral', type: '' });
-        lines.push({ text: '2. Beyond', type: '' });
-        lines.push({ text: '3. Reaching', type: '' });
-        lines.push({ text: '4. Over', type: '' });
-        lines.push({ text: '5. The', type: '' });
-        lines.push({ text: '6. Lateralus', type: '' });
-        lines.push({ text: '7. Pattern', type: '' });
-        lines.push({ text: '8. Fibonacci', type: '' });
-        lines.push({ text: '9. Sequence', type: '' });
-        lines.push({ text: '10. Hidden', type: '' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: '=== Fibonacci ===', type: 'accent' });
-        lines.push({ text: '0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377', type: '' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: '=== Pairs summing to 9 ===', type: 'accent' });
-        lines.push({ text: '  2 + 7 = 9', type: '' });
-        lines.push({ text: '  3 + 6 = 9', type: '' });
-        lines.push({ text: '  8 + 1 = 9', type: '' });
-    }
-    else if (codeStr.includes('Config Loader') || codeStr.includes('parse_config')) {
-        lines.push({ text: '=== Config Loader ===', type: 'accent' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: 'Error: Config not found: server.conf', type: 'error' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: 'Config loading complete.', type: 'info' });
-    }
-    else if (codeStr.includes('Server listening') || codeStr.includes('Router::new')) {
-        lines.push({ text: 'Server listening on http://0.0.0.0:8080', type: 'cyan' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: '  Routes:', type: 'info' });
-        lines.push({ text: '    GET  /            => home_handler', type: '' });
-        lines.push({ text: '    GET  /api/users   => list_users', type: '' });
-        lines.push({ text: '    POST /api/users   => create_user', type: '' });
-        lines.push({ text: '    *    *             => not_found', type: 'info' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: 'Awaiting connections...', type: 'info' });
-    }
-    else if (codeStr.includes('max_of') && codeStr.includes('Stack')) {
-        lines.push({ text: 'Max of [42, 17, 99, 3, 55]: Some(99)', type: '' });
-        lines.push({ text: 'Max of words: Some("mango")', type: '' });
-        lines.push({ text: 'Stack size: 3', type: '' });
-        lines.push({ text: 'Top: Some(30)', type: '' });
-        lines.push({ text: 'Popped: Some(30)', type: '' });
-        lines.push({ text: 'New top: Some(20)', type: '' });
-        lines.push({ text: 'Pair: (84, hello)', type: '' });
-    }
-    else if (codeStr.includes('compose') && codeStr.includes('apply_n')) {
-        lines.push({ text: 'double(5) = 10', type: '' });
-        lines.push({ text: 'add_one(5) = 6', type: '' });
-        lines.push({ text: 'double_then_add(5) = 11', type: '' });
-        lines.push({ text: 'times_n(7) = 21', type: '' });
-        lines.push({ text: 'Filtered & doubled (>15): [38, 50, 60]', type: '' });
-        lines.push({ text: 'triple applied 4 times to 1: 81', type: '' });
-        lines.push({ text: '  100 + ? = 101', type: '' });
-        lines.push({ text: '  100 + ? = 105', type: '' });
-        lines.push({ text: '  100 + ? = 110', type: '' });
-    }
-    else if (codeStr.includes('module geometry') && codeStr.includes('module colors')) {
-        lines.push({ text: 'Distance: 5.00', type: '' });
-        lines.push({ text: 'Midpoint: (1.5, 2.0)', type: '' });
-        lines.push({ text: 'Direction: (0.60, 0.80)', type: '' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: 'Palette:', type: 'accent' });
-        lines.push({ text: '  #FF0000', type: '' });
-        lines.push({ text: '  #7c5cfc', type: '' });
-        lines.push({ text: '  #22d3ee', type: '' });
-    }
-    else if (codeStr.includes('fibonacci()') && codeStr.includes('windows')) {
-        lines.push({ text: 'Fibonacci: [0, 1, 1, 2, 3, 5, 8, 13, 21, 34]', type: '' });
-        lines.push({ text: 'Fibonacci primes: [2, 3, 5, 13, 89, 233, 1597]', type: '' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: 'Countdown: 5... 4... 3... 2... 1... Liftoff!', type: 'cyan' });
-        lines.push({ text: 'Sum of squares < 1000: 1015', type: '' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: 'Moving average (window=3): [15, 21, 23, 30, 33]', type: '' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: 'Rankings:', type: 'accent' });
-        lines.push({ text: '  #1 Alice: 95', type: '' });
-        lines.push({ text: '  #2 Bob: 87', type: '' });
-        lines.push({ text: '  #3 Carol: 92', type: '' });
-    }
-    else if (codeStr.includes('ltl-analyze')) {
-        lines.push({ text: 'ltl-analyze v1.0.0', type: 'accent' });
-        lines.push({ text: '==================', type: '' });
-        lines.push({ text: '  src/main.ltl:', type: 'info' });
-        lines.push({ text: '    Lines: 142', type: '' });
-        lines.push({ text: '    Functions: 8', type: '' });
-        lines.push({ text: '    Pipelines: 23', type: '' });
-        lines.push({ text: '    Pattern matches: 5', type: '' });
-        lines.push({ text: '  src/parser.ltl:', type: 'info' });
-        lines.push({ text: '    Lines: 387', type: '' });
-        lines.push({ text: '    Functions: 24', type: '' });
-        lines.push({ text: '    Pipelines: 56', type: '' });
-        lines.push({ text: '    Pattern matches: 18', type: '' });
-        lines.push({ text: '  src/codegen.ltl:', type: 'info' });
-        lines.push({ text: '    Lines: 291', type: '' });
-        lines.push({ text: '    Functions: 15', type: '' });
-        lines.push({ text: '    Pipelines: 41', type: '' });
-        lines.push({ text: '    Pattern matches: 12', type: '' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: 'Summary:', type: 'accent' });
-        lines.push({ text: '  Total lines: 820', type: '' });
-        lines.push({ text: '  Functions: 47', type: '' });
-        lines.push({ text: '  Pipelines used: 120', type: '' });
-        lines.push({ text: '  Pattern matches: 35', type: '' });
-        lines.push({ text: '  Pipeline density: 14%', type: '' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: 'Report saved to: report.txt', type: 'info' });
-    }
-    else if (codeStr.includes('EntityKind') && codeStr.includes('update_physics')) {
-        lines.push({ text: '=== Game State ===', type: 'accent' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: '--- Frame 0 ---', type: 'cyan' });
-        lines.push({ text: '  \u{1F3AE} Player at (0.2, 0.1) HP:100', type: '' });
-        lines.push({ text: '  \u{1F4AB} Bullet at (1.8, 0.8) HP:1', type: '' });
-        lines.push({ text: '  \u{1F47E} Drone at (9.9, 5.0) HP:30', type: '' });
-        lines.push({ text: '  \u{1F47E} Boss at (20.0, 7.9) HP:200', type: '' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: '--- Frame 1 ---', type: 'cyan' });
-        lines.push({ text: '  \u{1F3AE} Player at (0.4, 0.2) HP:100', type: '' });
-        lines.push({ text: '  \u{1F4AB} Bullet at (2.6, 1.1) HP:1', type: '' });
-        lines.push({ text: '  \u{1F47E} Drone at (9.8, 5.0) HP:30', type: '' });
-        lines.push({ text: '  \u{1F47E} Boss at (20.0, 7.8) HP:200', type: '' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: '--- Frame 2 ---', type: 'cyan' });
-        lines.push({ text: '  \u{1F3AE} Player at (0.5, 0.3) HP:100', type: '' });
-        lines.push({ text: '  \u{1F4AB} Bullet at (3.4, 1.4) HP:1', type: '' });
-        lines.push({ text: '  \u{1F47E} Drone at (9.7, 5.0) HP:30', type: '' });
-        lines.push({ text: '  \u{1F47E} Boss at (20.0, 7.7) HP:200', type: '' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: 'Active entities: 4/4', type: 'info' });
-    }
-    else if (codeStr.includes('Sensor Monitor') && codeStr.includes('channel')) {
-        lines.push({ text: '=== Sensor Monitor (Channels + Select) ===', type: 'accent' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: '  [TEMP] temp-01: 20.0\u00b0C', type: '' });
-        lines.push({ text: '  [PRES] pres-01: 1013.25 hPa', type: '' });
-        lines.push({ text: '  [TEMP] temp-01: 20.5\u00b0C', type: '' });
-        lines.push({ text: '  [TEMP] temp-01: 21.0\u00b0C', type: '' });
-        lines.push({ text: '  [PRES] pres-01: 1015.25 hPa', type: '' });
-        lines.push({ text: '  [TEMP] temp-01: 21.5\u00b0C', type: '' });
-        lines.push({ text: '  [PRES] pres-01: 1017.25 hPa', type: '' });
-        lines.push({ text: '  [TEMP] temp-01: 22.0\u00b0C', type: '' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: 'All sensors closed. Total readings: 8', type: 'cyan' });
-    }
-    else if (codeStr.includes('define_builder') && codeStr.includes('pipe_debug')) {
-        lines.push({ text: '=== Macro System ===', type: 'accent' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: 'Built user: Alice (age 30)', type: '' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: 'Pipeline debug:', type: '' });
-        lines.push({ text: '  [debug] filter(|x| x > 2) = [3, 4, 5]', type: 'info' });
-        lines.push({ text: '  [debug] map(|x| x * 10) = [30, 40, 50]', type: 'info' });
-        lines.push({ text: '  [debug] sum() = 120', type: 'info' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: 'Final result: 120', type: '' });
-    }
-    else if (codeStr.includes('effect Log') && codeStr.includes('effect State')) {
-        lines.push({ text: '=== Effect System ===', type: 'accent' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: '  \u2705 [info] Processed: HELLO', type: '' });
-        lines.push({ text: '  \u2705 [info] Processed: WORLD', type: '' });
-        lines.push({ text: '  \u2705 [info] Processed: LATERALUS', type: '' });
-        lines.push({ text: '  \u26a0\ufe0f [warn] Empty item at index 3', type: '' });
-        lines.push({ text: '  \u274c [fail] Empty item encountered \u2014 skipping', type: '' });
-        lines.push({ text: '  \u2705 [info] Processed: EFFECTS', type: '' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: 'Result: [HELLO, WORLD, LATERALUS, EFFECTS]', type: '' });
-        lines.push({ text: 'Processed 4 items', type: '' });
-    }
-    else if (codeStr.includes('@timed') && codeStr.includes('@memoize')) {
-        lines.push({ text: '=== Decorators & Annotations ===', type: 'accent' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: '  [@timed] heavy_computation completed in 2.3ms', type: 'info' });
-        lines.push({ text: 'Computation result: 16661667', type: '' });
-        lines.push({ text: '  [@memoize] fibonacci(40): cache miss, computing...', type: 'info' });
-        lines.push({ text: 'fibonacci(40) = 102334155', type: '' });
-        lines.push({ text: 'Config valid: true', type: '' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: 'Registered routes:', type: '' });
-        lines.push({ text: '  GET  /api/users/', type: '' });
-        lines.push({ text: '  POST /api/users/', type: '' });
-    }
-    else if (codeStr.includes('const fn factorial') && codeStr.includes('comptime')) {
-        lines.push({ text: '=== Compile-Time Evaluation ===', type: 'accent' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: 'factorial(10) = 3628800', type: '' });
-        lines.push({ text: 'factorial(20) = 2432902008176640000', type: '' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: 'Type names (resolved at compile time):', type: '' });
-        lines.push({ text: '  Int    -> integer', type: '' });
-        lines.push({ text: '  Float  -> float', type: '' });
-        lines.push({ text: '  String -> string', type: '' });
-        lines.push({ text: '  Vec<_> -> vector', type: '' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: 'LUT samples:', type: '' });
-        lines.push({ text: '  LUT[0]   = 31', type: '' });
-        lines.push({ text: '  LUT[42]  = 233', type: '' });
-        lines.push({ text: '  LUT[255] = 0', type: '' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: 'Platform: Config { threads: 8, allocator: "jemalloc" }', type: '' });
-        lines.push({ text: 'Greeting: Lateralus | v0.5.0 | Comptime', type: 'cyan' });
-        lines.push({ text: '', type: '' });
-        lines.push({ text: 'All static assertions passed at compile time.', type: 'info' });
-    }
-    else {
-        // Generic fallback: extract println strings
-        const strs = [];
-        const re = /println\("([^"]*)"\)/g;
-        let m;
-        while ((m = re.exec(code)) !== null) {
-            let s = m[1].replace(/\\n/g, '\n').replace(/\{[^}]*\}/g, function(expr) {
-                return '<' + expr.slice(1, -1) + '>';
-            });
-            strs.push(s);
-        }
-        if (strs.length > 0) {
-            strs.forEach(function(s) { lines.push({ text: s, type: '' }); });
-        } else {
-            lines.push({ text: '(program compiled successfully -- no output)', type: 'info' });
-        }
-        const elapsed2 = (performance.now() - start + Math.random() * 15 + 5).toFixed(1);
-        return { lines: lines, elapsed: elapsed2, matched: false };
-    }
-
-    const elapsed = (performance.now() - start + Math.random() * 15 + 5).toFixed(1);
-    return { lines: lines, elapsed: elapsed, matched: true };
-}
-
-// -- UI Logic -------------------------------------------------
+// -- In-Browser WASM Compiler & Host Runtime Integration ------
 
 const editor = document.getElementById('editor');
 const output = document.getElementById('output');
 const lineNumbers = document.getElementById('lineNumbers');
+const panelTitle = document.getElementById('panelTitle');
+const statusRuntime = document.getElementById('statusRuntime');
+const tabOutputBtn = document.getElementById('tabOutput');
+const tabWatBtn = document.getElementById('tabWat');
+const tabHexBtn = document.getElementById('tabHex');
+
+let activeTab = 'output';
+let lastRunState = {
+    outputHtml: '<span class="info">Press &#9654; Run WASM to compile and execute in-browser (zero server calls).</span>',
+    watText: ';; Click "Run WASM" to inspect generated WebAssembly Text Format (.wat)',
+    wasmBytes: null,
+};
 
 function updateLineNumbers() {
     const lineCount = editor.value.split('\n').length;
@@ -2085,16 +1873,76 @@ function updateStatus() {
     document.getElementById('statusChars').textContent = text.length + ' chars';
 }
 
+function updateConnectivityBadge() {
+    const isOffline = typeof navigator !== 'undefined' && navigator.onLine === false;
+    statusRuntime.textContent = isOffline
+        ? 'lateralus wasm -- offline mode active (100% local)'
+        : 'lateralus wasm -- in-browser (zero server calls)';
+}
+
 function escHtml(s) {
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function formatWasmHexDump(bytes) {
+    if (!bytes || !bytes.length) {
+        return ';; Click "Run WASM" to inspect compiled WebAssembly 1.0 binary (.wasm)';
+    }
+    var rows = [];
+    rows.push(';; WebAssembly 1.0 binary (' + bytes.length + ' bytes) -- magic \\0asm v1');
+    var maxBytes = Math.min(bytes.length, 2048);
+    for (var offset = 0; offset < maxBytes; offset += 16) {
+        var hexCols = [];
+        var asciiCols = [];
+        for (var i = 0; i < 16; i++) {
+            if (offset + i < maxBytes) {
+                var b = bytes[offset + i];
+                hexCols.push(b.toString(16).padStart(2, '0'));
+                asciiCols.push(b >= 32 && b < 127 ? String.fromCharCode(b) : '.');
+            } else {
+                hexCols.push('  ');
+                asciiCols.push(' ');
+            }
+        }
+        var addr = offset.toString(16).padStart(6, '0');
+        rows.push(addr + '  ' + hexCols.slice(0, 8).join(' ') + '  ' + hexCols.slice(8).join(' ') + '  |' + asciiCols.join('') + '|');
+    }
+    if (bytes.length > maxBytes) {
+        rows.push('... (' + (bytes.length - maxBytes) + ' additional bytes omitted; click ".wasm" to download full binary)');
+    }
+    return rows.join('\n');
+}
+
+function switchTab(tab) {
+    activeTab = tab;
+    tabOutputBtn.classList.toggle('active', tab === 'output');
+    tabWatBtn.classList.toggle('active', tab === 'wat');
+    tabHexBtn.classList.toggle('active', tab === 'hex');
+
+    if (tab === 'output') {
+        panelTitle.textContent = 'wasm output';
+        output.innerHTML = lastRunState.outputHtml;
+    } else if (tab === 'wat') {
+        panelTitle.textContent = 'disassembly -- main.wat';
+        output.innerHTML = '<span class="cyan">' + escHtml(lastRunState.watText) + '</span>';
+    } else {
+        panelTitle.textContent = 'binary -- main.wasm';
+        output.innerHTML = '<span class="info">' + escHtml(formatWasmHexDump(lastRunState.wasmBytes)) + '</span>';
+    }
 }
 
 editor.addEventListener('input', function() { updateLineNumbers(); updateStatus(); });
 editor.addEventListener('click', updateStatus);
 editor.addEventListener('keyup', updateStatus);
 editor.addEventListener('scroll', function() { lineNumbers.scrollTop = editor.scrollTop; });
+window.addEventListener('online', updateConnectivityBadge);
+window.addEventListener('offline', updateConnectivityBadge);
 
-// Tab key inserts spaces
 editor.addEventListener('keydown', function(e) {
     if (e.key === 'Tab') {
         e.preventDefault();
@@ -2110,98 +1958,80 @@ editor.addEventListener('keydown', function(e) {
     }
 });
 
-function renderOutput(linesArr, lineCount, elapsed, offline) {
-    var html = '<span class="sep">----------------------------------------</span>\n';
-    html += '<span class="info">  Compiled main.ltl (' + lineCount + ' lines)' + (offline ? ' [offline]' : '') + '</span>\n';
-    html += '<span class="sep">----------------------------------------</span>\n\n';
-
-    linesArr.forEach(function(line) {
-        if (line.type) {
-            html += '<span class="' + line.type + '">' + escHtml(line.text) + '</span>\n';
-        } else {
-            html += escHtml(line.text) + '\n';
-        }
-    });
-
-    html += '\n<span class="sep">----------------------------------------</span>\n';
-    html += '<span class="info">  Process exited (' + elapsed + 'ms) -- 0 errors, 0 warnings</span>\n';
-    return html;
-}
-
 async function runCode() {
     var code = editor.value;
     if (!code.trim()) {
-        output.innerHTML = '<span class="warn">No code to run.</span>';
+        lastRunState.outputHtml = '<span class="warn">No code to run.</span>';
+        switchTab('output');
         return;
     }
 
-    output.innerHTML = '<span class="info">Compiling...</span>';
+    output.innerHTML = '<span class="info">Compiling main.ltl -> WebAssembly (.wasm) in-browser...</span>';
     var lineCount = code.split('\n').length;
 
-    // Try API first, fall back to simulation
     try {
-        var controller = new AbortController();
-        var fetchTimeout = setTimeout(function() { controller.abort(); }, 8000);
+        var compiled = window.LateralusWasmCompiler.compileLateralusToWasm(code);
+        lastRunState.watText = compiled.wat;
+        lastRunState.wasmBytes = compiled.wasmBytes;
 
-        var resp = await fetch('/api/run', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ code: code }),
-            signal: controller.signal,
+        var execResult = await window.LateralusWasmShim.runLateralusWasm(compiled.wasmBytes, {
+            astExecutor: window.LateralusWasmCompiler.executeSerializedAst,
         });
 
-        clearTimeout(fetchTimeout);
+        var html = '<span class="sep">--------------------------------------------------------</span>\n';
+        html += '<span class="info">  Compiled main.ltl (' + lineCount + ' lines) -> ' + compiled.wasmBytes.length + 'B .wasm [' + escHtml(compiled.mode) + ', ' + compiled.compileMs + 'ms]</span>\n';
+        html += '<span class="sep">--------------------------------------------------------</span>\n\n';
 
-        if (!resp.ok && resp.status !== 200) {
-            throw new Error('API returned status ' + resp.status);
-        }
-
-        var data;
-        try {
-            data = await resp.json();
-        } catch (jsonErr) {
-            throw new Error('Non-JSON response from API');
-        }
-
-        // API returned valid JSON
-        var html = '<span class="sep">----------------------------------------</span>\n';
-        html += '<span class="info">  Compiled main.ltl (' + lineCount + ' lines)</span>\n';
-        html += '<span class="sep">----------------------------------------</span>\n\n';
-
-        if (data.success && Array.isArray(data.output)) {
-            data.output.forEach(function(line) {
-                html += escHtml(String(line)) + '\n';
+        if (execResult.output.length > 0) {
+            execResult.output.forEach(function(line) {
+                html += escHtml(line) + '\n';
             });
-            html += '\n<span class="sep">----------------------------------------</span>\n';
-            html += '<span class="info">  Process exited (' + (data.stats ? data.stats.elapsed_ms : '?') + 'ms, ' + (data.stats ? data.stats.steps : '?') + ' steps) -- 0 errors, 0 warnings</span>\n';
-        } else if (data.error) {
-            // Try simulation fallback for known example patterns
-            try {
-                var simResult = simulateRun(code);
-                if (simResult.matched) {
-                    output.innerHTML = renderOutput(simResult.lines, lineCount, simResult.elapsed, false);
-                    return;
-                }
-            } catch(simErr) {}
-            var errMsg = typeof data.error === 'string' ? data.error : (data.error.message || 'Unknown error');
-            html += '<span class="error">' + escHtml(errMsg) + '</span>\n';
-            html += '\n<span class="sep">----------------------------------------</span>\n';
-            html += '<span class="error">  Compilation failed (' + (data.stats ? data.stats.elapsed_ms : 0) + 'ms)</span>\n';
-        } else {
-            html += '<span class="info">(program compiled successfully -- no output)</span>\n';
-            html += '\n<span class="sep">----------------------------------------</span>\n';
-            html += '<span class="info">  Process exited (0ms) -- 0 errors, 0 warnings</span>\n';
+        } else if (execResult.stderr.length === 0) {
+            html += '<span class="info">(module executed cleanly -- no stdout lines)</span>\n';
         }
 
-        output.innerHTML = html;
-    } catch (fetchErr) {
-        // Fallback to client-side simulation
-        try {
-            var result = simulateRun(code);
-            output.innerHTML = renderOutput(result.lines, lineCount, result.elapsed, true);
-        } catch (simErr) {
-            output.innerHTML = '<span class="error">Error: ' + escHtml(String(fetchErr.message || fetchErr)) + '</span>';
+        if (execResult.stderr.length > 0) {
+            execResult.stderr.forEach(function(errLine) {
+                html += '<span class="error">' + escHtml(errLine) + '</span>\n';
+            });
         }
+
+        if (execResult.httpRequests && execResult.httpRequests.length > 0) {
+            html += '\n<span class="cyan">  [host shim] ' + execResult.httpRequests.length + ' http_get call(s) bridged via browser fetch()</span>\n';
+        }
+
+        html += '\n<span class="sep">--------------------------------------------------------</span>\n';
+        html += '<span class="info">  WASM exited (code ' + execResult.exitCode + ', ' + execResult.elapsedMs + 'ms, mem ' + Math.round(execResult.memoryBytes / 1024) + ' KiB) -- local execution</span>\n';
+
+        lastRunState.outputHtml = html;
+        switchTab(activeTab);
+    } catch (err) {
+        var msg = err && err.message ? err.message : String(err);
+        var errHtml = '<span class="sep">--------------------------------------------------------</span>\n';
+        errHtml += '<span class="error">  ' + escHtml(err && err.name ? err.name : 'WasmError') + ': ' + escHtml(msg) + '</span>\n';
+        errHtml += '<span class="sep">--------------------------------------------------------</span>\n';
+        lastRunState.outputHtml = errHtml;
+        switchTab('output');
+    }
+}
+
+function downloadCompiledWasm() {
+    try {
+        var compiled = window.LateralusWasmCompiler.compileLateralusToWasm(editor.value);
+        lastRunState.watText = compiled.wat;
+        lastRunState.wasmBytes = compiled.wasmBytes;
+        var blob = new Blob([compiled.wasmBytes], { type: 'application/wasm' });
+        var dlUrl = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = dlUrl;
+        a.download = 'main.wasm';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function() { URL.revokeObjectURL(dlUrl); }, 1000);
+    } catch (err) {
+        lastRunState.outputHtml = '<span class="error">Cannot export .wasm: ' + escHtml(err && err.message ? err.message : String(err)) + '</span>';
+        switchTab('output');
     }
 }
 
@@ -2210,7 +2040,8 @@ function loadExample(name) {
     editor.value = EXAMPLES[name];
     updateLineNumbers();
     updateStatus();
-    output.innerHTML = '<span class="info">Example loaded -- press <span class="accent">&#9654; Run</span> to execute.</span>';
+    lastRunState.outputHtml = '<span class="info">Example loaded -- press <span class="accent">&#9654; Run WASM</span> to compile &amp; run locally.</span>';
+    switchTab('output');
     document.getElementById('exampleSelect').value = '';
 }
 
@@ -2226,9 +2057,9 @@ function copyShare() {
     var input = document.getElementById('shareUrl');
     input.select();
     navigator.clipboard.writeText(input.value).then(function() {
-        var btn = document.querySelector('.modal .btn');
+        var btn = document.getElementById('copyShareBtn');
         var orig = btn.textContent;
-        btn.textContent = '\u2713 Copied!';
+        btn.textContent = 'Copied!';
         setTimeout(function() { btn.textContent = orig; }, 1500);
     });
 }
@@ -2255,29 +2086,33 @@ function formatCode() {
 
 // -- Init -----------------------------------------------------
 
-// Load from URL hash if present
 var hash = window.location.hash;
 if (hash.startsWith('#code=')) {
     try {
         editor.value = decodeURIComponent(escape(atob(hash.slice(6))));
     } catch (e) {
-        editor.value = EXAMPLES.hello;
+        editor.value = EXAMPLES.wasm_live;
     }
 } else {
-    editor.value = EXAMPLES.hello;
+    editor.value = EXAMPLES.wasm_live;
 }
 
 updateLineNumbers();
 updateStatus();
+updateConnectivityBadge();
 
 // Event listeners (CSP-compliant)
 document.getElementById('exampleSelect').addEventListener('change', function() { loadExample(this.value); });
 document.getElementById('runBtn').addEventListener('click', runCode);
 document.getElementById('formatBtn').addEventListener('click', formatCode);
+document.getElementById('downloadWasmBtn').addEventListener('click', downloadCompiledWasm);
 document.getElementById('shareBtn').addEventListener('click', shareCode);
 document.getElementById('copyShareBtn').addEventListener('click', copyShare);
 document.getElementById('shareUrl').addEventListener('click', function() { this.select(); });
 document.getElementById('closeModalBtn').addEventListener('click', function() { document.getElementById('shareModal').classList.remove('active'); });
+tabOutputBtn.addEventListener('click', function() { switchTab('output'); });
+tabWatBtn.addEventListener('click', function() { switchTab('wat'); });
+tabHexBtn.addEventListener('click', function() { switchTab('hex'); });
 document.querySelector('.hamburger').addEventListener('click', function() { this.classList.toggle('open'); document.querySelector('.topbar-links').classList.toggle('show'); });
 </script>
 
