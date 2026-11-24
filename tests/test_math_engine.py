@@ -124,6 +124,26 @@ class TestMatrix:
         with pytest.raises(ValueError, match="singular"):
             m.inverse()
 
+    def test_matrix_scale_aware_singularity(self):
+        # Regression test for Issue #186: small-scale well-conditioned matrices
+        for k in (49, 50):
+            s = 2.0 ** -k
+            a = Matrix.identity(3) * s
+            assert abs(a.det() - (s ** 3)) < 1e-60 or pytest.approx(s ** 3, rel=1e-12) == a.det()
+            inv = a.inverse()
+            assert inv[0, 0] == pytest.approx(2.0 ** k, rel=1e-12)
+            assert inv[1, 1] == pytest.approx(2.0 ** k, rel=1e-12)
+            assert inv[2, 2] == pytest.approx(2.0 ** k, rel=1e-12)
+        # Truly singular matrices must still be detected
+        singular_3x3 = Matrix([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
+        assert abs(singular_3x3.det()) < 1e-12
+        with pytest.raises(ValueError, match="singular"):
+            singular_3x3.inverse()
+        # Scaled singular matrix
+        scaled_singular = Matrix([[1, 2], [2, 4]]) * (2.0 ** -50)
+        with pytest.raises(ValueError, match="singular"):
+            scaled_singular.inverse()
+
     def test_shape_mismatch(self):
         a = Matrix([[1, 2]])
         b = Matrix([[1], [2], [3]])

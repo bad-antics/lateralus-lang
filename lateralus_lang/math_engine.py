@@ -301,12 +301,16 @@ class Matrix:
 
     def _lu_det(self) -> float:
         n = self.rows
+        scale = max(max(abs(float(x)) for x in row) for row in self._data) if n > 0 else 0.0
+        if scale == 0.0:
+            return 0.0
+        tol = scale * 1e-15
         lu = [[float(self._data[r][c]) for c in range(n)] for r in range(n)]
         sign = 1
         for col in range(n):
             # Partial pivoting
             max_row = max(range(col, n), key=lambda r: abs(lu[r][col]))
-            if abs(lu[max_row][col]) < 1e-15:
+            if abs(lu[max_row][col]) <= tol:
                 return 0.0
             if max_row != col:
                 lu[col], lu[max_row] = lu[max_row], lu[col]
@@ -326,12 +330,16 @@ class Matrix:
         if self.rows != self.cols:
             raise ValueError("inverse requires a square matrix")
         n = self.rows
+        scale = max(max(abs(float(x)) for x in row) for row in self._data) if n > 0 else 0.0
+        if scale == 0.0:
+            raise ValueError("Matrix is singular — no inverse exists")
+        tol = scale * 1e-15
         aug = [[float(self._data[r][c]) for c in range(n)] +
                [1.0 if r == c else 0.0 for c in range(n)]
                for r in range(n)]
         for col in range(n):
             max_row = max(range(col, n), key=lambda r: abs(aug[r][col]))
-            if abs(aug[max_row][col]) < 1e-15:
+            if abs(aug[max_row][col]) <= tol:
                 raise ValueError("Matrix is singular — no inverse exists")
             aug[col], aug[max_row] = aug[max_row], aug[col]
             pivot = aug[col][col]
