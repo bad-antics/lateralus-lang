@@ -1,0 +1,188 @@
+// ===================================================================
+// examples/sort_tutorial.ltl — stdlib/sort.ltl tutorial companion
+// Runnable tour of the sorting algorithms in stdlib/sort: quicksort,
+// mergesort, insertion sort, selection sort, binary_search,
+// count_inversions, is_sorted and nsmallest/nlargest. Self-contained:
+// the same algorithms are re-implemented here so the script runs on
+// `lateralus run` without stdlib import resolution.
+// ===================================================================
+
+fn is_sorted(items: list) -> bool {
+    for i in range(0, len(items) - 1) {
+        if items[i] > items[i + 1] {
+            return false
+        }
+    }
+    return true
+}
+
+fn quicksort(items: list) -> list {
+    if len(items) <= 1 {
+        return items
+    }
+    let pivot = items[floor(len(items) / 2)]
+    let lo  = items |> filter(fn(x) { x < pivot })
+    let mid = items |> filter(fn(x) { x == pivot })
+    let hi  = items |> filter(fn(x) { x > pivot })
+    return quicksort(lo) + mid + quicksort(hi)
+}
+
+fn merge(a: list, b: list) -> list {
+    let out = []
+    let i = 0
+    let j = 0
+    while i < len(a) && j < len(b) {
+        if a[i] <= b[j] {
+            out = out + [a[i]]
+            i = i + 1
+        } else {
+            out = out + [b[j]]
+            j = j + 1
+        }
+    }
+    while i < len(a) { out = out + [a[i]]; i = i + 1 }
+    while j < len(b) { out = out + [b[j]]; j = j + 1 }
+    return out
+}
+
+fn mergesort(items: list) -> list {
+    if len(items) <= 1 {
+        return items
+    }
+    let mid = floor(len(items) / 2)
+    let left = mergesort(slice(items, 0, mid))
+    let right = mergesort(slice(items, mid, len(items)))
+    return merge(left, right)
+}
+
+fn insertion_sort(items: list) -> list {
+    let arr = items |> map(fn(x) { x })
+    for i in range(1, len(arr)) {
+        let key = arr[i]
+        let j = i - 1
+        while j >= 0 && arr[j] > key {
+            arr[j + 1] = arr[j]
+            j = j - 1
+        }
+        arr[j + 1] = key
+    }
+    return arr
+}
+
+fn selection_sort(items: list) -> list {
+    let arr = items |> map(fn(x) { x })
+    for i in range(0, len(arr)) {
+        let min_idx = i
+        for j in range(i + 1, len(arr)) {
+            if arr[j] < arr[min_idx] {
+                min_idx = j
+            }
+        }
+        if min_idx != i {
+            let tmp = arr[i]
+            arr[i] = arr[min_idx]
+            arr[min_idx] = tmp
+        }
+    }
+    return arr
+}
+
+fn binary_search(items: list, target) -> int {
+    let lo = 0
+    let hi = len(items) - 1
+    while lo <= hi {
+        let mid = floor((lo + hi) / 2)
+        if items[mid] == target {
+            return mid
+        } else if items[mid] < target {
+            lo = mid + 1
+        } else {
+            hi = mid - 1
+        }
+    }
+    return -1
+}
+
+fn count_inversions(items: list) -> int {
+    let count = 0
+    for i in range(0, len(items)) {
+        for j in range(i + 1, len(items)) {
+            if items[i] > items[j] {
+                count = count + 1
+            }
+        }
+    }
+    return count
+}
+
+fn nsmallest(items: list, n: int) -> list {
+    let s = quicksort(items)
+    return slice(s, 0, min(n, len(s)))
+}
+
+fn nlargest(items: list, n: int) -> list {
+    let s = quicksort(items)
+    let start = max(0, len(s) - n)
+    return slice(s, start, len(s))
+}
+
+fn yesno(b: bool) -> str {
+    if b { return "true" }
+    return "false"
+}
+
+fn show(label: str, xs: list) {
+    println(label + ": [" + join(xs, ", ") + "]")
+}
+
+fn main() {
+    println("=== LATERALUS STDLIB SORT TUTORIAL ===")
+    let input = [5, 2, 9, 1, 7, 3, 8, 4, 6, 0]
+    show("INPUT", input)
+
+    println("STEP 1: is_sorted(input) = " + yesno(is_sorted(input)))
+
+    let q = quicksort(input)
+    show("STEP 2: quicksort", q)
+
+    let m = mergesort(input)
+    show("STEP 3: mergesort", m)
+
+    let ins = insertion_sort(input)
+    show("STEP 4: insertion_sort", ins)
+
+    let sel = selection_sort(input)
+    show("STEP 5: selection_sort", sel)
+
+    println("STEP 6: is_sorted(quicksort) = " + yesno(is_sorted(q)))
+
+    println("STEP 7: count_inversions(input) = " + str(count_inversions(input)))
+
+    println("STEP 8: binary_search(quicksort, 7) = " + str(binary_search(q, 7)))
+    println("STEP 8b: binary_search(quicksort, 42) = " + str(binary_search(q, 42)))
+
+    show("STEP 9: nsmallest(input, 3)", nsmallest(input, 3))
+    show("STEP 10: nlargest(input, 3)", nlargest(input, 3))
+
+    // sort_by_key equivalent: sort words by length using decorate-sort-undecorate.
+    let words = ["pear", "fig", "banana", "kiwi", "plum"]
+    let decorated = words |> map(fn(w) { [len(w), w] })
+    // simple insertion sort on [key, value] pairs by key
+    let i = 1
+    while i < len(decorated) {
+        let key = decorated[i]
+        let j = i - 1
+        while j >= 0 && decorated[j][0] > key[0] {
+            decorated[j + 1] = decorated[j]
+            j = j - 1
+        }
+        decorated[j + 1] = key
+        i = i + 1
+    }
+    let by_len = decorated |> map(fn(pair) { pair[1] })
+    show("STEP 11: words by length", by_len)
+
+    println("PINNED_VECTORS: sorted=[0,1,2,3,4,5,6,7,8,9] inversions=25 binsearch_7=7 binsearch_42=-1")
+}
+
+main()
