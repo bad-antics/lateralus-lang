@@ -44,3 +44,30 @@ opinion.
 
 If you want to port more tasks, see [`BOUNTIES.md`](../../BOUNTIES.md)
 — "rosetta-20" is a $300 bounty for 20 additional canonical tasks.
+
+### Added in the 2026-11 expansion (15 tasks)
+
+| Task | File | Rosetta page |
+|------|------|--------------|
+| Fibonacci sequence | [`fibonacci.ltl`](fibonacci.ltl) | https://rosettacode.org/wiki/Fibonacci_sequence |
+| Greatest common divisor | [`gcd.ltl`](gcd.ltl) | https://rosettacode.org/wiki/Greatest_common_divisor |
+| Binary search | [`binary_search.ltl`](binary_search.ltl) | https://rosettacode.org/wiki/Binary_search |
+| Palindrome detection | [`palindrome.ltl`](palindrome.ltl) | https://rosettacode.org/wiki/Palindrome_detection |
+| Sorting (stdlib) | [`sorting_stdlib.ltl`](sorting_stdlib.ltl) | https://rosettacode.org/wiki/Sorting_algorithms/Quicksort |
+| Sorting (insertion) | [`sorting_insertion.ltl`](sorting_insertion.ltl) | https://rosettacode.org/wiki/Sorting_algorithms/Insertion_sort |
+| Sorting (quicksort, recursive) | [`sorting_quicksort.ltl`](sorting_quicksort.ltl) | https://rosettacode.org/wiki/Sorting_algorithms/Quicksort |
+| Base64 alphabet | [`base64_alphabet.ltl`](base64_alphabet.ltl) | https://rosettacode.org/wiki/Base64_encode_data |
+| SHA-256 | [`sha256.ltl`](sha256.ltl) | https://rosettacode.org/wiki/SHA-256 |
+| Word frequency | [`word_frequency.ltl`](word_frequency.ltl) | https://rosettacode.org/wiki/Word_frequency |
+| Reverse a string | [`reverse_string.ltl`](reverse_string.ltl) | https://rosettacode.org/wiki/Reverse_a_string |
+| Leap year | [`leap_year.ltl`](leap_year.ltl) | https://rosettacode.org/wiki/Leap_year |
+| Factorial | [`factorial.ltl`](factorial.ltl) | https://rosettacode.org/wiki/Factorial |
+| Collatz sequence | [`collatz.ltl`](collatz.ltl) | https://rosettacode.org/wiki/Collatz_sequence |
+| Sum of squares | [`sum_of_squares.ltl`](sum_of_squares.ltl) | https://rosettacode.org/wiki/Sum_of_squares |
+
+Every file above ends with a self-check that prints `OK` when it passes, so
+`for f in examples/rosetta/*.ltl; do lateralus run "$f"; done` can be used as a
+smoke suite. Two languages quirks worth knowing when porting more tasks:
+string literals beginning with `{` hit the f-string translation path (build
+braces with `chr(123)`/`chr(125)`), and module imports only resolve for the
+registered stdlib subset (`stdlib.strings`, `stdlib.collections`, ...).
