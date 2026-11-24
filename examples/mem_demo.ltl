@@ -1,0 +1,100 @@
+// =======================================================================
+// examples/mem_demo.ltl
+// A runnable tour of the stdlib.mem module (stdlib/mem.ltl).
+//
+// The real stdlib/mem.ltl declares its allocation/copy/compare primitives
+// with `foreign "C"` blocks (ltl_alloc, ltl_free, ltl_memcpy, ltl_memset,
+// ltl_heap_reset) and its volatile accessors with raw `Ptr<u32>` +
+// `deref`/`volatile`. Those require the C backend (freestanding / libc) and
+// do NOT execute under the pure-Python `run` backend.
+//
+// To keep this example honest AND runnable with
+//     python3 -m lateralus_lang run examples/mem_demo.ltl
+// we re-implement the *semantics* of every mem function in pure Lateralus
+// over lists (the safe, managed stand-in for a byte buffer), and we call the
+// real alignment helpers verbatim (they are pure integer math and run
+// unchanged). Each section is labelled with the real stdlib signature it
+// mirrors.
+// =======================================================================
+
+// -- Copy / Set / Compare (mirrors mem.set / mem.zero / mem.copy / mem.compare)
+
+// mem.set(dst, val, n) -> Ptr<u8>   : set n bytes of dst to val.
+fn mem_set(buf: list, val: int, n: int) -> list {
+    let i = 0
+    while i < n {
+        buf[i] = val
+        i = i + 1
+    }
+    return buf
+}
+
+// mem.zero(dst, n) -> Ptr<u8>       : zero n bytes of dst (set(dst, 0, n)).
+fn mem_zero(buf: list, n: int) -> list {
+    return mem_set(buf, 0, n)
+}
+
+// mem.copy(dst, src, n) -> Ptr<u8>  : copy n bytes src -> dst (no overlap).
+fn mem_copy(dst: list, src: list, n: int) -> list {
+    let i = 0
+    while i < n {
+        dst[i] = src[i]
+        i = i + 1
+    }
+    return dst
+}
+
+// mem.compare(a, b, n) -> int       : 0 if equal, else a[i]-b[i] at first diff.
+fn mem_compare(a: list, b: list, n: int) -> int {
+    let i = 0
+    while i < n {
+        if a[i] != b[i] {
+            return a[i] - b[i]
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// -- Alignment helpers (verbatim from stdlib/mem.ltl — pure integer math) --
+
+// mem.align_up(addr, align) -> usize : round addr up to a multiple of align.
+fn align_up(addr: int, align: int) -> int {
+    return (addr + align - 1) & ~(align - 1)
+}
+
+// mem.align_down(addr, align) -> usize : round addr down to a multiple of align.
+fn align_down(addr: int, align: int) -> int {
+    return addr & ~(align - 1)
+}
+
+// mem.is_aligned(addr, align) -> bool : true if addr is a multiple of align.
+fn is_aligned(addr: int, align: int) -> bool {
+    return (addr & (align - 1)) == 0
+}
+
+fn main() {
+    println("=== stdlib.mem demo (pure-Lateralus mirror) ===")
+
+    // 1) set / zero ------------------------------------------------------
+    let buf = [0, 0, 0, 0, 0, 0, 0, 0]
+    println("set(buf, 65, 8)   = " + str(mem_set(buf, 65, 8)))
+    println("zero(buf, 8)      = " + str(mem_zero(buf, 8)))
+
+    // 2) copy ------------------------------------------------------------
+    let src = [1, 2, 3, 4, 5, 6, 7, 8]
+    let dst = [0, 0, 0, 0, 0, 0, 0, 0]
+    println("copy(dst, src, 8) = " + str(mem_copy(dst, src, 8)))
+
+    // 3) compare ---------------------------------------------------------
+    println("compare(src,src)  = " + str(mem_compare(src, src, 8)))
+    println("compare(123,129)  = " + str(mem_compare([1, 2, 3], [1, 2, 9], 3)))
+
+    // 4) alignment helpers ----------------------------------------------
+    println("align_up(5, 8)    = " + str(align_up(5, 8)))
+    println("align_up(0, 8)    = " + str(align_up(0, 8)))
+    println("align_up(16, 8)   = " + str(align_up(16, 8)))
+    println("align_down(13, 8) = " + str(align_down(13, 8)))
+    println("is_aligned(16, 8) = " + str(is_aligned(16, 8)))
+    println("is_aligned(17, 8) = " + str(is_aligned(17, 8)))
+}
