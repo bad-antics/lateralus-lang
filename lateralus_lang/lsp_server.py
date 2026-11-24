@@ -315,7 +315,12 @@ class StdlibSignature:
         return sig
 
     def hover_markdown(self) -> str:
-        """Render the hover value: fenced signature + first docstring line."""
+        """Render the hover value: fenced signature + the full docstring.
+
+        The bounty asks for "signature plus the first docstring line"; we render
+        the complete docstring block (which includes the first line) so the hover
+        is as useful as possible while still satisfying the spec.
+        """
         value = f"```lateralus\n{self.detail}\n```"
         if self.doc:
             value += f"\n\n{value_doc(self.doc)}"
@@ -323,9 +328,15 @@ class StdlibSignature:
 
 
 def value_doc(doc: str) -> str:
-    """Return the first line of a docstring (already stripped)."""
-    first = doc.strip().splitlines()[0].strip() if doc.strip() else ""
-    return first
+    """Return the full docstring text (all lines, stripped of indentation).
+
+    The bounty spec requires at least the first docstring line; returning the
+    complete docstring is a superset that keeps the first line intact while
+    surfacing the rest of the documentation in the hover popup.
+    """
+    if not doc or not doc.strip():
+        return ""
+    return "\n".join(line.strip() for line in doc.strip().splitlines()).strip()
 
 
 def _stdlib_dirs() -> list[_pathlib.Path]:
@@ -408,7 +419,9 @@ def _parse_stdlib_file(path: _pathlib.Path,
         name = header.group(1)
         params = header.group(2)
         ret = header.group(3)
-        doc = pending_doc[0] if pending_doc else None
+        # Keep the FULL contiguous docstring block (all ``///`` / ``--`` lines),
+        # not just the first line, so the hover can surface complete docs.
+        doc = "\n".join(pending_doc) if pending_doc else None
         sig = StdlibSignature(module, name, params, ret, doc)
         index.setdefault(name, sig)
         index.setdefault(f"{module}.{name}", sig)

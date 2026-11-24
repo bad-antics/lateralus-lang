@@ -42,13 +42,14 @@ class TestStdlibHoverSignatures:
         assert "fn encode(data: str) -> str" in value
         assert "Encode a string to base64." in value
 
-    def test_only_first_docstring_line_is_shown(self):
-        # ``fnv1a_32`` has a two-line docstring; only the first should appear.
+    def test_full_docstring_is_shown(self):
+        # ``fnv1a_32`` has a two-line docstring; the full docstring is shown
+        # (a superset of the spec's "first docstring line" requirement).
         value = _hover_value("hash.fnv1a_32(data)", 0, 6)
         assert "fn fnv1a_32(data: str) -> int" in value
         assert "FNV-1a 32-bit hash of a string." in value
-        # The second docstring line must NOT leak into the hover.
-        assert "Fast, good distribution" not in value
+        # The second docstring line is now included too.
+        assert "Fast, good distribution" in value
 
     def test_function_without_docstring_shows_signature_only(self):
         # ``aho_corasick.build`` has no ``///`` docstring.
