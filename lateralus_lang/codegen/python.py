@@ -236,6 +236,18 @@ class PythonTranspiler(ASTVisitor):
         self._w += "ord = _builtins.ord"
         self._w += "none = None    # Lateralus alias for Python None"
         self._w += "null = None    # Lateralus alias for Python None"
+        self._w += "nil  = None    # Lateralus alias for Python None"
+        self._w += "def panic(msg=''): raise RuntimeError(str(msg))"
+        self._w += "def bytes_of(s): return [ord(c) for c in s] if isinstance(s, str) else list(s)"
+        self._w += "def type_of(v):"
+        self._w += "    if v is None: return 'nil'"
+        self._w += "    if isinstance(v, bool): return 'bool'"
+        self._w += "    if isinstance(v, int): return 'int'"
+        self._w += "    if isinstance(v, float): return 'float'"
+        self._w += "    if isinstance(v, str): return 'str'"
+        self._w += "    if isinstance(v, list): return 'list'"
+        self._w += "    if isinstance(v, dict): return 'map'"
+        self._w += "    return type(v).__name__"
         self._w += "keys = lambda d: list(d.keys())"
         self._w += "values = lambda d: list(d.values())"
         self._w += "sorted = _builtins.sorted"
@@ -1548,7 +1560,7 @@ class PythonTranspiler(ASTVisitor):
         if isinstance(node, ListExpr):
             return f"[{', '.join(self._expr(e) for e in node.elements)}]"
         if isinstance(node, MapExpr):
-            pairs = ", ".join(f"{self._expr(k)}: {self._expr(v)}"
+            pairs = ", ".join(f"{(repr(k.name) if isinstance(k, Ident) else self._expr(k))}: {self._expr(v)}"
                               for k, v in node.pairs)
             return "{" + pairs + "}"
         if isinstance(node, TupleExpr):
