@@ -623,9 +623,11 @@ fn many(a: int, b: int, c: int, d: int, e: int) -> int {
         assert "many" in c_src
 
     def test_no_main_function(self):
-        """Programs without main() should still transpile."""
+        """Programs without main() should still transpile and not call undefined ltl_main()."""
         c_src = check_c("fn helper() -> int { return 0 }")
         assert "helper" in c_src
+        assert "No main() found — nothing to run" in c_src
+        assert "ltl_main();" not in c_src
 
     def test_special_characters_in_string(self):
         c_src = check_c(r'let s = "hello\nworld"')
