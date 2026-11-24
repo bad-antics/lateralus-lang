@@ -742,6 +742,12 @@ def newton_raphson(
         if abs(fpx) < 1e-15:
             raise ValueError("Newton-Raphson: derivative too small — no convergence")
         x = x - fx / fpx
+    # The loop consumes its last allowed update and exits without ever
+    # re-evaluating the residual, so a root reached on the final iteration is
+    # still reported as non-convergence.  Check the last iterate once more
+    # before declaring failure; a genuinely non-convergent run still raises.
+    if abs(f(x)) < tol:
+        return x
     raise ValueError(f"Newton-Raphson: did not converge in {max_iter} iterations")
 
 
