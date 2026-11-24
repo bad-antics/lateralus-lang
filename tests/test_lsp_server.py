@@ -2,6 +2,7 @@
 Tests for the LATERALUS LSP server.
 """
 from lateralus_lang.lsp_server import (
+    STDLIB_FUNCTIONS,
     DocumentManager,
     LateralusLSP,
     TextDocument,
@@ -535,3 +536,35 @@ class TestLSPServerV2:
         })
         # Already formatted: should return empty edits
         assert resp["result"] == []
+
+
+
+KEY = "let r = "
+
+
+class TestStdlibHover:
+    def test_stdlib_index_is_populated(self):
+        assert STDLIB_FUNCTIONS
+        assert "length" in STDLIB_FUNCTIONS
+
+    def test_hover_on_documented_stdlib_function(self):
+        name, entry = next(
+            (n, e) for n, e in STDLIB_FUNCTIONS.items() if e["doc"]
+        )
+        doc = TextDocument("file:///stdlib.ltl", "lateralus", 1, KEY + name + "(x)")
+        hover = get_hover(doc, 0, len(KEY))
+        assert hover is not None
+        value = hover["contents"]["value"]
+        assert entry["signature"] in value
+        assert entry["doc"] in value
+        assert entry["module"] in value
+
+    def test_hover_on_unknown_word_returns_none(self):
+        doc = TextDocument("file:///stdlib.ltl", "lateralus", 1, "let x = not_a_real_stdlib_fn(x)")
+        assert get_hover(doc, 0, 10) is None
+
+    def test_builtin_hover_still_wins(self):
+        doc = TextDocument("file:///stdlib.ltl", "lateralus", 1, "let n = len(items)")
+        hover = get_hover(doc, 0, 10)
+        assert hover is not None
+        assert "fn len(" in hover["contents"]["value"]
