@@ -45,6 +45,26 @@ class TestLiterals:
         assert ts[0].kind  == TK.STRING
         assert ts[0].value == "hello"
 
+    def test_string_brace_escape_double_open(self):
+        ts = tokens('"{{literal}}"')
+        assert ts[0].kind == TK.STRING
+        assert ts[0].value == "{literal}"
+
+    def test_string_brace_escape_multiple(self):
+        ts = tokens('"{{a}} and {{b}}"')
+        assert ts[0].kind == TK.STRING
+        assert ts[0].value == "{a} and {b}"
+
+    def test_string_brace_escape_double_close(self):
+        ts = tokens('"foo}}bar"')
+        assert ts[0].kind == TK.STRING
+        assert ts[0].value == "foo}bar"
+
+    def test_string_brace_escape_with_interpolation(self):
+        ts = tokens('"Hello {name}, welcome to {{lateralus}}!"')
+        assert ts[0].kind == TK.STRING
+        assert ts[0].value == [("str", "Hello "), ("expr", "name"), ("str", ", welcome to {lateralus}!")]
+
     def test_bool_true(self):
         ts = tokens("true")
         assert ts[0].kind  == TK.BOOL
@@ -114,6 +134,20 @@ class TestComments:
     def test_line_comment_skipped(self):
         ts = tokens("42 // this is a comment")
         assert len(ts) == 1
+
+    def test_dash_comment_skipped(self):
+        ts = tokens("42 -- this is a dash comment")
+        assert len(ts) == 1
+        assert ts[0].value == 42
+
+    def test_dash_comment_with_apostrophe(self):
+        ts = tokens("-- comment with apostrophe's here\n42")
+        assert len(ts) == 1
+        assert ts[0].value == 42
+
+    def test_dash_comment_entire_file(self):
+        ts = tokens("-- only a comment")
+        assert len(ts) == 0
 
     def test_hash_comment_skipped(self):
         ts = tokens("42 # hash comment")

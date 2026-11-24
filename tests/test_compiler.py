@@ -93,6 +93,16 @@ class TestPythonTranspiler:
         assert r.ok
         assert '"hello world"' in r.python_src or "'hello world'" in r.python_src
 
+    def test_string_brace_escape_codegen(self):
+        r = check('let s = "{{literal}}"')
+        assert r.ok
+        assert "'{literal}'" in r.python_src or '"{literal}"' in r.python_src
+
+    def test_string_brace_escape_with_interpolation_codegen(self):
+        r = check('let msg = "Hello {name}, welcome to {{lateralus}}!"')
+        assert r.ok
+        assert "f\"Hello {name}, welcome to {{lateralus}}!\"" in r.python_src
+
     def test_bool_literal(self):
         r = check("let flag = true")
         assert r.ok
