@@ -28,7 +28,7 @@ comparable.
 | Workload | Lateralus (interp) | Python | Node |
 |---|---|---|---|
 | `xxhash64` 2 MB | **0.65 s** (incl. ~0.15 s startup) | 0.35 s | 0.22 s |
-| `lz4` 4 MB round-trip | not run — see blockers | 2.21 s | 0.29 s |
+| `lz4` round-trip | **256 KB in 59.15 s**; 4 MB does not finish — see scaling below | 2.21 s @ 4 MB | 0.29 s @ 4 MB |
 | `chacha20` 1 MB | not run — see blockers | 1.31 s | 0.06 s |
 | `aho_corasick` 1 MB / 1k patterns | not run — see blockers | 0.34 s | 0.10 s |
 | `radix_sort_u32` 100k | **0.64 s** (incl. ~0.15 s startup) | 0.13 s | 0.04 s |
@@ -36,6 +36,26 @@ comparable.
 Throughput for the one workload that does run end to end:
 **2 MiB / 0.65 s ≈ 3.2 MB/s** including input generation, which is in line with
 the ~5–10 MB/s noted in `stdlib/xxhash.ltl`'s own header.
+
+### lz4: why the Lateralus column is 256 KB, not 4 MB
+
+`stdlib/lz4.ltl` appends to its output with `out = out + [...]`, once per literal
+byte and once per match, so the interpreter's cost is quadratic in the input.
+Measured on this machine with the same driver, seed and digest:
+
+| Input | Wall time | Growth |
+|---|---|---|
+| 64 KB | 3.91 s | — |
+| 128 KB | 14.55 s | 3.7× |
+| 256 KB | 59.15 s | 4.1× |
+
+Four megabytes is 16× the 256 KB input, so quadratic scaling puts it near
+**4 hours** — not a measurement anyone will reproduce. At 256 KB the digest is
+`ok:262144:656b0b76:263173`, which is byte-identical to the Python reference at
+the same size, so the implementation is correct; it is the output-building
+pattern that does not scale. Preallocating the output and assigning by index is
+the fix, and the same pattern change took `xxhash64` from 28 s to 0.65 s at
+2 MB.
 
 ## Correctness (all three languages agree where they run)
 

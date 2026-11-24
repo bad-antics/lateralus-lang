@@ -1,0 +1,78 @@
+
+// ── benchmark driver: LZ4 compress + decompress round-trip ──────────
+// NOTE: the call site size is a constant because stdlib/lz4.ltl builds its
+// output with `out = out + [...]`, which is quadratic in the interpreter.
+// 4 MB (the size the bounty asks for) does not finish; see
+// benchmarks/results/stdlib_results.md for the measured scaling.
+let LZ4_BENCH_N = 262144
+
+fn hex_digit(v: int) -> str {
+    let chars = "0123456789abcdef"
+    return chars[v]
+}
+
+fn hex32(v: int) -> str {
+    let out = ""
+    let i = 7
+    while i >= 0 {
+        out = out + hex_digit((v >> (i * 4)) & 0xF)
+        i = i - 1
+    }
+    return out
+}
+
+fn xs_next(s: int) -> int {
+    let x = s & 0xFFFFFFFF
+    x = (x ^ ((x << 13) & 0xFFFFFFFF)) & 0xFFFFFFFF
+    x = (x ^ (x >> 17)) & 0xFFFFFFFF
+    x = (x ^ ((x << 5) & 0xFFFFFFFF)) & 0xFFFFFFFF
+    return x
+}
+
+fn gen_bytes(n: int, seed: int) -> list {
+    let out = [0] * n
+    let s = seed & 0xFFFFFFFF
+    let i = 0
+    while i < n {
+        s = xs_next(s)
+        out[i] = s & 0xFF
+        if i + 1 < n { out[i + 1] = (s >> 8) & 0xFF }
+        if i + 2 < n { out[i + 2] = (s >> 16) & 0xFF }
+        if i + 3 < n { out[i + 3] = (s >> 24) & 0xFF }
+        i = i + 4
+    }
+    return out
+}
+
+fn adler32(buf: list) -> int {
+    let a = 1
+    let b = 0
+    let i = 0
+    let n = len(buf)
+    while i < n {
+        a = (a + buf[i]) % 65521
+        b = (b + a) % 65521
+        i = i + 1
+    }
+    return ((b << 16) | a) & 0xFFFFFFFF
+}
+
+fn main() -> int {
+    let data = gen_bytes(LZ4_BENCH_N, 0x2468ACE0)
+    let packed = compress(data)
+    let back = decompress(packed)
+    let same = len(back) == len(data)
+    if same {
+        let k = 0
+        while k < len(data) {
+            if back[k] != data[k] { same = false }
+            k = k + 1
+        }
+    }
+    if same == false {
+        println("lz4 ROUNDTRIP MISMATCH")
+        return 1
+    }
+    println("lz4 ok:" + str(len(data)) + ":" + hex32(adler32(packed)) + ":" + str(len(packed)))
+    return 0
+}
