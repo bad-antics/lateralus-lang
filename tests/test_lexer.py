@@ -45,6 +45,26 @@ class TestLiterals:
         assert ts[0].kind  == TK.STRING
         assert ts[0].value == "hello"
 
+    def test_string_brace_escape_double_open(self):
+        ts = tokens('"{{literal}}"')
+        assert ts[0].kind == TK.STRING
+        assert ts[0].value == "{literal}"
+
+    def test_string_brace_escape_multiple(self):
+        ts = tokens('"{{a}} and {{b}}"')
+        assert ts[0].kind == TK.STRING
+        assert ts[0].value == "{a} and {b}"
+
+    def test_string_brace_escape_double_close(self):
+        ts = tokens('"foo}}bar"')
+        assert ts[0].kind == TK.STRING
+        assert ts[0].value == "foo}bar"
+
+    def test_string_brace_escape_with_interpolation(self):
+        ts = tokens('"Hello {name}, welcome to {{lateralus}}!"')
+        assert ts[0].kind == TK.STRING
+        assert ts[0].value == [("str", "Hello "), ("expr", "name"), ("str", ", welcome to {lateralus}!")]
+
     def test_bool_true(self):
         ts = tokens("true")
         assert ts[0].kind  == TK.BOOL
