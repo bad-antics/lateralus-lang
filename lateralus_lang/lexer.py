@@ -534,6 +534,14 @@ class Lexer:
                 esc = self._advance()
                 buf += {"n": "\n", "t": "\t", "r": "\r", "\\": "\\",
                         '"': '"', "0": "\0"}.get(esc, esc)
+            elif ch == "{" and self._peek() == "{":
+                buf += "{"
+                self._advance()
+                self._advance()
+            elif ch == "}" and self._peek() == "}":
+                buf += "}"
+                self._advance()
+                self._advance()
             elif ch == "{" and self._peek() != "{":
                 # interpolation
                 parts.append(("str", buf)); buf = ""
@@ -552,8 +560,6 @@ class Lexer:
                     if depth > 0: expr_src += c
                     self._advance()
                 parts.append(("expr", expr_src))
-            elif ch == "{{":
-                buf += "{"; self._advance(); self._advance()
             else:
                 buf += self._advance()
         parts.append(("str", buf))
