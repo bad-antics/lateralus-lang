@@ -677,11 +677,15 @@ class CTranspiler(ASTVisitor):
         if isinstance(node, ListExpr):
             return "ltl_list_t*"
         if isinstance(node, IndexExpr):
-            # Typed C array? Return its element type.
+            # Typed C array or a boxed list whose element type we recorded:
+            # either way the read produces a scalar, and callers must know that
+            # or they will declare `ltl_value_t dx = <double>`.
             if isinstance(node.obj, Ident):
                 nm = self._mangle(node.obj.name)
                 if nm in self._list_elem_types:
                     return self._list_elem_types[nm]
+                if nm in self._box_elem_types:
+                    return self._box_elem_types[nm]
             return "ltl_value_t"
         if isinstance(node, Ident):
             # Look up known local variable types
@@ -710,6 +714,11 @@ class CTranspiler(ASTVisitor):
             if tname == "float": return "double"
             if tname == "bool":  return "bool"
             return _c_type(node.target, "ltl_value_t")
+        if isinstance(node, UnaryOp):
+            # -1.5 is still a double; without this the boxing dispatch in
+            # _visit_AssignStmt sees ltl_value_t and leaves a raw double in an
+            # ltl_value_t slot.
+            return self._infer_ctype_from_expr(node.operand)
         if isinstance(node, CallExpr):
             if isinstance(node.callee, Ident):
                 # str(x) lowers to one of the ltl_*_to_str helpers, all of which
@@ -1329,11 +1338,11 @@ class CTranspiler(ASTVisitor):
                 arg = self._visit_expr(node.args[0])
                 return f"(({arg})->len)"
             # Builtin type-coercion calls: int(x), float(x), bool(x), str(x).
-            if name in ("int", "float", "bool", "str") and len(node.args) == 1:
+            if name in ("int", "to_int", "float", "bool", "str") and len(node.args) == 1:
                 arg_node = node.args[0]
                 arg = self._visit_expr(arg_node)
                 src = self._infer_ctype_from_expr(arg_node)
-                if name == "int":   return f"((int64_t)({arg}))"
+                if name in ("int", "to_int"): return f"((int64_t)({arg}))"
                 if name == "float": return f"((double)({arg}))"
                 if name == "bool":  return f"((bool)({arg}))"
                 # str(x): dispatch on source type

@@ -835,3 +835,47 @@ fn main() -> int {
 }
 """)
         assert "ltl_io_println(" in c_src
+
+
+class TestNumericInference:
+    """Element and unary types must survive into declarations.
+
+    `ltl_value_t dx = <double>` is valid C and silently wrong at runtime, so
+    these pin the inference rather than the emitted expression.
+    """
+
+    def test_unary_minus_stays_float(self):
+        c_src = check_c("""
+fn main() -> int {
+    let n = 3
+    let xs = [0.0] * n
+    xs[0] = -1.5
+    println(str(xs[0]))
+    return 0
+}
+""")
+        assert "ltl_box_float((-1.5))" in c_src
+
+    def test_index_difference_declares_double(self):
+        c_src = check_c("""
+fn main() -> int {
+    let n = 3
+    let xs = [0.0] * n
+    let dx = xs[0] - xs[1]
+    println(str(dx))
+    return 0
+}
+""")
+        assert "double dx = " in c_src
+
+    def test_to_int_is_a_cast(self):
+        c_src = check_c("""
+fn main() -> int {
+    let v = 2.7
+    let i = to_int(v)
+    println(str(i))
+    return 0
+}
+""")
+        assert "((int64_t)(v))" in c_src
+        assert "to_int(" not in c_src.split("int64_t ltl_main")[-1]
