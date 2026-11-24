@@ -1194,6 +1194,10 @@ class CTranspiler(ASTVisitor):
             right = self._visit_expr(node.right)
             left  = self._visit_expr(node.left)
             return f"{right}({left})"
+        if op == "|?":
+            right = self._visit_expr(node.right)
+            left  = self._visit_expr(node.left)
+            return f"(({left}) != NULL ? {right}({left}) : NULL)"
         if op == "**":
             left  = self._visit_expr(node.left)
             right = self._visit_expr(node.right)

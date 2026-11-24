@@ -230,6 +230,25 @@ class BytecodeGenerator:
             self._bc.emit_u8(int(Op.CALL))
             self._emit_label_ref(str(instr.src2))
 
+        elif op == IROp.PIPE_OPT:
+            # a |? f  →  f(a) if a is non-nil/truthy else nil/0
+            lbl_id = len(self._fixups) + len(self._label_map)
+            skip_lbl = f"__pipe_opt_skip_{lbl_id}"
+            end_lbl  = f"__pipe_opt_end_{lbl_id}"
+            self._push_operand(instr.src1)
+            self._bc.emit_u8(int(Op.DUP))
+            self._bc.emit_u8(int(Op.JF))
+            self._emit_label_ref(skip_lbl)
+            self._bc.emit_u8(int(Op.CALL))
+            self._emit_label_ref(str(instr.src2))
+            self._bc.emit_u8(int(Op.JMP))
+            self._emit_label_ref(end_lbl)
+            self._label_map[skip_lbl] = len(self._bc.code)
+            self._bc.emit_u8(int(Op.POP))
+            self._bc.emit_u8(int(Op.PUSH_IMM))
+            self._bc.emit_u64(0)
+            self._label_map[end_lbl] = len(self._bc.code)
+
         elif op == IROp.AWAIT:
             self._push_operand(instr.src1)
             self._bc.emit_u8(int(Op.AWAIT_OP))
