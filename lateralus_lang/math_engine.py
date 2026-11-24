@@ -216,6 +216,10 @@ class Matrix:
 
     @staticmethod
     def from_flat(data: List, rows: int, cols: int) -> "Matrix":
+        if len(data) != rows * cols:
+            raise ValueError(
+                f"Matrix.from_flat expected {rows * cols} values for shape ({rows}, {cols}), got {len(data)}"
+            )
         return Matrix([data[i*cols:(i+1)*cols] for i in range(rows)])
 
     def __getitem__(self, idx):
