@@ -377,6 +377,30 @@ class TestAsPattern:
         p = Pattern.as_pat(Pattern.literal(42), "val")
         assert not match_pattern(99, p).matched
 
+    def test_as_does_not_mutate_shared_match_success(self):
+        first = match_pattern(7, parse_pattern("7 @ x"))
+        second = match_pattern(42, parse_pattern("_ @ y"))
+        assert first.bindings == {"x": 7}
+        assert second.bindings == {"y": 42}
+        assert first is not second
+        wildcard_res = match_pattern("hello", parse_pattern("_"))
+        assert wildcard_res.bindings == {}
+
+    def test_as_pattern_rejected_guard_leak(self):
+        result = (
+            MatchExpr(7)
+            .arm(
+                Pattern.guard(
+                    Pattern.as_pat(Pattern.literal(7), "discarded"),
+                    lambda value, bindings: False,
+                ),
+                lambda bindings: "unreachable",
+            )
+            .arm(Pattern.wildcard(), lambda bindings: dict(bindings))
+            .execute()
+        )
+        assert result == {}
+
 
 # ---------------------------------------------------------------------------
 # Regex patterns

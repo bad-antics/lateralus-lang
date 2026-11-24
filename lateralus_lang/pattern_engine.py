@@ -338,8 +338,7 @@ def match_pattern(value: Any, pattern: Pattern) -> MatchResult:
         inner_result = match_pattern(value, pattern.children[0])
         if not inner_result.matched:
             return MATCH_FAILURE
-        inner_result.bindings[pattern.name] = value
-        return inner_result
+        return MatchResult(True, {**inner_result.bindings, pattern.name: value})
 
     return MATCH_FAILURE
 
