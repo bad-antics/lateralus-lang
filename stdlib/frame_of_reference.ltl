@@ -76,6 +76,7 @@ pub fn decode(enc: map) -> list {
 /// For time-series timestamps.  Returns {first, second_delta, dods}.
 pub fn encode_dod(xs: list) -> map {
     let m = {}
+    m["count"] = len(xs)
     if len(xs) == 0 {
         m["first"] = 0; m["second_delta"] = 0; m["dods"] = []
         return m
@@ -100,11 +101,16 @@ pub fn encode_dod(xs: list) -> map {
 }
 
 pub fn decode_dod(enc: map) -> list {
-    let out = [enc["first"]]
-    if len(enc["dods"]) == 0 && enc["second_delta"] == 0 && len(out) == 1 {
-        // single-element column
-        return out
+    if contains(keys(enc), "count") {
+        if enc["count"] == 0 { return [] }
+        if enc["count"] == 1 { return [enc["first"]] }
+    } else {
+        if len(enc["dods"]) == 0 && enc["second_delta"] == 0 {
+            // single-element column legacy fallback
+            return [enc["first"]]
+        }
     }
+    let out = [enc["first"]]
     let prev_d = enc["second_delta"]
     out = out + [enc["first"] + prev_d]
     let dods = enc["dods"]
@@ -114,6 +120,9 @@ pub fn decode_dod(enc: map) -> list {
         out = out + [out[len(out) - 1] + d]
         prev_d = d
         i = i + 1
+    }
+    if contains(keys(enc), "count") && len(out) > enc["count"] {
+        return slice(out, 0, enc["count"])
     }
     return out
 }
