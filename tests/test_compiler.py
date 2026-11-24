@@ -172,3 +172,52 @@ class TestCompileResult:
     def test_result_error_list_empty_on_success(self):
         r = check("fn f() { }")
         assert r.errors == [] or all(e.severity.value == "warning" for e in r.errors)
+
+
+class TestLtlModuleImports:
+    """Issue #260: `import <mod>` for a .ltl module must inline the
+    transpiled module instead of emitting a raw Python import."""
+
+    def _compile_dir(self, files, main_name="main.ltl"):
+        import pathlib
+        import tempfile
+        d = tempfile.mkdtemp()
+        for name, src in files.items():
+            pathlib.Path(d, name).write_text(src)
+        return Compiler().compile_file(str(pathlib.Path(d, main_name)),
+                                       target=Target.PYTHON)
+
+    def test_import_inlines_module(self):
+        r = self._compile_dir({
+            "mymod.ltl": "pub fn double_it(x: int) -> int { return x * 2 }\n",
+            "main.ltl": "import mymod\nfn main() { println(str(mymod_double_it(5))) }\n",
+        })
+        assert r.ok
+        assert "import mymod as" not in r.python_src
+        assert "def mymod_double_it" in r.python_src
+        assert "mymod = _LTL_NS" in r.python_src
+
+    def test_import_namespace_access(self):
+        import contextlib, io
+        r = self._compile_dir({
+            "mymod.ltl": "pub fn double_it(x: int) -> int { return x * 2 }\n",
+            "main.ltl": "import mymod\nfn main() { println(str(mymod.double_it(5))) }\nmain()\n",
+        })
+        assert r.ok
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            exec(r.python_src, {})
+        assert "10" in buf.getvalue()
+
+    def test_from_import_aliases(self):
+        r = self._compile_dir({
+            "mymod.ltl": "pub fn double_it(x: int) -> int { return x * 2 }\n",
+            "main.ltl": "from mymod import double_it\nfn main() { println(str(double_it(4))) }\n",
+        })
+        assert r.ok
+        assert "double_it = mymod_double_it" in r.python_src
+
+    def test_python_import_still_works(self):
+        r = check("import json\nfn main() { println(str(1)) }\n")
+        assert r.ok
+        assert "import json as json" in r.python_src

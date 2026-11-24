@@ -156,11 +156,13 @@ _PY_BUILTINS = {"int", "float", "str", "bool", "len", "print", "input",
 
 class PythonTranspiler(ASTVisitor):
 
-    def __init__(self, use_match_stmt: bool = True):
+    def __init__(self, use_match_stmt: bool = True,
+                 skip_imports: Optional[set] = None):
         self._w    = _W()
         self._use_match = use_match_stmt
         self._lambda_counter = 0
         self._hoisted_lambdas: list[str] = []
+        self._skip_imports = skip_imports or set()
 
     def transpile(self, program: Program) -> str:
         # Pre-scan: collect impl blocks keyed by type name so they can be
@@ -857,6 +859,10 @@ class PythonTranspiler(ASTVisitor):
             self._w += ""
 
     def visit_ImportStmt(self, node: ImportStmt):
+        if node.path in self._skip_imports:
+            # Resolved and inlined by the compiler (Lateralus .ltl module)
+            self._w += f"# import {node.path}  (inlined .ltl module)"
+            return
         alias = node.alias or node.path.replace(".", "_")
         # Map known ltl stdlib paths to Python equivalents
         # stdlib.* paths are handled by the preamble shims — no import needed
@@ -2107,6 +2113,8 @@ class PythonTranspiler(ASTVisitor):
 # Convenience
 # ─────────────────────────────────────────────────────────────────────────────
 
-def transpile_to_python(program: Program, use_match_stmt: bool = True) -> str:
+def transpile_to_python(program: Program, use_match_stmt: bool = True,
+                        skip_imports: Optional[set] = None) -> str:
     """Transpile a parsed LTL Program AST to Python 3 source."""
-    return PythonTranspiler(use_match_stmt=use_match_stmt).transpile(program)
+    return PythonTranspiler(use_match_stmt=use_match_stmt,
+                            skip_imports=skip_imports).transpile(program)
