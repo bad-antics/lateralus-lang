@@ -5,6 +5,33 @@ Data structures and containers.
 """
 from __future__ import annotations
 
+
+class Stack:
+    """Small object API matching the documented collections.Stack type."""
+
+    def __init__(self):
+        self.items = []
+
+    def push(self, value):
+        self.items.append(value)
+        return self
+
+    def pop(self):
+        if not self.items:
+            raise RuntimeError("Stack underflow")
+        return self.items.pop()
+
+    def peek(self):
+        if not self.items:
+            raise RuntimeError("Stack is empty")
+        return self.items[-1]
+
+    def is_empty(self) -> bool:
+        return not self.items
+
+    def size(self) -> int:
+        return len(self.items)
+
 # --- Stack ------------------------------------------------------------
 
 def stack_new() -> dict:
@@ -138,6 +165,7 @@ def pq_is_empty(pq: dict) -> bool:
 
 
 __all__ = [
+    'Stack',
     'stack_new', 'stack_push', 'stack_pop', 'stack_peek', 'stack_is_empty',
     'queue_new', 'queue_enqueue', 'queue_dequeue', 'queue_peek', 'queue_is_empty',
     'set_new', 'set_add', 'set_has', 'set_remove', 'set_to_list',
