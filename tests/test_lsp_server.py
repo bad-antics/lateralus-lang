@@ -12,6 +12,7 @@ from lateralus_lang.lsp_server import (
     get_hover,
     get_references,
     get_signature_help,
+    load_stdlib_signatures,
 )
 
 
@@ -128,6 +129,39 @@ class TestHover:
         doc = TextDocument("file:///test.ltl", "lateralus", 1, "xyz123")
         hover = get_hover(doc, 0, 3)
         assert hover is None
+
+
+class TestStdlibHover:
+    """Hover for stdlib functions, parsed from stdlib/*.ltl at first use."""
+
+    def test_hover_shows_signature_and_docstring(self):
+        doc = TextDocument("file:///test.ltl", "lateralus", 1, "let out = encode(data)")
+        hover = get_hover(doc, 0, 10)  # inside "encode"
+        assert hover is not None
+        value = hover["contents"]["value"]
+        assert "fn encode(data: str) -> str" in value
+        assert "Encode a string to base64." in value
+
+    def test_hover_shows_signature_without_docstring(self):
+        doc = TextDocument("file:///test.ltl", "lateralus", 1, "let s = bubble_sort(items)")
+        hover = get_hover(doc, 0, 10)  # inside "bubble_sort"
+        assert hover is not None
+        assert "fn bubble_sort(arr: list) -> list" in hover["contents"]["value"]
+
+    def test_index_covers_the_shipped_stdlib(self):
+        index = load_stdlib_signatures()
+        assert len(index) > 1000
+        assert {"encode", "decode", "merge_sort", "radix_sort_u32"} <= set(index)
+        # Return types are captured, and docstrings are attached where present.
+        assert index["encode"]["signature"] == "fn encode(data: str) -> str"
+        assert index["encode"]["doc"]
+        assert index["encode"]["module"] == "base64"
+
+    def test_index_refresh_rebuilds(self):
+        first = load_stdlib_signatures()
+        again = load_stdlib_signatures()
+        assert again is first          # cached between hovers
+        assert load_stdlib_signatures(refresh=True) is not first
 
 
 class TestLSPServer:
