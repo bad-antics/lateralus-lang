@@ -468,6 +468,10 @@ class ProjectManifest:
     cfg_features: list[str] = field(default_factory=list)
     targets: dict[str, dict] = field(default_factory=dict)
 
+    # v3.2: where `publish` sends packages and `add` reads them from.
+    # {"path": "/srv/registry"} or {"url": "https://pkg.example.com"}
+    registry: dict = field(default_factory=dict)
+
     @classmethod
     def from_toml(cls, path: Path) -> "ProjectManifest":
         """Load manifest from lateralus.toml."""
@@ -553,6 +557,7 @@ class ProjectManifest:
             workspace=ws,
             cfg_features=cfg_features,
             targets=targets,
+            registry=data.get("registry", {}) or {},
         )
 
     @staticmethod
@@ -645,6 +650,15 @@ class ProjectManifest:
             lines.append("\n[cfg]")
             feats = ", ".join(f'"{f}"' for f in self.cfg_features)
             lines.append(f"features = [{feats}]")
+
+        # Registry (v3.2). The auth token is deliberately not serialised —
+        # it belongs in LATERALUS_REGISTRY_TOKEN, not in a file people commit.
+        if self.registry:
+            lines.append("\n[registry]")
+            for key in ("url", "path"):
+                value = self.registry.get(key)
+                if value:
+                    lines.append(f'{key} = "{value}"')
 
         # Scripts
         if self.scripts:
