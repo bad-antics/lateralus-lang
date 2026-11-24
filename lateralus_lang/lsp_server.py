@@ -578,29 +578,29 @@ def get_definition(doc: TextDocument, line: int, character: int) -> Optional[dic
 
     # Search for definitions in the current document
     # Priority: fn > struct > enum > trait > type > let > const
+    name = rf"({re.escape(word)})"
     patterns = [
-        (re.compile(rf"(?:pub\s+)?(?:async\s+)?fn\s+{re.escape(word)}\s*\("), word),
-        (re.compile(rf"(?:pub\s+)?struct\s+{re.escape(word)}\b"), word),
-        (re.compile(rf"(?:pub\s+)?enum\s+{re.escape(word)}\b"), word),
-        (re.compile(rf"(?:pub\s+)?trait\s+{re.escape(word)}\b"), word),
-        (re.compile(rf"(?:pub\s+)?type\s+{re.escape(word)}\b"), word),
-        (re.compile(rf"let\s+(?:mut\s+)?{re.escape(word)}\b"), word),
-        (re.compile(rf"const\s+{re.escape(word)}\b"), word),
+        re.compile(rf"(?:pub\s+)?(?:async\s+)?fn\s+{name}\s*\("),
+        re.compile(rf"(?:pub\s+)?struct\s+{name}\b"),
+        re.compile(rf"(?:pub\s+)?enum\s+{name}\b"),
+        re.compile(rf"(?:pub\s+)?trait\s+{name}\b"),
+        re.compile(rf"(?:pub\s+)?type\s+{name}\b"),
+        re.compile(rf"let\s+(?:mut\s+)?{name}\b"),
+        re.compile(rf"const\s+{name}\b"),
     ]
 
     for i, text in enumerate(doc.lines):
-        for pat, _name in patterns:
+        for pat in patterns:
             m = pat.search(text)
             if m:
-                col = m.start()
-                # Don't return self-reference
-                if i == line:
+                start, end = m.span(1)
+                if i == line and start <= character <= end:
                     continue
                 return {
                     "uri": doc.uri,
                     "range": {
-                        "start": {"line": i, "character": col},
-                        "end": {"line": i, "character": col + len(word)},
+                        "start": {"line": i, "character": start},
+                        "end": {"line": i, "character": end},
                     },
                 }
 
