@@ -639,12 +639,19 @@ print(f"\n  {_passed} passed  {_failed} failed")
         from .formatter import FormatConfig, format_file
         config = FormatConfig(indent_size=getattr(ns, "indent", 4))
         files = []
+        missing = []
         for f in ns.files:
             p_path = pathlib.Path(f)
             if p_path.is_file() and p_path.suffix == ".ltl":
                 files.append(p_path)
             elif p_path.is_dir():
                 files.extend(sorted(p_path.rglob("*.ltl")))
+            elif not p_path.exists():
+                missing.append(f)
+        if missing:
+            for m in missing:
+                print(f"error: file not found: {m}", file=sys.stderr)
+            return 1
         if not files:
             print("No .ltl files found.")
             return 0
