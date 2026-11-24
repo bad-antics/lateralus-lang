@@ -1,0 +1,62 @@
+// ===================================================================
+// examples/stomp_tutorial.ltl — STOMP 1.2 Protocol & Frame Codec Tutorial
+// -------------------------------------------------------------------
+// Demonstrates building, inspecting, and parsing STOMP 1.2 text frames
+// completely offline without requiring an active message broker.
+// Covers header escaping, ASCII frame delimitation, and message lifecycle.
+// ===================================================================
+
+println("=== Lateralus STOMP 1.2 Frame Tutorial ===")
+
+// 1. Header Escaping (RFC STOMP 1.2 §Header Exchange)
+// Values containing colons, newlines, carriage returns, or backslashes
+// must be safely escaped:
+// ':' -> '\c', '\n' -> '\n', '\r' -> '\r', '\' -> '\\'
+let raw_header = "user:alice\ncluster\\node-1"
+let escaped = escape_header(raw_header)
+let restored = unescape_header(escaped)
+println("[1] Header Escaping:")
+println("    Original: " + raw_header)
+println("    Escaped:  " + escaped)
+println("    Restored: " + restored)
+
+// 2. Build Canonical SEND Frame
+// Generates a fully formatted STOMP SEND frame with destination,
+// content-type, content-length, and NUL-byte terminator.
+let send_frame = send("/queue/jobs", "text/plain", "ping")
+println("\n[2] Encoded SEND Frame (len=" + str(len(send_frame)) + "):")
+println("----------------------------------------")
+println(send_frame)
+println("----------------------------------------")
+
+// 3. Inspect Frame Internals with parse_frame
+let parsed = parse_frame(send_frame)
+if parsed != nil {
+    println("\n[3] Parsed Frame Structure:")
+    println("    Command:  " + parsed["command"])
+    println("    Consumed: " + str(parsed["consumed"]) + " bytes")
+    println("    Body:     \"" + parsed["body"] + "\"")
+    let hdrs = parsed["headers"]
+    let i = 0
+    while i < len(hdrs) {
+        let h = hdrs[i]
+        println("    Header:   " + h[0] + " = " + h[1])
+        i = i + 1
+    }
+}
+
+// 4. Client Lifecycle Management
+println("\n[4] Generating Client Lifecycle Frames:")
+let conn = connect("mq.corp.internal", "worker-1", "s3cret", "10000,10000")
+println("    CONNECT frame produced: " + str(len(conn)) + " bytes")
+
+let sub = subscribe("sub-0", "/topic/telemetry", "client-individual")
+println("    SUBSCRIBE frame produced: " + str(len(sub)) + " bytes")
+
+let ack_msg = ack("msg-5501", "tx-prod-9")
+println("    ACK frame produced: " + str(len(ack_msg)) + " bytes")
+
+let disc = disconnect("receipt-close-99")
+println("    DISCONNECT frame produced: " + str(len(disc)) + " bytes")
+
+println("\nTutorial complete: STOMP 1.2 frames encoded and verified offline.")
