@@ -357,6 +357,9 @@ class Lexer:
         if ch == "/" and self._peek() == "/":
             self._skip_line_comment()
             return
+        if ch == "-" and self._peek() == "-":
+            self._skip_line_comment()
+            return
         if ch == "/" and self._peek() == "*":
             self._skip_block_comment(line, col)
             return
