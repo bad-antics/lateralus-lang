@@ -196,3 +196,46 @@ println(y)
         unused_fn = [i for i in result.issues if i.rule == "unused-function"
                      and "test_something" in i.message]
         assert len(unused_fn) == 0
+
+
+class TestCliFmt:
+    def test_fmt_check_missing_file_returns_error(self, capsys):
+        from lateralus_lang.__main__ import main
+        rc = main(["fmt", "--check", "nonexistent_file_definitely_not_here.ltl"])
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert "error: file not found" in captured.err
+
+    def test_fmt_check_valid_and_missing_file_returns_error(self, tmp_path, capsys):
+        from lateralus_lang.__main__ import main
+        valid = tmp_path / "valid.ltl"
+        valid.write_text("let x = 42\n", encoding="utf-8")
+        missing = tmp_path / "missing.ltl"
+        rc = main(["fmt", "--check", str(valid), str(missing)])
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert "error: file not found" in captured.err
+        assert "missing.ltl" in captured.err
+
+    def test_fmt_check_valid_file_returns_success(self, tmp_path, capsys):
+        from lateralus_lang.__main__ import main
+        valid = tmp_path / "valid.ltl"
+        valid.write_text("let x = 42\n", encoding="utf-8")
+        rc = main(["fmt", "--check", str(valid)])
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "All files are properly formatted." in captured.out
+
+    def test_fmt_check_unformatted_file_returns_one(self, tmp_path):
+        from lateralus_lang.__main__ import main
+        unfmt = tmp_path / "unfmt.ltl"
+        unfmt.write_text("let x = 42   \n", encoding="utf-8")
+        rc = main(["fmt", "--check", str(unfmt)])
+        assert rc == 1
+
+    def test_fmt_missing_file_without_check_returns_error(self, capsys):
+        from lateralus_lang.__main__ import main
+        rc = main(["fmt", "nonexistent_missing.ltl"])
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert "error: file not found" in captured.err
