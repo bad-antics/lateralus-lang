@@ -21,7 +21,9 @@ MODULES = {
     "lz4": [ROOT / "stdlib" / "lz4.ltl"],
     "aho_corasick": [ROOT / "stdlib" / "aho_corasick.ltl"],
     "radix_sort_u32": [ROOT / "stdlib" / "radix_sort.ltl"],
-    "chacha20": [ROOT / "std" / "crypto" / "chacha20.ltl"],
+    # std/crypto/chacha20.ltl is Rust pseudo-code that does not parse as
+    # Lateralus; stdlib/chacha20.ltl is the real implementation.
+    "chacha20": [ROOT / "stdlib" / "chacha20.ltl"],
 }
 
 

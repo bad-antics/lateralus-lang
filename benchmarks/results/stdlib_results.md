@@ -29,13 +29,39 @@ comparable.
 |---|---|---|---|
 | `xxhash64` 2 MB | **0.65 s** (incl. ~0.15 s startup) | 0.35 s | 0.22 s |
 | `lz4` round-trip | **256 KB in 59.15 s**; 4 MB does not finish — see scaling below | 2.21 s @ 4 MB | 0.29 s @ 4 MB |
-| `chacha20` 1 MB | not run — see blockers | 1.31 s | 0.06 s |
+| `chacha20` 1 MB | **1.81 s** | 1.31 s | 0.06 s |
 | `aho_corasick` 1 MB / 1k patterns | **521 s**, 751 matches (run outside the CLI's 60 s cap) | 0.34 s | 0.10 s |
 | `radix_sort_u32` 100k | **0.64 s** (incl. ~0.15 s startup) | 0.13 s | 0.04 s |
 
 Throughput for the one workload that does run end to end:
 **2 MiB / 0.65 s ≈ 3.2 MB/s** including input generation, which is in line with
 the ~5–10 MB/s noted in `stdlib/xxhash.ltl`'s own header.
+
+### chacha20: the module exists twice, and one copy is Rust
+
+`std/crypto/chacha20.ltl` (216 lines) is Rust pseudo-code and does not parse.
+`stdlib/chacha20.ltl` (100 lines) is real Lateralus and runs. The assembler now
+takes the stdlib copy:
+
+```python
+"chacha20": [ROOT / "stdlib" / "chacha20.ltl"],
+```
+
+1 MB of data from the shared XorShift32 stream (seed `0x0BADF00D`), RFC 8439 key
+`00..1f` and nonce `00..0b`, counter starting at 1:
+
+```
+Lateralus 32aa25005fe5f3a9:b1bffb37   1.81 s
+Python    32aa25005fe5f3a9:b1bffb37
+```
+
+Byte-identical, first eight ciphertext bytes and an adler32 over the whole
+megabyte.
+
+One caveat: the driver drives `block()` directly and XORs into a preallocated
+list rather than calling `xor()`, because `xor()` appends with
+`out = out + [...]` per byte and is quadratic at megabyte scale — the same
+pattern as `lz4` and `xxhash64`.
 
 ### aho_corasick: two blockers, both real
 
@@ -86,11 +112,11 @@ the fix, and the same pattern change took `xxhash64` from 28 s to 0.65 s at
 ## Correctness (all three languages agree where they run)
 
 ```
-xxhash 1673070f3eb5acc9
-lz4 ok:4194304:45d451f4:4210753
-chacha20 32aa25005fe5f3a9:b1bffb37
-aho_corasick 751
-radix_sort_u32 000017df:ffffe0a8:5301c95d
+xxhash       1673070f3eb5acc9                     (2 MB)         all three agree
+lz4          ok:262144:656b0b76:263173            (256 KB)       Python agrees
+chacha20     32aa25005fe5f3a9:b1bffb37            (1 MB)         Python agrees
+aho_corasick 751                                 (1 MB / 1k)    Python agrees
+radix_sort   000017df:ffffe0a8:5301c95d           (100k keys)    Python agrees
 ```
 
 Lateralus produces `1617644453214137545` for workload 1, which is
@@ -124,9 +150,11 @@ contributor would hit:
 
 1. **`std/crypto/chacha20.ltl` is not Lateralus source.** It is Rust pseudo-code
    (`const CONSTANTS: [u32; 4]`, `fn quarter_round(state: &mut [u32; 16], …)`)
-   and does not parse:
-   `ParseError: expected type name (got LBRACKET '[')` at line 4. Workload 3
-   needs a real LTL port before it can run here.
+   and does not parse: `ParseError: expected type name (got LBRACKET '[')`.
+   Resolved for this benchmark by assembling from `stdlib/chacha20.ltl`, which
+   *is* a real LTL implementation of the same primitive — but the two files
+   disagree about which one is canonical, and `std/crypto/` is the one a reader
+   will open first.
 2. **The C99 backend cannot compile `list`.** `lateralus c` on any module that
    takes a `list` parameter emits `static int64_t read_u64_le(list buf, …)`,
    and `gcc` then fails with `unknown type name 'list'`, so the
