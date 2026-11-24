@@ -583,23 +583,35 @@ def parse_lql(lql_string: str) -> LQLStatement:
     """
     s = lql_string.strip()
 
+    # Clause keywords (LIMIT, OFFSET, ORDER BY, GROUP BY, WHERE) that appear
+    # inside a single-quoted string literal in the WHERE value must NOT be
+    # treated as clauses (issue #849). To detect clauses only outside quoted
+    # strings, we build a "masked" copy of the query where the contents of
+    # single-quoted literals are replaced with spaces (the quote characters
+    # themselves are kept so string boundaries remain visible). Clause
+    # extraction runs against this masked copy; the matched spans are then
+    # applied to the original string so quoted values are preserved verbatim.
+    masked = re.sub(r"'[^']*'", lambda mm: "'" + " " * (len(mm.group(0)) - 2) + "'", s)
+
     # Extract LIMIT
     limit = None
-    m = re.search(r'\bLIMIT\s+(\d+)', s, re.IGNORECASE)
+    m = re.search(r'\bLIMIT\s+(\d+)', masked, re.IGNORECASE)
     if m:
         limit = int(m.group(1))
         s = s[:m.start()] + s[m.end():]
+        masked = masked[:m.start()] + masked[m.end():]
 
     # Extract OFFSET
     offset = 0
-    m = re.search(r'\bOFFSET\s+(\d+)', s, re.IGNORECASE)
+    m = re.search(r'\bOFFSET\s+(\d+)', masked, re.IGNORECASE)
     if m:
         offset = int(m.group(1))
         s = s[:m.start()] + s[m.end():]
+        masked = masked[:m.start()] + masked[m.end():]
 
     # Extract ORDER BY
     order_by: list[tuple[str, bool]] = []
-    m = re.search(r'\bORDER\s+BY\s+(.+?)(?=\bWHERE\b|\bGROUP\b|\bHAVING\b|$)', s, re.IGNORECASE)
+    m = re.search(r'\bORDER\s+BY\s+(.+?)(?=\bWHERE\b|\bGROUP\b|\bHAVING\b|$)', masked, re.IGNORECASE)
     if m:
         for part in m.group(1).split(","):
             part = part.strip()
@@ -607,27 +619,33 @@ def parse_lql(lql_string: str) -> LQLStatement:
             key = re.sub(r'\s+(ASC|DESC)$', '', part, flags=re.IGNORECASE).strip()
             order_by.append((key, desc))
         s = s[:m.start()] + s[m.end():]
+        masked = masked[:m.start()] + masked[m.end():]
 
     # Extract GROUP BY
     group_by: list[str] = []
-    m = re.search(r'\bGROUP\s+BY\s+(.+?)(?=\bWHERE\b|\bHAVING\b|$)', s, re.IGNORECASE)
+    m = re.search(r'\bGROUP\s+BY\s+(.+?)(?=\bWHERE\b|\bHAVING\b|$)', masked, re.IGNORECASE)
     if m:
         group_by = [k.strip() for k in m.group(1).split(",")]
         s = s[:m.start()] + s[m.end():]
+        masked = masked[:m.start()] + masked[m.end():]
 
     # Extract WHERE
     where_clause = None
-    m = re.search(r'\bWHERE\s+(.+?)(?=\bGROUP\b|\bORDER\b|\bHAVING\b|$)', s, re.IGNORECASE)
+    m = re.search(r'\bWHERE\s+(.+?)(?=\bGROUP\b|\bORDER\b|\bHAVING\b|$)', masked, re.IGNORECASE)
     if m:
-        where_clause = m.group(1).strip()
+        # Slice the where clause from the original string so quoted values
+        # (which were masked to spaces above) are preserved verbatim.
+        where_clause = s[m.start(1):m.end(1)].strip()
         s = s[:m.start()] + s[m.end():]
+        masked = masked[:m.start()] + masked[m.end():]
 
     # Extract FROM
     source_name = ""
-    m = re.search(r'\bFROM\s+(\w+)', s, re.IGNORECASE)
+    m = re.search(r'\bFROM\s+(\w+)', masked, re.IGNORECASE)
     if m:
         source_name = m.group(1)
         s = s[:m.start()] + s[m.end():]
+        masked = masked[:m.start()] + masked[m.end():]
 
     # Extract SELECT [DISTINCT] columns
     distinct = False

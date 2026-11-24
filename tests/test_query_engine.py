@@ -301,6 +301,35 @@ class TestLQLParser:
         result = lql("SELECT * FROM nonexistent", context)
         assert result == []
 
+    def test_lql_clause_keywords_inside_quoted_where(self):
+        # Issue #849: clause keywords (LIMIT, ORDER BY) that appear inside a
+        # single-quoted string literal in the WHERE value must NOT be treated
+        # as query clauses. Each query should return its matching row.
+        rows = [{"note": "Quota LIMIT 1"}, {"note": "Work ORDER BY date"}]
+        for row in rows:
+            query = "SELECT note FROM notes WHERE note = '" + row["note"] + "'"
+            result = lql(query, {"notes": rows})
+            assert len(result) == 1
+            assert result[0]["note"] == row["note"]
+
+    def test_lql_real_limit_clause_still_works(self):
+        # A genuine trailing LIMIT clause must still be honored even when the
+        # WHERE value itself contains a clause keyword.
+        rows = [{"note": "Quota LIMIT 1"}, {"note": "Work ORDER BY date"}]
+        result = lql(
+            "SELECT note FROM notes WHERE note = 'Quota LIMIT 1' LIMIT 1",
+            {"notes": rows},
+        )
+        assert len(result) == 1
+        assert result[0]["note"] == "Quota LIMIT 1"
+
+    def test_lql_real_order_by_clause_still_works(self):
+        # A genuine trailing ORDER BY clause must still be honored.
+        rows = [{"note": "Quota LIMIT 1"}, {"note": "Work ORDER BY date"}]
+        result = lql("SELECT note FROM notes ORDER BY note DESC", {"notes": rows})
+        notes = [r["note"] for r in result]
+        assert notes == sorted(notes, reverse=True)
+
 
 # ---------------------------------------------------------------------------
 # Aggregation functions
