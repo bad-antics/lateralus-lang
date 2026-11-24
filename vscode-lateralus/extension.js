@@ -1086,9 +1086,43 @@ function activate(context) {
         })
     );
 
+    // -- Run current file (bounty: vscode-extension-polish) --
+    const runStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 90);
+    runStatusBar.text = "$(play) LTL";
+    runStatusBar.tooltip = "Run current Lateralus file";
+    runStatusBar.command = "lateralus.runFile";
+    runStatusBar.show();
+    context.subscriptions.push(runStatusBar);
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand("lateralus.runFile", async () => {
+            const editor = vscode.window.activeTextEditor;
+            if (!editor) { vscode.window.showWarningMessage("Lateralus: no active editor"); return; }
+            const doc = editor.document;
+            if (!doc.fileName.endsWith(".ltl")) { vscode.window.showWarningMessage("Lateralus: not a .ltl file"); return; }
+            await doc.save();
+            const cfg = vscode.workspace.getConfiguration("lateralus");
+            const pythonCmd = cfg.get("pythonCommand") || "python3";
+            const cwd = (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0].uri.fsPath)
+                || require("path").dirname(doc.fileName);
+            outputChannel.appendLine("[lateralus] run " + doc.fileName);
+            runStatusBar.text = "$(sync~spin) LTL";
+            const cp = require("child_process").spawn(
+                pythonCmd, ["-m", "lateralus_lang", "run", doc.fileName], { cwd: cwd });
+            cp.stdout.on("data", (b) => outputChannel.append(String(b)));
+            cp.stderr.on("data", (b) => outputChannel.append(String(b)));
+            cp.on("close", (code) => {
+                runStatusBar.text = code === 0 ? "$(play) LTL" : "$(error) LTL";
+                outputChannel.appendLine("[lateralus] exited with code " + code);
+                outputChannel.show(true);
+                setTimeout(() => { runStatusBar.text = "$(play) LTL"; }, 2500);
+            });
+        })
+    );
+
     // Commands
     context.subscriptions.push(
-        vscode.commands.registerCommand("lateralus.restartServer", () => {
+vscode.commands.registerCommand("lateralus.restartServer", () => {
             outputChannel.appendLine("[lateralus] Restarting server...");
             stopServer();
             setTimeout(startServer, 500);
