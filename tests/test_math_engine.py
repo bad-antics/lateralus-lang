@@ -158,6 +158,52 @@ class TestVector:
         n = v.normalize()
         assert n.norm() == pytest.approx(1.0)
 
+    def test_dimension_mismatch_raises_value_error(self):
+        a = Vector([1, 2, 100])
+        b = Vector([10])
+        with pytest.raises(ValueError, match="dimension mismatch"):
+            _ = a + b
+        with pytest.raises(ValueError, match="dimension mismatch"):
+            _ = b + a
+        with pytest.raises(ValueError, match="dimension mismatch"):
+            _ = a - b
+        with pytest.raises(ValueError, match="dimension mismatch"):
+            _ = b - a
+        with pytest.raises(ValueError, match="dimension mismatch"):
+            _ = a.dot(b)
+        with pytest.raises(ValueError, match="dimension mismatch"):
+            _ = b.dot(a)
+
+    def test_empty_vector_dimension_mismatch(self):
+        a = Vector([1, 2, 100])
+        empty = Vector([])
+        with pytest.raises(ValueError, match="dimension mismatch"):
+            _ = a + empty
+        with pytest.raises(ValueError, match="dimension mismatch"):
+            _ = empty + a
+        with pytest.raises(ValueError, match="dimension mismatch"):
+            _ = a - empty
+        with pytest.raises(ValueError, match="dimension mismatch"):
+            _ = empty - a
+        with pytest.raises(ValueError, match="dimension mismatch"):
+            _ = a.dot(empty)
+        with pytest.raises(ValueError, match="dimension mismatch"):
+            _ = empty.dot(a)
+
+    def test_equal_dimensions_and_empty_vectors(self):
+        a = Vector([1, 2, 3])
+        b = Vector([4, 5, 6])
+        add_res = a + b
+        sub_res = a - b
+        assert add_res._data == [5, 7, 9]
+        assert sub_res._data == [-3, -3, -3]
+        assert a.dot(b) == 32
+
+        e1, e2 = Vector([]), Vector([])
+        assert (e1 + e2)._data == []
+        assert (e1 - e2)._data == []
+        assert e1.dot(e2) == 0
+
 
 # -------------------------------------------------------------------------
 # Interval arithmetic
