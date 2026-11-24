@@ -579,22 +579,22 @@ def get_definition(doc: TextDocument, line: int, character: int) -> Optional[dic
     # Search for definitions in the current document
     # Priority: fn > struct > enum > trait > type > let > const
     patterns = [
-        (re.compile(rf"(?:pub\s+)?(?:async\s+)?fn\s+{re.escape(word)}\s*\("), word),
-        (re.compile(rf"(?:pub\s+)?struct\s+{re.escape(word)}\b"), word),
-        (re.compile(rf"(?:pub\s+)?enum\s+{re.escape(word)}\b"), word),
-        (re.compile(rf"(?:pub\s+)?trait\s+{re.escape(word)}\b"), word),
-        (re.compile(rf"(?:pub\s+)?type\s+{re.escape(word)}\b"), word),
-        (re.compile(rf"let\s+(?:mut\s+)?{re.escape(word)}\b"), word),
-        (re.compile(rf"const\s+{re.escape(word)}\b"), word),
+        (re.compile(rf"(?:pub\s+)?(?:async\s+)?fn\s+({re.escape(word)})\s*\("), word),
+        (re.compile(rf"(?:pub\s+)?struct\s+({re.escape(word)})\b"), word),
+        (re.compile(rf"(?:pub\s+)?enum\s+({re.escape(word)})\b"), word),
+        (re.compile(rf"(?:pub\s+)?trait\s+({re.escape(word)})\b"), word),
+        (re.compile(rf"(?:pub\s+)?type\s+({re.escape(word)})\b"), word),
+        (re.compile(rf"let\s+(?:mut\s+)?({re.escape(word)})\b"), word),
+        (re.compile(rf"const\s+({re.escape(word)})\b"), word),
     ]
 
     for i, text in enumerate(doc.lines):
         for pat, _name in patterns:
             m = pat.search(text)
             if m:
-                col = m.start()
-                # Don't return self-reference
-                if i == line:
+                col = m.start(1)
+                # Don't return self-reference if the cursor is inside the found identifier
+                if i == line and col <= character < col + len(word):
                     continue
                 return {
                     "uri": doc.uri,
