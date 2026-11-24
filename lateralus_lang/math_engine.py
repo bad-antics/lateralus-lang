@@ -454,8 +454,9 @@ class Interval:
 
     def __post_init__(self):
         if self.lo > self.hi:
-            object.__setattr__(self, "lo", min(self.lo, self.hi))
-            object.__setattr__(self, "hi", max(self.lo, self.hi))
+            lo, hi = min(self.lo, self.hi), max(self.lo, self.hi)
+            object.__setattr__(self, "lo", lo)
+            object.__setattr__(self, "hi", hi)
 
     @staticmethod
     def exact(v: float) -> "Interval":

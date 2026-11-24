@@ -195,6 +195,14 @@ class TestInterval:
         assert a.hi == 10.5
         assert a.mid == pytest.approx(10.0)
 
+    def test_reversed_bounds(self):
+        a = Interval(1, -1)
+        assert a.lo == -1
+        assert a.hi == 1
+        assert a.contains(0)
+        with pytest.raises(ZeroDivisionError):
+            Interval.exact(1) / a
+
 
 # -------------------------------------------------------------------------
 # Automatic differentiation
