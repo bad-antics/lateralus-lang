@@ -35,6 +35,7 @@ ErrorBridge for integration with the Lateralus error_engine.
 """
 from __future__ import annotations
 
+import os
 import pathlib
 import time
 from dataclasses import dataclass, field
@@ -108,6 +109,14 @@ class CompileResult:
 # Compiler
 # -----------------------------------------------------------------------------
 
+DEFAULT_RUN_TIMEOUT: float = 60.0
+"""Default wall-clock limit for a transpiled script, in seconds.
+
+Overridable per run with ``lateralus run --timeout`` or globally with the
+``LATERALUS_RUN_TIMEOUT`` environment variable. ``0`` disables the cap.
+"""
+
+
 class Compiler:
     """
     Main compiler orchestrator.
@@ -119,9 +128,22 @@ class Compiler:
             result.bytecode.run()   # or: VM(result.bytecode).run()
     """
 
-    def __init__(self, verbose: bool = False, freestanding: bool = False):
+    def __init__(self, verbose: bool = False, freestanding: bool = False,
+                 run_timeout: float | None = DEFAULT_RUN_TIMEOUT):
         self.verbose = verbose
         self.freestanding = freestanding
+        # Seconds allowed for a transpiled script to run. None disables the cap.
+        # Precedence: explicit argument > LATERALUS_RUN_TIMEOUT > default.
+        if run_timeout == DEFAULT_RUN_TIMEOUT:
+            env_raw = os.environ.get("LATERALUS_RUN_TIMEOUT")
+            if env_raw is not None and env_raw.strip():
+                try:
+                    run_timeout = float(env_raw)
+                except ValueError:
+                    pass
+        if run_timeout is not None and run_timeout <= 0:
+            run_timeout = None
+        self.run_timeout = run_timeout
 
     # -- public API ------------------------------------------------------------
 
@@ -356,7 +378,7 @@ class Compiler:
         try:
             proc = _sp.run(
                 [_sys.executable, tmp_path],
-                timeout=60,
+                timeout=self.run_timeout,
             )
             result.exit_code = proc.returncode
             if proc.returncode != 0:
@@ -365,7 +387,10 @@ class Compiler:
             result.ok = False
             result.errors.append(ErrorContext(
                 severity=Severity.ERROR, code="TimeoutError",
-                message="Script execution timed out (60s)",
+                message=(f"Script execution timed out "
+                         f"({self.run_timeout:g}s); raise it with "
+                         f"`lateralus run --timeout SECONDS` "
+                         f"(0 disables the cap)"),
                 file=result.source_file,
             ))
         except Exception as exc:

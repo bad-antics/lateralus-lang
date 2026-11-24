@@ -3,7 +3,7 @@ lateralus_lang/__main__.py  -  Entry point for `python -m lateralus_lang`
 """
 import sys
 
-from .compiler import Compiler, Target
+from .compiler import DEFAULT_RUN_TIMEOUT, Compiler, Target
 from .markup import parse as _ltlm_parse
 from .markup import to_ansi as _ltlm_ansi
 from .markup import to_html as _ltlm_html
@@ -29,6 +29,9 @@ def main(argv=None) -> int:
     run_p.add_argument("args", nargs="*", help="Script arguments")
     run_p.add_argument("--ipc", action="store_true",
                        help="JSON IPC mode: read params from stdin, write result to stdout")
+    run_p.add_argument("--timeout", type=float, default=None, metavar="SECONDS",
+                       help="Wall-clock limit for the script (default: $LATERALUS_RUN_TIMEOUT "
+                            "or 60; 0 disables the cap)")
 
     # build
     build_p = sub.add_parser("build", help="Compile .ltl → .ltbc bytecode")
@@ -291,7 +294,10 @@ def main(argv=None) -> int:
                          help="Also remove dist/ and .egg-info/")
 
     ns = p.parse_args(argv)
-    c  = Compiler()
+    c  = Compiler(
+        run_timeout=(ns.timeout if getattr(ns, "timeout", None) is not None
+                     else DEFAULT_RUN_TIMEOUT),
+    )
 
     if ns.cmd == "run":
         # JSON IPC mode — read params from stdin, emit result JSON to stdout
