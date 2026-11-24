@@ -1,0 +1,98 @@
+
+// ── benchmark driver: 1,000 patterns scanned over 1 MB of ASCII text ──
+// stdlib/aho_corasick.ltl calls char_at(), which is not a builtin and is not
+// defined anywhere in stdlib — it is provided here so the module can run at
+// all. Reported in benchmarks/results/stdlib_results.md.
+let AC_TEXT_N  = 1048576
+let AC_PAT_N   = 1000
+
+fn char_at(s: str, i: int) -> str {
+    return s[i]
+}
+
+// Printable ASCII 32..126. char_of() maps a byte back to a one-char string;
+// the language has ord() but no inverse.
+fn char_of(code: int) -> str {
+    return chr(code)
+}
+
+fn xs_next(s: int) -> int {
+    let x = s & 0xFFFFFFFF
+    x = (x ^ ((x << 13) & 0xFFFFFFFF)) & 0xFFFFFFFF
+    x = (x ^ (x >> 17)) & 0xFFFFFFFF
+    x = (x ^ ((x << 5) & 0xFFFFFFFF)) & 0xFFFFFFFF
+    return x
+}
+
+// Divide-and-conquer join: stdlib join() concatenates in a loop, which is
+// quadratic on a 1 MB string.
+fn join_fast(items: list) -> str {
+    let n = len(items)
+    if n == 0 { return "" }
+    if n == 1 { return items[0] }
+    let mid = n / 2
+    let left = []
+    let right = []
+    let i = 0
+    while i < mid { left = left + [items[i]]; i = i + 1 }
+    while i < n { right = right + [items[i]]; i = i + 1 }
+    return join_fast(left) + join_fast(right)
+}
+
+fn substr(s: str, start: int, n: int) -> str {
+    let parts = [""] * n
+    let i = 0
+    while i < n { parts[i] = s[start + i]; i = i + 1 }
+    return join_fast(parts)
+}
+
+fn gen_text(n: int, seed: int) -> str {
+    let codes = [0] * n
+    let s = seed & 0xFFFFFFFF
+    let i = 0
+    while i < n {
+        s = xs_next(s)
+        codes[i] = 32 + (s % 95)
+        i = i + 1
+    }
+    let parts = [""] * n
+    i = 0
+    while i < n { parts[i] = char_of(codes[i]); i = i + 1 }
+    return join_fast(parts)
+}
+
+fn gen_patterns(count: int, seed: int, text: str) -> list {
+    let tl = len(text)
+    let pats = [""] * count
+    let s = seed & 0xFFFFFFFF
+    let i = 0
+    while i < count {
+        s = xs_next(s)
+        let ln = 4 + (s % 9)
+        if i % 4 != 0 && tl > 16 {
+            s = xs_next(s)
+            let start = s % (tl - ln)
+            pats[i] = substr(text, start, ln)
+        } else {
+            let chars = [""] * ln
+            let k = 0
+            while k < ln {
+                s = xs_next(s)
+                chars[k] = char_of(32 + (s % 95))
+                k = k + 1
+            }
+            pats[i] = join_fast(chars)
+        }
+        i = i + 1
+    }
+    return pats
+}
+
+fn main() -> int {
+    let text = gen_text(AC_TEXT_N, 0x5EED1234)
+    let pats = gen_patterns(AC_PAT_N, 0xC0FFEE11, text)
+    let auto = build(pats)
+    let hits = find_all(auto, text)
+    println("aho_corasick " + str(len(hits)))
+    return 0
+}

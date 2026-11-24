@@ -30,12 +30,38 @@ comparable.
 | `xxhash64` 2 MB | **0.65 s** (incl. ~0.15 s startup) | 0.35 s | 0.22 s |
 | `lz4` round-trip | **256 KB in 59.15 s**; 4 MB does not finish — see scaling below | 2.21 s @ 4 MB | 0.29 s @ 4 MB |
 | `chacha20` 1 MB | not run — see blockers | 1.31 s | 0.06 s |
-| `aho_corasick` 1 MB / 1k patterns | not run — see blockers | 0.34 s | 0.10 s |
+| `aho_corasick` 1 MB / 1k patterns | **521 s**, 751 matches (run outside the CLI's 60 s cap) | 0.34 s | 0.10 s |
 | `radix_sort_u32` 100k | **0.64 s** (incl. ~0.15 s startup) | 0.13 s | 0.04 s |
 
 Throughput for the one workload that does run end to end:
 **2 MiB / 0.65 s ≈ 3.2 MB/s** including input generation, which is in line with
 the ~5–10 MB/s noted in `stdlib/xxhash.ltl`'s own header.
+
+### aho_corasick: two blockers, both real
+
+1. **`stdlib/aho_corasick.ltl` cannot run as shipped.** It calls `char_at(text, i)`
+   in `build`, `find_all` and `find_all_starts`, but `char_at` is neither a
+   builtin nor defined anywhere in `stdlib/`. The driver defines it
+   (`fn char_at(s: str, i: int) -> str { return s[i] }`) so the workload can run
+   at all; the module itself needs that helper.
+2. **`lateralus run` kills anything over 60 s.** `compiler.py` runs the
+   transpiled script with `subprocess.run(..., timeout=60)` and no flag to raise
+   it, so a 1 MB scan cannot be measured through the CLI at all — it dies with
+   `Script execution timed out (60s)`. The numbers below come from transpiling
+   to Python and running the result directly, which is the only way to get a
+   number past the cap.
+
+Correctness at both sizes, against the Python reference with the same seeds:
+
+| Text | Lateralus | Python |
+|---|---|---|
+| 64 KB | 750 matches, 2.32 s | 750 matches |
+| 1 MB | **751 matches, 521 s** | 751 matches |
+
+The 1 MB number is 220× the 64 KB time for 16× the input, i.e. the automaton
+builder is quadratic: `ac_new_node()` appends with `gm = gm + [{}]` once per
+node, so a 1,000-pattern automaton pays that cost thousands of times. The scan
+itself is linear; the build is not.
 
 ### lz4: why the Lateralus column is 256 KB, not 4 MB
 
