@@ -859,7 +859,7 @@ class PythonTranspiler(ASTVisitor):
     def visit_ImportStmt(self, node: ImportStmt):
         alias = node.alias or node.path.replace(".", "_")
         # Map known ltl stdlib paths to Python equivalents
-        # stdlib.* paths are handled by the preamble shims — no import needed
+        # Only explicitly mapped stdlib paths have preamble shims.
         _alias_map = {
             "io":               "_io",
             "stdlib.io":        "_io",
@@ -896,10 +896,12 @@ class PythonTranspiler(ASTVisitor):
             else:
                 self._w += f"{alias} = {target}"
             return
-        # For from-imports of stdlib, emit a comment — symbols already in preamble
-        if any(node.path.startswith(p) for p in ("stdlib.",)):
-            self._w += f"# stdlib '{node.path}' resolved via preamble shims"
-            return
+        # Do not silently discard imports with no Python implementation. That
+        # produces successful compilation followed by unbound names at runtime.
+        if node.path.startswith("stdlib."):
+            raise ValueError(
+                f"Python backend does not support stdlib import '{node.path}'"
+            )
         py_path = node.path.replace(".", ".")
         self._w += f"import {py_path} as {alias}"
 
