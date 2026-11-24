@@ -1,0 +1,78 @@
+// ===================================================================
+// examples/merkle_tutorial.ltl
+//
+// Tutorial: Cryptographic Merkle Trees & Inclusion Proofs using
+// Lateralus `stdlib/merkle.ltl`.
+//
+// Demonstrates:
+// 1. Constructing a binary Merkle tree with RFC 6962 domain separation.
+// 2. Generating logarithmic O(log n) inclusion proofs (audit paths).
+// 3. Independent light-client verification against block header root.
+// 4. Detecting data tampering and forgery attempts.
+// 5. Cross-replica leaf diffing for distributed state reconciliation.
+// ===================================================================
+
+import merkle
+
+pub fn main() {
+    print("=== Lateralus Merkle Tree Tutorial ===")
+
+    // 1. Ledger transaction set
+    let transactions = [
+        "tx:alice->bob:50_USDC",
+        "tx:bob->charlie:25_USDC",
+        "tx:charlie->dave:10_USDC",
+        "tx:dave->eve:5_USDC",
+        "tx:eve->frank:2_USDC"
+    ]
+
+    print("Transaction batch size: " + str(len(transactions)))
+
+    // 2. Construct Merkle tree
+    let tree = merkle_build_default(transactions)
+    let root = tree["root"]
+    print("Merkle Root Hash: " + root)
+    print("Tree height (levels): " + str(len(tree["levels"])))
+
+    // 3. Generate inclusion proof for transaction #2 (charlie->dave)
+    let target_idx = 2
+    let target_tx = transactions[target_idx]
+    let audit_path = merkle_proof(tree, target_idx)
+
+    print("Generated audit path for '" + target_tx + "':")
+    print("Proof steps count: " + str(len(audit_path)))
+
+    // 4. Light-client verification
+    let is_valid = merkle_verify_default(root, target_tx, audit_path)
+    if is_valid {
+        print("[VERIFIED] Transaction is cryptographically proven in block root!")
+    } else {
+        print("[FAILED] Verification failed.")
+    }
+
+    // 5. Tamper resistance demonstration
+    let tampered_tx = "tx:charlie->dave:1000_USDC"
+    let is_tamper_accepted = merkle_verify_default(root, tampered_tx, audit_path)
+    if not is_tamper_accepted {
+        print("[REJECTED] Tampered transaction correctly rejected!")
+    }
+
+    // 6. Cross-replica state diffing
+    let replica_transactions = [
+        "tx:alice->bob:50_USDC",
+        "tx:bob->charlie:25_USDC",
+        "tx:charlie->dave:99_USDC", // modified
+        "tx:dave->eve:5_USDC",
+        "tx:eve->frank:2_USDC"
+    ]
+    let replica_tree = merkle_build_default(replica_transactions)
+    let divergent_indices = merkle_diff_leaves(tree, replica_tree)
+
+    print("Reconciling replicas...")
+    print("Divergent leaf indices count: " + str(len(divergent_indices)))
+    if len(divergent_indices) > 0 {
+        print("First divergent index: " + str(divergent_indices[0]))
+    }
+
+    print("=== Merkle Tutorial Completed Successfully ===")
+}
