@@ -1,0 +1,241 @@
+// ===================================================================
+// Lateralus stdlib — base64
+// RFC 4648 Base64 encoding and decoding
+// ===================================================================
+
+// -- Alphabet --------------------------------------------------------
+
+let CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+let PAD = "="
+
+// -- Encoding --------------------------------------------------------
+
+/// Encode a string to base64.
+pub fn encode(data: str) -> str {
+    let result = ""
+    let i = 0
+    let n = len(data)
+
+    while i < n {
+        let b0 = ord(data[i])
+        let b1 = 0
+        let b2 = 0
+        let padding = 0
+
+        if i + 1 < n {
+            b1 = ord(data[i + 1])
+        } else {
+            padding = padding + 1
+        }
+        if i + 2 < n {
+            b2 = ord(data[i + 2])
+        } else {
+            padding = padding + 1
+        }
+
+        // Split 3 bytes into 4 sextets
+        // Shifts rather than `/`: division yields a float in Lateralus and a
+        // float cannot index a string.
+        let c0 = b0 >> 2
+        let c1 = ((b0 & 3) << 4) | (b1 >> 4)
+        let c2 = ((b1 & 15) << 2) | (b2 >> 6)
+        let c3 = b2 % 64
+
+        result = result + CHARS[c0]
+        result = result + CHARS[c1]
+
+        if padding <= 1 {
+            result = result + CHARS[c2]
+        } else {
+            result = result + PAD
+        }
+
+        if padding == 0 {
+            result = result + CHARS[c3]
+        } else {
+            result = result + PAD
+        }
+
+        i = i + 3
+    }
+
+    return result
+}
+
+// -- Decoding --------------------------------------------------------
+
+/// Look up the index of a base64 character.
+fn char_index(c: str) -> int {
+    for i in range(0, 64) {
+        if CHARS[i] == c {
+            return i
+        }
+    }
+    return -1
+}
+
+/// Decode a base64 string.
+pub fn decode(encoded: str) -> str {
+    let result = ""
+    let i = 0
+    let n = len(encoded)
+
+    while i < n {
+        let c0 = char_index(encoded[i])
+        let c1 = char_index(encoded[i + 1])
+
+        let has_c2 = (i + 2 < n) and (encoded[i + 2] != PAD)
+        let has_c3 = (i + 3 < n) and (encoded[i + 3] != PAD)
+
+        let v2 = 0
+        let v3 = 0
+        if has_c2 {
+            v2 = char_index(encoded[i + 2])
+        }
+        if has_c3 {
+            v3 = char_index(encoded[i + 3])
+        }
+
+        // Reconstruct 3 bytes from 4 sextets
+        let byte0 = (c0 << 2) | (c1 >> 4)
+        result = result + chr(byte0)
+
+        if has_c2 {
+            let byte1 = ((c1 & 15) << 4) | (v2 >> 2)
+            result = result + chr(byte1)
+        }
+
+        if has_c3 {
+            let byte2 = ((v2 & 3) << 6) | v3
+            result = result + chr(byte2)
+        }
+
+        i = i + 4
+    }
+
+    return result
+}
+
+// -- URL-safe variants -----------------------------------------------
+
+/// Encode using URL-safe base64 (+ → -, / → _).
+pub fn encode_url(data: str) -> str {
+    let b = encode(data)
+    let result = ""
+    for i in range(0, len(b)) {
+        let c = b[i]
+        if c == "+" {
+            result = result + "-"
+        } else if c == "/" {
+            result = result + "_"
+        } else {
+            result = result + c
+        }
+    }
+    return result
+}
+
+/// Decode URL-safe base64 (- → +, _ → /).
+pub fn decode_url(encoded: str) -> str {
+    let b = ""
+    for i in range(0, len(encoded)) {
+        let c = encoded[i]
+        if c == "-" {
+            b = b + "+"
+        } else if c == "_" {
+            b = b + "/"
+        } else {
+            b = b + c
+        }
+    }
+    return decode(b)
+}
+
+// -- Utilities -------------------------------------------------------
+
+/// Check if a string is valid base64.
+pub fn is_valid(s: str) -> bool {
+    let n = len(s)
+    if n % 4 != 0 {
+        return false
+    }
+    for i in range(0, n) {
+        let c = s[i]
+        if char_index(c) < 0 and c != PAD {
+            return false
+        }
+    }
+    return true
+}
+
+/// Compute the encoded length for `n` input bytes.
+pub fn encoded_length(n: int) -> int {
+    return to_int(floor((n + 2) / 3)) * 4
+}
+
+/// Compute the decoded length from encoded string length.
+pub fn decoded_length(encoded: str) -> int {
+    let n = len(encoded)
+    let padding = 0
+    if n > 0 and encoded[n - 1] == PAD {
+        padding = padding + 1
+    }
+    if n > 1 and encoded[n - 2] == PAD {
+        padding = padding + 1
+    }
+    return (n >> 2) * 3 - padding
+}
+
+// ---------------------------------------------------------------------------
+// Runnable check: RFC 4648 section 10 test vectors, plus the URL-safe alphabet
+// and the length helpers. Run with:  lateralus run examples/base64_vectors.ltl
+// ---------------------------------------------------------------------------
+
+// Counters live in a list: rebinding a top-level `let` inside a function would
+// shadow it, so mutate the slot instead.
+let stats = [0, 0]
+
+fn check(name: str, cond: bool) {
+    if cond {
+        stats[0] = stats[0] + 1
+        print("  ok   " + name)
+    } else {
+        stats[1] = stats[1] + 1
+        print("  FAIL " + name)
+    }
+}
+
+fn main() {
+    print("=== RFC 4648 base64 vectors ===")
+
+    check("\"\"      -> \"\"",        encode("") == "")
+    check("\"f\"     -> \"Zg==\"",    encode("f") == "Zg==")
+    check("\"fo\"    -> \"Zm8=\"",    encode("fo") == "Zm8=")
+    check("\"foo\"   -> \"Zm9v\"",    encode("foo") == "Zm9v")
+    check("\"foob\"  -> \"Zm9vYg==\"", encode("foob") == "Zm9vYg==")
+    check("\"fooba\" -> \"Zm9vYmE=\"", encode("fooba") == "Zm9vYmE=")
+    check("\"foobar\"-> \"Zm9vYmFy\"", encode("foobar") == "Zm9vYmFy")
+
+    print("=== round-trip ===")
+    let samples = ["", "f", "fo", "foo", "foob", "fooba", "foobar", "hello, world", "a+b/c?"]
+    let i = 0
+    while i < len(samples) {
+        let s = samples[i]
+        check("round-trip " + s, decode(encode(s)) == s)
+        i = i + 1
+    }
+
+    print("=== URL-safe alphabet ===")
+    check("+/ become -_", encode_url("a+b/c?") == "YStiL2M_")
+    check("url round-trip", decode_url(encode_url("a+b/c?")) == "a+b/c?")
+
+    print("=== helpers ===")
+    check("is_valid(Zm9v)", is_valid("Zm9v"))
+    check("encoded_length(5) = 8", encoded_length(5) == 8)
+    check("decoded_length(\"Zm9vYmFy\") = 6", decoded_length("Zm9vYmFy") == 6)
+
+    print("")
+    print("pass=" + str(stats[0]) + " fail=" + str(stats[1]))
+}
+
+main()
