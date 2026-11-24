@@ -1,0 +1,210 @@
+// Advent of Code 2024 · Day 21 · Keypad Conundrum
+// A chain of robots types a code: one numeric pad, then directional pads.
+// Part 1: sum of complexities with 2 directional robots.
+// Part 2: the same with 25 directional robots, so the answer is counted per
+// key-pair instead of per string.
+// Part 1 answer 126384 is stated on https://adventofcode.com/2024/day/21;
+// the part 2 value below is what the same codes cost with 25 robots, counted
+// by an independent Python implementation of this table scheme.
+
+let SAMPLE = "029A
+980A
+179A
+456A
+379A"
+
+// Pads as row strings; the space marks the missing key.
+let NUM_ROWS = ["789", "456", "123", " 0A"]
+let DIR_ROWS = [" ^A", "<v>"]
+
+fn chars(s: str) -> list {
+    let out = []
+    let i = 0
+    while i < len(s) {
+        out = out + [slice(s, i, i + 1)]
+        i = i + 1
+    }
+    return out
+}
+
+fn lines_of(text: str) -> list {
+    let out = []
+    for line in str_split(text, "\n") {
+        let l = str_trim(line)
+        if len(l) > 0 { out = out + [l] }
+    }
+    return out
+}
+
+// Position lookup for one pad: key -> [row, col]. The space is skipped.
+fn pad_map(rows: list) -> list {
+    let m = map_new()
+    let r = 0
+    while r < len(rows) {
+        let c = 0
+        let line = rows[r]
+        while c < len(line) {
+            let ch = slice(line, c, c + 1)
+            if ch != " " { map_set(m, ch, [r, c]) }
+            c = c + 1
+        }
+        r = r + 1
+    }
+    return m
+}
+
+fn pos_of(pad: list, key: str) -> list {
+    return map_get(pad, key, [0, 0])
+}
+
+// All shortest key sequences that move the arm from one key to another
+// without crossing the pad's gap. At most two candidates exist per pair.
+fn routes(pad: list, rows: int, cols: int, gap: list, a: str, b: str) -> list {
+    if a == b { return [""] }
+    let src = pos_of(pad, a)
+    let dst = pos_of(pad, b)
+    let dr = dst[0] - src[0]
+    let dc = dst[1] - src[1]
+    let vs = ""
+    let hs = ""
+    let i = 0
+    while i < dr { vs = vs + "v"; i = i + 1 }
+    i = 0
+    while i < 0 - dr { vs = vs + "^"; i = i + 1 }
+    i = 0
+    while i < dc { hs = hs + ">"; i = i + 1 }
+    i = 0
+    while i < 0 - dc { hs = hs + "<"; i = i + 1 }
+    let out = []
+    for cand in [vs + hs, hs + vs] {
+        // walk the candidate and reject any step into the gap or off the pad
+        let r = src[0]
+        let c = src[1]
+        let ok = true
+        for m in chars(cand) {
+            if m == "^" { r = r - 1 }
+            if m == "v" { r = r + 1 }
+            if m == "<" { c = c - 1 }
+            if m == ">" { c = c + 1 }
+            if r < 0 || c < 0 || r >= rows || c >= cols { ok = false }
+            if r == gap[0] && c == gap[1] { ok = false }
+        }
+        if ok && !contains(out, cand) { out = out + [cand] }
+    }
+    if len(out) == 0 { out = [vs + hs] }
+    return out
+}
+
+// Cost of typing a whole sequence on one level, given the pair costs of the
+// level above it. Every press starts from "A".
+fn seq_cost(table: list, seq: str) -> int {
+    let total = 0
+    let cur = "A"
+    for ch in chars(seq) {
+        total = total + map_get(table, cur + ch, 0)
+        cur = ch
+    }
+    return total
+}
+
+// One level up: cost of each ordered key pair on a directional pad.
+fn lift(table: list, pad: list, rows: int, cols: int, gap: list) -> list {
+    let out = map_new()
+    let keys = ["^", "A", "<", "v", ">"]
+    for a in keys {
+        for b in keys {
+            let best = 1000000000000000000
+            for r in routes(pad, rows, cols, gap, a, b) {
+                let c = seq_cost(table, r + "A")
+                if c < best { best = c }
+            }
+            map_set(out, a + b, best)
+        }
+    }
+    return out
+}
+
+// Base level: a single directional pad in front of the number pad.
+fn base_table(pad: list, rows: int, cols: int, gap: list) -> list {
+    let out = map_new()
+    let keys = ["^", "A", "<", "v", ">"]
+    for a in keys {
+        for b in keys {
+            let best = 1000000000000000000
+            for r in routes(pad, rows, cols, gap, a, b) {
+                let c = len(r) + 1
+                if c < best { best = c }
+            }
+            map_set(out, a + b, best)
+        }
+    }
+    return out
+}
+
+fn chain_table(levels: int) -> list {
+    let dir_pad = pad_map(DIR_ROWS)
+    let table = base_table(dir_pad, 2, 3, [0, 0])
+    let i = 1
+    while i < levels { table = lift(table, dir_pad, 2, 3, [0, 0]); i = i + 1 }
+    return table
+}
+
+// Cost of one code: move on the number pad, then pay the chain table.
+fn code_cost(table: list, code: str) -> int {
+    let num_pad = pad_map(NUM_ROWS)
+    let total = 0
+    let cur = "A"
+    for ch in chars(code) {
+        let best = 1000000000000000000
+        for r in routes(num_pad, 4, 3, [3, 0], cur, ch) {
+            let c = seq_cost(table, r + "A")
+            if c < best { best = c }
+        }
+        total = total + best
+        cur = ch
+    }
+    return total
+}
+
+fn numeric_part(code: str) -> int {
+    let digits = ""
+    for ch in chars(code) {
+        if ch != "A" { digits = digits + ch }
+    }
+    return int(digits)
+}
+
+fn solve(text: str, levels: int) -> int {
+    let table = chain_table(levels)
+    let total = 0
+    for code in lines_of(text) {
+        total = total + code_cost(table, code) * numeric_part(code)
+    }
+    return total
+}
+
+fn part1(text: str) -> int {
+    return solve(text, 2)
+}
+
+fn part2(text: str) -> int {
+    return solve(text, 25)
+}
+
+@test
+fn test_part1() {
+    assert_eq(part1(SAMPLE), 126384)
+}
+
+@test
+fn test_part2() {
+    // 25 directional robots on the sample codes (computed, not stated on the page)
+    assert_eq(part2(SAMPLE), 154115708116294)
+}
+
+fn main() {
+    print("Day 21 Part 1 (sample): " + str(part1(SAMPLE)))
+    print("Day 21 Part 2 (sample): " + str(part2(SAMPLE)))
+}
+
+main()
