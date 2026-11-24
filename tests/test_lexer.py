@@ -115,6 +115,20 @@ class TestComments:
         ts = tokens("42 // this is a comment")
         assert len(ts) == 1
 
+    def test_dash_comment_skipped(self):
+        ts = tokens("42 -- this is a dash comment")
+        assert len(ts) == 1
+        assert ts[0].value == 42
+
+    def test_dash_comment_with_apostrophe(self):
+        ts = tokens("-- comment with apostrophe's here\n42")
+        assert len(ts) == 1
+        assert ts[0].value == 42
+
+    def test_dash_comment_entire_file(self):
+        ts = tokens("-- only a comment")
+        assert len(ts) == 0
+
     def test_hash_comment_skipped(self):
         ts = tokens("42 # hash comment")
         assert len(ts) == 1
