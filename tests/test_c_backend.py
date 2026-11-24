@@ -746,3 +746,92 @@ class TestTypeAlias:
         c_src = check_c("type Score = int")
         assert "typedef" in c_src
         assert "Score" in c_src
+
+
+class TestBoxedListAccess:
+    """Reading an element out of a boxed list.
+
+    `ltl_list_t` stores `ltl_value_t` items, so `xs[i]` cannot be used where a
+    scalar is expected — gcc rejects `ltl_value_t == int`. These pin the
+    unboxing that makes the common `flags[i] == 1` pattern compile, and that
+    assignments still target the slot rather than the unboxed copy.
+    """
+
+    def test_read_is_unboxed(self):
+        c_src = check_c("""
+fn main() -> int {
+    let n = 10
+    let flags = [1] * (n + 1)
+    let k = 0
+    while k <= n {
+        if flags[k] == 1 { println("hit") }
+        k = k + 1
+    }
+    return 0
+}
+""")
+        assert "ltl_unbox_int(flags->items[k])" in c_src
+
+    def test_float_list_uses_float_unbox(self):
+        c_src = check_c("""
+fn main() -> int {
+    let n = 4
+    let xs = [0.5] * n
+    let k = 0
+    let total = 0.0
+    while k < n {
+        total = total + xs[k]
+        k = k + 1
+    }
+    println(str(total))
+    return 0
+}
+""")
+        assert "ltl_unbox_float(xs->items[k])" in c_src
+
+    def test_assignment_target_is_not_unboxed(self):
+        c_src = check_c("""
+fn main() -> int {
+    let n = 4
+    let flags = [0] * n
+    flags[1] = 7
+    println(str(flags[1]))
+    return 0
+}
+""")
+        assert "ltl_unbox_int(flags->items[1]) = " not in c_src
+        assert "ltl_box_int(7)" in c_src
+
+    def test_list_parameter_prototype(self):
+        c_src = check_c("""
+fn first(xs: list) -> int {
+    return xs[0]
+}
+fn main() -> int {
+    let xs = [5] * 2
+    println(str(first(xs)))
+    return 0
+}
+""")
+        assert "ltl_list_t* xs" in c_src
+        assert "sum_list(list xs)" not in c_src
+
+    def test_len_builtin(self):
+        c_src = check_c("""
+fn main() -> int {
+    let xs = [1] * 3
+    println(str(len(xs)))
+    return 0
+}
+""")
+        assert "->len" in c_src
+
+    def test_str_in_println_uses_string_helper(self):
+        c_src = check_c("""
+fn main() -> int {
+    let n = 41
+    println(str(n + 1))
+    return 0
+}
+""")
+        assert "ltl_io_println(" in c_src
