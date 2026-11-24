@@ -364,6 +364,18 @@ class Lexer:
             self._skip_line_comment()
             return
 
+        # Line comment: `--` (two hyphens) outside a string/char literal.
+        # Like `//` and `#`, a `--` ALWAYS begins a line comment that runs to
+        # end-of-line (issue #880). This branch is checked before the operator
+        # and char-literal branches so an apostrophe inside a comment (e.g.
+        # "-- don't", "Python's" in stdlib/json.ltl) is consumed here and never
+        # seen by the char-literal scanner (which would raise "Unterminated char
+        # literal"). Subtraction and unary minus use a single '-' (e.g. `5 - 3`,
+        # `a - -b`, `-x`) and are unaffected; only an adjacent `--` is a comment.
+        if ch == "-" and self._peek() == "-":
+            self._skip_line_comment()
+            return
+
         # Raw string r"…"
         if ch == "r" and self._peek() == '"':
             self._advance()  # skip 'r'
