@@ -1,0 +1,180 @@
+// tests/stdlib_kafka_wire_tutorial.ltl
+// Pinned test vectors and binary invariants for stdlib/kafka_wire.ltl
+
+import kafka_wire
+
+fn bytes_match(a: list, b: list) -> bool {
+    if len(a) != len(b) {
+        return false
+    }
+    let i = 0
+    while i < len(a) {
+        if a[i] != b[i] {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+pub fn test_fixed_width_integers() -> bool {
+    // INT8
+    let b8 = kafka_wire_enc_i8(127)
+    let d8 = kafka_wire_dec_i8(b8, 0)
+    if d8[0] != 127 || d8[1] != 1 {
+        return false
+    }
+
+    // INT16 Big-Endian
+    let b16 = kafka_wire_enc_i16(0x0102)
+    if not bytes_match(b16, [1, 2]) {
+        return false
+    }
+    let d16 = kafka_wire_dec_i16(b16, 0)
+    if d16[0] != 0x0102 || d16[1] != 2 {
+        return false
+    }
+
+    // INT32 Big-Endian
+    let b32 = kafka_wire_enc_i32(0x01020304)
+    if not bytes_match(b32, [1, 2, 3, 4]) {
+        return false
+    }
+    let d32 = kafka_wire_dec_i32(b32, 0)
+    if d32[0] != 0x01020304 || d32[1] != 4 {
+        return false
+    }
+
+    // INT64 Big-Endian
+    let b64 = kafka_wire_enc_i64(0x0102030405060708)
+    if len(b64) != 8 || b64[0] != 1 || b64[7] != 8 {
+        return false
+    }
+    let d64 = kafka_wire_dec_i64(b64, 0)
+    if d64[0] != 0x0102030405060708 || d64[1] != 8 {
+        return false
+    }
+    return true
+}
+
+pub fn test_zigzag_varint_properties() -> bool {
+    // Canonical ZigZag arithmetic mapping:
+    //  0 -> 0, -1 -> 1, 1 -> 2, -2 -> 3, 2 -> 4
+    if kafka_wire_zz_encode(0) != 0 || kafka_wire_zz_decode(0) != 0 {
+        return false
+    }
+    if kafka_wire_zz_encode(-1) != 1 || kafka_wire_zz_decode(1) != -1 {
+        return false
+    }
+    if kafka_wire_zz_encode(1) != 2 || kafka_wire_zz_decode(2) != 1 {
+        return false
+    }
+    if kafka_wire_zz_encode(-2) != 3 || kafka_wire_zz_decode(3) != -2 {
+        return false
+    }
+
+    // End-to-end varint round trip across negative and positive integers
+    let test_nums = [0, -1, 1, -127, 127, -123456, 123456]
+    let k = 0
+    while k < len(test_nums) {
+        let n = test_nums[k]
+        let enc = kafka_wire_enc_varint(n)
+        let dec = kafka_wire_dec_varint(enc, 0)
+        if dec[0] != n || dec[1] != len(enc) {
+            return false
+        }
+        k = k + 1
+    }
+    return true
+}
+
+pub fn test_string_codecs() -> bool {
+    // Classic STRING (int16 length prefixed)
+    let s = "telemetry-topic"
+    let enc_s = kafka_wire_enc_string(s)
+    let dec_s = kafka_wire_dec_string(enc_s, 0)
+    if dec_s[0] != s || dec_s[1] != len(enc_s) {
+        return false
+    }
+
+    // Nullable string null representation: [-1] encoded as [0xff, 0xff]
+    let null_s = kafka_wire_enc_nullable_string(nil)
+    if not bytes_match(null_s, [255, 255]) {
+        return false
+    }
+    let dec_null = kafka_wire_dec_string(null_s, 0)
+    if dec_null[0] != nil || dec_null[1] != 2 {
+        return false
+    }
+
+    // COMPACT_STRING: unsigned varint of len + 1
+    let cs = "production-cluster"
+    let enc_cs = kafka_wire_enc_compact_string(cs)
+    let dec_cs = kafka_wire_dec_compact_string(enc_cs, 0)
+    if dec_cs[0] != cs || dec_cs[1] != len(enc_cs) {
+        return false
+    }
+
+    // COMPACT_STRING null: encoded as 0
+    let null_cs = kafka_wire_enc_compact_string(nil)
+    if not bytes_match(null_cs, [0]) {
+        return false
+    }
+    let dec_null_cs = kafka_wire_dec_compact_string(null_cs, 0)
+    if dec_null_cs[0] != nil || dec_null_cs[1] != 1 {
+        return false
+    }
+    return true
+}
+
+pub fn test_header_framing() -> bool {
+    // Header v1
+    let api_k = kafka_wire_api_produce()
+    let api_v = 9
+    let corr_id = 42001
+    let client = "producer-app"
+    let h1 = kafka_wire_request_header_v1(api_k, api_v, corr_id, client)
+    if len(h1) <= 8 {
+        return false
+    }
+
+    // Header v2 extends Header v1 with tagged_fields count byte (0x00)
+    let h2 = kafka_wire_request_header_v2(api_k, api_v, corr_id, client)
+    if len(h2) != len(h1) + 1 {
+        return false
+    }
+    if h2[len(h2) - 1] != 0 {
+        return false
+    }
+
+    // Framing: 4-byte big-endian size prepended
+    let frame = kafka_wire_frame_request(h2)
+    if len(frame) != len(h2) + 4 {
+        return false
+    }
+    let parsed_len = kafka_wire_dec_i32(frame, 0)
+    if parsed_len[0] != len(h2) {
+        return false
+    }
+
+    return true
+}
+
+pub fn test_parse_response_frame() -> bool {
+    let corr_id = 998877
+    let payload = [10, 20, 30, 40]
+    let resp_body = kafka_wire_enc_i32(corr_id) + payload
+    let resp_frame = kafka_wire_frame_request(resp_body)
+
+    let parsed = kafka_wire_parse_response_frame(resp_frame, 0)
+    if parsed[0] != corr_id {
+        return false
+    }
+    if not bytes_match(parsed[1], payload) {
+        return false
+    }
+    if parsed[2] != len(resp_frame) {
+        return false
+    }
+    return true
+}
