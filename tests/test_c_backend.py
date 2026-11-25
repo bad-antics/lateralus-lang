@@ -746,3 +746,16 @@ class TestTypeAlias:
         c_src = check_c("type Score = int")
         assert "typedef" in c_src
         assert "Score" in c_src
+
+
+class TestBoolCoercion:
+    """Issue #330 item 3: && / || / ! conditions must not be wrapped in
+    ltl_unbox_bool (they already yield C int/bool)."""
+
+    def test_and_of_comparisons(self):
+        c_src = check_c("fn main() { let x = 1\n let y = 2\n if x == 1 && y == 2 { io.println(\"ok\") } }")
+        assert "ltl_unbox_bool(((x == 1)" not in c_src
+
+    def test_not_condition(self):
+        c_src = check_c("fn main() { let flag = true\n if !flag { io.println(\"x\") } }")
+        assert "ltl_unbox_bool((!flag))" not in c_src
