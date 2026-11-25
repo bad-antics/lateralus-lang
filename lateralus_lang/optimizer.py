@@ -327,13 +327,21 @@ def apply_algebraic_simplification(
     if op == "-" and same_operand:
         return ("const", 0)
 
-    # x / x  →  1  (when x != 0)
+    # x / x  →  1  (when x != 0 is provable; avoid folding unknown variables or 0 / 0)
     if op == "/" and same_operand:
-        return ("const", 1)
+        if isinstance(left, (int, float)) and left != 0:
+            return ("const", 1)
+        if isinstance(left, tuple) and len(left) == 2 and left[0] == "const" and isinstance(left[1], (int, float)) and left[1] != 0:
+            return ("const", 1)
+        return None
 
-    # x % x  →  0  (when x != 0)
+    # x % x  →  0  (when x != 0 is provable; avoid folding unknown variables or 0 % 0)
     if op == "%" and same_operand:
-        return ("const", 0)
+        if isinstance(left, (int, float)) and left != 0:
+            return ("const", 0)
+        if isinstance(left, tuple) and len(left) == 2 and left[0] == "const" and isinstance(left[1], (int, float)) and left[1] != 0:
+            return ("const", 0)
+        return None
 
     # x ^ x  →  0
     if op in ("^", "xor") and same_operand:

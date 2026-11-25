@@ -341,13 +341,43 @@ class TestAlgebraicSimplification:
         r = apply_algebraic_simplification("-", "x", "x", same_operand=True)
         assert r == ("const", 0)
 
-    def test_x_div_x(self):
+    def test_x_div_x_unguarded_variable_not_folded(self):
+        # Guard x == 0: x / x on an unverified variable must NOT fold to 1 (fixes #982)
         r = apply_algebraic_simplification("/", "x", "x", same_operand=True)
-        assert r == ("const", 1)
+        assert r is None
 
-    def test_x_mod_x(self):
+    def test_x_div_x_nonzero_constant_folded(self):
+        # Provably non-zero constants can safely fold to 1
+        r1 = apply_algebraic_simplification("/", 5, 5, same_operand=True)
+        assert r1 == ("const", 1)
+        r2 = apply_algebraic_simplification("/", ("const", 10.0), ("const", 10.0), same_operand=True)
+        assert r2 == ("const", 1)
+
+    def test_x_div_x_zero_constant_not_folded(self):
+        # Zero division must NOT fold to 1
+        r1 = apply_algebraic_simplification("/", 0, 0, same_operand=True)
+        assert r1 is None
+        r2 = apply_algebraic_simplification("/", ("const", 0), ("const", 0), same_operand=True)
+        assert r2 is None
+
+    def test_x_mod_x_unguarded_variable_not_folded(self):
+        # Guard x == 0: x % x on an unverified variable must NOT fold to 0 (fixes #982)
         r = apply_algebraic_simplification("%", "x", "x", same_operand=True)
-        assert r == ("const", 0)
+        assert r is None
+
+    def test_x_mod_x_nonzero_constant_folded(self):
+        # Provably non-zero constants can safely fold to 0
+        r1 = apply_algebraic_simplification("%", 5, 5, same_operand=True)
+        assert r1 == ("const", 0)
+        r2 = apply_algebraic_simplification("%", ("const", 7.0), ("const", 7.0), same_operand=True)
+        assert r2 == ("const", 0)
+
+    def test_x_mod_x_zero_constant_not_folded(self):
+        # Modulo by zero must NOT fold to 0
+        r1 = apply_algebraic_simplification("%", 0, 0, same_operand=True)
+        assert r1 is None
+        r2 = apply_algebraic_simplification("%", ("const", 0), ("const", 0), same_operand=True)
+        assert r2 is None
 
     def test_x_xor_x(self):
         r = apply_algebraic_simplification("^", "x", "x", same_operand=True)
