@@ -1,0 +1,101 @@
+# stdlib/ringbuf: Efficient Circular Buffers in Lateralus
+
+The `stdlib/ringbuf` module provides a fixed-size circular buffer. This data structure is essential for handling continuous data streams where only the most recent observations are relevant—such as telemetry, rolling averages, or recent logs.
+
+## Practical Example: Telemetry Retention
+
+In this example, we maintain a window of the last three temperature readings. This is a common pattern in IoT and monitoring systems where you want to calculate trends without storing an unbounded history.
+
+```lateralus
+import stdlib/ringbuf as rb
+
+fn main() {
+    // Initialize with capacity 3
+    let readings = rb.new(3)
+    
+    // Simulate incoming telemetry
+    let data = [21.0, 22.5, 23.0, 24.5]
+    
+    for val in data {
+        // IMPORTANT: Ringbuf is functional; we must reassign the result
+        readings = rb.push(readings, val)
+        println("Added Reading:")
+        println(val)
+        println("Current Window:")
+        println(rb.to_list(readings))
+    }
+}
+```
+
+When the 4th value (`24.5`) is pushed, the oldest value (`21.0`) is automatically dropped, leaving `[22.5, 23.0, 24.5]` in the buffer.
+
+## Key Mechanics
+
+### 1. Functional Reassignment
+Unlike buffers in imperative languages that mutate in-place, `stdlib/ringbuf` operations return a new buffer state. 
+
+```lateralus
+readings = rb.push(readings, item)
+```
+
+If you forget to reassign, the `readings` variable will still point to the old state. This design ensures that the buffer remains predictable and avoids side effects in concurrent contexts.
+
+### 2. Overwrite Behavior
+When `count(buf) == capacity(buf)`, the buffer is full. The next `push` operation:
+- Increments the `tail` (wrapping around to 0 if necessary).
+- Increments the `head` (the oldest element is now "lost").
+- Keeps the `count` equal to `capacity`.
+
+### 3. Limitations
+- **Performance**: The current implementation of `push` and `pop` is **O(N)**. It reconstructs the internal list on every modification. This is suitable for small windows (like telemetry) but may be slow for buffers with thousands of elements.
+- **Memory**: The buffer pre-allocates its full capacity using `nil` placeholders upon creation.
+
+## Pinned Test Vectors
+
+To verify the implementation, we can use these test vectors which cover empty states, full states, and wrap-around logic.
+
+```lateralus
+@test
+fn test_ringbuf_logic() {
+    let b = rb.new(2)
+    
+    // Vector: Empty
+    if !rb.is_empty(b) { return 1 }
+    
+    // Vector: Wrap-around
+    b = rb.push(b, "first")
+    b = rb.push(b, "second")
+    b = rb.push(b, "third") // "first" is overwritten
+    
+    if rb.peek_front(b) != "second" { return 1 }
+    if rb.count(b) != 2 { return 1 }
+    
+    // Vector: Pop
+    let res = rb.pop(b)
+    if res[0] != "second" { return 1 }
+    if rb.count(res[1]) != 1 { return 1 }
+    
+    return 0
+}
+```
+
+## Running the Example
+
+You can run the tutorial example using the Python backend. Save the code to `telemetry.ltl` and use the following runner script to execute it against the upstream compiler:
+
+```python
+import sys
+from lateralus_lang.compiler import Compiler, Target
+
+def run_example(path):
+    with open(path, "r") as f:
+        source = f.read()
+    compiler = Compiler()
+    result = compiler.compile_and_run(source, Target.PYTHON)
+    print(result.stdout)
+    if result.returncode != 0:
+        print(result.stderr, file=sys.stderr)
+
+if __name__ == "__main__":
+    run_example("telemetry.ltl")
+```
