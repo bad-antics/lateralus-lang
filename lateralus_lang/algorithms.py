@@ -140,9 +140,12 @@ def count_occurrences(text: str, pattern: str) -> int:
 def caesar_cipher(text: str, shift: int) -> str:
     result = []
     for ch in text:
-        if ch.isalpha():
-            base = ord('A') if ch.isupper() else ord('a')
+        if 'a' <= ch <= 'z':
+            base = ord('a')
             result.append(chr((ord(ch) - base + shift) % 26 + base))
+    elif 'A' <= ch <= 'Z':
+                base = ord('A')
+                result.append(chr((ord(ch) - base + shift) % 26 + base))
         else:
             result.append(ch)
     return ''.join(result)
