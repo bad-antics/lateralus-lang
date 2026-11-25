@@ -1,0 +1,650 @@
+// ============================================================================
+// lt_logs.ltl — single-file log shipper / rollup CLI  ([bounty] lt-logs-shipper)
+// ----------------------------------------------------------------------------
+// Reads log lines from stdin, auto-detects logfmt / JSON / syslog RFC 5424,
+// filters with a small DSL, batches matches into 1-minute rollups, and emits
+// compressed JSON-lines (gzip).  With --key it encrypts the payload with
+// ChaCha20-Poly1305 (nonce prepended, tag appended) and writes binary to
+// stdout.
+//
+// Usage:
+//   lt_logs [--where EXPR]... [--format jsonl] [--key HEXKEY] [--plain]
+//
+//   --where EXPR   filter clause (repeatable, ANDed):
+//                    field=value     field equals value
+//                    field!=value    field does not equal value
+//                    field~regex     field matches regex (Python re)
+//                    ~regex          raw line matches regex
+//                    @p1|p2|p3       raw line matches any pattern
+//                                  (Aho-Corasick multi-pattern search)
+//   --format FMT   output format: jsonl (default).  Emits compressed
+//                  JSON-lines; gzip is the wire compression.
+//   --plain        emit uncompressed JSON-lines (debugging)
+//   --key HEX      32-byte hex (or any string, hashed to 32B) ChaCha20-Poly1305
+//                  key; output becomes nonce||ciphertext||tag binary.
+//
+// Since `ltlc run` does not forward script args, flags may also be supplied
+// via environment: LT_LOGS_WHERE (;; -separated clauses), LT_LOGS_KEY,
+// LT_LOGS_PLAIN=1.  sys.argv is honoured when the transpiled program is run
+// directly (python lt_logs.py --key ...).
+// ============================================================================
+
+import sys
+import re
+import json
+import zlib
+import os
+import time
+import cryptography.hazmat.primitives.ciphers.aead as aead
+
+// ---------------------------------------------------------------------------
+// Small helpers
+// ---------------------------------------------------------------------------
+
+fn field_get(rec: map, name: str) -> str {
+    // record-level pseudo-fields first, then parsed fields
+    if name == "level" || name == "service" || name == "minute" ||
+       name == "format" || name == "msg" || name == "raw" {
+        if map_has(rec, name) { return str(rec[name]) }
+    }
+    if map_has(rec["fields"], name) {
+        return str(rec["fields"][name])
+    }
+    return ""
+}
+
+fn bump(hist: map, key: str) {
+    if !map_has(hist, key) { hist[key] = 0 }
+    hist[key] = hist[key] + 1
+}
+
+// ---------------------------------------------------------------------------
+// Parsers — each returns a record map:
+//   {raw, format, minute, level, service, fields{...}, msg}
+// ---------------------------------------------------------------------------
+
+fn minute_from_ts(ts: str) -> str {
+    // ISO-8601-ish: "2026-11-23T01:23:45Z" or "2026-11-23 01:23:45"
+    if len(ts) >= 16 && (str_contains(ts, "T") || str_contains(ts, "-")) {
+        let t = str_replace(ts, " ", "T")
+        return slice(t, 0, 16)
+    }
+    // epoch seconds / millis
+    let f = 0.0
+    let ok = true
+    let i = 0
+    while i < len(ts) && ok {
+        let c = slice(ts, i, i + 1)
+        if !(c >= "0" && c <= "9") && c != "." { ok = false }
+        i = i + 1
+    }
+    if ok && len(ts) > 0 {
+        f = ts as float
+        if f > 1e12 { f = f / 1000.0 }
+        return time.strftime("%Y-%m-%dT%H:%M", time.gmtime(f))
+    }
+    return ""
+}
+
+fn now_minute() -> str {
+    return time.strftime("%Y-%m-%dT%H:%M", time.gmtime(time.time()))
+}
+
+fn level_norm(l: str) -> str {
+    let s = str_lower(str_trim(l))
+    if s == "" { return "unknown" }
+    if str_starts_with(s, "emerg") || s == "panic" { return "emerg" }
+    if str_starts_with(s, "alert") { return "alert" }
+    if str_starts_with(s, "crit") { return "crit" }
+    if str_starts_with(s, "err") { return "error" }
+    if str_starts_with(s, "warn") { return "warn" }
+    if str_starts_with(s, "notice") { return "notice" }
+    if str_starts_with(s, "info") { return "info" }
+    if str_starts_with(s, "debug") { return "debug" }
+    if str_starts_with(s, "trace") { return "trace" }
+    return s
+}
+
+fn syslog_level(pri: int) -> str {
+    let sev = pri % 8
+    if sev <= 1 { return "emerg" }
+    if sev == 2 { return "crit" }
+    if sev == 3 { return "error" }
+    if sev == 4 { return "warning" }
+    if sev == 5 { return "notice" }
+    if sev == 6 { return "info" }
+    return "debug"
+}
+
+fn parse_logfmt(line: str) -> map {
+    // key=value pairs; values may be "double quoted" with \" \\ escapes
+    let fields = {}
+    let n = len(line)
+    let i = 0
+    while i < n {
+        while i < n && slice(line, i, i + 1) == " " { i = i + 1 }
+        if i >= n { break }
+        let ks = i
+        while i < n && slice(line, i, i + 1) != "=" && slice(line, i, i + 1) != " " {
+            i = i + 1
+        }
+        let k = slice(line, ks, i)
+        let v = ""
+        if i < n && slice(line, i, i + 1) == "=" {
+            i = i + 1
+            if i < n && slice(line, i, i + 1) == "\"" {
+                i = i + 1
+                let vb = ""
+                let scanning = true
+                while scanning && i < n {
+                    let c = slice(line, i, i + 1)
+                    if c == "\\" && i + 1 < n {
+                        vb = vb + slice(line, i + 1, i + 2)
+                        i = i + 2
+                    } else if c == "\"" {
+                        scanning = false
+                        i = i + 1
+                    } else {
+                        vb = vb + c
+                        i = i + 1
+                    }
+                }
+                v = vb
+            } else {
+                let vs = i
+                while i < n && slice(line, i, i + 1) != " " { i = i + 1 }
+                v = slice(line, vs, i)
+            }
+        }
+        if len(k) > 0 { fields[k] = v }
+    }
+    return fields
+}
+
+fn first_field(fields: map, names: list) -> str {
+    let i = 0
+    while i < len(names) {
+        let k = names[i]
+        if map_has(fields, k) && str(fields[k]) != "" { return str(fields[k]) }
+        i = i + 1
+    }
+    return ""
+}
+
+fn parse_syslog5424(line: str) -> map {
+    // <PRI>VERSION SP TIMESTAMP SP HOST SP APP SP PID SP MSGID SP SD SP MSG
+    let m = re.search("^<(\\d+)>(\\d+)\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+(\\[.*?\\]|-)\\s*(.*)$", line)
+    let fields = {}
+    if m == None {
+        let r = {}
+        r["ok"] = false
+        r["fields"] = fields
+        return r
+    }
+    let pri = int(m.group(1))
+    fields["pri"] = str(pri)
+    fields["version"] = m.group(2)
+    fields["timestamp"] = m.group(3)
+    fields["hostname"] = m.group(4)
+    fields["app"] = m.group(5)
+    fields["procid"] = m.group(6)
+    fields["msgid"] = m.group(7)
+    let sd = m.group(8)
+    if str_starts_with(sd, "[") {
+        // structured data: [k="v" k2="v2"][k3="v3"]
+        let p = re.compile("(\\w+)=\"([^\"]*)\"")
+        let ms = p.findall(sd)
+        let j = 0
+        while j < len(ms) {
+            fields[ms[j][0]] = ms[j][1]
+            j = j + 1
+        }
+    }
+    let r = {}
+    r["ok"] = true
+    r["pri"] = pri
+    r["timestamp"] = m.group(3)
+    r["host"] = m.group(4)
+    r["app"] = m.group(5)
+    r["msg"] = m.group(9)
+    r["fields"] = fields
+    return r
+}
+
+fn is_lbrace(c: str) -> bool {
+    // "{" cannot appear in a string literal (lexer treats it as block open);
+    // match it via the regex hex escape instead.
+    return re.search("^\\x7b$", c) != None
+}
+
+fn classify(line: str) -> map {
+    let raw = str_trim(line)
+    let rec = {}
+    rec["raw"] = raw
+    rec["fields"] = {}
+    if raw == "" { rec["skip"] = true; return rec }
+    rec["skip"] = false
+    // JSON
+    if is_lbrace(slice(raw, 0, 1)) {
+        let obj = None
+        try {
+            obj = json.loads(raw)
+        } recover * (e) {
+            obj = None
+        }
+        if obj != None && is_lbrace(slice(str(obj), 0, 1)) {
+            let fields = {}
+            let ks = keys(obj)
+            let i = 0
+            while i < len(ks) {
+                let k = ks[i]
+                fields[k] = jval(obj[k])
+                i = i + 1
+            }
+            let ts = first_field(fields, ["@timestamp", "timestamp", "time", "ts", "datetime"])
+            let lvl = first_field(fields, ["level", "severity", "lvl", "log.level", "pri"])
+            let svc = first_field(fields, ["service", "app", "application", "logger", "hostname", "host", "source"])
+            let msg = first_field(fields, ["msg", "message", "log", "event", "body"])
+            let minute = minute_from_ts(ts)
+            if minute == "" { minute = now_minute() }
+            rec["format"] = "json"
+            rec["minute"] = minute
+            rec["level"] = level_norm(lvl)
+            rec["service"] = svc
+            rec["msg"] = msg
+            rec["fields"] = fields
+            return rec
+        }
+    }
+    // syslog RFC 5424
+    if re.search("^<\\d+>\\d+\\s", raw) != None {
+        let p = parse_syslog5424(raw)
+        if p["ok"] {
+            let fields = p["fields"]
+            let minute = minute_from_ts(p["timestamp"])
+            if minute == "" { minute = now_minute() }
+            rec["format"] = "syslog"
+            rec["minute"] = minute
+            rec["level"] = syslog_level(p["pri"])
+            rec["service"] = p["app"]
+            rec["msg"] = p["msg"]
+            rec["fields"] = fields
+            return rec
+        }
+    }
+    // logfmt (default for key=value lines)
+    let fields = parse_logfmt(raw)
+    if len(keys(fields)) > 0 {
+        let ts = first_field(fields, ["time", "ts", "@timestamp", "timestamp", "datetime"])
+        let lvl = first_field(fields, ["level", "severity", "lvl", "pri"])
+        let svc = first_field(fields, ["service", "app", "application", "logger", "host", "source"])
+        let msg = first_field(fields, ["msg", "message", "log", "event"])
+        let minute = minute_from_ts(ts)
+        if minute == "" { minute = now_minute() }
+        rec["format"] = "logfmt"
+        rec["minute"] = minute
+        rec["level"] = level_norm(lvl)
+        rec["service"] = svc
+        rec["msg"] = msg
+        rec["fields"] = fields
+        return rec
+    }
+    // plain text
+    rec["format"] = "text"
+    rec["minute"] = now_minute()
+    rec["level"] = "unknown"
+    rec["service"] = ""
+    rec["msg"] = raw
+    let tf = {}
+    tf["raw"] = raw
+    rec["fields"] = tf
+    return rec
+}
+
+// ---------------------------------------------------------------------------
+// Aho-Corasick multi-pattern matcher (for @p1|p2|p3 clauses)
+// ---------------------------------------------------------------------------
+
+fn ac_build(patterns: list) -> map {
+    // states: 0 = root.  g[s] = {char: next}; fail[s]; dict[s] = [patterns]
+    let g = {}
+    let fail = {}
+    let out = {}
+    let dict = {}
+    g[0] = {}
+    fail[0] = 0
+    out[0] = []
+    dict[0] = []
+    let ns = 1
+    let pi = 0
+    while pi < len(patterns) {
+        let p = str(patterns[pi])
+        if len(p) > 0 {
+            let s = 0
+            let i = 0
+            while i < len(p) {
+                let c = slice(p, i, i + 1)
+                let nxt = -1
+                if contains(g[s], c) { nxt = g[s][c] }
+                if nxt == -1 {
+                    g[s][c] = ns
+                    g[ns] = {}
+                    fail[ns] = 0
+                    out[ns] = []
+                    dict[ns] = []
+                    s = ns
+                    ns = ns + 1
+                } else {
+                    s = nxt
+                }
+                i = i + 1
+            }
+            out[s] = out[s] + [p]
+        }
+        pi = pi + 1
+    }
+    // failure links via BFS
+    let queue = []
+    let d0 = g[0]
+    let ckeys = keys(d0)
+    let qi0 = 0
+    while qi0 < len(ckeys) {
+        let u = d0[ckeys[qi0]]
+        dict[u] = out[u] + dict[fail[u]]
+        queue = queue + [u]
+        qi0 = qi0 + 1
+    }
+    let qi = 0
+    while qi < len(queue) {
+        let r = queue[qi]
+        qi = qi + 1
+        let dr = g[r]
+        let rks = keys(dr)
+        let k = 0
+        while k < len(rks) {
+            let c = rks[k]
+            let u = dr[c]
+            queue = queue + [u]
+            let f = fail[r]
+            while f != 0 && !contains(g[f], c) { f = fail[f] }
+            if contains(g[f], c) { fail[u] = g[f][c] } else { fail[u] = 0 }
+            dict[u] = out[u] + dict[fail[u]]
+            k = k + 1
+        }
+    }
+    let st = {}
+    st["g"] = g
+    st["fail"] = fail
+    st["dict"] = dict
+    return st
+}
+
+fn ac_contains(st: map, text: str) -> bool {
+    let g = st["g"]
+    let fail = st["fail"]
+    let dict = st["dict"]
+    let s = 0
+    let i = 0
+    while i < len(text) {
+        let c = slice(text, i, i + 1)
+        while s != 0 && !contains(g[s], c) { s = fail[s] }
+        if contains(g[s], c) { s = g[s][c] }
+        if len(dict[s]) > 0 { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// ---------------------------------------------------------------------------
+// Filter DSL
+// ---------------------------------------------------------------------------
+
+fn index_of(s: str, sub: str) -> int {
+    // literal substring index via regex-escaped search
+    let p = re.compile(re.escape(sub))
+    let m = p.search(s)
+    if m == None { return -1 }
+    return m.start()
+}
+
+fn clause_match(rec: map, clause: str) -> bool {
+    let c = str_trim(clause)
+    if c == "" { return true }
+    // @p1|p2|p3  — Aho-Corasick any-match on raw line
+    if slice(c, 0, 1) == "@" {
+        let pats = str_split(slice(c, 1, len(c)), "|")
+        let st = ac_build(pats)
+        return ac_contains(st, rec["raw"])
+    }
+    // ~regex — raw line regex
+    if slice(c, 0, 1) == "~" {
+        return re.search(slice(c, 1, len(c)), rec["raw"]) != None
+    }
+    // field!=value
+    let ip = index_of(c, "!=")
+    if ip > 0 {
+        let k = str_trim(slice(c, 0, ip))
+        let v = str_trim(slice(c, ip + 2, len(c)))
+        return field_get(rec, k) != v
+    }
+    // field~regex
+    let ti = index_of(c, "~")
+    if ti > 0 {
+        let k = str_trim(slice(c, 0, ti))
+        let pat = str_trim(slice(c, ti + 1, len(c)))
+        return re.search(pat, field_get(rec, k)) != None
+    }
+    // field=value
+    let eq = index_of(c, "=")
+    if eq > 0 {
+        let k = str_trim(slice(c, 0, eq))
+        let v = str_trim(slice(c, eq + 1, len(c)))
+        return field_get(rec, k) == v
+    }
+    // bare word → substring on raw
+    return str_contains(rec["raw"], c)
+}
+
+fn passes(rec: map, clauses: list) -> bool {
+    let i = 0
+    while i < len(clauses) {
+        if !clause_match(rec, clauses[i]) { return false }
+        i = i + 1
+    }
+    return true
+}
+
+// ---------------------------------------------------------------------------
+// Rollup + output
+// ---------------------------------------------------------------------------
+
+fn top_n(hist: map, n: int) -> map {
+    // top-n key->count by count desc (insertion order for ties)
+    let items = []
+    let ks = keys(hist)
+    let i = 0
+    while i < len(ks) {
+        items = items + [[hist[ks[i]], ks[i]]]
+        i = i + 1
+    }
+    // insertion sort desc by count
+    let j = 1
+    while j < len(items) {
+        let cur = items[j]
+        let k = j - 1
+        while k >= 0 && items[k][0] < cur[0] {
+            items[k + 1] = items[k]
+            k = k - 1
+        }
+        items[k + 1] = cur
+        j = j + 1
+    }
+    let out = {}
+    let m = 0
+    while m < len(items) && m < n {
+        out[items[m][1]] = items[m][0]
+        m = m + 1
+    }
+    return out
+}
+
+fn parse_args() -> map {
+    let args = sys.argv
+    let i = 1
+    let wheres = []
+    let plain = false
+    let key = ""
+    let outfmt = "jsonl"
+    while i < len(args) {
+        let a = args[i]
+        if a == "--where" && i + 1 < len(args) {
+            wheres = wheres + [args[i + 1]]
+            i = i + 2
+        } else if a == "--plain" {
+            plain = true
+            i = i + 1
+        } else if a == "--key" && i + 1 < len(args) {
+            key = args[i + 1]
+            i = i + 2
+        } else if a == "--format" && i + 1 < len(args) {
+            outfmt = args[i + 1]
+            i = i + 2
+        } else {
+            i = i + 1
+        }
+    }
+    // env fallback (ltlc run drops script args)
+    let ew = os.getenv("LT_LOGS_WHERE", "")
+    if ew != "" {
+        let parts = str_split(ew, ";;")
+        let j = 0
+        while j < len(parts) {
+            let p = str_trim(parts[j])
+            if p != "" && p != "@" { wheres = wheres + [p] }
+            j = j + 1
+        }
+    }
+    if key == "" { key = os.getenv("LT_LOGS_KEY", "") }
+    if os.getenv("LT_LOGS_PLAIN", "") == "1" { plain = true }
+    let ef = os.getenv("LT_LOGS_FORMAT", "")
+    if ef != "" { outfmt = ef }
+    let cfg = {}
+    cfg["where"] = wheres
+    cfg["plain"] = plain
+    cfg["key"] = key
+    cfg["format"] = outfmt
+    return cfg
+}
+
+fn key_bytes(key: str) -> list {
+    // 32-byte key: hex decode if 64 hex chars, else sha256 of utf8 bytes
+    let k = str_trim(key)
+    if len(k) == 64 {
+        let ok = true
+        let i = 0
+        while i < len(k) && ok {
+            let c = slice(k, i, i + 1)
+            if !(c >= "0" && c <= "9") && !(c >= "a" && c <= "f") && !(c >= "A" && c <= "F") { ok = false }
+            i = i + 1
+        }
+        if ok { return hex_decode(k) }
+    }
+    return hex_decode(sha256(k))
+}
+
+fn str_to_bytes(s: str) -> bytes {
+    return bytes(s, "utf8")
+}
+
+fn jval(v) -> str {
+    // stringified field value; nested structures stay JSON
+    let s = str(v)
+    if is_lbrace(slice(s, 0, 1)) || slice(s, 0, 1) == "[" { return json.dumps(v) }
+    return s
+}
+
+fn main() -> int {
+    let cfg = parse_args()
+    let data = sys.stdin.read()
+    let lines = str_split(data, "\n")
+
+    let buckets = {}
+    let order = []
+    let matched = 0
+    let seen = 0
+    let i = 0
+    while i < len(lines) {
+        let rec = classify(lines[i])
+        if !rec.get("skip", false) {
+            seen = seen + 1
+            if passes(rec, cfg["where"]) {
+                matched = matched + 1
+                let b = rec["minute"]
+                if !map_has(buckets, b) {
+                    let bk = {}
+                    bk["minute"] = b
+                    bk["lines"] = 0
+                    bk["levels"] = {}
+                    bk["services"] = {}
+                    bk["formats"] = {}
+                    buckets[b] = bk
+                    order = order + [b]
+                }
+                let r = buckets[b]
+                r["lines"] = r["lines"] + 1
+                bump(r["levels"], rec["level"])
+                if rec["service"] != "" { bump(r["services"], rec["service"]) }
+                bump(r["formats"], rec["format"])
+            }
+        }
+        i = i + 1
+    }
+
+    // emit rollups sorted by minute
+    let sorted = sort(order)
+    let out_lines = []
+    let j = 0
+    while j < len(sorted) {
+        let b = sorted[j]
+        let r = buckets[b]
+        let rec_out = {}
+        rec_out["minute"] = r["minute"]
+        rec_out["lines"] = r["lines"]
+        rec_out["levels"] = top_n(r["levels"], 8)
+        rec_out["services"] = top_n(r["services"], 8)
+        rec_out["formats"] = top_n(r["formats"], 8)
+        out_lines = out_lines + [json.dumps(rec_out)]
+        j = j + 1
+    }
+    let payload = str_join(out_lines, "\n")
+    if len(out_lines) > 0 { payload = payload + "\n" }
+
+    let meta = "# lt_logs: " + str(seen) + " lines read, " + str(matched) +
+               " matched, " + str(len(out_lines)) + " rollup buckets\n"
+    if cfg["format"] == "parquet" {
+        // Parquet writer lives in stdlib/parquet.ltl; for this single-file
+        // deliverable we emit compressed JSON-lines, the alternative format
+        // allowed by the bounty spec ("either Parquet or compressed-JSON-lines").
+        sys.stderr.write("lt_logs: --format parquet not built-in; emitting compressed JSON-lines\n")
+    }
+
+    if cfg["plain"] {
+        sys.stdout.write(meta + payload)
+        return 0
+    }
+    sys.stderr.write(meta)
+
+    let gz = zlib.compress(str_to_bytes(payload))
+    let blob = gz
+    if cfg["key"] != "" {
+        let kb = key_bytes(cfg["key"])
+        let kk = kb
+        if len(kk) != 32 { kk = sha256(kk) }
+        let cipher = aead.ChaCha20Poly1305(bytes(kk))
+        let nonce = os.urandom(12)
+        let ct = cipher.encrypt(nonce, bytes(gz), bytes([]))
+        blob = nonce + ct
+    }
+    sys.stdout.buffer.write(bytes(blob))
+    return 0
+}
