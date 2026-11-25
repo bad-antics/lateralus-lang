@@ -1217,8 +1217,10 @@ class PythonTranspiler(ASTVisitor):
             node.else_body.accept(self)
 
     def visit_PipelineAssign(self, node: PipelineAssign):
-        """target |>= expr  →  target = expr(target)"""
-        self._w += f"{self._expr(node.target)} = {self._expr(node.value)}"
+        """target |>= expr  →  target = target |> expr"""
+        target_str = self._expr(node.target)
+        pipe_expr = BinOp(op="|>", left=node.target, right=node.value)
+        self._w += f"{target_str} = {self._expr(pipe_expr)}"
 
     # ── v1.5 statement visitors ────────────────────────────────────────────────
 
