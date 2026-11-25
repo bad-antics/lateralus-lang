@@ -296,3 +296,40 @@ class TestNumericalMethods:
         # ∫₀^π sin(x) dx = 2
         result = simpson_integrate(math.sin, 0, math.pi, 1000)
         assert result == pytest.approx(2.0, abs=1e-8)
+"""Regression test for bad-antics/lateralus-lang issue #971.
+
+Vector.__add__/__sub__/dot silently truncated to the shorter operand via
+zip(), producing wrong results for mismatched dimensions. They must raise
+ValueError instead.
+"""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import pytest
+
+from lateralus_lang.math_engine import Vector
+
+
+def test_add_dimension_mismatch_raises():
+    with pytest.raises(ValueError):
+        Vector([1.0, 2.0, 3.0]) + Vector([1.0, 2.0])
+
+
+def test_sub_dimension_mismatch_raises():
+    with pytest.raises(ValueError):
+        Vector([1.0, 2.0, 3.0]) - Vector([1.0, 2.0])
+
+
+def test_dot_dimension_mismatch_raises():
+    with pytest.raises(ValueError):
+        Vector([1.0, 2.0, 3.0]).dot(Vector([1.0, 2.0]))
+
+
+def test_valid_ops_still_work():
+    a = Vector([1.0, 2.0, 3.0])
+    b = Vector([4.0, 5.0, 6.0])
+    assert (a + b)._data == [5.0, 7.0, 9.0]
+    assert (b - a)._data == [3.0, 3.0, 3.0]
+    assert a.dot(b) == 32.0
