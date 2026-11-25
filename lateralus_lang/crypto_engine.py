@@ -50,6 +50,13 @@ def sha512(data: Union[str, bytes]) -> str:
     return hashlib.sha512(data).hexdigest()
 
 
+
+def blake2s(data: Union[str, bytes], digest_size: int = 32) -> str:
+    """BLAKE2s hex digest (default 256-bit, RFC 7693)."""
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    return hashlib.blake2s(data, digest_size=digest_size).hexdigest()
+
 def blake2b(data: Union[str, bytes], digest_size: int = 32) -> str:
     """BLAKE2b hex digest (default 256-bit)."""
     if isinstance(data, str):
