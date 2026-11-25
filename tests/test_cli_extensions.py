@@ -225,3 +225,23 @@ class TestRegisterSubcommands:
                 assert hasattr(args, "func"), f"Command {cmd} should have a func attribute"
             except SystemExit:
                 pass  # --help causes SystemExit, that's fine
+
+
+class TestCliHelpEncoding:
+    def test_help_under_cp1252_and_ascii(self):
+        import os
+        import subprocess
+        import sys
+
+        for encoding in ["cp1252:strict", "ascii:strict"]:
+            env = dict(os.environ)
+            env["PYTHONIOENCODING"] = encoding
+            res = subprocess.run(
+                [sys.executable, "-m", "lateralus_lang", "--help"],
+                capture_output=True,
+                text=False,
+                env=env,
+            )
+            assert res.returncode == 0, f"Failed under {encoding}: {res.stderr.decode('utf-8', errors='replace')}"
+            assert b"usage:" in res.stdout
+

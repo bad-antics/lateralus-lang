@@ -940,7 +940,7 @@ class DependencyResolver:
         cycles = self.graph.detect_cycles()
         if cycles:
             raise DependencyCycle(
-                f"Circular dependency detected: {' → '.join(cycles[0])}"
+                f"Circular dependency detected: {' -> '.join(cycles[0])}"
             )
 
         # Sort topologically

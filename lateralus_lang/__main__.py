@@ -31,19 +31,19 @@ def main(argv=None) -> int:
                        help="JSON IPC mode: read params from stdin, write result to stdout")
 
     # build
-    build_p = sub.add_parser("build", help="Compile .ltl → .ltbc bytecode")
+    build_p = sub.add_parser("build", help="Compile .ltl -> .ltbc bytecode")
     build_p.add_argument("file")
     build_p.add_argument("-o", "--output")
     build_p.add_argument("--profile", default="debug",
                          help="Build profile: debug, release, bench")
 
     # py  (transpile)
-    py_p = sub.add_parser("py", help="Transpile .ltl → Python 3")
+    py_p = sub.add_parser("py", help="Transpile .ltl -> Python 3")
     py_p.add_argument("file")
     py_p.add_argument("-o", "--output")
 
     # c  (transpile to C99)
-    c_p = sub.add_parser("c", help="Transpile .ltl → C99")
+    c_p = sub.add_parser("c", help="Transpile .ltl -> C99")
     c_p.add_argument("file")
     c_p.add_argument("-o", "--output")
     c_p.add_argument("--freestanding", action="store_true",
@@ -52,14 +52,14 @@ def main(argv=None) -> int:
                      help="Target architecture (default: x86_64)")
 
     # js  (transpile to JavaScript ES2022+)
-    js_p = sub.add_parser("js", help="Transpile .ltl → JavaScript ES2022+")
+    js_p = sub.add_parser("js", help="Transpile .ltl -> JavaScript ES2022+")
     js_p.add_argument("file")
     js_p.add_argument("-o", "--output")
     js_p.add_argument("--format", default="esm", choices=["esm", "cjs", "iife"],
                       help="Module format (default: esm)")
 
     # wasm  (compile to WebAssembly)
-    wasm_p = sub.add_parser("wasm", help="Compile .ltl → WebAssembly (.wat)")
+    wasm_p = sub.add_parser("wasm", help="Compile .ltl -> WebAssembly (.wat)")
     wasm_p.add_argument("file")
     wasm_p.add_argument("-o", "--output")
 
@@ -77,7 +77,7 @@ def main(argv=None) -> int:
                         help="Show execution timing for each evaluation")
 
     # asm
-    asm_p = sub.add_parser("asm", help="Assemble .ltasm → .ltbc")
+    asm_p = sub.add_parser("asm", help="Assemble .ltasm -> .ltbc")
     asm_p.add_argument("file")
     asm_p.add_argument("-o", "--output")
 
@@ -122,7 +122,7 @@ def main(argv=None) -> int:
     # harden  (v3.2) — iterative self-hardening loop
     hard_p = sub.add_parser(
         "harden",
-        help="Iterate mutate → propose → apply until mutation score reaches target",
+        help="Iterate mutate -> propose -> apply until mutation score reaches target",
     )
     hard_p.add_argument("file")
     hard_p.add_argument("--trials", "-n", type=int, default=100,
@@ -132,7 +132,7 @@ def main(argv=None) -> int:
     hard_p.add_argument("--max-iter", type=int, default=5,
                         help="Maximum iterations (default: 5)")
     hard_p.add_argument("--target", type=float, default=1.0,
-                        help="Target mutation score 0.0–1.0 (default: 1.0 = 100%%)")
+                        help="Target mutation score 0.0-1.0 (default: 1.0 = 100%%)")
     hard_p.add_argument("--timeout", type=float, default=10.0,
                         help="Per-mutant timeout in seconds (default: 10)")
 
@@ -152,7 +152,7 @@ def main(argv=None) -> int:
     # relate  (v3.2) — cross-function relational law discovery
     rel_p = sub.add_parser(
         "relate",
-        help="Find cross-function relational laws (inverse, commuting, equivalent, …)",
+        help="Find cross-function relational laws (inverse, commuting, equivalent, ...)",
     )
     rel_p.add_argument("file")
     rel_p.add_argument("--trials", "-n", type=int, default=80,
@@ -198,13 +198,13 @@ def main(argv=None) -> int:
     doc_p.add_argument("--html",   action="store_true", help="Emit HTML instead of terminal output")
     doc_p.add_argument("-o", "--output", help="Write output to file")
 
-    # compile  (v1.4 — .ltl → .ltlc binary)
-    comp_p = sub.add_parser("compile", help="Compile .ltl → .ltlc proprietary binary")
+    # compile  (v1.4 — .ltl -> .ltlc binary)
+    comp_p = sub.add_parser("compile", help="Compile .ltl -> .ltlc proprietary binary")
     comp_p.add_argument("file")
     comp_p.add_argument("-o", "--output", help="Output .ltlc path")
 
-    # decompile  (v1.4 — .ltlc → .ltl source)
-    decomp_p = sub.add_parser("decompile", help="Decompile .ltlc → .ltl source")
+    # decompile  (v1.4 — .ltlc -> .ltl source)
+    decomp_p = sub.add_parser("decompile", help="Decompile .ltlc -> .ltl source")
     decomp_p.add_argument("file")
     decomp_p.add_argument("-o", "--output", help="Write decompiled source to file")
 
@@ -281,7 +281,7 @@ def main(argv=None) -> int:
                            help="Number of repetitions (default: 10)")
 
     # disasm  (v2.4)
-    disasm_p = sub.add_parser("disasm", help="Disassemble .ltbc bytecode → .ltasm text")
+    disasm_p = sub.add_parser("disasm", help="Disassemble .ltbc bytecode -> .ltasm text")
     disasm_p.add_argument("file")
     disasm_p.add_argument("-o", "--output", help="Output .ltasm file")
 
@@ -329,7 +329,7 @@ def main(argv=None) -> int:
             import pickle
             out = ns.output or (pathlib.Path(ns.file).stem + ".ltbc")
             pathlib.Path(out).write_bytes(pickle.dumps(result.bytecode))
-            print(f"Built → {out}")
+            print(f"Built -> {out}")
         else:
             _print_errors(result)
         return 0 if result.ok else 1
@@ -340,7 +340,7 @@ def main(argv=None) -> int:
             import pathlib
             out = ns.output or (pathlib.Path(ns.file).stem + ".py")
             pathlib.Path(out).write_text(result.python_src, encoding="utf-8")
-            print(f"Transpiled → {out}")
+            print(f"Transpiled -> {out}")
         else:
             _print_errors(result)
         return 0 if result.ok else 1
@@ -353,7 +353,7 @@ def main(argv=None) -> int:
             import pathlib
             out = ns.output or (pathlib.Path(ns.file).stem + ".c")
             pathlib.Path(out).write_text(result.c_src, encoding="utf-8")
-            print(f"Transpiled → {out}")
+            print(f"Transpiled -> {out}")
         else:
             _print_errors(result)
         return 0 if result.ok else 1
@@ -364,7 +364,7 @@ def main(argv=None) -> int:
             import pathlib
             out = ns.output or (pathlib.Path(ns.file).stem + ".js")
             pathlib.Path(out).write_text(result.js_src, encoding="utf-8")
-            print(f"Transpiled → {out}")
+            print(f"Transpiled -> {out}")
         else:
             _print_errors(result)
         return 0 if result.ok else 1
@@ -375,7 +375,7 @@ def main(argv=None) -> int:
             import pathlib
             out = ns.output or (pathlib.Path(ns.file).stem + ".wat")
             pathlib.Path(out).write_text(result.wasm_src, encoding="utf-8")
-            print(f"Compiled → {out}")
+            print(f"Compiled -> {out}")
         else:
             _print_errors(result)
         return 0 if result.ok else 1
@@ -404,7 +404,7 @@ def main(argv=None) -> int:
             import pickle
             out = ns.output or (pathlib.Path(ns.file).stem + ".ltbc")
             pathlib.Path(out).write_bytes(pickle.dumps(result.bytecode))
-            print(f"Assembled → {out}")
+            print(f"Assembled -> {out}")
         else:
             _print_errors(result)
         return 0 if result.ok else 1
@@ -478,7 +478,7 @@ for _fn in _LATERALUS_TESTS:
         _passed += 1
     except Exception as _e:
         _ms = (_test_time.perf_counter() - _t0) * 1000
-        print(f"  \033[91m✗\033[0m  {_fn.__name__}  ({_ms:.2f}ms)  →  {_e}")
+        print(f"  \033[91m✗\033[0m  {_fn.__name__}  ({_ms:.2f}ms)  ->  {_e}")
         _failed += 1
 print(f"\n  {_passed} passed  {_failed} failed")
 """
@@ -522,7 +522,7 @@ print(f"\n  {_passed} passed  {_failed} failed")
         )
 
     elif ns.cmd == "harden":
-        # v3.2 — iterative self-hardening (mutate → propose → apply loop)
+        # v3.2 — iterative self-hardening (mutate -> propose -> apply loop)
         from .law_mutator import harden_file
         return harden_file(
             ns.file,
@@ -579,7 +579,7 @@ print(f"\n  {_passed} passed  {_failed} failed")
             out_str = _ltlm_ansi(doc)
         if ns.output:
             pathlib.Path(ns.output).write_text(out_str, encoding="utf-8")
-            print(f"Written → {ns.output}")
+            print(f"Written -> {ns.output}")
         else:
             print(out_str)
         return 0
@@ -587,7 +587,7 @@ print(f"\n  {_passed} passed  {_failed} failed")
     elif ns.cmd == "compile":
         from .binary import compile_file_to_ltlc
         out = compile_file_to_ltlc(ns.file, ns.output)
-        print(f"Compiled → {out}")
+        print(f"Compiled -> {out}")
         return 0
 
     elif ns.cmd == "decompile":
@@ -597,7 +597,7 @@ print(f"\n  {_passed} passed  {_failed} failed")
         source = decompile_ltlc_to_source(ns.file)
         if ns.output:
             pathlib.Path(ns.output).write_text(source, encoding="utf-8")
-            print(f"Decompiled → {ns.output}")
+            print(f"Decompiled -> {ns.output}")
         else:
             print(source)
         return 0
@@ -626,7 +626,7 @@ print(f"\n  {_passed} passed  {_failed} failed")
         print("Features (v1.7):    lateralus.toml · workspaces · build profiles · @cfg")
         print("Features (v1.8):    macro! · comptime · #[derive] · @foreign · metaprogramming")
         print("Features (v1.9):    FFI · Jupyter kernel · enhanced REPL · source maps")
-        print("Features (v2.0):    C99 backend · DAP debugger · optimizer (O0–O3)")
+        print("Features (v2.0):    C99 backend · DAP debugger · optimizer (O0-O3)")
         print("Features (v2.1):    JS backend · WASM backend · polyglot runtime")
         print("Features (v2.2):    12 new stdlib · 4 linter rules · OS apps (ltlc/chat/edit/pkg)")
         print("Features (v2.3):    6 new stdlib · 5 linter rules · LSP code actions/rename")
@@ -842,7 +842,7 @@ print(f"\n  {_passed} passed  {_failed} failed")
         asm_text = disassemble(bc)
         if ns.output:
             pathlib.Path(ns.output).write_text(asm_text, encoding="utf-8")
-            print(f"Disassembled → {ns.output}")
+            print(f"Disassembled -> {ns.output}")
         else:
             print(asm_text)
         return 0
