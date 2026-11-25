@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Base64 From Scratch: Six Bits at a Time</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "Base64 From Scratch: Six Bits at a Time"
+author: Lateralus contributors
+date: 2026-11-25
+abstract: A walk through stdlib/base64.ltl - how six-bit groups turn three bytes into four characters, why the implementation uses bit operations, and the RFC 4648 vectors that pin it down.
+---
+
+# Why Base64 exists
+
+Many text channels only carry text safely. JSON strings, HTTP headers, XML
+documents, environment variables, and URL query parameters can all corrupt or
+reject arbitrary bytes. Base64 maps arbitrary bytes to 64 printable characters
+that those channels can carry unchanged.
+
+The cost is about 33 percent more bytes. The benefit is that the data survives
+the trip. Base64 is not encryption and it is not compression. It is only a
+re-encoding.
+
+# The core idea: 3 bytes become 4 characters
+
+A byte contains 8 bits. A Base64 character contains 6 bits. The least common
+multiple of 8 and 6 is 24, which is exactly three bytes or four characters.
+The encoder therefore consumes three bytes at a time:
+
+```
+byte 0     byte 1     byte 2
+aaaaaabb   bbbbcccc   ccdddddd
+
+sextets:
+aaaaaa     bbbbcc     ccdddd     dddddd
+```
+
+Each sextet is an index from 0 to 63 into this alphabet:
+
+```lateralus
+let CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+```
+
+The last two characters, `+` and `/`, are useful in text but inconvenient in a
+URL. RFC 4648 also defines a URL-safe alphabet that replaces them with `-` and
+`_`. The URL-safe functions in `stdlib/base64.ltl` perform that mapping.
+
+# Extracting the six-bit groups
+
+The first sextet is the top six bits of byte 0. It is tempting to write this:
+
+```lateralus
+let c0 = b0 / 4          // wrong in Lateralus
+```
+
+That does not work. In Lateralus, `/` produces a floating-point value. A float
+cannot be used as a string index, so the next line fails when indexing `CHARS`.
+
+The integer-safe version uses shifts and masks:
+
+```lateralus
+let c0 = b0 >> 2
+let c1 = ((b0 & 3) << 4) | (b1 >> 4)
+let c2 = ((b1 & 15) << 2) | (b2 >> 6)
+let c3 = b2 & 63
+```
+
+`>>` discards low bits, `<<` makes room for the next value, `&` masks off bits
+that do not belong, and `|` combines the two halves. These four lines are the
+core of the encoder.
+
+`ord()` turns a character into its numeric value. It replaces an earlier,
+incorrect call to a non-existent `char_code()` function.
+
+# Padding
+
+Most inputs are not a multiple of three bytes. For the final short group, RFC
+4648 pads the output with `=` until its length is a multiple of four:
+
+```lateralus
+if padding <= 1 {
+    result = result + CHARS[c2]
+} else {
+    result = result + PAD
+}
+
+if padding == 0 {
+    result = result + CHARS[c3]
+} else {
+    result = result + PAD
+}
+```
+
+Two missing input bytes produce two `=` characters. One missing input byte
+produces one `=`. The padding carries no data. It tells the decoder how many
+bits in the last group are real.
+
+# Decoding
+
+Decoding is the same bit layout read in reverse:
+
+```lateralus
+let byte0 = (c0 << 2) | (c1 >> 4)
+result = result + chr(byte0)
+
+if has_c2 {
+    let byte1 = ((c1 & 15) << 4) | (v2 >> 2)
+    result = result + chr(byte1)
+}
+
+if has_c3 {
+    let byte2 = ((v2 & 3) << 6) | v3
+    result = result + chr(byte2)
+}
+```
+
+`char_index()` maps a Base64 character back to its six-bit value. `chr()` turns
+the reconstructed numeric value back into a string character. `decode()`
+expects valid, padded input. It is a decoder, not a validator.
+
+# URL-safe Base64
+
+`encode_url()` calls `encode()` and then performs two substitutions:
+
+```lateralus
+if c == "+" {
+    result = result + "-"
+} else if c == "/" {
+    result = result + "_"
+} else {
+    result = result + c
+}
+```
+
+`decode_url()` reverses the substitution before calling `decode()`. Use the
+URL-safe pair for signed tokens, query parameters, filenames, and other places
+where `+` and `/` have special meaning. These functions keep the `=` padding;
+they do not implement the optional unpadded URL-safe form.
+
+# Validation and length helpers
+
+`is_valid()` checks the structural rules for padded standard Base64:
+
+- The length must be a multiple of four, except for the empty string.
+- Padding may appear only at the end.
+- Every non-padding character must belong to the standard alphabet.
+
+It does not prove that a string decodes to meaningful data, and it does not
+accept the URL-safe alphabet. Validate URL-safe input separately if your
+application requires that guarantee.
+
+The length helpers make buffer sizing predictable:
+
+```lateralus
+pub fn encoded_length(n: int) -> int {
+    return to_int(floor((n + 2) / 3)) * 4
+}
+
+pub fn decoded_length(encoded: str) -> int {
+    let n = len(encoded)
+    let padding = 0
+    if n > 0 and encoded[n - 1] == PAD {
+        padding = padding + 1
+    }
+    if n > 1 and encoded[n - 2] == PAD {
+        padding = padding + 1
+    }
+    return (n >> 2) * 3 - padding
+}
+```
+
+`encoded_length()` deliberately converts the floating-point division result
+back to an integer. `decoded_length()` uses a shift because it needs integer
+floor division as well.
+
+# Pinned RFC 4648 vectors
+
+Correctness must come from the specification, not from an encoder agreeing
+with its own decoder. RFC 4648 section 10 gives these vectors:
+
+| input | Base64 |
+|---|---|
+| `""` | `""` |
+| `"f"` | `Zg==` |
+| `"fo"` | `Zm8=` |
+| `"foo"` | `Zm9v` |
+| `"foob"` | `Zm9vYg==` |
+| `"fooba"` | `Zm9vYmE=` |
+| `"foobar"` | `Zm9vYmFy` |
+
+The pattern is useful to remember: every extra input byte adds two output
+characters until a new three-byte group begins, and padding shrinks as the
+final group fills up.
+
+# Running the example
+
+`examples/base64_vectors.ltl` contains the seven RFC vectors, the matching
+decode checks, round-trips, URL-safe cases, validation checks, and length
+helper checks:
+
+```
+$ lateralus run examples/base64_vectors.ltl
+=== RFC 4648 base64 encode vectors ===
+  ok   encode empty
+  ok   encode f
+  ...
+=== validation ===
+  ok   ==== is invalid
+=== length helpers ===
+  ok   encoded_length(5) == 8
+  ok   decoded_length(Zm9vYmFy) == 6
+
+pass=27 fail=0
+```
+
+The example inlines the implementation because the Python runner does not yet
+resolve `import stdlib.base64`. Keep the inlined block synchronized with the
+module. `tests/test_base64_stdlib.py` executes the real module source as well,
+so a divergence between the module and its documented behavior is caught.
+
+# Current byte-model limitation
+
+`stdlib/base64.ltl` accepts a `str` and uses `ord()` on each character. It is
+therefore safe for byte-valued strings in the range 0 through 255, but it is
+not a complete UTF-8 Base64 API. A future revision should encode UTF-8 bytes
+before applying the algorithm. Until then, the example intentionally uses
+ASCII input.
+
+Also remember the security boundary: Base64 provides neither confidentiality
+nor integrity. Use a cipher for secrecy and a MAC or signature for integrity.
+
+# Further reading
+
+- RFC 4648 section 4: the standard alphabet and padding rules.
+- RFC 4648 section 5: the URL-safe alphabet.
+- `stdlib/hash.ltl`: checksums for non-cryptographic integrity checks.
+- `stdlib/chacha20.ltl`: authenticated encryption when secrecy is required.
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>
