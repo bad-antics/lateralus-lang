@@ -1,0 +1,247 @@
+// ===================================================================
+// examples/bitflags_tutorial.ltl -- Runnable tutorial & pinned vectors
+// for stdlib/bitflags.ltl (RFC 9293 TCP control bits + POSIX modes)
+// ===================================================================
+// Inlines stdlib/bitflags.ltl so `lateralus run examples/bitflags_tutorial.ltl`
+// executes standalone (matching examples/spiral_ranking.ltl).
+
+fn _bitflags_with_value(bf: map, next_val: int) -> map {
+    let out = {}
+    out["value"] = next_val
+    out["names"] = list_copy(bf["names"])
+    return out
+}
+
+fn _bitflags_mask(bf: map, name: str) -> int {
+    let pairs = bf["names"]
+    let i = 0
+    while i < len(pairs) {
+        if pairs[i][0] == name {
+            return pairs[i][1]
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+fn bitflags_new() -> map {
+    let bf = {}
+    bf["value"] = 0
+    bf["names"] = []
+    return bf
+}
+
+fn bitflags_with_raw(schema: map, raw_value: int) -> map {
+    return _bitflags_with_value(schema, raw_value)
+}
+
+fn bitflags_define(bf: map, name: str, bit: int) -> map {
+    let mask = 1 << bit
+    let pairs = bf["names"]
+    let next_pairs = []
+    let updated = false
+    let i = 0
+    while i < len(pairs) {
+        if pairs[i][0] == name {
+            next_pairs = next_pairs + [[name, mask]]
+            updated = true
+        } else {
+            next_pairs = next_pairs + [pairs[i]]
+        }
+        i = i + 1
+    }
+    if updated == false {
+        next_pairs = next_pairs + [[name, mask]]
+    }
+    let out = {}
+    out["value"] = bf["value"]
+    out["names"] = next_pairs
+    return out
+}
+
+fn bitflags_set(bf: map, name: str) {
+    let mask = _bitflags_mask(bf, name)
+    if mask < 0 { return Err("Unknown flag: " + name) }
+    return Ok(_bitflags_with_value(bf, bf["value"] | mask))
+}
+
+fn bitflags_clear(bf: map, name: str) {
+    let mask = _bitflags_mask(bf, name)
+    if mask < 0 { return Err("Unknown flag: " + name) }
+    let v = bf["value"]
+    if (v & mask) != 0 { v = v ^ mask }
+    return Ok(_bitflags_with_value(bf, v))
+}
+
+fn bitflags_toggle(bf: map, name: str) {
+    let mask = _bitflags_mask(bf, name)
+    if mask < 0 { return Err("Unknown flag: " + name) }
+    return Ok(_bitflags_with_value(bf, bf["value"] ^ mask))
+}
+
+fn bitflags_has(bf: map, name: str) -> bool {
+    let mask = _bitflags_mask(bf, name)
+    if mask < 0 { return false }
+    return (bf["value"] & mask) != 0
+}
+
+fn bitflags_has_all(bf: map, flag_names: list) -> bool {
+    let i = 0
+    while i < len(flag_names) {
+        if bitflags_has(bf, flag_names[i]) == false { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn bitflags_has_any(bf: map, flag_names: list) -> bool {
+    let i = 0
+    while i < len(flag_names) {
+        if bitflags_has(bf, flag_names[i]) { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn bitflags_raw(bf: map) -> int { return bf["value"] }
+fn bitflags_union(a: map, b: map) -> map { return _bitflags_with_value(a, a["value"] | b["value"]) }
+fn bitflags_intersect(a: map, b: map) -> map { return _bitflags_with_value(a, a["value"] & b["value"]) }
+fn bitflags_symmetric_diff(a: map, b: map) -> map { return _bitflags_with_value(a, a["value"] ^ b["value"]) }
+
+fn bitflags_active(bf: map) -> list {
+    let pairs = bf["names"]
+    let v = bf["value"]
+    let out = []
+    let i = 0
+    while i < len(pairs) {
+        if (v & pairs[i][1]) != 0 { out = out + [pairs[i][0]] }
+        i = i + 1
+    }
+    return out
+}
+
+fn bitflags_to_string(bf: map) -> str {
+    let active_names = bitflags_active(bf)
+    if len(active_names) == 0 { return "(none)" }
+    return join(active_names, " | ")
+}
+
+fn bitflags_unwrap(res) -> map {
+    return res.unwrap()
+}
+
+// -- Test harness ---------------------------------------------------
+
+let COUNTS = [0, 0]
+
+fn check(label: str, cond: bool) {
+    if cond {
+        COUNTS[0] = COUNTS[0] + 1
+        print("  ok   " + label)
+    } else {
+        COUNTS[1] = COUNTS[1] + 1
+        print("  FAIL " + label)
+    }
+}
+
+fn tcp_control_schema() -> map {
+    // RFC 9293 Section 3.1 TCP control-bit octet (LSB 0 -> MSB 7)
+    return bitflags_new()
+        |> bitflags_define("FIN", 0)
+        |> bitflags_define("SYN", 1)
+        |> bitflags_define("RST", 2)
+        |> bitflags_define("PSH", 3)
+        |> bitflags_define("ACK", 4)
+        |> bitflags_define("URG", 5)
+        |> bitflags_define("ECE", 6)
+        |> bitflags_define("CWR", 7)
+}
+
+fn posix_mode_schema() -> map {
+    // POSIX owner permission bits + descriptor flag
+    return bitflags_new()
+        |> bitflags_define("READ", 2)
+        |> bitflags_define("WRITE", 1)
+        |> bitflags_define("EXEC", 0)
+        |> bitflags_define("CLOEXEC", 3)
+}
+
+fn main() {
+    print("=== RFC 9293 Section 3.1 TCP Control-Bit Vectors ===")
+    let tcp = tcp_control_schema()
+    check("empty raw == 0", bitflags_raw(tcp) == 0)
+    check("empty display == (none)", bitflags_to_string(tcp) == "(none)")
+
+    let syn = bitflags_set(tcp, "SYN").unwrap()
+    check("SYN raw == 2 (0x02)", bitflags_raw(syn) == 2)
+    check("SYN display == SYN", bitflags_to_string(syn) == "SYN")
+
+    // Set ACK first, then SYN: output order still follows RFC declaration order!
+    let syn_ack = tcp
+        |> bitflags_set("ACK")
+        |> bitflags_unwrap
+        |> bitflags_set("SYN")
+        |> bitflags_unwrap
+    check("SYN|ACK raw == 18 (0x12)", bitflags_raw(syn_ack) == 18)
+    check("SYN|ACK canonical order", bitflags_to_string(syn_ack) == "SYN | ACK")
+    check("has_all([SYN, ACK]) == true", bitflags_has_all(syn_ack, ["SYN", "ACK"]))
+    check("has_all([SYN, FIN]) == false", bitflags_has_all(syn_ack, ["SYN", "FIN"]) == false)
+    check("has_any([FIN, ACK]) == true", bitflags_has_any(syn_ack, ["FIN", "ACK"]))
+    check("has_any([FIN, RST]) == false", bitflags_has_any(syn_ack, ["FIN", "RST"]) == false)
+
+    let psh_ack = bitflags_with_raw(tcp, 24)
+    check("wire 0x18 (24) -> PSH | ACK", bitflags_to_string(psh_ack) == "PSH | ACK")
+
+    let fin_ack = tcp
+        |> bitflags_set("FIN")
+        |> bitflags_unwrap
+        |> bitflags_set("ACK")
+        |> bitflags_unwrap
+    check("FIN|ACK raw == 17 (0x11)", bitflags_raw(fin_ack) == 17)
+    check("FIN|ACK display", bitflags_to_string(fin_ack) == "FIN | ACK")
+
+    let ecn_syn = tcp
+        |> bitflags_set("SYN")
+        |> bitflags_unwrap
+        |> bitflags_set("ECE")
+        |> bitflags_unwrap
+        |> bitflags_set("CWR")
+        |> bitflags_unwrap
+    check("ECN SYN raw == 194 (0xC2)", bitflags_raw(ecn_syn) == 194)
+    check("ECN SYN display == SYN | ECE | CWR", bitflags_to_string(ecn_syn) == "SYN | ECE | CWR")
+
+    let ack_only = bitflags_toggle(syn_ack, "SYN").unwrap()
+    check("toggle SYN off -> 16 (0x10)", bitflags_raw(ack_only) == 16)
+    let still_ack = bitflags_clear(ack_only, "SYN").unwrap()
+    check("clear unset bit is idempotent -> 16", bitflags_raw(still_ack) == 16)
+
+    let bad = bitflags_set(tcp, "BOGUS")
+    check("unknown flag returns Err", bad.is_err())
+
+    print("=== POSIX Permission & Set-Algebra Vectors ===")
+    let mode = posix_mode_schema()
+    let r_only = bitflags_set(mode, "READ").unwrap()
+    let w_only = bitflags_set(mode, "WRITE").unwrap()
+    let x_only = bitflags_set(mode, "EXEC").unwrap()
+
+    let rw = bitflags_union(r_only, w_only)
+    let rx = bitflags_union(r_only, x_only)
+    let rwx = bitflags_union(rw, x_only)
+
+    check("POSIX rw- raw == 6 (0o6)", bitflags_raw(rw) == 6)
+    check("POSIX rw- display == READ | WRITE", bitflags_to_string(rw) == "READ | WRITE")
+    check("POSIX rwx raw == 7 (0o7)", bitflags_raw(rwx) == 7)
+    check("POSIX rwx display == READ | WRITE | EXEC", bitflags_to_string(rwx) == "READ | WRITE | EXEC")
+
+    let masked = bitflags_intersect(rwx, rx)
+    check("intersect(rwx=7, r-x=5) == 5 (READ | EXEC)", bitflags_raw(masked) == 5 && bitflags_to_string(masked) == "READ | EXEC")
+
+    let diff = bitflags_symmetric_diff(rw, rx)
+    check("symmetric_diff(rw-=6, r-x=5) == 3 (WRITE | EXEC)", bitflags_raw(diff) == 3 && bitflags_to_string(diff) == "WRITE | EXEC")
+
+    print("")
+    print("pass=" + str(COUNTS[0]) + " fail=" + str(COUNTS[1]))
+    assert_eq(COUNTS[1], 0)
+}
+
+main()

@@ -1,102 +1,207 @@
-// Lateralus Standard Library — Bit Flags
-// Type-safe bitflag operations for system programming
+// ===================================================================
+// Lateralus Standard Library -- Bit Flags (stdlib/bitflags.ltl)
+// Type-safe named bitflag operations for protocols and system state
+// ===================================================================
+//
+// Representation:
+//   {
+//     "value": int,                 // non-negative raw bitmask
+//     "names": [[name, mask], ...]  // ordered [str, int] pairs (mask = 1 << bit)
+//   }
 
-/// A set of named bit flags backed by a u64
-struct BitFlags {
-    value: u64,
-    names: [(str, u64)],
+fn _bitflags_with_value(bf: map, next_val: int) -> map {
+    let out = {}
+    out["value"] = next_val
+    out["names"] = list_copy(bf["names"])
+    return out
 }
 
-impl BitFlags {
-    /// Create an empty flag set
-    pub fn new() -> BitFlags {
-        BitFlags { value: 0, names: [] }
+fn _bitflags_mask(bf: map, name: str) -> int {
+    let pairs = bf["names"]
+    let i = 0
+    while i < len(pairs) {
+        if pairs[i][0] == name {
+            return pairs[i][1]
+        }
+        i = i + 1
     }
-
-    /// Create from a raw integer value
-    pub fn from_raw(value: u64) -> BitFlags {
-        BitFlags { value, names: [] }
-    }
-
-    /// Define a named flag
-    pub fn define(mut self, name: str, bit: u64) -> BitFlags {
-        self.names.push((name, 1u64 << bit))
-        self
-    }
-
-    /// Set a flag by name
-    pub fn set(mut self, name: str) -> Result<BitFlags, str> {
-        let mask = self.names
-            |> find(|(n, _)| n == name)
-            |> map(|(_, m)| m)
-            |> ok_or("Unknown flag: {name}")?
-        self.value |= mask
-        Ok(self)
-    }
-
-    /// Clear a flag by name
-    pub fn clear(mut self, name: str) -> Result<BitFlags, str> {
-        let mask = self.names
-            |> find(|(n, _)| n == name)
-            |> map(|(_, m)| m)
-            |> ok_or("Unknown flag: {name}")?
-        self.value &= !mask
-        Ok(self)
-    }
-
-    /// Toggle a flag by name
-    pub fn toggle(mut self, name: str) -> Result<BitFlags, str> {
-        let mask = self.names
-            |> find(|(n, _)| n == name)
-            |> map(|(_, m)| m)
-            |> ok_or("Unknown flag: {name}")?
-        self.value ^= mask
-        Ok(self)
-    }
-
-    /// Check if a flag is set
-    pub fn has(self, name: str) -> bool {
-        self.names
-            |> find(|(n, _)| n == name)
-            |> map(|(_, m)| self.value & m != 0)
-            |> unwrap_or(false)
-    }
-
-    /// Check if all given flags are set
-    pub fn has_all(self, names: [str]) -> bool {
-        names |> all(|n| self.has(n))
-    }
-
-    /// Check if any of the given flags are set
-    pub fn has_any(self, names: [str]) -> bool {
-        names |> any(|n| self.has(n))
-    }
-
-    /// Get raw value
-    pub fn raw(self) -> u64 { self.value }
-
-    /// Union of two flag sets
-    pub fn union(self, other: BitFlags) -> BitFlags {
-        BitFlags { value: self.value | other.value, names: self.names }
-    }
-
-    /// Intersection of two flag sets
-    pub fn intersect(self, other: BitFlags) -> BitFlags {
-        BitFlags { value: self.value & other.value, names: self.names }
-    }
-
-    /// List all active flag names
-    pub fn active(self) -> [str] {
-        self.names
-            |> filter(|(_, m)| self.value & m != 0)
-            |> map(|(n, _)| n)
-            |> collect
-    }
-
-    /// Display as a human-readable string
-    pub fn to_string(self) -> str {
-        let flags = self.active()
-        if flags.is_empty() { "(none)" }
-        else { flags |> join(" | ") }
-    }
+    return -1
 }
+
+/// Create an empty flag set (raw value = 0).
+pub fn bitflags_new() -> map {
+    let bf = {}
+    bf["value"] = 0
+    bf["names"] = []
+    return bf
+}
+
+/// Create a flag set initialized with a raw integer bitmask.
+pub fn bitflags_from_raw(raw_value: int) -> map {
+    let bf = {}
+    bf["value"] = raw_value
+    bf["names"] = []
+    return bf
+}
+
+/// Copy registered flag definitions onto a raw integer bitmask.
+pub fn bitflags_with_raw(schema: map, raw_value: int) -> map {
+    return _bitflags_with_value(schema, raw_value)
+}
+
+/// Register a named flag at bit position `bit` (0-indexed from LSB, mask = 1 << bit).
+/// Re-defining an existing flag name updates its bit mask in place.
+pub fn bitflags_define(bf: map, name: str, bit: int) -> map {
+    let mask = 1 << bit
+    let pairs = bf["names"]
+    let next_pairs = []
+    let updated = false
+    let i = 0
+    while i < len(pairs) {
+        if pairs[i][0] == name {
+            next_pairs = next_pairs + [[name, mask]]
+            updated = true
+        } else {
+            next_pairs = next_pairs + [pairs[i]]
+        }
+        i = i + 1
+    }
+    if updated == false {
+        next_pairs = next_pairs + [[name, mask]]
+    }
+    let out = {}
+    out["value"] = bf["value"]
+    out["names"] = next_pairs
+    return out
+}
+
+/// Set a named flag. Returns Ok(updated) or Err("Unknown flag: <name>").
+pub fn bitflags_set(bf: map, name: str) {
+    let mask = _bitflags_mask(bf, name)
+    if mask < 0 {
+        return Err("Unknown flag: " + name)
+    }
+    return Ok(_bitflags_with_value(bf, bf["value"] | mask))
+}
+
+/// Clear a named flag without relying on width-dependent signed ~mask negation.
+/// Returns Ok(updated) or Err("Unknown flag: <name>").
+pub fn bitflags_clear(bf: map, name: str) {
+    let mask = _bitflags_mask(bf, name)
+    if mask < 0 {
+        return Err("Unknown flag: " + name)
+    }
+    let v = bf["value"]
+    if (v & mask) != 0 {
+        v = v ^ mask
+    }
+    return Ok(_bitflags_with_value(bf, v))
+}
+
+/// Toggle (XOR) a named flag. Returns Ok(updated) or Err("Unknown flag: <name>").
+pub fn bitflags_toggle(bf: map, name: str) {
+    let mask = _bitflags_mask(bf, name)
+    if mask < 0 {
+        return Err("Unknown flag: " + name)
+    }
+    return Ok(_bitflags_with_value(bf, bf["value"] ^ mask))
+}
+
+/// Check whether a single named flag is active. Unknown names return false.
+pub fn bitflags_has(bf: map, name: str) -> bool {
+    let mask = _bitflags_mask(bf, name)
+    if mask < 0 {
+        return false
+    }
+    return (bf["value"] & mask) != 0
+}
+
+/// Check whether all given flag names are active (vacuously true for []).
+pub fn bitflags_has_all(bf: map, flag_names: list) -> bool {
+    let i = 0
+    while i < len(flag_names) {
+        if bitflags_has(bf, flag_names[i]) == false {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+/// Check whether at least one of the given flag names is active.
+pub fn bitflags_has_any(bf: map, flag_names: list) -> bool {
+    let i = 0
+    while i < len(flag_names) {
+        if bitflags_has(bf, flag_names[i]) {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+/// Extract the underlying integer bitmask.
+pub fn bitflags_raw(bf: map) -> int {
+    return bf["value"]
+}
+
+/// Bitwise OR of two flag sets (retaining `a`'s registered flag table).
+pub fn bitflags_union(a: map, b: map) -> map {
+    return _bitflags_with_value(a, a["value"] | b["value"])
+}
+
+/// Bitwise AND of two flag sets (retaining `a`'s registered flag table).
+pub fn bitflags_intersect(a: map, b: map) -> map {
+    return _bitflags_with_value(a, a["value"] & b["value"])
+}
+
+/// Bitwise XOR (symmetric difference) of two flag sets.
+pub fn bitflags_symmetric_diff(a: map, b: map) -> map {
+    return _bitflags_with_value(a, a["value"] ^ b["value"])
+}
+
+/// Return active flag names in deterministic declaration order.
+pub fn bitflags_active(bf: map) -> list {
+    let pairs = bf["names"]
+    let v = bf["value"]
+    let out = []
+    let i = 0
+    while i < len(pairs) {
+        if (v & pairs[i][1]) != 0 {
+            out = out + [pairs[i][0]]
+        }
+        i = i + 1
+    }
+    return out
+}
+
+/// Format active flags as "A | B | C", or "(none)" when no registered bit is set.
+pub fn bitflags_to_string(bf: map) -> str {
+    let active_names = bitflags_active(bf)
+    if len(active_names) == 0 {
+        return "(none)"
+    }
+    return join(active_names, " | ")
+}
+
+/// Pipeline helper: unwrap an Ok(bf) result or raise LtlError on Err.
+pub fn bitflags_unwrap(res) -> map {
+    return res.unwrap()
+}
+
+// Module-local short aliases matching single-module stdlib conventions
+pub fn new() -> map { return bitflags_new() }
+pub fn from_raw(raw_value: int) -> map { return bitflags_from_raw(raw_value) }
+pub fn define(bf: map, name: str, bit: int) -> map { return bitflags_define(bf, name, bit) }
+pub fn set(bf: map, name: str) { return bitflags_set(bf, name) }
+pub fn clear(bf: map, name: str) { return bitflags_clear(bf, name) }
+pub fn toggle(bf: map, name: str) { return bitflags_toggle(bf, name) }
+pub fn has(bf: map, name: str) -> bool { return bitflags_has(bf, name) }
+pub fn has_all(bf: map, flag_names: list) -> bool { return bitflags_has_all(bf, flag_names) }
+pub fn has_any(bf: map, flag_names: list) -> bool { return bitflags_has_any(bf, flag_names) }
+pub fn raw(bf: map) -> int { return bitflags_raw(bf) }
+pub fn union(a: map, b: map) -> map { return bitflags_union(a, b) }
+pub fn intersect(a: map, b: map) -> map { return bitflags_intersect(a, b) }
+pub fn symmetric_diff(a: map, b: map) -> map { return bitflags_symmetric_diff(a, b) }
+pub fn active(bf: map) -> list { return bitflags_active(bf) }
+pub fn to_string(bf: map) -> str { return bitflags_to_string(bf) }
