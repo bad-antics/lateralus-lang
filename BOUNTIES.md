@@ -144,4 +144,10 @@ Drop them in `BOUNTIES-LOG.md` when claimed; we'll review and pay weekly.
    written reason on the PR. First-submitted-first-reviewed.
 5. Payment is in 14 days of merge.
 
-Questions: open an issue or email `bounties@lateralus.dev`.
+Questions: open an issue. (Note: the `bounties@lateralus.dev` email is currently inactive; please use the GitHub issue tracker for all bounty-related inquiries.)
+
+### Bounty Claim Process
+1. **Availability:** All listed bounties are active unless marked otherwise. If you intend to work on one, please comment on the issue or open a new one to reserve it.
+2. **Payment:** We support direct PayPal, GitHub Sponsors, Ko-Fi, or BTC/LN. If you cannot use Stripe, please specify your preferred payment method when you submit your PR.
+3. **Acceptance:** We accept results from standard Linux/macOS environments. Performance parity is measured against the provided reference implementations in `benchmarks/reference/`.
+4. **Tooling:** No specific restrictions beyond standard library usage. Ensure your code is idiomatic and passes the existing test suite.
