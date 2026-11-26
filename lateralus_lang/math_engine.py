@@ -809,6 +809,21 @@ def simpson_integrate(
 # Convenience registry — maps names to functions for the transpiler preamble
 # -----------------------------------------------------------------------------
 
+def _round_half_away_zero(x, ndigits=None):
+    """Round half away from zero.
+
+    Python's builtin ``round`` rounds ties to even (banker's rounding), which
+    disagrees with the C backend (C ``round()``) and with
+    ``stdlib/math.ltl::round_val``.  This keeps the three backends consistent.
+    """
+    if ndigits is None or ndigits == 0:
+        return int(math.floor(x + 0.5)) if x >= 0 else int(math.ceil(x - 0.5))
+    q = 10 ** ndigits
+    v = x * q
+    r = math.floor(v + 0.5) if v >= 0 else math.ceil(v - 0.5)
+    return r / q
+
+
 MATH_BUILTINS: Dict[str, Any] = {
     # Types
     "Matrix": Matrix,
@@ -830,7 +845,7 @@ MATH_BUILTINS: Dict[str, Any] = {
     "abs": abs,
     "floor": math.floor,
     "ceil": math.ceil,
-    "round": round,
+    "round": _round_half_away_zero,
     "sin": math.sin,
     "cos": math.cos,
     "tan": math.tan,
