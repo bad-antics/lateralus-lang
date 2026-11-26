@@ -7,6 +7,7 @@ from pathlib import Path
 
 from lateralus_lang.law_generalizer import (
     _rename_var,
+    _substitute_vars,
     characterize_file,
     try_characterize,
 )
@@ -175,3 +176,73 @@ def test_characterize_file_zero_matches(tmp_path: Path):
         rc = characterize_file(f, trials=40, seed=42)
     assert rc == 1
     assert "no closed-form match" in buf.getvalue()
+
+
+def test_substitute_vars_simultaneous_no_aliasing():
+    """Swapping or reusing template names must not alias x -> y -> k."""
+    assert _substitute_vars("x - y", {"x": "y", "y": "x"}) == "y - x"
+    assert _substitute_vars("x * y", {"x": "y", "y": "k"}) == "y * k"
+    assert _substitute_vars("xy + x - y", {"x": "y", "y": "x"}) == "xy + y - x"
+
+
+def test_as_ltl_law_preserves_swapped_yx_parameters():
+    """Regression: 2-arg functions with first parameter `y` must not collapse
+    `(x - y)` into `(x - x)` or `(k * k)` during sequential renaming."""
+    def sub_yx(y: int, x: int) -> int:
+        return y - x
+
+    def scale_yk(y: int, k: int) -> int:
+        return y * k
+
+    c_sub = try_characterize(sub_yx, trials=60)
+    assert c_sub is not None
+    assert "return sub_yx(y, x) == (y - x)" in c_sub.as_ltl_law()
+
+    c_scale = try_characterize(scale_yk, trials=60)
+    assert c_scale is not None
+    assert "return scale_yk(y, k) == (y * k)" in c_scale.as_ltl_law()
+
+
+def test_characterize_then_verify_swapped_yx_roundtrip(tmp_path: Path):
+    """End-to-end: `characterize_file` output for `(y, x)` / `(y, k)` / `(y, n)`
+    must pass `verify_file` with zero counterexamples."""
+    import os
+    import subprocess
+    import sys
+
+    src_file = tmp_path / "swapped.ltl"
+    src_file.write_text(
+        "fn sub_yx(y: int, x: int) -> int {\n"
+        "    return y - x\n"
+        "}\n\n"
+        "fn scale_yk(y: int, k: int) -> int {\n"
+        "    return y * k\n"
+        "}\n\n"
+        "fn gt_yn(y: int, n: int) -> bool {\n"
+        "    return y > n\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    laws_file = tmp_path / "laws.ltl"
+    with contextlib.redirect_stdout(io.StringIO()):
+        rc = characterize_file(src_file, trials=60, seed=42, output=str(laws_file))
+    assert rc == 0
+
+    combined = tmp_path / "combined.ltl"
+    combined.write_text(
+        src_file.read_text(encoding="utf-8") + "\n" + laws_file.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    repo_root = Path(__file__).resolve().parent.parent
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(repo_root)
+    proc = subprocess.run(
+        [sys.executable, "-m", "lateralus_lang", "verify", str(combined), "--seed", "42"],
+        cwd=str(repo_root),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "3 passed  0 failed" in proc.stdout
+

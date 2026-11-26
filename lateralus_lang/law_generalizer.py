@@ -84,12 +84,14 @@ class Characterization:
         params = ", ".join(
             f"{n}: {_ltl_type(t)}" for n, t in zip(self.param_names, self.param_types)
         )
-        # Rename `x`/`y` in the expression to the real param names
-        expr = self.expr
+        # Rename `x`/`y` in the expression simultaneously to avoid aliasing
+        # when param_names[0] == "y" (e.g. `(y, x)` or `(y, k)`).
+        mapping: dict[str, str] = {}
         if len(self.param_names) >= 1 and self.param_names[0] != "x":
-            expr = _rename_var(expr, "x", self.param_names[0])
+            mapping["x"] = self.param_names[0]
         if len(self.param_names) >= 2 and self.param_names[1] != "y":
-            expr = _rename_var(expr, "y", self.param_names[1])
+            mapping["y"] = self.param_names[1]
+        expr = _substitute_vars(self.expr, mapping)
         call = f"{self.fn_name}({', '.join(self.param_names)})"
         # Always parenthesize to be safe with `==` vs `?:`, `||`, etc.
         rhs = f"({expr})"
@@ -112,6 +114,15 @@ def _rename_var(expr: str, old: str, new: str) -> str:
     """Token-level rename respecting word boundaries."""
     import re
     return re.sub(rf"\b{re.escape(old)}\b", new, expr)
+
+
+def _substitute_vars(expr: str, mapping: dict[str, str]) -> str:
+    """Simultaneous token-level variable substitution respecting word boundaries."""
+    if not mapping:
+        return expr
+    import re
+    pattern = r"\b(" + "|".join(re.escape(k) for k in mapping) + r")\b"
+    return re.sub(pattern, lambda m: mapping[m.group(0)], expr)
 
 
 # ─── The inference loop ────────────────────────────────────────────────────
