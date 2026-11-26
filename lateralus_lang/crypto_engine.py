@@ -343,8 +343,10 @@ class LBEDecoder:
     """Decode LATERALUS Binary Encoding back to Python values."""
 
     def decode(self, data: bytes) -> Any:
-        if data[:4] != LBE_MAGIC:
+        if len(data) < 4 or data[:4] != LBE_MAGIC:
             raise ValueError("Not a valid LBE file — bad magic bytes")
+        if len(data) < 8:
+            raise ValueError("Truncated LBE payload")
         version, flags = struct.unpack(">HH", data[4:8])
         if version > LBE_VERSION:
             raise ValueError(f"LBE version {version} not supported "
@@ -352,10 +354,14 @@ class LBEDecoder:
         body = data[8:]
         if flags & 0x01:
             body = zlib.decompress(body)
+        if not body:
+            raise ValueError("Truncated LBE payload")
         value, _ = self._decode_value(body, 0)
         return value
 
     def _decode_value(self, data: bytes, pos: int) -> Tuple[Any, int]:
+        if pos >= len(data):
+            raise ValueError("Truncated LBE payload")
         tag = data[pos]
         pos += 1
 
@@ -363,27 +369,43 @@ class LBEDecoder:
             return None, pos
 
         if tag == _TAG_BOOL:
+            if pos + 1 > len(data):
+                raise ValueError("Truncated LBE payload")
             return bool(data[pos]), pos + 1
 
         if tag == _TAG_INT:
+            if pos + 8 > len(data):
+                raise ValueError("Truncated LBE payload")
             val = struct.unpack(">q", data[pos:pos+8])[0]
             return val, pos + 8
 
         if tag == _TAG_FLOAT:
+            if pos + 8 > len(data):
+                raise ValueError("Truncated LBE payload")
             val = struct.unpack(">d", data[pos:pos+8])[0]
             return val, pos + 8
 
         if tag == _TAG_STRING:
+            if pos + 4 > len(data):
+                raise ValueError("Truncated LBE payload")
             length = struct.unpack(">I", data[pos:pos+4])[0]
             pos += 4
+            if pos + length > len(data):
+                raise ValueError("Truncated LBE payload")
             return data[pos:pos+length].decode("utf-8"), pos + length
 
         if tag == _TAG_BYTES:
+            if pos + 4 > len(data):
+                raise ValueError("Truncated LBE payload")
             length = struct.unpack(">I", data[pos:pos+4])[0]
             pos += 4
+            if pos + length > len(data):
+                raise ValueError("Truncated LBE payload")
             return data[pos:pos+length], pos + length
 
         if tag == _TAG_LIST:
+            if pos + 4 > len(data):
+                raise ValueError("Truncated LBE payload")
             count = struct.unpack(">I", data[pos:pos+4])[0]
             pos += 4
             items = []
@@ -393,6 +415,8 @@ class LBEDecoder:
             return items, pos
 
         if tag == _TAG_MAP:
+            if pos + 4 > len(data):
+                raise ValueError("Truncated LBE payload")
             count = struct.unpack(">I", data[pos:pos+4])[0]
             pos += 4
             result = {}
@@ -403,16 +427,22 @@ class LBEDecoder:
             return result, pos
 
         if tag == _TAG_BIGINT:
+            if pos + 5 > len(data):
+                raise ValueError("Truncated LBE payload")
             length = struct.unpack(">I", data[pos:pos+4])[0]
             pos += 4
             sign = data[pos]
             pos += 1
+            if pos + length > len(data):
+                raise ValueError("Truncated LBE payload")
             mag = int.from_bytes(data[pos:pos+length], byteorder="big")
             if sign:
                 mag = -mag
             return mag, pos + length
 
         if tag == _TAG_TIMESTAMP:
+            if pos + 8 > len(data):
+                raise ValueError("Truncated LBE payload")
             ns = struct.unpack(">Q", data[pos:pos+8])[0]
             return ns / 1e9, pos + 8
 
@@ -470,10 +500,16 @@ class SignedPayload:
 
     @staticmethod
     def from_bytes(raw: bytes) -> "SignedPayload":
+        if len(raw) < 4:
+            raise ValueError("Truncated SignedPayload")
         meta_len = struct.unpack(">I", raw[:4])[0]
+        if 4 + meta_len + 4 > len(raw):
+            raise ValueError("Truncated SignedPayload")
         meta = json.loads(raw[4:4+meta_len].decode("utf-8"))
         data_offset = 4 + meta_len
         data_len = struct.unpack(">I", raw[data_offset:data_offset+4])[0]
+        if data_offset + 4 + data_len > len(raw):
+            raise ValueError("Truncated SignedPayload")
         data = raw[data_offset+4:data_offset+4+data_len]
         return SignedPayload(
             data=data,
