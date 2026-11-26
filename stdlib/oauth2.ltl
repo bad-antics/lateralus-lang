@@ -85,21 +85,47 @@ pub fn pkce_verifier(entropy: str) -> str {
     return entropy
 }
 
+/// Encode raw byte array (0..255) directly to unpadded URL-safe Base64 (RFC 4648 §5)
+/// without round-tripping through chr() / UTF-8 string encoding.
+pub fn base64url_encode_bytes(data: list) -> str {
+    let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    let out = ""
+    let n = len(data)
+    let i = 0
+    while i < n {
+        let b0 = data[i] & 0xff
+        let b1 = 0
+        let b2 = 0
+        let rem = n - i
+        if rem > 1 {
+            b1 = data[i + 1] & 0xff
+        }
+        if rem > 2 {
+            b2 = data[i + 2] & 0xff
+        }
+        let c0 = b0 >> 2
+        let c1 = ((b0 & 0x03) << 4) | (b1 >> 4)
+        let c2 = ((b1 & 0x0f) << 2) | (b2 >> 6)
+        let c3 = b2 & 0x3f
+
+        out = out + char_at(alphabet, c0) + char_at(alphabet, c1)
+        if rem > 1 {
+            out = out + char_at(alphabet, c2)
+        }
+        if rem > 2 {
+            out = out + char_at(alphabet, c3)
+        }
+        i = i + 3
+    }
+    return out
+}
+
 /// Build the S256 challenge: base64url(SHA-256(verifier)) with
-/// padding stripped.  Since the default toolchain exposes SHA only
-/// through `crypto.hash_sha256` (which returns hex), we fall back to
-/// a hex→bytes→base64url pipeline when crypto is in scope at the
-/// call site.  Here we just wrap a caller-provided sha256_bytes fn.
+/// padding stripped. Encodes raw digest bytes directly to preserve
+/// octets >= 0x80 per RFC 7636 §4.2.
 pub fn pkce_challenge_s256(verifier: str, sha256_bytes) -> str {
     let digest = sha256_bytes(verifier)
-    let raw = ""
-    let i = 0
-    while i < len(digest) {
-        raw = raw + chr(digest[i])
-        i = i + 1
-    }
-    let enc = base64_encode_url(raw)
-    return strip_padding(enc)
+    return base64url_encode_bytes(digest)
 }
 
 pub fn strip_padding(s: str) -> str {
@@ -111,6 +137,17 @@ pub fn strip_padding(s: str) -> str {
 }
 
 // -- Authorization URL ---------------------------------------------
+
+pub fn has_query_separator(u: str) -> bool {
+    let i = 0
+    while i < len(u) {
+        if char_at(u, i) == "?" {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
 
 pub fn authorization_url(client: map, state: str, pkce_challenge: str,
                          extra: map) -> str {
@@ -130,7 +167,17 @@ pub fn authorization_url(client: map, state: str, pkce_challenge: str,
         params[ks[i]] = extra[ks[i]]
         i = i + 1
     }
-    return client["auth_url"] + "?" + form_encode(params)
+    let base_url = client["auth_url"]
+    let query = form_encode(params)
+    if has_query_separator(base_url) {
+        let n = len(base_url)
+        let last_ch = char_at(base_url, n - 1)
+        if last_ch == "?" || last_ch == "&" {
+            return base_url + query
+        }
+        return base_url + "&" + query
+    }
+    return base_url + "?" + query
 }
 
 // -- Token exchange -------------------------------------------------
