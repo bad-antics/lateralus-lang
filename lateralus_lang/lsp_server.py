@@ -196,6 +196,55 @@ LATERALUS_BUILTINS = {
     "base64_decode": {"detail": "fn base64_decode(data: str) -> str", "doc": "Base64 decode"},
 }
 
+
+# --- stdlib signature index (lsp-hover-signatures bounty) -------------
+_STDLIB_INDEX: Optional[dict[str, dict[str, str]]] = None
+
+
+def build_stdlib_index() -> dict[str, dict[str, str]]:
+    """Parse stdlib/*.ltl once; index `pub fn` signatures + first doc line."""
+    global _STDLIB_INDEX
+    if _STDLIB_INDEX is not None:
+        return _STDLIB_INDEX
+    index: dict[str, dict[str, str]] = {}
+    try:
+        from pathlib import Path
+        stdlib_dir = Path(__file__).resolve().parent.parent / "stdlib"
+        if stdlib_dir.is_dir():
+            fn_re = re.compile(r"^\s*pub\s+fn\s+([A-Za-z_]\w*)\s*\((.*?)\)\s*(?:->\s*([^\{]+))?\s*\{")
+            for path in sorted(stdlib_dir.glob("*.ltl")):
+                lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+                pending_doc = ""
+                for line in lines:
+                    stripped = line.strip()
+                    if stripped.startswith("//") and not stripped.startswith("// --"):
+                        candidate = stripped.lstrip("/").strip()
+                        if candidate and not pending_doc:
+                            pending_doc = candidate
+                        continue
+                    m = fn_re.match(line)
+                    if m:
+                        name, params, ret = m.group(1), m.group(2).strip(), (m.group(3) or "").strip()
+                        detail = "fn %s(%s)" % (name, params)
+                        if ret:
+                            detail += " -> " + ret
+                        doc = pending_doc or ("stdlib." + path.stem)
+                        index[name] = {"detail": detail, "doc": doc}
+                        pending_doc = ""
+                        continue
+                    if stripped and not stripped.startswith("//"):
+                        pending_doc = ""
+    except Exception:            # pragma: no cover - graceful degradation
+        index = {}
+    _STDLIB_INDEX = index
+    return index
+
+
+def reset_stdlib_index() -> None:
+    """Clear the cached stdlib index (used by tests)."""
+    global _STDLIB_INDEX
+    _STDLIB_INDEX = None
+
 # Type annotations
 LATERALUS_TYPES = [
     "int", "float", "str", "bool", "list", "map", "any", "none", "void",
@@ -438,6 +487,17 @@ def get_hover(doc: TextDocument, line: int, character: int) -> Optional[dict]:
             "contents": {
                 "kind": "markdown",
                 "value": keyword_docs[word],
+            },
+        }
+
+    # stdlib function signatures (parsed from stdlib/*.ltl)
+    stdlib_info = build_stdlib_index().get(word)
+    if stdlib_info:
+        return {
+            "contents": {
+                "kind": "markdown",
+                "value": "```lateralus\n%s\n```\n\n%s" % (
+                    stdlib_info["detail"], stdlib_info["doc"]),
             },
         }
 
