@@ -1,0 +1,95 @@
+// Regression coverage for JWT header validation and RFC 7519 claims checks.
+
+import jwt
+import base64
+
+fn make_token(header_json: str, claims_json: str, key: list, hash_name: str) -> str {
+    let header_segment = base64_urlsafe_nopad(bytes_of(header_json))
+    let claims_segment = base64_urlsafe_nopad(bytes_of(claims_json))
+    let signing_input = header_segment + "." + claims_segment
+    let signature = crypto_hmac(hash_name, key, bytes_of(signing_input))
+    return signing_input + "." + base64_urlsafe_nopad(signature)
+}
+
+pub fn test_jwt_scalar_audience() -> bool {
+    let key = bytes_of("secret")
+    let token = make_token(
+        "{\"alg\":\"HS256\",\"typ\":\"JWT\"}",
+        "{\"sub\":\"u1\",\"exp\":200,\"aud\":\"api\"}",
+        key,
+        "sha256"
+    )
+    let opts = {}
+    opts["now"] = 100
+    opts["audience"] = "api"
+    return jwt.verify_hmac(token, key, "HS256", opts)[0]
+}
+
+pub fn test_jwt_array_audience() -> bool {
+    let key = bytes_of("secret")
+    let token = make_token(
+        "{\"alg\":\"HS256\",\"typ\":\"JWT\"}",
+        "{\"sub\":\"u1\",\"exp\":200,\"aud\":[\"web\",\"api\"]}",
+        key,
+        "sha256"
+    )
+    let opts = {}
+    opts["now"] = 100
+    opts["audience"] = "api"
+    return jwt.verify_hmac(token, key, "HS256", opts)[0]
+}
+
+pub fn test_jwt_expiry_boundary_and_clock_override() -> bool {
+    let key = bytes_of("secret")
+    let token = make_token(
+        "{\"alg\":\"HS256\",\"typ\":\"JWT\"}",
+        "{\"sub\":\"u1\",\"exp\":100}",
+        key,
+        "sha256"
+    )
+    let before = {}
+    before["now"] = 99
+    let boundary = {}
+    boundary["now"] = 100
+    if not jwt.verify_hmac(token, key, "HS256", before)[0] {
+        return false
+    }
+    let result = jwt.verify_hmac(token, key, "HS256", boundary)
+    return not result[0] && result[1] == "expired"
+}
+
+pub fn test_jwt_header_algorithm_must_match() -> bool {
+    let key = bytes_of("secret")
+    let token = make_token(
+        "{\"alg\":\"HS512\",\"typ\":\"JWT\"}",
+        "{\"sub\":\"u1\"}",
+        key,
+        "sha512"
+    )
+    let result = jwt.verify_hmac(token, key, "HS256", {})
+    return not result[0] && result[1] == "bad_header"
+}
+
+pub fn test_jwt_none_algorithm_rejected() -> bool {
+    let key = bytes_of("secret")
+    let token = make_token(
+        "{\"alg\":\"none\",\"typ\":\"JWT\"}",
+        "{\"sub\":\"u1\"}",
+        key,
+        "sha256"
+    )
+    let result = jwt.verify_hmac(token, key, "HS256", {})
+    return not result[0] && result[1] == "bad_header"
+}
+
+pub fn test_jwt_malformed_header_rejected() -> bool {
+    let key = bytes_of("secret")
+    let token = make_token("not-json", "{\"sub\":\"u1\"}", key, "sha256")
+    let result = jwt.verify_hmac(token, key, "HS256", {})
+    return not result[0] && result[1] == "malformed"
+}
+
+pub fn test_jwt_peek_malformed_is_safe() -> bool {
+    let result = jwt.peek("not-a-jwt")
+    return contains(keys(result), "error") && result["error"] == "malformed"
+}
