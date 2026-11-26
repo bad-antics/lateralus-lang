@@ -265,6 +265,17 @@ class TestStatistics:
         data = [2, 4, 4, 4, 5, 5, 7, 9]
         assert std_dev(data) == pytest.approx(math.sqrt(variance(data)))
 
+    def test_population_variance_single_value(self):
+        # Issue #1012: Population variance of single-value dataset is 0.0
+        assert variance([7.0], population=True) == 0.0
+        assert std_dev([7.0], population=True) == 0.0
+        with pytest.raises(ValueError):
+            variance([7.0], population=False)
+
+    def test_population_variance_multi_value(self):
+        assert variance([5.0, 9.0], population=True) == pytest.approx(4.0)
+        assert std_dev([5.0, 9.0], population=True) == pytest.approx(2.0)
+
     def test_correlation_perfect(self):
         x = [1, 2, 3, 4, 5]
         y = [2, 4, 6, 8, 10]

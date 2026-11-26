@@ -669,8 +669,12 @@ def median(data: List[float]) -> float:
 
 
 def variance(data: List[float], population: bool = False) -> float:
-    if len(data) < 2:
-        raise ValueError("variance requires at least 2 data points")
+    if not data:
+        raise ValueError("variance requires at least 1 data point")
+    if len(data) == 1:
+        if population:
+            return 0.0
+        raise ValueError("sample variance requires at least 2 data points")
     m = mean(data)
     ss = sum((x - m) ** 2 for x in data)
     return ss / len(data) if population else ss / (len(data) - 1)
