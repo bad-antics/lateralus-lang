@@ -75,7 +75,7 @@ pub fn authorization_url(client: map, state: str, nonce: str,
 // -- id_token validation --------------------------------------------
 
 /// Verify an id_token's signature (via jwt_verify_hmac) and check the
-/// standard OIDC claims: iss, aud, exp, iat, nonce.
+/// standard OIDC claims: iss, sub, aud, exp, iat, nonce.
 /// Returns [ok, claims_or_error_string].
 pub fn verify_id_token(token: str, key: list, alg: str,
                        issuer: str, audience: str, expected_nonce: str,
@@ -87,17 +87,22 @@ pub fn verify_id_token(token: str, key: list, alg: str,
         return [false, res[1]]
     }
     let claims = res[1]
+    // --- iss ---
     if not contains(keys(claims), "iss") || claims["iss"] != issuer {
         return [false, "iss mismatch"]
     }
-    // aud may be a string or a list; accept either.
+    // --- sub (required by OIDC Core §3.1.3.7) ---
+    if not contains(keys(claims), "sub") {
+        return [false, "sub missing"]
+    }
+    // --- aud: string or list ---
     let aud_ok = false
     if contains(keys(claims), "aud") {
         let aud = claims["aud"]
-        if aud == audience {
-            aud_ok = true
+        if typeof aud == "str" {
+            if aud == audience { aud_ok = true }
         } else {
-            // list form — linear search
+            // list form
             let j = 0
             while j < len(aud) {
                 if aud[j] == audience { aud_ok = true }
@@ -107,6 +112,15 @@ pub fn verify_id_token(token: str, key: list, alg: str,
     }
     if not aud_ok {
         return [false, "aud mismatch"]
+    }
+    // --- exp (required by OIDC Core §3.1.3.7) ---
+    if not contains(keys(claims), "exp") {
+        return [false, "exp missing"]
+    }
+    // exp is numeric timestamp; now_s already passed to jwt for time check,
+    // but double-check here in case jwt impl ignores opts.now.
+    if claims["exp"] < now_s {
+        return [false, "token expired"]
     }
     if expected_nonce != "" {
         if not contains(keys(claims), "nonce") || claims["nonce"] != expected_nonce {
@@ -118,15 +132,27 @@ pub fn verify_id_token(token: str, key: list, alg: str,
 
 /// Compute the `at_hash` claim value for an access_token bound to a
 /// given signing algorithm (first-half truncation rule from the OIDC
-/// Core §3.1.3.6).  Caller provides a sha256_bytes hook.
+/// Core §3.1.3.6).  Caller provides a sha256_bytes hook returning a
+/// list of integer bytes (0..255).
 pub fn at_hash_s256(access_token: str, sha256_bytes) -> str {
     let d = sha256_bytes(access_token)
     let half = len(d) / 2
-    let raw = ""
+    // Build a string from the raw bytes.  chr() only accepts 0..255
+    // but the language's chr may interpret >127 as signed.  Use
+    // explicit byte-to-char via bytes_of on a single-byte string.
+    let raw_bytes = []
     let i = 0
     while i < half {
-        raw = raw + chr(d[i])
+        raw_bytes = raw_bytes + [d[i]]
         i = i + 1
+    }
+    // Convert byte list to a raw string via bytes_of
+    let raw = ""
+    let j = 0
+    while j < len(raw_bytes) {
+        // Create a 1-byte string for each byte value
+        raw = raw + bytes_of([raw_bytes[j]]) // single-byte string
+        j = j + 1
     }
     return oauth2_strip_padding(base64_encode_url_str(raw))
 }
