@@ -22,6 +22,15 @@ reference and as discoverability ("Rosetta Code in X" searches).
 | Topological Sort            | [`topological_sort.ltl`](topological_sort.ltl) | graphs, Kahn's algorithm     |
 | Huffman Coding              | [`huffman.ltl`](huffman.ltl)                | trees + greedy                   |
 | JSON Mini Parser            | [`json_mini.ltl`](json_mini.ltl)            | recursive-descent parsing        |
+| Fibonacci Sequence          | [`fibonacci.ltl`](fibonacci.ltl)            | iterative sequence               |
+| Factorial                   | [`factorial.ltl`](factorial.ltl)            | iterative product                |
+| Greatest Common Divisor     | [`gcd.ltl`](gcd.ltl)                       | Euclid's algorithm               |
+| Primality by Trial Division | [`is_prime.ltl`](is_prime.ltl)             | number theory, early exit        |
+| Reverse a String            | [`reverse_string.ltl`](reverse_string.ltl) | char lists, indexing             |
+| Collatz Sequence            | [`collatz.ltl`](collatz.ltl)               | conditional iteration            |
+| Sum of Natural Numbers      | [`sum_naturals.ltl`](sum_naturals.ltl)     | accumulation loop                |
+| Max and Min of a List       | [`max_min.ltl`](max_min.ltl)               | list reduction                   |
+| Palindrome Detection        | [`palindrome.ltl`](palindrome.ltl)         | two-pointer comparison           |
 
 ## Verifying
 
