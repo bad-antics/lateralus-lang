@@ -669,8 +669,11 @@ def median(data: List[float]) -> float:
 
 
 def variance(data: List[float], population: bool = False) -> float:
-    if len(data) < 2:
-        raise ValueError("variance requires at least 2 data points")
+    # A population of one value has zero spread, matching statistics.pvariance.
+    # A sample still needs at least two observations (n - 1 denominator).
+    minimum = 1 if population else 2
+    if len(data) < minimum:
+        raise ValueError(f"variance requires at least {minimum} data points")
     m = mean(data)
     ss = sum((x - m) ** 2 for x in data)
     return ss / len(data) if population else ss / (len(data) - 1)
