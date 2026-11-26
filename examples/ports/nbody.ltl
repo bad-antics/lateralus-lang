@@ -1,0 +1,155 @@
+// N-body simulation — the classic 5-planet solar-system benchmark.
+//
+// Same algorithm and same constants as nbody.py: the symmetric symplectic
+// integrator from the benchmarks game, over eight parallel arrays so the inner
+// loop touches no struct. The loops live in main() rather than in helper
+// functions because the C backend still has no element type for a `list`
+// parameter — see the note in examples/ports/README.md.
+//
+// Energies are printed as integers scaled by 1e9: the language has no printf,
+// and scaling keeps the comparison with CPython exact instead of approximate.
+
+// PI, the solar mass and the day/year ratio are written out at each use: the C
+// backend emits a top-level `let` as a C global, and a global initialised from
+// another global is not a compile-time constant ("initializer element is not a
+// compile-time constant"). Inlined, the values are identical and the file is
+// still readable.
+
+fn scaled(v: float) -> int {
+    return to_int(round(v * 1000000000.0))
+}
+
+fn main() -> int {
+    let n = 5
+
+    let mass = [0.0] * n
+    let xs = [0.0] * n
+    let ys = [0.0] * n
+    let zs = [0.0] * n
+    let vxs = [0.0] * n
+    let vys = [0.0] * n
+    let vzs = [0.0] * n
+
+    // sun
+    mass[0] = 4.0 * 3.141592653589793 * 3.141592653589793
+    // jupiter
+    mass[1] = 9.54791938424326609e-04
+    xs[1] = 4.84143144246472090e+00
+    ys[1] = -1.16032004402742839e+00
+    zs[1] = -1.03622044471123109e-01
+    vxs[1] = 1.66007664274403694e-03 * 365.24
+    vys[1] = 7.69901118419740425e-03 * 365.24
+    vzs[1] = -6.90460016972063023e-05 * 365.24
+    // saturn
+    mass[2] = 2.85885980666130812e-04
+    xs[2] = 8.34336671824457987e+00
+    ys[2] = 4.12479856412430479e+00
+    zs[2] = -4.03523417114321381e-01
+    vxs[2] = -2.76742510726862411e-03 * 365.24
+    vys[2] = 4.99852801234917238e-03 * 365.24
+    vzs[2] = 2.30417297573763929e-05 * 365.24
+    // uranus
+    mass[3] = 4.36624404335156298e-05
+    xs[3] = 1.28943695621391310e+01
+    ys[3] = -1.51111514016986312e+01
+    zs[3] = -2.23307578892655734e-01
+    vxs[3] = 2.96460137564761618e-03 * 365.24
+    vys[3] = 2.37847173959480950e-03 * 365.24
+    vzs[3] = -2.96589568540237556e-05 * 365.24
+    // neptune
+    mass[4] = 5.15138902046611451e-05
+    xs[4] = 1.53796971148509165e+01
+    ys[4] = -2.59193146099879641e+01
+    zs[4] = 1.79258772950371181e-01
+    vxs[4] = 2.68067772490389322e-03 * 365.24
+    vys[4] = 1.62824170038242295e-03 * 365.24
+    vzs[4] = -9.51592254519715870e-05 * 365.24
+
+    // Put the sun at the barycentre by cancelling total momentum.
+    let px = 0.0
+    let py = 0.0
+    let pz = 0.0
+    let i = 0
+    while i < n {
+        px = px + vxs[i] * mass[i]
+        py = py + vys[i] * mass[i]
+        pz = pz + vzs[i] * mass[i]
+        i = i + 1
+    }
+    let solar = 4.0 * 3.141592653589793 * 3.141592653589793
+    vxs[0] = 0.0 - px / solar
+    vys[0] = 0.0 - py / solar
+    vzs[0] = 0.0 - pz / solar
+
+    // Energy before.
+    let e = 0.0
+    i = 0
+    while i < n {
+        e = e + 0.5 * mass[i] * (vxs[i] * vxs[i] + vys[i] * vys[i] + vzs[i] * vzs[i])
+        let j = i + 1
+        while j < n {
+            let dx = xs[i] - xs[j]
+            let dy = ys[i] - ys[j]
+            let dz = zs[i] - zs[j]
+            e = e - (mass[i] * mass[j]) / sqrt(dx * dx + dy * dy + dz * dz)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    println(str(scaled(e)))
+
+    // Integrate.
+    let dt = 0.01
+    let steps = 500000
+    let step = 0
+    while step < steps {
+        let a = 0
+        while a < n - 1 {
+            let b = a + 1
+            while b < n {
+                let dx = xs[a] - xs[b]
+                let dy = ys[a] - ys[b]
+                let dz = zs[a] - zs[b]
+                let d2 = dx * dx + dy * dy + dz * dz
+                let mag = dt / (d2 * sqrt(d2))
+                let ma = mass[a]
+                let mb = mass[b]
+                vxs[a] = vxs[a] - dx * mb * mag
+                vys[a] = vys[a] - dy * mb * mag
+                vzs[a] = vzs[a] - dz * mb * mag
+                vxs[b] = vxs[b] + dx * ma * mag
+                vys[b] = vys[b] + dy * ma * mag
+                vzs[b] = vzs[b] + dz * ma * mag
+                b = b + 1
+            }
+            a = a + 1
+        }
+        let c = 0
+        while c < n {
+            xs[c] = xs[c] + dt * vxs[c]
+            ys[c] = ys[c] + dt * vys[c]
+            zs[c] = zs[c] + dt * vzs[c]
+            c = c + 1
+        }
+        step = step + 1
+    }
+
+    // Energy after.
+    e = 0.0
+    i = 0
+    while i < n {
+        e = e + 0.5 * mass[i] * (vxs[i] * vxs[i] + vys[i] * vys[i] + vzs[i] * vzs[i])
+        let j2 = i + 1
+        while j2 < n {
+            let dx = xs[i] - xs[j2]
+            let dy = ys[i] - ys[j2]
+            let dz = zs[i] - zs[j2]
+            e = e - (mass[i] * mass[j2]) / sqrt(dx * dx + dy * dy + dz * dz)
+            j2 = j2 + 1
+        }
+        i = i + 1
+    }
+    println(str(scaled(e)))
+
+    return 0
+}
