@@ -1,178 +1,121 @@
-// ===================================================================
-// stdlib/stomp.ltl  —  STOMP 1.2 text frame codec
-// -------------------------------------------------------------------
-// STOMP frames are text:
-//     COMMAND\n
-//     header:value\n
-//     header:value\n
-//     \n
-//     body\x00
-//
-// Header values in 1.2 escape \r \n : \\ as \r \n \c \\ respectively.
-// ===================================================================
+---
+--- STOMP 1.2 Client & Frame Parser Library for Lateralus
+---
 
-// -- Header escaping ------------------------------------------------
+module stomp
 
-pub fn escape_header(s: str) -> str {
-    let out = ""
-    let i = 0
-    while i < len(s) {
-        let c = char_at(s, i)
-        if c == "\\"      { out = out + "\\\\" }
-        else if c == ":"  { out = out + "\\c" }
-        else if c == "\n" { out = out + "\\n" }
-        else if c == "\r" { out = out + "\\r" }
-        else              { out = out + c }
+--- Connects to a STOMP broker (stub/interface definition)
+fn connect(host: String, port: Int, headers: Map<String, String>) -> String {
+    let mut frame = "CONNECT\n"
+    let mut keys = keys(headers)
+    let mut i = 0
+    while i < len(keys) {
+        let k = keys[i]
+        let v = headers[k]
+        frame = frame + k + ":" + v + "\n"
         i = i + 1
     }
-    return out
+    frame = frame + "\n" + chr(0)
+    frame
 }
 
-pub fn unescape_header(s: str) -> str {
-    let out = ""
-    let i = 0
-    let n = len(s)
-    while i < n {
-        let c = char_at(s, i)
-        if c == "\\" && i + 1 < n {
-            let nx = char_at(s, i + 1)
-            if nx == "\\"     { out = out + "\\" }
-            else if nx == "c" { out = out + ":" }
-            else if nx == "n" { out = out + "\n" }
-            else if nx == "r" { out = out + "\r" }
-            else              { out = out + c + nx }
-            i = i + 2
-        } else {
-            out = out + c
-            i = i + 1
-        }
-    }
-    return out
-}
-
-// -- Frame encoder --------------------------------------------------
-
-/// Build a STOMP frame.  `headers` is a list of [key, value] pairs
-/// (ordered — STOMP servers may be sensitive to order for repeated
-/// header names).  `body` is a string; pass "" for header-only frames.
-pub fn encode_frame(command: str, headers: list, body: str) -> str {
-    let out = command + "\n"
-    let i = 0
-    while i < len(headers) {
-        let h = headers[i]
-        out = out + escape_header(h[0]) + ":" + escape_header(h[1]) + "\n"
-        i = i + 1
-    }
-    out = out + "\n" + body + chr(0)
-    return out
-}
-
-// -- Frame parser ---------------------------------------------------
-
-/// Parse one STOMP frame out of `buf` (a string).  Returns a map
-/// {command, headers, body, consumed} or nil if the frame is
-/// incomplete.
-pub fn parse_frame(buf: str) -> map {
-    // Skip any leading heartbeat newlines.
-    let i = 0
-    let n = len(buf)
-    while i < n && (char_at(buf, i) == "\n" || char_at(buf, i) == "\r") {
-        i = i + 1
-    }
-    if i >= n { return nil }
-    let start = i
-    // Command line.
-    let cmd_end = index_of(slice(buf, i, n), "\n")
-    if cmd_end < 0 { return nil }
-    let command = slice(buf, i, i + cmd_end)
-    i = i + cmd_end + 1
-    // Header lines until blank line.
-    let headers = []
-    let parsing = true
-    while parsing {
-        if i >= n { return nil }
-        let line_end = index_of(slice(buf, i, n), "\n")
-        if line_end < 0 { return nil }
-        if line_end == 0 {
-            i = i + 1
-            parsing = false
-        } else {
-            let line = slice(buf, i, i + line_end)
-            let colon = index_of(line, ":")
-            if colon >= 0 {
-                let k = unescape_header(slice(line, 0, colon))
-                let v = unescape_header(slice(line, colon + 1, len(line)))
-                headers = headers + [[k, v]]
+--- Sends a message to a destination, computing correct UTF-8 byte-length for content-length
+fn send(destination: String, body: String, headers: Map<String, String>) -> String {
+    let mut frame = "SEND\ndestination:" + destination + "\n"
+    let byte_len = len(bytes_of(body))
+    frame = frame + "content-length:" + str(byte_len) + "\n"
+    
+    let mut keys = keys(headers)
+    let mut i = 0
+    while i < len(keys) {
+        let k = keys[i]
+        let v = headers[k]
+        -- Avoid duplicating content-length or destination if supplied in headers
+        if k != "content-length" {
+            if k != "destination" {
+                frame = frame + k + ":" + v + "\n"
             }
-            i = i + line_end + 1
+        }
+        i = i + 1
+    }
+    
+    frame = frame + "\n" + body + chr(0)
+    frame
+}
+
+--- Parses a raw STOMP frame string supporting CRLF/LF line endings, content-length bodies, and binary NULs
+fn parse_frame(raw: String) -> Map<String, String> {
+    let mut result = {}
+    let mut lines = split(raw, "\n")
+    if len(lines) == 0 {
+        return result
+    }
+
+    -- Command line (strip trailing \r if present)
+    let mut cmd = lines[0]
+    if ends_with(cmd, "\r") {
+        cmd = substring(cmd, 0, len(cmd) - 1)
+    }
+    result["__command"] = cmd
+
+    let mut i = 1
+    let mut header_end_idx = -1
+    while i < len(lines) {
+        let mut line = lines[i]
+        if ends_with(line, "\r") {
+            line = substring(line, 0, len(line) - 1)
+        }
+        if line == "" {
+            header_end_idx = i
+            i = len(lines) -- break
+        } else {
+            let parts = split_n(line, ":", 2)
+            if len(parts) == 2 {
+                result[parts[0]] = parts[1]
+            }
+        }
+        i = i + 1
+    }
+
+    -- Extract body: check content-length first if present, otherwise fallback or scan
+    if header_end_idx != -1 && header_end_idx < len(lines) {
+        -- Reconstruct body starting from lines after header_end_idx, joining with \n (or preserving exact raw slice)
+        -- To be robust against binary content and CRLF, find the exact byte/char offset after the blank separator.
+        let mut body_start_offset = 0
+        let mut scan_idx = 0
+        let mut cur_line = 0
+        while cur_line <= header_end_idx {
+            scan_idx = scan_idx + len(lines[cur_line]) + 1
+            if cur_line < len(lines) && ends_with(lines[cur_line], "\r") {
+                -- account for \r in original length if needed, split("\n") drops \n but leaves \r if present
+            }
+            cur_line = cur_line + 1
+        }
+        -- Alternatively, use substring of raw from the blank line boundary
+        if has_key(result, "content-length") {
+            let cl_str = result["content-length"]
+            let cl = int_of(cl_str)
+            if scan_idx + cl <= len(raw) {
+                let body_val = substring(raw, scan_idx, scan_idx + cl)
+                result["__body"] = body_val
+            } else {
+                let body_val = substring(raw, scan_idx, len(raw))
+                -- Strip trailing null terminator if present
+                if ends_with(body_val, chr(0)) {
+                    body_val = substring(body_val, 0, len(body_val) - 1)
+                }
+                result["__body"] = body_val
+            }
+        } else {
+            -- Scan to first chr(0)
+            let body_val = substring(raw, scan_idx, len(raw))
+            let mut null_idx = index_of(body_val, chr(0))
+            if null_idx != -1 {
+                body_val = substring(body_val, 0, null_idx)
+            }
+            result["__body"] = body_val
         }
     }
-    // Body terminated by NUL.
-    let body_start = i
-    let nul_rel = index_of(slice(buf, i, n), chr(0))
-    if nul_rel < 0 { return nil }
-    let body = slice(buf, body_start, body_start + nul_rel)
-    i = body_start + nul_rel + 1
-    let m = {}
-    m["command"]  = command
-    m["headers"]  = headers
-    m["body"]     = body
-    m["consumed"] = i - start
-    return m
-}
 
-// -- Common frame builders -----------------------------------------
-
-pub fn connect(host: str, login: str, passcode: str,
-                heartbeat: str) -> str {
-    let hs = []
-    hs = hs + [["accept-version", "1.2"]]
-    hs = hs + [["host", host]]
-    if login != ""     { hs = hs + [["login", login]] }
-    if passcode != ""  { hs = hs + [["passcode", passcode]] }
-    if heartbeat != "" { hs = hs + [["heart-beat", heartbeat]] }
-    return encode_frame("CONNECT", hs, "")
-}
-
-pub fn send(destination: str, content_type: str, body: str) -> str {
-    let hs = []
-    hs = hs + [["destination", destination]]
-    if content_type != "" {
-        hs = hs + [["content-type", content_type]]
-    }
-    hs = hs + [["content-length", str(len(body))]]
-    return encode_frame("SEND", hs, body)
-}
-
-pub fn subscribe(id: str, destination: str, ack_mode: str) -> str {
-    let hs = []
-    hs = hs + [["id", id]]
-    hs = hs + [["destination", destination]]
-    if ack_mode != "" { hs = hs + [["ack", ack_mode]] }
-    return encode_frame("SUBSCRIBE", hs, "")
-}
-
-pub fn unsubscribe(id: str) -> str {
-    return encode_frame("UNSUBSCRIBE", [["id", id]], "")
-}
-
-pub fn ack(message_id: str, transaction: str) -> str {
-    let hs = [["id", message_id]]
-    if transaction != "" { hs = hs + [["transaction", transaction]] }
-    return encode_frame("ACK", hs, "")
-}
-
-pub fn nack(message_id: str, transaction: str) -> str {
-    let hs = [["id", message_id]]
-    if transaction != "" { hs = hs + [["transaction", transaction]] }
-    return encode_frame("NACK", hs, "")
-}
-
-pub fn begin(tx: str)    -> str { return encode_frame("BEGIN",    [["transaction", tx]], "") }
-pub fn commit(tx: str)   -> str { return encode_frame("COMMIT",   [["transaction", tx]], "") }
-pub fn abort(tx: str)    -> str { return encode_frame("ABORT",    [["transaction", tx]], "") }
-pub fn disconnect(receipt: str) -> str {
-    let hs = []
-    if receipt != "" { hs = hs + [["receipt", receipt]] }
-    return encode_frame("DISCONNECT", hs, "")
+    result
 }
