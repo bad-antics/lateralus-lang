@@ -655,7 +655,17 @@ def gradient(fn: Callable, point: List[float]) -> List[float]:
 def mean(data: List[float]) -> float:
     if not data:
         raise ValueError("mean of empty dataset")
-    return sum(data) / len(data)
+    n = len(data)
+    try:
+        s = math.fsum(data)
+        if math.isinf(s):
+            raise OverflowError
+        return s / n
+    except OverflowError:
+        m = 0.0
+        for i, x in enumerate(data, 1):
+            m += (x - m) / i
+        return m
 
 
 def median(data: List[float]) -> float:

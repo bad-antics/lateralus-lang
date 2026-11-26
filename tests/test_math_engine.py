@@ -296,3 +296,11 @@ class TestNumericalMethods:
         # ∫₀^π sin(x) dx = 2
         result = simpson_integrate(math.sin, 0, math.pi, 1000)
         assert result == pytest.approx(2.0, abs=1e-8)
+
+
+def test_mean_large_finite_overflow():
+    # Issue #1015: Mean should not overflow to infinity for identical finite large floats
+    data = [1e308, 1e308]
+    result = mean(data)
+    assert not math.isinf(result)
+    assert result == pytest.approx(1e308)
