@@ -63,6 +63,22 @@ class TestLTLNumber:
 # -------------------------------------------------------------------------
 
 class TestMatrix:
+    @pytest.mark.parametrize("row", [[], [9], [9, 8, 7]])
+    def test_row_assignment_rejects_wrong_length_without_mutation(self, row):
+        matrix = Matrix([[1, 2], [3, 4]])
+        with pytest.raises(ValueError, match="row.*length|length.*row"):
+            matrix[0] = row
+        assert matrix.shape == (2, 2)
+        assert matrix.data == [[1, 2], [3, 4]]
+        assert matrix.transpose().data == [[1, 3], [2, 4]]
+
+    def test_row_assignment_accepts_matching_iterable(self):
+        matrix = Matrix([[1, 2], [3, 4]])
+        matrix[-1] = (value for value in [5, 6])
+        assert matrix.shape == (2, 2)
+        assert matrix.data == [[1, 2], [5, 6]]
+        assert matrix.transpose().data == [[1, 5], [2, 6]]
+
     def test_creation(self):
         m = Matrix([[1, 2], [3, 4]])
         assert m.shape == (2, 2)
