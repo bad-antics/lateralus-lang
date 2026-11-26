@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>stdlib.dict_encoding tutorial</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "Dictionary encoding, one platform at a time"
+author: bounty-hunter
+date: 2026-11-19
+abstract: A worked tour of stdlib/dict_encoding.ltl using six train departures. Learn how first appearance fixes dictionary order, how decode rebuilds a row, and exactly when four entries fit in two bits but five need three.
+---
+
+# Six trains, a handful of platforms
+
+Picture a departure board with six rows. Each row names the platform the train leaves from:
+
+```
+Platform_A  Platform_B  Platform_A  Platform_C  Platform_B  Platform_A
+```
+
+The labels repeat. Storing the same strings over and over wastes space — the classic problem in columnar formats such as Parquet (PLAIN_DICTIONARY) and Arrow (DictionaryArray). **Dictionary encoding** replaces the label column with two smaller pieces:
+
+- a **dictionary**: each distinct label, stored once;
+- **indices**: one integer per row, pointing into the dictionary.
+
+`stdlib/dict_encoding.ltl` gives us four functions: `encode`, `decode`, `index_bit_width`, and `cardinality`.
+
+## encode: first appearance sets the order
+
+The dictionary order is not alphabetical. It is the order in which labels are *first seen*:
+
+```
+encode(["Platform_A", "Platform_B", "Platform_A",
+        "Platform_C", "Platform_B", "Platform_A"])
+```
+
+Walk the rows left to right. The first `Platform_A` is new, so it becomes index 0. `Platform_B` is new, index 1. The second `Platform_A` is already in the dictionary, so it reuses 0. `Platform_C` is new, index 2. The result:
+
+```
+dictionary = ["Platform_A", "Platform_B", "Platform_C"]
+indices    = [0, 1, 0, 2, 1, 0]
+```
+
+Six labels collapsed into three strings and six tiny integers. The machinery behind it is a list for the dictionary and a map from label to index; a `while` loop appends a new entry only when `contains(dict_idx, k)` is false.
+
+## decode: rebuild the original row
+
+Decoding walks the indices and looks each one up in the dictionary:
+
+```
+decode(enc) == ["Platform_A", "Platform_B", "Platform_A",
+                "Platform_C", "Platform_B", "Platform_A"]
+```
+
+Round-tripping is lossless: `decode(encode(values)) == values`, repeated labels and all.
+
+## The bit-width boundary: four fit in two, five need three
+
+Once the dictionary is shared once, each index only needs enough bits to name the largest entry. That is `ceil(log2(cardinality))`, returned by `index_bit_width`:
+
+```
+cardinality 4  ->  index_bit_width 2   (0..3 fit in two bits)
+cardinality 5  ->  index_bit_width 3   (0..4 need three bits)
+```
+
+This is why a fourth dictionary entry is free (still two bits) but a fifth one bumps every index up to three bits. The function computes it with an integer shift loop — no floating point — and returns `1` for empty or single-entry columns so the result is always usable.
+
+## Runnable example and pinned vectors
+
+The companion file `examples/tutorials/dict_encoding_train.ltl` runs the departure-board example end to end:
+
+```
+$ ltlc run examples/tutorials/dict_encoding_train.ltl
+dictionary : ['Platform_A', 'Platform_B', 'Platform_C']
+indices    : [0, 1, 0, 2, 1, 0]
+decoded    : ['Platform_A', 'Platform_B', 'Platform_A', 'Platform_C', 'Platform_B', 'Platform_A']
+cardinality: 3
+bits/value : 2
+```
+
+It ends with five pinned `@test` vectors, so `lateralus test` self-verifies the behaviour this tutorial describes:
+
+1. repeated labels — dictionary order and index round-trip;
+2. a one-entry column — all indices zero, bit width 1;
+3. an empty column — empty dictionary, bit width 1;
+4. four entries — the 2-bit boundary;
+5. five entries — the 3-bit boundary.
+
+## Why it matters
+
+Dictionary encoding is the quiet workhorse behind analytic databases. Low-cardinality columns — platform names, country codes, status enums — shrink dramatically once the repeated strings are factored out. `stdlib/dict_encoding.ltl` brings that technique to Lateralus in a few dozen lines, fully testable with pinned vectors.
+
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>
