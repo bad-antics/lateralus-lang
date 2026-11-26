@@ -140,7 +140,24 @@ class TestVector:
         a = Vector([1, 2, 3])
         b = Vector([4, 5, 6])
         assert a.dot(b) == 32  # 4 + 10 + 18
+    @pytest.mark.parametrize("left,right", [
+        ([1, 2, 3], [4, 5]),
+        ([1, 2], [4, 5, 6]),
+        ([], [1]),
+        ([1], []),
+    ])
+    def test_operations_reject_dimension_mismatch(self, left, right):
+        a = Vector(left)
+        b = Vector(right)
 
+        with pytest.raises(ValueError):
+            a + b
+
+        with pytest.raises(ValueError):
+            a - b
+
+        with pytest.raises(ValueError):
+            a.dot(b)
     def test_norm(self):
         v = Vector([3, 4])
         assert v.norm() == pytest.approx(5.0)
