@@ -1,102 +1,235 @@
-// Lateralus Standard Library — Bit Flags
-// Type-safe bitflag operations for system programming
+-- stdlib/bitflags.ltl
+-- Type-safe protocol & permission bitmasks, pipeline-friendly.
+--
+-- Design notes:
+--   * Every operation takes the flag set FIRST so it composes with `|>`.
+--   * Named-flag lookups return Result (Ok / Err) -- unknown names are
+--     reported, never silently ignored.
+--   * clear is width-agnostic: (flags | mask) ^ mask removes the bits in
+--     `mask` without needing a fixed-width bitwise NOT.
+--
+-- Example:
+--   let perms = bf_empty() |> bf_set(READ) |> bf_set(WRITE)
+--   perms |> bf_has(WRITE)   -- true
 
-/// A set of named bit flags backed by a u64
-struct BitFlags {
-    value: u64,
-    names: [(str, u64)],
+-- ---------------------------------------------------------------
+-- Construction
+-- ---------------------------------------------------------------
+
+--- The empty flag set.
+fn bf_empty() {
+    return 0
 }
 
-impl BitFlags {
-    /// Create an empty flag set
-    pub fn new() -> BitFlags {
-        BitFlags { value: 0, names: [] }
+--- Build a flag set from a list of single-bit masks.
+fn bf_from_list(masks) {
+    let acc = 0
+    for m in masks {
+        acc = acc | m
     }
+    return acc
+}
 
-    /// Create from a raw integer value
-    pub fn from_raw(value: u64) -> BitFlags {
-        BitFlags { value, names: [] }
+--- The mask for bit position `n` (0-based).
+fn bf_bit(n) {
+    return 1 << n
+}
+
+-- ---------------------------------------------------------------
+-- Core operations (flag set first => pipeline friendly)
+-- ---------------------------------------------------------------
+
+--- Set (turn on) all bits of `mask`.
+fn bf_set(flags, mask) {
+    return flags | mask
+}
+
+--- Clear (turn off) all bits of `mask`. Width-agnostic:
+--- (flags | mask) ^ mask forces the mask bits on, then flips them off,
+--- leaving every other bit untouched.
+fn bf_clear(flags, mask) {
+    return (flags | mask) ^ mask
+}
+
+--- Toggle all bits of `mask`.
+fn bf_toggle(flags, mask) {
+    return flags ^ mask
+}
+
+--- True when ALL bits of `mask` are set in `flags`.
+fn bf_has(flags, mask) {
+    return (flags & mask) == mask
+}
+
+--- True when ANY bit of `mask` is set in `flags`.
+fn bf_has_any(flags, mask) {
+    return (flags & mask) != 0
+}
+
+--- True when no bits are set.
+fn bf_is_empty(flags) {
+    return flags == 0
+}
+
+-- ---------------------------------------------------------------
+-- Set algebra
+-- ---------------------------------------------------------------
+
+--- Union of two flag sets.
+fn bf_union(a, b) {
+    return a | b
+}
+
+--- Intersection of two flag sets.
+fn bf_intersect(a, b) {
+    return a & b
+}
+
+--- Difference: bits in `a` that are not in `b`.
+fn bf_difference(a, b) {
+    return bf_clear(a, b)
+}
+
+--- Complement of `flags` within a bounded `universe` mask.
+--- universe ^ (flags & universe) never depends on integer width.
+fn bf_complement(flags, universe) {
+    return universe ^ (flags & universe)
+}
+
+-- ---------------------------------------------------------------
+-- Inspection
+-- ---------------------------------------------------------------
+
+--- Number of set bits (population count).
+fn bf_count(flags) {
+    let n = 0
+    let v = flags
+    while v != 0 {
+        n = n + (v & 1)
+        v = v >> 1
     }
+    return n
+}
 
-    /// Define a named flag
-    pub fn define(mut self, name: str, bit: u64) -> BitFlags {
-        self.names.push((name, 1u64 << bit))
-        self
+--- Render the lowest `width` bits as a binary string, MSB first.
+fn bf_to_binary(flags, width) {
+    let out = ""
+    let i = width - 1
+    while i >= 0 {
+        if ((flags >> i) & 1) == 1 {
+            out = out + "1"
+        } else {
+            out = out + "0"
+        }
+        i = i - 1
     }
+    return out
+}
 
-    /// Set a flag by name
-    pub fn set(mut self, name: str) -> Result<BitFlags, str> {
-        let mask = self.names
-            |> find(|(n, _)| n == name)
-            |> map(|(_, m)| m)
-            |> ok_or("Unknown flag: {name}")?
-        self.value |= mask
-        Ok(self)
+-- ---------------------------------------------------------------
+-- Named flags with Result validation
+-- ---------------------------------------------------------------
+-- A "table" is a list of [name, mask] pairs, e.g.
+--   [["READ", 4], ["WRITE", 2], ["EXEC", 1]]
+
+--- Look up a flag mask by name. Ok(mask) or Err(message).
+fn bf_lookup(table, name) {
+    for entry in table {
+        if entry[0] == name {
+            return Ok(entry[1])
+        }
     }
+    return Err("unknown flag: " + name)
+}
 
-    /// Clear a flag by name
-    pub fn clear(mut self, name: str) -> Result<BitFlags, str> {
-        let mask = self.names
-            |> find(|(n, _)| n == name)
-            |> map(|(_, m)| m)
-            |> ok_or("Unknown flag: {name}")?
-        self.value &= !mask
-        Ok(self)
+--- Set a named flag. Returns Ok(new_flags) or Err on unknown name.
+fn bf_set_named(flags, table, name) {
+    let r = bf_lookup(table, name)
+    match r {
+        Ok(mask) => Ok(bf_set(flags, mask)),
+        Err(e) => Err(e)
     }
+}
 
-    /// Toggle a flag by name
-    pub fn toggle(mut self, name: str) -> Result<BitFlags, str> {
-        let mask = self.names
-            |> find(|(n, _)| n == name)
-            |> map(|(_, m)| m)
-            |> ok_or("Unknown flag: {name}")?
-        self.value ^= mask
-        Ok(self)
+--- Clear a named flag. Returns Ok(new_flags) or Err on unknown name.
+fn bf_clear_named(flags, table, name) {
+    let r = bf_lookup(table, name)
+    match r {
+        Ok(mask) => Ok(bf_clear(flags, mask)),
+        Err(e) => Err(e)
     }
+}
 
-    /// Check if a flag is set
-    pub fn has(self, name: str) -> bool {
-        self.names
-            |> find(|(n, _)| n == name)
-            |> map(|(_, m)| self.value & m != 0)
-            |> unwrap_or(false)
+--- Toggle a named flag. Returns Ok(new_flags) or Err on unknown name.
+fn bf_toggle_named(flags, table, name) {
+    let r = bf_lookup(table, name)
+    match r {
+        Ok(mask) => Ok(bf_toggle(flags, mask)),
+        Err(e) => Err(e)
     }
+}
 
-    /// Check if all given flags are set
-    pub fn has_all(self, names: [str]) -> bool {
-        names |> all(|n| self.has(n))
+--- Test a named flag. Returns Ok(bool) or Err on unknown name.
+fn bf_has_named(flags, table, name) {
+    let r = bf_lookup(table, name)
+    match r {
+        Ok(mask) => Ok(bf_has(flags, mask)),
+        Err(e) => Err(e)
     }
+}
 
-    /// Check if any of the given flags are set
-    pub fn has_any(self, names: [str]) -> bool {
-        names |> any(|n| self.has(n))
+--- Build a flag set from a list of names. Fails on the first unknown name.
+fn bf_from_names(table, names) {
+    let acc = 0
+    for name in names {
+        let r = bf_lookup(table, name)
+        match r {
+            Ok(mask) => {
+                acc = acc | mask
+            },
+            Err(e) => {
+                return Err(e)
+            }
+        }
     }
+    return Ok(acc)
+}
 
-    /// Get raw value
-    pub fn raw(self) -> u64 { self.value }
-
-    /// Union of two flag sets
-    pub fn union(self, other: BitFlags) -> BitFlags {
-        BitFlags { value: self.value | other.value, names: self.names }
+--- List the names of all flags set in `flags`, in table order.
+fn bf_names(flags, table) {
+    let out = []
+    for entry in table {
+        if bf_has(flags, entry[1]) {
+            out = out + [entry[0]]
+        }
     }
+    return out
+}
 
-    /// Intersection of two flag sets
-    pub fn intersect(self, other: BitFlags) -> BitFlags {
-        BitFlags { value: self.value & other.value, names: self.names }
-    }
+-- ---------------------------------------------------------------
+-- Reference flag tables (RFC 9293 TCP control bits, POSIX modes)
+-- ---------------------------------------------------------------
 
-    /// List all active flag names
-    pub fn active(self) -> [str] {
-        self.names
-            |> filter(|(_, m)| self.value & m != 0)
-            |> map(|(n, _)| n)
-            |> collect
-    }
+--- TCP header control bits (RFC 9293 Section 3.1).
+fn tcp_flags_table() {
+    return [
+        ["FIN", 1],
+        ["SYN", 2],
+        ["RST", 4],
+        ["PSH", 8],
+        ["ACK", 16],
+        ["URG", 32],
+        ["ECE", 64],
+        ["CWR", 128]
+    ]
+}
 
-    /// Display as a human-readable string
-    pub fn to_string(self) -> str {
-        let flags = self.active()
-        if flags.is_empty() { "(none)" }
-        else { flags |> join(" | ") }
-    }
+--- POSIX-style file access flags.
+fn posix_flags_table() {
+    return [
+        ["EXEC", 1],
+        ["WRITE", 2],
+        ["READ", 4],
+        ["CLOEXEC", 8]
+    ]
 }
