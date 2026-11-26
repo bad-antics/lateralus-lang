@@ -14,7 +14,10 @@ import time
 
 /// Sign a compact JWT using an HMAC algorithm.
 pub fn sign_hmac(claims: map, key: list, alg: str) -> str {
-    let header_json = "{\"typ\":\"JWT\",\"alg\":\"" + alg + "\"}"
+    let header = {}
+    header["typ"] = "JWT"
+    header["alg"] = alg
+    let header_json = json_stringify(header)
     let h = base64_urlsafe_nopad(bytes_of(header_json))
     let p = base64_urlsafe_nopad(bytes_of(json_stringify(claims)))
     let signing_input = h + "." + p
@@ -29,14 +32,33 @@ pub fn verify_hmac(token: str, key: list, alg: str, opts: map) -> list {
     if len(parts) != 3 {
         return [false, "malformed"]
     }
+    // The protected header is part of the signed input. Require it to name
+    // the algorithm the caller asked us to verify; this also rejects the
+    // unsecured JWT `alg: none` form.
+    let decoded_header = decode_json_segment(parts[0])
+    if not decoded_header[0] || type_of(decoded_header[1]) != "map" {
+        return [false, "malformed"]
+    }
+    let header = decoded_header[1]
+    if not contains(keys(header), "alg") || header["alg"] != alg || alg == "none" {
+        return [false, "bad_header"]
+    }
     let signing_input = parts[0] + "." + parts[1]
-    let want = base64_urlsafe_decode_nopad(parts[2])
+    let encoded_signature = decode_segment(parts[2])
+    if not encoded_signature[0] {
+        return [false, "malformed"]
+    }
+    let want = encoded_signature[1]
     let hash_name = hmac_hash_for(alg)
     let got = crypto_hmac(hash_name, key, bytes_of(signing_input))
     if not crypto_ct_eq(got, want) {
         return [false, "bad_signature"]
     }
-    let claims = json_parse(base64_urlsafe_decode_nopad(parts[1]))
+    let decoded_claims = decode_json_segment(parts[1])
+    if not decoded_claims[0] || type_of(decoded_claims[1]) != "map" {
+        return [false, "malformed"]
+    }
+    let claims = decoded_claims[1]
     let err = check_claims(claims, opts)
     if len(err) > 0 {
         return [false, err]
@@ -48,8 +70,19 @@ pub fn verify_hmac(token: str, key: list, alg: str, opts: map) -> list {
 pub fn peek(token: str) -> map {
     let parts = split(token, ".")
     let out = {}
-    out["header"] = json_parse(base64_urlsafe_decode_nopad(parts[0]))
-    out["claims"] = json_parse(base64_urlsafe_decode_nopad(parts[1]))
+    if len(parts) < 2 {
+        out["error"] = "malformed"
+        return out
+    }
+    let header = decode_json_segment(parts[0])
+    let claims = decode_json_segment(parts[1])
+    if not header[0] || type_of(header[1]) != "map" ||
+       not claims[0] || type_of(claims[1]) != "map" {
+        out["error"] = "malformed"
+        return out
+    }
+    out["header"] = header[1]
+    out["claims"] = claims[1]
     return out
 }
 
@@ -69,6 +102,23 @@ pub fn issue(sub: str, key: list, ttl_s: int, extra: map, alg: str) -> str {
 
 // -- Internals ------------------------------------------------------
 
+fn decode_json_segment(segment: str) -> list {
+    try {
+        let value = json_parse(base64_urlsafe_decode_nopad(segment))
+        return [true, value]
+    } catch e {
+        return [false, "malformed"]
+    }
+}
+
+fn decode_segment(segment: str) -> list {
+    try {
+        return [true, base64_urlsafe_decode_nopad(segment)]
+    } catch e {
+        return [false, "malformed"]
+    }
+}
+
 pub fn hmac_hash_for(alg: str) -> str {
     if alg == "HS256" { return "sha256" }
     if alg == "HS384" { return "sha384" }
@@ -78,12 +128,15 @@ pub fn hmac_hash_for(alg: str) -> str {
 
 pub fn check_claims(c: map, opts: map) -> str {
     let now = time_unix_now()
+    if contains(keys(opts), "now") {
+        now = opts["now"]
+    }
     let leeway = 0
     if contains(keys(opts), "leeway_s") {
         leeway = opts["leeway_s"]
     }
     if contains(keys(c), "exp") {
-        if now > c["exp"] + leeway {
+        if now >= c["exp"] + leeway {
             return "expired"
         }
     }
@@ -93,11 +146,22 @@ pub fn check_claims(c: map, opts: map) -> str {
         }
     }
     if contains(keys(opts), "audience") {
-        let aud = ""
+        let aud_ok = false
         if contains(keys(c), "aud") {
-            aud = c["aud"]
+            let aud = c["aud"]
+            if type_of(aud) == "list" {
+                let i = 0
+                while i < len(aud) {
+                    if aud[i] == opts["audience"] {
+                        aud_ok = true
+                    }
+                    i = i + 1
+                }
+            } else if aud == opts["audience"] {
+                aud_ok = true
+            }
         }
-        if aud != opts["audience"] {
+        if not aud_ok {
             return "wrong_audience"
         }
     }
