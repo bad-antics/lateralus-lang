@@ -867,8 +867,12 @@ class PythonTranspiler(ASTVisitor):
             "stdlib.math":      "_math",
             "strings":          "_builtins",   # string funcs are in preamble
             "stdlib.strings":   "_builtins",
-            "collections":      "_builtins",
-            "stdlib.collections": "_builtins",
+            # ``collections`` is a Lateralus stdlib name.  Mapping it to
+            # Python's builtins made ``import collections`` resolve to an
+            # object with no Lateralus Stack/Queue API (and produced a
+            # misleading ``builtins.Stack`` AttributeError).
+            "collections":      "lateralus_lang.data",
+            "stdlib.collections": "lateralus_lang.data",
             "time":             "_time",
             "stdlib.time":      "_time",
             "random":           "__import__('random')",
