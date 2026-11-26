@@ -247,11 +247,15 @@ def main(argv=None) -> int:
     add_p.add_argument("--path", default=None)
     add_p.add_argument("--git", default=None)
     add_p.add_argument("--dev", action="store_true")
+    add_p.add_argument("--registry", "-r", default=None,
+                       help="Registry URL or local root (default: $LATERALUS_REGISTRY)")
 
     # publish  (v1.7)
     pub_p = sub.add_parser("publish", help="Publish package to registry")
     pub_p.add_argument("--dry-run", action="store_true",
                        help="Preview without uploading")
+    pub_p.add_argument("--registry", "-r", default=None,
+                       help="Registry URL or local root (default: $LATERALUS_REGISTRY)")
 
     # serve  (v2.2)
     serve_p = sub.add_parser("serve", help="Serve .ltlml docs as HTML pages")
@@ -706,46 +710,68 @@ print(f"\n  {_passed} passed  {_failed} failed")
 
     elif ns.cmd == "add":
         from .package_manager import Dependency, ProjectManifest, _find_manifest
+        from .registry import RegistryError
+        from .registry import add as registry_add
         manifest_path = _find_manifest()
-        if not manifest_path:
-            print("No lateralus.toml found. Run 'lateralus init' first.",
-                  file=sys.stderr)
+        # A registry-backed install fetches + verifies + unpacks into vendor/.
+        # Fall back to a manifest-only dependency edit for path/git deps.
+        if (getattr(ns, "path", None) or getattr(ns, "git", None)):
+            if not manifest_path:
+                print("No lateralus.toml found. Run 'lateralus init' first.",
+                      file=sys.stderr)
+                return 1
+            manifest = ProjectManifest.from_file(manifest_path)
+            dep = Dependency(
+                name=ns.package,
+                version=getattr(ns, "version", "*"),
+                path=getattr(ns, "path", None),
+                git=getattr(ns, "git", None),
+            )
+            if getattr(ns, "dev", False):
+                manifest.dev_dependencies[ns.package] = dep
+            else:
+                manifest.dependencies[ns.package] = dep
+            manifest.save(manifest_path)
+            print(f"Added {ns.package}@{dep.version}")
+            return 0
+        try:
+            summary = registry_add(
+                ns.package,
+                version_spec=getattr(ns, "version", "*"),
+                registry_url=getattr(ns, "registry", None),
+                workspace_dir=manifest_path.parent if manifest_path else None,
+            )
+        except RegistryError as exc:
+            print(f"error: {exc}", file=sys.stderr)
             return 1
-        manifest = ProjectManifest.from_file(manifest_path)
-        dep = Dependency(
-            name=ns.package,
-            version=getattr(ns, "version", "*"),
-            path=getattr(ns, "path", None),
-            git=getattr(ns, "git", None),
-        )
-        if getattr(ns, "dev", False):
-            manifest.dev_dependencies[ns.package] = dep
-        else:
-            manifest.dependencies[ns.package] = dep
-        manifest.save(manifest_path)
-        print(f"Added {ns.package}@{dep.version}")
+        print(f"Installed {summary['name']}@{summary['version']}")
+        print(f"  integrity: {summary['integrity']} (verified)")
+        print(f"  dest:      {summary['dest']}")
         return 0
 
     elif ns.cmd == "publish":
-        from .package_manager import PackageBundle, ProjectManifest, _find_manifest
+        from .package_manager import _find_manifest
+        from .registry import RegistryError
+        from .registry import publish as registry_publish
         manifest_path = _find_manifest()
         if not manifest_path:
             print("No lateralus.toml found.", file=sys.stderr)
             return 1
-        manifest = ProjectManifest.from_file(manifest_path)
-        bundle = PackageBundle.create(manifest_path.parent, manifest)
-        if getattr(ns, "dry_run", False):
-            print(f"Would publish {bundle.name}@{bundle.version}")
-            print(f"  Files: {len(bundle.files)}")
-            print(f"  Size:  {bundle.size:,} bytes")
-            print(f"  Integrity: {bundle.integrity}")
-            for f in bundle.files[:10]:
-                print(f"    {f}")
-            if len(bundle.files) > 10:
-                print(f"    ... and {len(bundle.files) - 10} more")
-        else:
-            print(f"Publishing {bundle.name}@{bundle.version}")
-            print("  (Registry not yet available — use --dry-run to preview)")
+        try:
+            summary = registry_publish(
+                manifest_path.parent,
+                registry_url=getattr(ns, "registry", None),
+                dry_run=getattr(ns, "dry_run", False),
+            )
+        except RegistryError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        verb = "Would publish" if summary["dry_run"] else "Published"
+        print(f"{verb} {summary['name']}@{summary['version']}")
+        print(f"  integrity: {summary['integrity']}")
+        print(f"  size:      {summary['size']:,} bytes")
+        print(f"  files:     {len(summary['files'])}")
+        print(f"  registry:  {summary['registry']}")
         return 0
 
     elif ns.cmd == "serve":
