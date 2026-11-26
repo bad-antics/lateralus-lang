@@ -39,8 +39,15 @@ pub fn enc_integer(n: int) -> str {
     return ":" + str(n) + crlf()
 }
 
+/// Encode a bulk string.  Length MUST be the UTF-8 byte count per
+/// RESP2/RESP3 spec.  Uses a tiny byte-count helper.
+fn utf8_len(s: str) -> int {
+    let bytes = bytes_of(s)
+    return len(bytes)
+}
+
 pub fn enc_bulk_string(s: str) -> str {
-    return "$" + str(len(s)) + crlf() + s + crlf()
+    return "$" + str(utf8_len(s)) + crlf() + s + crlf()
 }
 
 pub fn enc_null_bulk() -> str {
@@ -139,10 +146,16 @@ pub fn decode_bulk(buf: str, i: int) -> list {
     let hdr = read_line(buf, i, "raw")
     if hdr[0] == nil { return [nil, i] }
     let n = try_int(hdr[0])
+    if n == nil { return [nil, i] }
+    if n < 0 { return [nil, hdr[1]] }
     i = hdr[1]
-    if n < 0 { return [nil, i] }
     if i + n + 2 > len(buf) { return [nil, i] }
     let payload = slice(buf, i, i + n)
+    // Verify trailing CRLF per RESP spec.
+    if i + n + 1 >= len(buf) || char_at(buf, i + n) != "" || char_at(buf, i + n + 1) != "
+" {
+        return [nil, i]
+    }
     return [payload, i + n + 2]
 }
 
@@ -188,10 +201,16 @@ pub fn decode_map(buf: str, i: int) -> list {
     return [m, i]
 }
 
+/// Safe runtime type tag for decode_map key coercion.
 pub fn type_of_simple(v) -> str {
     if v == nil { return "nil" }
-    // Duck-typing: a string will concat with "" cleanly.
+    // String test: string concatenation with empty string is a no-op
+    // only for strings; other types (int, bool, map, array) throw or differ.
     let p = v + ""
     if p == v { return "str" }
+    // Bool and int are common; stringify them for map keys.
+    if v == true || v == false { return "bool" }
+    if typeof v == "int" { return "int" }
     return "other"
 }
+
