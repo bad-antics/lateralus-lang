@@ -236,6 +236,10 @@ class PythonTranspiler(ASTVisitor):
         self._w += "ord = _builtins.ord"
         self._w += "none = None    # Lateralus alias for Python None"
         self._w += "null = None    # Lateralus alias for Python None"
+        # Keep the documented function spelling alongside the unary keyword.
+        # ``typeof`` is emitted as Python's ``type(...)`` below, so the
+        # function form should have the same runtime behaviour.
+        self._w += "def type_of(value): return type(value)"
         self._w += "keys = lambda d: list(d.keys())"
         self._w += "values = lambda d: list(d.values())"
         self._w += "sorted = _builtins.sorted"
