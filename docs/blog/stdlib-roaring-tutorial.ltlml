@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>stdlib.roaring Tutorial</title><link rel="stylesheet" href="../ltlml.css"></head>
+<body><nav class="ltlml-nav"><span class="nav-brand">LATERALUS</span><a href="../index.ltlml">Home</a></nav>
+<div id="ltlml-render" class="ltlml-document"></div>
+<script id="ltlml-source" type="text/ltlml">
+---
+title: "stdlib.roaring Tutorial — Compressed Roaring Bitmaps in LATERALUS"
+author: DrTardis1963
+date: 2026-11-24
+abstract: Compressed 32-bit integer sets with hybrid array/bitmap containers, union, membership, and cardinality in stdlib.roaring.
+---
+
+# stdlib.roaring Tutorial
+
+`stdlib.roaring` implements Roaring Bitmaps: 32-bit integers are partitioned by their high 16 bits into hybrid containers — sorted `u16` arrays for sparse chunks (`<= 4096` elements) and 8 KiB bitmaps for dense chunks.
+
+## Core API
+
+- `new_bitmap() -> map`: Create an empty roaring bitmap
+- `add(b: map, v: int) -> map`: Insert a 32-bit integer (automatically promotes array containers above 4096 entries)
+- `has(b: map, v: int) -> bool`: Test set membership in `O(log n)` (array) or `O(1)` (bitmap)
+- `cardinality(b: map) -> int`: Total element count across all containers
+- `union(a: map, b: map) -> map`: Set union of two roaring bitmaps
+- `to_list(b: map) -> list`: Materialize all elements in sorted order
+
+## Runnable Example
+
+See `examples/roaring_tutorial.ltl` and `tests/stdlib_roaring_tutorial.ltl`:
+
+```lateralus
+import roaring
+
+let a = new_bitmap()
+a = add(a, 1)
+a = add(a, 42)
+a = add(a, 65536)
+a = add(a, 65537)
+a = add(a, 131072)
+a = add(a, 42)
+
+let b = new_bitmap()
+b = add(b, 42)
+b = add(b, 999)
+b = add(b, 65537)
+
+let u = union(a, b)
+assert(cardinality(a) == 5)
+assert(has(a, 65536) == true)
+assert(has(a, 65535) == false)
+assert(cardinality(u) == 6)
+assert(to_list(u) == [1, 42, 999, 65536, 65537, 131072])
+```
+
+## Pinned Test Vectors
+
+| Operation | Expected Output |
+|---|---|
+| `cardinality(a)` after inserting `[1, 42, 65536, 65537, 131072, 42]` | `5` |
+| `has(a, 65536)` / `has(a, 65535)` | `true` / `false` |
+| `to_list(a)` | `[1, 42, 65536, 65537, 131072]` |
+| `cardinality(union(a, b))` with `b = {42, 999, 65537}` | `6` |
+| `to_list(union(a, b))` | `[1, 42, 999, 65536, 65537, 131072]` |
+</script><script src="../ltlml.js"></script></body></html>
