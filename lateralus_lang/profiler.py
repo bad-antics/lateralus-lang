@@ -85,7 +85,7 @@ class LateralusProfiler:
         if not path.exists():
             raise FileNotFoundError(f"File not found: {filepath}")
 
-        source = path.read_text()
+        source = path.read_text(encoding="utf-8")
 
         # Try to import the compiler
         try:
@@ -98,12 +98,18 @@ class LateralusProfiler:
         # Track memory
         tracemalloc.start()
 
-        # Profile compilation and execution
+        # Profile compilation and in-process execution so cProfile captures user functions
         start = time.perf_counter()
 
         self.profiler.enable()
         try:
-            result = compiler.run(source, target=Target.PYTHON)
+            result = compiler.compile_source(source, filename=str(path), target=Target.PYTHON)
+            if not result.ok or not result.python_src:
+                err_msg = "; ".join(getattr(e, "message", str(e)) for e in getattr(result, "errors", []))
+                raise RuntimeError(err_msg or "Failed to compile LATERALUS program")
+            code_obj = compile(result.python_src, str(path), "exec")
+            exec_globals = {"__name__": "__main__", "__file__": str(path)}
+            exec(code_obj, exec_globals)
         finally:
             self.profiler.disable()
 
@@ -120,15 +126,21 @@ class LateralusProfiler:
 
         function_stats = []
         total_calls = 0
+        target_name = path.name.lower()
+        target_full = str(path).lower()
 
         for key, value in stats.stats.items():
             filename, line, func_name = key
             cc, nc, tt, ct, callers = value
             total_calls += nc
+            fname_low = filename.lower()
 
-            # Filter to show relevant functions
-            if "lateralus" in filename.lower() or func_name in (
-                "<module>", "run", "compile", "tokenize", "parse",
+            # Filter to show relevant functions (including user functions in the profiled .ltl file)
+            if (
+                "lateralus" in fname_low
+                or fname_low == target_full
+                or Path(filename).name.lower() == target_name
+                or func_name in ("<module>", "run", "compile", "tokenize", "parse")
             ):
                 function_stats.append({
                     "name": f"{func_name} ({Path(filename).name}:{line})",
