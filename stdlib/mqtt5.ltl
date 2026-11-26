@@ -1,224 +1,245 @@
-// ===================================================================
-// stdlib/mqtt5.ltl  —  MQTT 5.0 packet codec
-// -------------------------------------------------------------------
-// Fixed-header + remaining-length varint + variable-header + payload.
-// Covers CONNECT, CONNACK, PUBLISH (QoS 0/1/2), PUBACK, SUBSCRIBE,
-// SUBACK, PINGREQ/PINGRESP, DISCONNECT.  Property codecs for the
-// most common Property Identifiers (PIs) are provided.
-//
-// Refs: https://docs.oasis-open.org/mqtt/mqtt/v5.0/mqtt-v5.0.html
-// ===================================================================
+--- stdlib/mqtt5.ltl
+--- MQTT v5.0 protocol support library
 
-// -- Packet types ---------------------------------------------------
+module mqtt5
 
-pub fn pkt_connect()     -> int { return 1 }
-pub fn pkt_connack()     -> int { return 2 }
-pub fn pkt_publish()     -> int { return 3 }
-pub fn pkt_puback()      -> int { return 4 }
-pub fn pkt_pubrec()      -> int { return 5 }
-pub fn pkt_pubrel()      -> int { return 6 }
-pub fn pkt_pubcomp()     -> int { return 7 }
-pub fn pkt_subscribe()   -> int { return 8 }
-pub fn pkt_suback()      -> int { return 9 }
-pub fn pkt_unsubscribe() -> int { return 10 }
-pub fn pkt_unsuback()    -> int { return 11 }
-pub fn pkt_pingreq()     -> int { return 12 }
-pub fn pkt_pingresp()    -> int { return 13 }
-pub fn pkt_disconnect()  -> int { return 14 }
-pub fn pkt_auth()        -> int { return 15 }
+--- Packet Types
+let PKT_CONNECT     = 1
+let PKT_CONNACK     = 2
+let PKT_PUBLISH     = 3
+let PKT_PUBACK      = 4
+let PKT_PUBREC      = 5
+let PKT_PUBREL      = 6
+let PKT_PUBCOMP     = 7
+let PKT_SUBSCRIBE   = 8
+let PKT_SUBACK      = 9
+let PKT_UNSUBSCRIBE = 10
+let PKT_UNSUBACK    = 11
+let PKT_PINGREQ     = 12
+let PKT_PINGRESP    = 13
+let PKT_DISCONNECT  = 14
+let PKT_AUTH        = 15
 
-// Property identifiers (subset).
-pub fn pi_payload_format()   -> int { return 0x01 }
-pub fn pi_message_expiry()   -> int { return 0x02 }
-pub fn pi_content_type()     -> int { return 0x03 }
-pub fn pi_response_topic()   -> int { return 0x08 }
-pub fn pi_correlation_data() -> int { return 0x09 }
-pub fn pi_sub_id()           -> int { return 0x0B }
-pub fn pi_session_expiry()   -> int { return 0x11 }
-pub fn pi_receive_max()      -> int { return 0x21 }
-pub fn pi_topic_alias_max()  -> int { return 0x22 }
-pub fn pi_user_property()    -> int { return 0x26 }
+--- Record definition for an MQTT 5.0 packet
+record Packet {
+    packet_type: int,
+    flags: int,
+    remaining_length: int,
+    properties: map,
+    payload: []int
+}
 
-// -- Remaining-length varint ----------------------------------------
+--- Decode an MQTT variable byte integer (MQTT 5.0 §1.5.5)
+--- Returns (value, next_index) or nil if truncated or overlong (>4 bytes).
+fn dec_varint(buf: []int, i: int) -> any {
+    let mut val = 0
+    let mut shift = 0
+    let mut idx = i
+    let mut count = 0
 
-/// MQTT variable-byte integer: 1-4 bytes, 7 bits of payload each.
-pub fn enc_varint(v: int) -> list {
-    let out = []
-    let go = true
-    while go {
-        let b = v & 0x7f
-        v = v >> 7
-        if v > 0 {
-            b = b | 0x80
-        } else {
-            go = false
+    while idx < len(buf) {
+        if count >= 4 {
+            return nil
         }
-        out = out + [b]
+        let b = buf[idx]
+        idx = idx + 1
+        count = count + 1
+        val = val + ((b & 127) << shift)
+        if (b & 128) == 0 {
+            return [val, idx]
+        }
+        shift = shift + 7
+    }
+    return nil
+}
+
+--- Encode an integer into an MQTT variable byte integer
+fn enc_varint(val: int) -> []int {
+    let mut out = []
+    let mut x = val
+    if x == 0 {
+        return [0]
+    }
+    while x > 0 {
+        let mut encoded = x % 128
+        x = x / 128
+        if x > 0 {
+            encoded = encoded | 128
+        }
+        out = push(out, encoded)
     }
     return out
 }
 
-pub fn dec_varint(buf: list, i: int) -> list {
-    let result = 0
-    let mult = 1
-    let go = true
-    while go {
-        let b = buf[i]
-        i = i + 1
-        result = result + ((b & 0x7f) * mult)
-        mult = mult * 128
-        if (b & 0x80) == 0 { go = false }
+--- Decode a UTF-8 string from a buffer with a 2-byte length prefix
+fn dec_utf8(buf: []int, i: int) -> any {
+    if i + 2 > len(buf) {
+        return nil
     }
-    return [result, i]
+    let length = (buf[i] << 8) + buf[i + 1]
+    let start = i + 2
+    let end = start + length
+    if end > len(buf) {
+        return nil
+    }
+    
+    let mut s = ""
+    let mut k = 0
+    while k < length {
+        let b1 = buf[start + k]
+        if b1 < 128 {
+            s = s + chr(b1)
+            k = k + 1
+        } else if (b1 & 224) == 192 {
+            if k + 1 >= length {
+                return nil
+            }
+            let b2 = buf[start + k + 1]
+            let code = ((b1 & 31) << 6) | (b2 & 63)
+            s = s + chr(code)
+            k = k + 2
+        } else if (b1 & 240) == 224 {
+            if k + 2 >= length {
+                return nil
+            }
+            let b2 = buf[start + k + 1]
+            let b3 = buf[start + k + 2]
+            let code = ((b1 & 15) << 12) | ((b2 & 63) << 6) | (b3 & 63)
+            s = s + chr(code)
+            k = k + 3
+        } else if (b1 & 248) == 240 {
+            if k + 3 >= length {
+                return nil
+            }
+            let b2 = buf[start + k + 1]
+            let b3 = buf[start + k + 2]
+            let b4 = buf[start + k + 3]
+            let code = ((b1 & 7) << 18) | ((b2 & 63) << 12) | ((b3 & 63) << 6) | (b4 & 63)
+            s = s + chr(code)
+            k = k + 4
+        } else {
+            return nil
+        }
+    }
+    return [s, end]
 }
 
-// -- Primitive encoders ---------------------------------------------
-
-pub fn enc_u8(v: int)  -> list { return [v & 0xff] }
-pub fn enc_u16(v: int) -> list { return [(v >> 8) & 0xff, v & 0xff] }
-pub fn enc_u32(v: int) -> list {
-    return [(v >> 24) & 0xff, (v >> 16) & 0xff,
-            (v >> 8)  & 0xff,  v        & 0xff]
+--- Encode a UTF-8 string with a 2-byte length prefix
+fn enc_utf8(s: string) -> []int {
+    let mut bytes = []
+    let mut i = 0
+    while i < len(s) {
+        let code = ord(s[i])
+        bytes = push(bytes, code)
+        i = i + 1
+    }
+    let length = len(bytes)
+    let msb = length / 256
+    let lsb = length % 256
+    return concat([msb, lsb], bytes)
 }
 
-pub fn dec_u16(buf: list, i: int) -> list {
-    return [(buf[i] << 8) | buf[i + 1], i + 2]
-}
-pub fn dec_u32(buf: list, i: int) -> list {
-    let v = (buf[i] << 24) | (buf[i + 1] << 16) | (buf[i + 2] << 8) | buf[i + 3]
-    return [v, i + 4]
+--- Decode MQTT 5.0 properties
+fn dec_properties(buf: []int, i: int) -> any {
+    let prop_res = dec_varint(buf, i)
+    if prop_res == nil {
+        return nil
+    }
+    let prop_len = prop_res[0]
+    let mut idx = prop_res[1]
+    let end_idx = idx + prop_len
+    if end_idx > len(buf) {
+        return nil
+    }
+
+    let mut props = {}
+    while idx < end_idx {
+        if idx >= len(buf) {
+            return nil
+        }
+        let prop_id = buf[idx]
+        idx = idx + 1
+
+        if prop_id == 31 { -- Reason String
+            let str_res = dec_utf8(buf, idx)
+            if str_res == nil {
+                return nil
+            }
+            props["reason_string"] = str_res[0]
+            idx = str_res[1]
+        } else if prop_id == 38 { -- User Property
+            let k_res = dec_utf8(buf, idx)
+            if k_res == nil {
+                return nil
+            }
+            idx = k_res[1]
+            let v_res = dec_utf8(buf, idx)
+            if v_res == nil {
+                return nil
+            }
+            idx = v_res[1]
+            if not has_key(props, "user_properties") {
+                props["user_properties"] = {}
+            }
+            props["user_properties"][k_res[0]] = v_res[0]
+        } else if prop_id == 17 { -- Session Expiry Interval
+            if idx + 4 > len(buf) {
+                return nil
+            }
+            let val = (buf[idx] << 24) + (buf[idx+1] << 16) + (buf[idx+2] << 8) + buf[idx+3]
+            props["session_expiry_interval"] = val
+            idx = idx + 4
+        } else {
+            -- Unknown or unsupported property in stub, skip or fail
+            return nil
+        }
+    }
+
+    return [props, end_idx]
 }
 
-/// UTF-8 string: u16 length + bytes.
-pub fn enc_utf8(s: str) -> list {
-    let bytes = bytes_of(s)
-    return enc_u16(len(bytes)) + bytes
-}
+--- Parse an MQTT 5.0 packet from a byte buffer
+fn parse_packet(buf: []int, i: int) -> any {
+    if i >= len(buf) {
+        return nil
+    }
+    let byte1 = buf[i]
+    let packet_type = (byte1 >> 4) & 15
+    let flags = byte1 & 15
 
-pub fn dec_utf8(buf: list, i: int) -> list {
-    let n = dec_u16(buf, i)
-    i = n[1]
-    let s = ""
-    let k = 0
-    while k < n[0] {
-        s = s + chr(buf[i + k])
+    let varint_res = dec_varint(buf, i + 1)
+    if varint_res == nil {
+        return nil
+    }
+    let remaining_length = varint_res[0]
+    let mut payload_start = varint_res[1]
+    let packet_end = payload_start + remaining_length
+    if packet_end > len(buf) {
+        return nil
+    }
+
+    let mut properties = {}
+    if packet_type == PKT_CONNECT or packet_type == PKT_CONNACK or packet_type == PKT_PUBLISH {
+        let prop_res = dec_properties(buf, payload_start)
+        if prop_res == nil {
+            return nil
+        }
+        properties = prop_res[0]
+        payload_start = prop_res[1]
+    }
+
+    let mut payload = []
+    let mut k = payload_start
+    while k < packet_end {
+        payload = push(payload, buf[k])
         k = k + 1
     }
-    return [s, i + n[0]]
-}
 
-pub fn enc_binary(bytes: list) -> list {
-    return enc_u16(len(bytes)) + bytes
-}
-
-// -- Property encoders ---------------------------------------------
-
-pub fn prop_u8(pi: int, v: int) -> list {
-    return enc_varint(pi) + [v & 0xff]
-}
-pub fn prop_u16(pi: int, v: int) -> list {
-    return enc_varint(pi) + enc_u16(v)
-}
-pub fn prop_u32(pi: int, v: int) -> list {
-    return enc_varint(pi) + enc_u32(v)
-}
-pub fn prop_utf8(pi: int, s: str) -> list {
-    return enc_varint(pi) + enc_utf8(s)
-}
-pub fn prop_binary(pi: int, bytes: list) -> list {
-    return enc_varint(pi) + enc_binary(bytes)
-}
-/// A user-property is a UTF-8 pair: (key, value).
-pub fn prop_user(key: str, value: str) -> list {
-    return enc_varint(pi_user_property()) + enc_utf8(key) + enc_utf8(value)
-}
-
-/// Wrap a list of already-encoded property TLVs into a properties
-/// block: a varint length followed by the concatenated bytes.
-pub fn props_block(props: list) -> list {
-    return enc_varint(len(props)) + props
-}
-
-// -- Packet builders ------------------------------------------------
-
-pub fn build_packet(packet_type: int, flags: int, variable_header: list,
-                     payload: list) -> list {
-    let first = ((packet_type & 0x0f) << 4) | (flags & 0x0f)
-    let remaining = variable_header + payload
-    return [first] + enc_varint(len(remaining)) + remaining
-}
-
-pub fn connect(client_id: str, keepalive: int, clean_start: bool,
-                username: str, password: str, props: list) -> list {
-    let proto_name = enc_utf8("MQTT")
-    let proto_level = [5]
-    let flags = 0
-    if clean_start     { flags = flags | 0x02 }
-    if username != ""  { flags = flags | 0x80 }
-    if password != ""  { flags = flags | 0x40 }
-    let variable = proto_name + proto_level + [flags] + enc_u16(keepalive)
-                 + props_block(props)
-    let payload = enc_utf8(client_id)
-    if username != "" { payload = payload + enc_utf8(username) }
-    if password != "" { payload = payload + enc_utf8(password) }
-    return build_packet(pkt_connect(), 0, variable, payload)
-}
-
-pub fn publish(topic: str, qos: int, retain: bool, dup: bool,
-                packet_id: int, props: list, body: list) -> list {
-    let flags = 0
-    if dup    { flags = flags | 0x08 }
-    flags = flags | ((qos & 0x03) << 1)
-    if retain { flags = flags | 0x01 }
-    let variable = enc_utf8(topic)
-    if qos > 0 {
-        variable = variable + enc_u16(packet_id)
+    return Packet {
+        packet_type: packet_type,
+        flags: flags,
+        remaining_length: remaining_length,
+        properties: properties,
+        payload: payload
     }
-    variable = variable + props_block(props)
-    return build_packet(pkt_publish(), flags, variable, body)
-}
-
-pub fn subscribe(packet_id: int, filters: list) -> list {
-    // `filters` is a list of [topic_filter, options_byte] pairs.
-    let variable = enc_u16(packet_id) + props_block([])
-    let payload = []
-    let i = 0
-    while i < len(filters) {
-        let f = filters[i]
-        payload = payload + enc_utf8(f[0]) + [f[1] & 0xff]
-        i = i + 1
-    }
-    // MQTT 5 SUBSCRIBE fixed-header lower nibble must be 0x2.
-    return build_packet(pkt_subscribe(), 0x02, variable, payload)
-}
-
-pub fn pingreq()  -> list { return [0xC0, 0x00] }
-pub fn pingresp() -> list { return [0xD0, 0x00] }
-
-pub fn disconnect(reason_code: int) -> list {
-    // DISCONNECT has no payload; variable header is a single byte
-    // reason code plus an empty properties block.
-    return build_packet(pkt_disconnect(), 0,
-                        [reason_code & 0xff] + props_block([]),
-                        [])
-}
-
-// -- Packet parsing -------------------------------------------------
-
-/// Parse one packet starting at `i`.  Returns a map with
-/// {type, flags, remaining, body, consumed} or nil if short.
-pub fn parse_packet(buf: list, i: int) -> map {
-    if i >= len(buf) { return nil }
-    let first = buf[i]
-    let r = dec_varint(buf, i + 1)
-    let rem = r[0]
-    let body_start = r[1]
-    if len(buf) < body_start + rem { return nil }
-    let m = {}
-    m["type"]      = (first >> 4) & 0x0f
-    m["flags"]     = first & 0x0f
-    m["remaining"] = rem
-    m["body"]      = slice(buf, body_start, body_start + rem)
-    m["consumed"]  = body_start + rem - i
-    return m
 }
