@@ -271,3 +271,15 @@ class TestInterpolation:
     def test_lagrange_single_point(self):
         points = [(3, 7)]
         assert lagrange_interpolate(points, 3) == 7
+
+
+class TestMixedUnitArithmetic:
+    def test_converted_unit_preserves_arithmetic(self):
+        m = meters(1)
+        cm = m.to(100, "cm")
+        assert (cm + m).value == 2.0
+        assert (cm - m).value == 0.0
+        assert (cm / m).value == 1.0
+        assert (cm * m).value == 1.0
+        mm = cm.to(10, "mm")
+        assert (mm / m).value == 1.0
