@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import cmath
 import math
+from bisect import bisect_right
 from dataclasses import dataclass
 from typing import Callable
 
@@ -392,24 +393,39 @@ def lagrange_interpolate(points: list[tuple[float, float]], x: float) -> float:
 
 
 def cubic_spline(points: list[tuple[float, float]], x: float) -> float:
-    """Natural cubic spline interpolation (simplified)."""
+    """Interpolate strictly increasing knots with a natural spline, clamping outside the domain."""
     n = len(points)
     if n < 2:
         return points[0][1] if points else 0.0
 
-    # Find the interval
-    xs = [p[0] for p in points]
-    ys = [p[1] for p in points]
-
-    for i in range(n - 1):
-        if xs[i] <= x <= xs[i + 1]:
-            t = (x - xs[i]) / (xs[i + 1] - xs[i])
-            return ys[i] * (1 - t) + ys[i + 1] * t
-
-    # Extrapolate
-    if x < xs[0]:
+    xs, ys = zip(*points)
+    widths = [xs[i + 1] - xs[i] for i in range(n - 1)]
+    if any(not width > 0 for width in widths):
+        raise ValueError("cubic_spline requires strictly increasing knot coordinates")
+    interval = bisect_right(xs, x) - 1
+    if interval < 0:
         return ys[0]
-    return ys[-1]
+    if interval == n - 1 or x == xs[interval]:
+        return ys[interval]
+
+    # Solve for knot second derivatives. Natural endpoint curvature is zero.
+    upper = [0.0] * n
+    curvature = [0.0] * n
+    for i in range(1, n - 1):
+        left, right = widths[i - 1], widths[i]
+        slope_change = (ys[i + 1] - ys[i]) / right - (ys[i] - ys[i - 1]) / left
+        pivot = 2 * (left + right) - left * upper[i - 1]
+        upper[i] = right / pivot
+        curvature[i] = (6 * slope_change - left * curvature[i - 1]) / pivot
+    for i in range(n - 2, 0, -1):
+        curvature[i] -= upper[i] * curvature[i + 1]
+
+    width = widths[interval]
+    a = (xs[interval + 1] - x) / width
+    b = (x - xs[interval]) / width
+    linear = a * ys[interval] + b * ys[interval + 1]
+    correction = (a**3 - a) * curvature[interval] + (b**3 - b) * curvature[interval + 1]
+    return linear + width * (width * correction / 6)
 
 
 # --- LATERALUS Integration --------------------------------------------
