@@ -23,6 +23,86 @@ let outputChannel;
 /** @type {vscode.StatusBarItem} */
 let statusBarItem;
 
+/** @type {vscode.StatusBarItem} */
+let runStatusBarItem;
+
+/**
+ * Find the lateralus CLI executable.
+ * Checks: 1) config setting lateralus.cliPath, 2) `lateralus` on PATH,
+ * 3) `ltlc` on PATH, 4) `python -m lateralus_lang`.
+ * Returns { command, args } or null.
+ */
+function findLateralusCli(filePath) {
+    const config = vscode.workspace.getConfiguration("lateralus");
+    const configured = config.get("cliPath", "");
+    const { execSync } = require("child_process");
+    if (configured) {
+        return { command: configured, args: ["run", filePath] };
+    }
+    for (const candidate of ["lateralus", "ltlc"]) {
+        try {
+            execSync(`${candidate} --version`, { stdio: "ignore" });
+            return { command: candidate, args: ["run", filePath] };
+        } catch {}
+    }
+    // Fall back to invoking the module through the LSP interpreter.
+    try {
+        const pythonPath = findPython();
+        return { command: pythonPath, args: ["-m", "lateralus_lang", "run", filePath] };
+    } catch {}
+    return null;
+}
+
+/**
+ * Run the active Lateralus file through the lateralus CLI, streaming
+ * combined stdout/stderr into the Lateralus output channel.
+ */
+function runLateralusFile() {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || !isLateralusDocument(editor.document)) {
+        vscode.window.showWarningMessage("Lateralus: open a .ltl file to run.");
+        return;
+    }
+    if (editor.document.isUntitled) {
+        vscode.window.showWarningMessage("Lateralus: save the file before running.");
+        return;
+    }
+    const filePath = editor.document.uri.fsPath;
+    const cli = findLateralusCli(filePath);
+    if (!cli) {
+        vscode.window.showErrorMessage(
+            "Lateralus: could not find the `lateralus` CLI. Install it (pip install lateralus-lang) or set lateralus.cliPath."
+        );
+        return;
+    }
+
+    outputChannel.show(true);
+    outputChannel.appendLine(`[lateralus] ▶ run ${filePath}`);
+    outputChannel.appendLine(`[lateralus] $ ${cli.command} ${cli.args.join(" ")}`);
+
+    const start = Date.now();
+    const child = spawn(cli.command, cli.args, { stdio: ["ignore", "pipe", "pipe"] });
+
+    child.stdout.on("data", (d) => {
+        d.toString().split(/\r?\n/).forEach((line) => {
+            if (line.length) outputChannel.appendLine(line);
+        });
+    });
+    child.stderr.on("data", (d) => {
+        d.toString().split(/\r?\n/).forEach((line) => {
+            if (line.length) outputChannel.appendLine(line);
+        });
+    });
+    child.on("error", (err) => {
+        outputChannel.appendLine(`[lateralus] failed to start CLI: ${err.message}`);
+        vscode.window.showErrorMessage(`Lateralus: ${err.message}`);
+    });
+    child.on("close", (code) => {
+        const ms = Date.now() - start;
+        outputChannel.appendLine(`[lateralus] ■ process exited with code ${code} (${ms} ms)`);
+    });
+}
+
 /**
  * Find the Python interpreter to use for the LSP server.
  * Checks: 1) config setting, 2) python3, 3) python
@@ -1016,6 +1096,14 @@ function activate(context) {
     statusBarItem.command = "lateralus.restartServer";
     context.subscriptions.push(statusBarItem);
 
+    // Status-bar "Run file → OUTPUT" button (shown for .ltl editors)
+    runStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 101);
+    runStatusBarItem.text = "$(play) Run Lateralus";
+    runStatusBarItem.tooltip = "Run the current Lateralus file through the lateralus CLI (output → Lateralus channel)";
+    runStatusBarItem.command = "lateralus.runFile";
+    runStatusBarItem.show();
+    context.subscriptions.push(runStatusBarItem);
+
     // Diagnostics collection
     diagnosticCollection = vscode.languages.createDiagnosticCollection("lateralus");
     context.subscriptions.push(diagnosticCollection);
@@ -1095,6 +1183,9 @@ function activate(context) {
         }),
         vscode.commands.registerCommand("lateralus.showOutput", () => {
             outputChannel.show();
+        }),
+        vscode.commands.registerCommand("lateralus.runFile", () => {
+            runLateralusFile();
         }),
         vscode.commands.registerCommand("lateralus.formatDocument", () => {
             vscode.commands.executeCommand("editor.action.formatDocument");
