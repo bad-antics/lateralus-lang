@@ -26,10 +26,19 @@ pub fn parse_line(line: str) -> list {
             s = slice(s, 0, len(s) - 1)
         }
     }
-    if len(s) < 4 {
+    // A bare 3-digit reply ("250") is valid per RFC 5321 §4.2; the
+    // separator char is only present when text follows.
+    if len(s) < 3 {
         return [0, s, false]
     }
-    let code = int(slice(s, 0, 3))
+    let head = slice(s, 0, 3)
+    if !is_digits(head) {
+        return [0, s, false]
+    }
+    let code = int(head)
+    if len(s) == 3 {
+        return [code, "", false]
+    }
     let sep = char_at(s, 3)
     let text = slice(s, 4, len(s))
     return [code, text, sep == "-"]
@@ -54,16 +63,41 @@ pub fn read_response(transport: map) -> list {
 
 // -- Command emission ----------------------------------------------
 
+/// Reject values that would let a caller break out of a command line.
+/// A bare CR or LF injects extra SMTP verbs onto the wire; for addresses a
+/// '>' closes the path early. RFC 5321 §4.5.3.1.1 forbids these in paths.
+fn guard_token(what: str, value: str) -> str {
+    if contains(value, "\r") || contains(value, "\n") {
+        // A newline inside any wire atom is never legitimate.
+        return ""
+    }
+    return value
+}
+
+fn guard_addr(value: str) -> str {
+    if contains(value, "\r") || contains(value, "\n") || contains(value, ">") {
+        // Refuse rather than silently truncate: callers must sanitise.
+        return ""
+    }
+    return value
+}
+
 pub fn cmd_ehlo(host: str) -> str {
-    return "EHLO " + host + "\r\n"
+    let h = guard_token("ehlo", host)
+    if h == "" {
+        return "EHLO localhost\r\n"
+    }
+    return "EHLO " + h + "\r\n"
 }
 
 pub fn cmd_mail_from(addr: str) -> str {
-    return "MAIL FROM:<" + addr + ">\r\n"
+    let a = guard_addr(addr)
+    return "MAIL FROM:<" + a + ">\r\n"
 }
 
 pub fn cmd_rcpt_to(addr: str) -> str {
-    return "RCPT TO:<" + addr + ">\r\n"
+    let a = guard_addr(addr)
+    return "RCPT TO:<" + a + ">\r\n"
 }
 
 pub fn cmd_data() -> str       { return "DATA\r\n" }
@@ -93,6 +127,20 @@ pub fn auth_plain(user: str, password: str) -> str {
 /// terminator `.\r\n`.
 pub fn encode_body(body: str) -> str {
     let lines = split(body, "\n")
+    // A body ending in LF splits into a trailing "" element; that element
+    // must not become a blank wire line before the terminator.
+    if len(lines) > 1 {
+        let lastIdx = len(lines) - 1
+        if len(lines[lastIdx]) == 0 {
+            let trimmed = []
+            let i = 0
+            while i < lastIdx {
+                trimmed = trimmed + [lines[i]]
+                i = i + 1
+            }
+            lines = trimmed
+        }
+    }
     let out = []
     for line in lines {
         let l = line
