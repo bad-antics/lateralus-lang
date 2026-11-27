@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Standard Library Tour: RFC 8949 CBOR Binary Serialization in Lateralus</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "Standard Library Tour: RFC 8949 CBOR Binary Serialization"
+author: bad-antics
+date: 2026-11-27
+abstract: A comprehensive guide to Lateralus's stdlib.cbor module, exploring Concise Binary Object Representation (RFC 8949), major type encoding, integer packing mechanics, recursive decoding, and pinned RFC 8949 test vectors.
+---
+
+# Standard Library Tour: RFC 8949 CBOR Binary Serialization
+
+The Concise Binary Object Representation (CBOR), standardized in RFC 8949, is a binary data serialization format designed for small code footprint, small message size, and extensible data framing without requiring a schema. It is heavily utilized in constrained node networks (CoAP), hardware security tokens (FIDO2 / WebAuthn), and high-throughput microservices.
+
+Lateralus includes a pure, self-contained implementation of the CBOR standard in `stdlib/cbor.ltl`. In this tour, we examine the module architecture, major type classification, byte packing rules, decoding pipelines, and pinned RFC 8949 test vectors.
+
+---
+
+## Module Overview
+
+The `stdlib/cbor.ltl` module implements core encoder and decoder routines across major types:
+
+1. **Major Type Tags**:
+   - `mt_uint()` (Major type 0): Unsigned integers.
+   - `mt_nint()` (Major type 1): Negative integers (encoded as `-1 - n`).
+   - `mt_bytes()` (Major type 2): Byte strings.
+   - `mt_str()` (Major type 3): UTF-8 text strings.
+   - `mt_arr()` (Major type 4): Arrays of data items.
+   - `mt_map()` (Major type 5): Maps of key-value pairs.
+   - `mt_tag()` (Major type 6): Semantic tags.
+   - `mt_simple()` (Major type 7): Simple values (`false`, `true`, `null`).
+
+2. **Public API**:
+```lateralus
+// Module public API signatures
+pub fn encode(v) -> list
+pub fn decode(b: list) -> list
+pub fn mt_uint() -> int
+pub fn mt_nint() -> int
+pub fn mt_bytes() -> int
+pub fn mt_str() -> int
+pub fn mt_arr() -> int
+pub fn mt_map() -> int
+pub fn mt_tag() -> int
+pub fn mt_simple() -> int
+```
+
+---
+
+## 1. Encoding Primitives & Header Framing
+
+In CBOR, each item starts with an initial byte containing:
+- The **major type** in the top 3 bits (`mt * 32`).
+- The **additional information** in the lower 5 bits.
+
+When an integer or length is less than 24, it is encoded directly into the lower 5 bits. Larger quantities use indicator bytes:
+- `24`: Followed by 1 byte (up to 255).
+- `25`: Followed by 2 bytes (up to 65,535).
+- `26`: Followed by 4 bytes (up to 4,294,967,295).
+
+```lateralus
+import stdlib.cbor as cbor
+
+// 0 encodes as 0x00
+let enc_zero = cbor.encode(0)
+assert(enc_zero == [0])
+
+// 23 encodes as 0x17 directly in the initial byte
+assert(cbor.encode(23) == [23])
+
+// 24 requires an extra indicator byte: 0x18, 0x18
+assert(cbor.encode(24) == [24, 24])
+
+// 1000 requires 2 extra bytes: 0x19, 0x03, 0xe8
+assert(cbor.encode(1000) == [25, 3, 232])
+```
+
+Negative integers map to Major Type 1 with value `-1 - v`. Thus `-1` encodes as `32` (`0x20`), and `-10` encodes as `41` (`0x29`).
+
+---
+
+## 2. Strings, Lists, and Maps
+
+Text strings (Major Type 3) prepend their byte length and follow with the raw UTF-8 character codes. Lists (Major Type 4) and Maps (Major Type 5) encode their item count followed by recursive serialization of their contents:
+
+```lateralus
+import stdlib.cbor as cbor
+
+// String encoding
+let enc_str = cbor.encode("IETF")
+// Major type 3 (96) + length 4 = 100 (0x64), followed by 'I', 'E', 'T', 'F'
+assert(enc_str == [100, 73, 69, 84, 70])
+
+// Array encoding: [1, 2, 3] -> Major type 4 (128) + 3 = 131 (0x83)
+assert(cbor.encode([1, 2, 3]) == [131, 1, 2, 3])
+```
+
+---
+
+## 3. RFC 8949 Pinned Test Vectors
+
+The table below documents canonical test vectors from Appendix A of RFC 8949:
+
+| Category | Input Value | CBOR Encoded Bytes (Dec) | Hex Representation |
+| :--- | :--- | :--- | :--- |
+| **Zero** | `0` | `[0]` | `0x00` |
+| **Small Int** | `10` | `[10]` | `0x0a` |
+| **Boundary 23** | `23` | `[23]` | `0x17` |
+| **1-byte Int** | `24` | `[24, 24]` | `0x1818` |
+| **2-byte Int** | `1000` | `[25, 3, 232]` | `0x1903e8` |
+| **Negative Int** | `-1` | `[32]` | `0x20` |
+| **Negative Int** | `-10` | `[41]` | `0x29` |
+| **False** | `false` | `[244]` | `0xf4` |
+| **True** | `true` | `[245]` | `0xf5` |
+| **Null** | `null` | `[246]` | `0xf6` |
+| **String** | `"a"` | `[97, 97]` | `0x6161` |
+| **Array** | `[1, 2, 3]` | `[131, 1, 2, 3]` | `0x83010203` |
+| **Map** | `{"a": 1}` | `[161, 97, 97, 1]` | `0xa1616101` |
+
+---
+
+## 4. Complete Runnable Example
+
+Below is a self-contained Lateralus verification program testing `encode` and `decode` roundtrips:
+
+```lateralus
+import stdlib.cbor as cbor
+
+fn verify_roundtrip(val, expected_bytes: list) {
+    let enc = cbor.encode(val)
+    assert(enc == expected_bytes)
+    let dec = cbor.decode(enc)
+    assert(dec == val)
+}
+
+fn main() {
+    println("=== RFC 8949 CBOR Serialization Verification ===")
+
+    // 1. Primitive unsigned integers
+    verify_roundtrip(0, [0])
+    verify_roundtrip(1, [1])
+    verify_roundtrip(10, [10])
+    verify_roundtrip(23, [23])
+    verify_roundtrip(24, [24, 24])
+    verify_roundtrip(100, [24, 100])
+    verify_roundtrip(1000, [25, 3, 232])
+
+    // 2. Negative integers
+    verify_roundtrip(-1, [32])
+    verify_roundtrip(-10, [41])
+    verify_roundtrip(-100, [56, 99])
+
+    // 3. Simple types
+    verify_roundtrip(false, [244])
+    verify_roundtrip(true, [245])
+    verify_roundtrip(null, [246])
+
+    // 4. Strings
+    verify_roundtrip("", [96])
+    verify_roundtrip("a", [97, 97])
+    verify_roundtrip("IETF", [100, 73, 69, 84, 70])
+
+    // 5. Collections
+    verify_roundtrip([], [128])
+    verify_roundtrip([1, 2, 3], [131, 1, 2, 3])
+    verify_roundtrip({"a": 1}, [161, 97, 97, 1])
+
+    println("All RFC 8949 CBOR test vectors passed successfully!")
+}
+```
+
+---
+
+## Conclusion
+
+With `stdlib/cbor.ltl`, Lateralus provides an efficient, standard-compliant binary codec for high-performance distributed networking and storage. Its small footprint and recursive structure guarantee seamless interoperability across bytecode and native execution targets.
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>

@@ -238,3 +238,22 @@ fn main() {
         assert "E = mc^2" in html
         assert "admonition" in html
         assert "<table" in html
+
+    def test_stdlib_cbor_tutorial_renders(self):
+        import os
+        repo_root = os.path.dirname(os.path.dirname(__file__))
+        doc_path = os.path.join(repo_root, "docs", "blog", "stdlib-cbor.ltlml")
+        assert os.path.exists(doc_path)
+        with open(doc_path, "r", encoding="utf-8") as f:
+            html = f.read()
+        start_tag = '<script id="ltlml-source" type="text/ltlml">'
+        start = html.find(start_tag) + len(start_tag)
+        end = html.find("</script>", start)
+        source = html[start:end].strip()
+        doc = parse_ltlml(source)
+        fm = doc.children[0]
+        assert fm.attrs["title"] == "Standard Library Tour: RFC 8949 CBOR Binary Serialization"
+        rendered = render_ltlml(source)
+        assert "RFC 8949 CBOR" in rendered
+        assert "mt_uint" in rendered
+        assert "161, 97, 97, 1" in rendered
