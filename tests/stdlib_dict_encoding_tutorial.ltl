@@ -1,0 +1,115 @@
+// tests/stdlib_dict_encoding_tutorial.ltl
+// Pinned test vectors and invariants for stdlib/dict_encoding.ltl
+
+import dict_encoding
+
+fn lists_equal(a: list, b: list) -> bool {
+    if len(a) != len(b) {
+        return false
+    }
+    let i = 0
+    while i < len(a) {
+        if a[i] != b[i] {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+pub fn test_empty_list_roundtrip() -> bool {
+    let empty: list = []
+    let enc = dict_encoding_encode(empty)
+    if dict_encoding_cardinality(enc) != 0 {
+        return false
+    }
+    if len(enc["indices"]) != 0 {
+        return false
+    }
+    let dec = dict_encoding_decode(enc)
+    return lists_equal(dec, empty)
+}
+
+pub fn test_monochromatic_input() -> bool {
+    let vals = ["ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE"]
+    let enc = dict_encoding_encode(vals)
+    if dict_encoding_cardinality(enc) != 1 {
+        return false
+    }
+    if dict_encoding_index_bit_width(enc) != 1 {
+        return false
+    }
+    let indices = enc["indices"]
+    let i = 0
+    while i < len(indices) {
+        if indices[i] != 0 {
+            return false
+        }
+        i = i + 1
+    }
+    let dec = dict_encoding_decode(enc)
+    return lists_equal(dec, vals)
+}
+
+pub fn test_binary_domain() -> bool {
+    let vals = ["pass", "fail", "pass", "pass", "fail"]
+    let enc = dict_encoding_encode(vals)
+    if dict_encoding_cardinality(enc) != 2 {
+        return false
+    }
+    if dict_encoding_index_bit_width(enc) != 1 {
+        return false
+    }
+    let dec = dict_encoding_decode(enc)
+    return lists_equal(dec, vals)
+}
+
+pub fn test_low_cardinality_roundtrip() -> bool {
+    let verbs = ["GET", "POST", "GET", "PUT", "GET", "DELETE", "POST", "GET"]
+    let enc = dict_encoding_encode(verbs)
+    if dict_encoding_cardinality(enc) != 4 {
+        return false
+    }
+    // Cardinality 4 requires 2 bits (indices 0, 1, 2, 3)
+    if dict_encoding_index_bit_width(enc) != 2 {
+        return false
+    }
+    let dec = dict_encoding_decode(enc)
+    return lists_equal(dec, verbs)
+}
+
+pub fn test_first_seen_order_preserved() -> bool {
+    let vals = ["delta", "gamma", "alpha", "beta", "gamma", "delta"]
+    let enc = dict_encoding_encode(vals)
+    let dict = enc["dictionary"]
+    if len(dict) != 4 {
+        return false
+    }
+    if dict[0] != "delta" || dict[1] != "gamma" || dict[2] != "alpha" || dict[3] != "beta" {
+        return false
+    }
+    let dec = dict_encoding_decode(enc)
+    return lists_equal(dec, vals)
+}
+
+pub fn test_bit_width_scaling() -> bool {
+    // 8 distinct values should require 3 bits
+    let vals8 = ["v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7"]
+    let enc8 = dict_encoding_encode(vals8)
+    if dict_encoding_cardinality(enc8) != 8 {
+        return false
+    }
+    if dict_encoding_index_bit_width(enc8) != 3 {
+        return false
+    }
+    // 9 distinct values should step up to 4 bits
+    let vals9 = ["v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8"]
+    let enc9 = dict_encoding_encode(vals9)
+    if dict_encoding_cardinality(enc9) != 9 {
+        return false
+    }
+    if dict_encoding_index_bit_width(enc9) != 4 {
+        return false
+    }
+    return true
+}
