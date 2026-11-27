@@ -465,27 +465,61 @@ _COMPARE_OPS = {
 }
 
 
+def _split_top_level(expr: str, op: str) -> list[str]:
+    parts = []
+    depth = 0
+    curr = ""
+    i = 0
+    op_len = len(op)
+    while i < len(expr):
+        if expr[i] == '(':
+            depth += 1
+            curr += expr[i]
+            i += 1
+        elif expr[i] == ')':
+            depth -= 1
+            curr += expr[i]
+            i += 1
+        elif depth == 0 and expr[i:i+op_len].upper() == op:
+            left_ok = (i == 0 or not expr[i-1].isalnum() and expr[i-1] != '_')
+            right_ok = (i+op_len == len(expr) or not expr[i+op_len].isalnum() and expr[i+op_len] != '_')
+            if left_ok and right_ok:
+                parts.append(curr)
+                curr = ""
+                i += op_len
+            else:
+                curr += expr[i]
+                i += 1
+        else:
+            curr += expr[i]
+            i += 1
+    parts.append(curr)
+    return parts
+
 def _parse_condition(expr: str) -> Predicate:
-    """
-    Parse a simple condition string into a predicate function.
-    Supports: field op value, AND, OR, NOT, parentheses.
-    Examples:
-        "age > 18"
-        "status == 'active' AND score >= 90"
-        "NOT archived"
-    """
     expr = expr.strip()
+    
+    if expr.startswith("(") and expr.endswith(")"):
+        depth = 0
+        valid = True
+        for i, c in enumerate(expr):
+            if c == '(': depth += 1
+            elif c == ')': depth -= 1
+            if depth == 0 and i < len(expr) - 1:
+                valid = False
+                break
+        if valid:
+            return _parse_condition(expr[1:-1])
 
-    # Try AND / OR splitting (simple, not nested)
-    if " AND " in expr.upper():
-        parts = re.split(r'\bAND\b', expr, flags=re.IGNORECASE)
-        preds = [_parse_condition(p) for p in parts]
-        return lambda r, ps=preds: all(p(r) for p in ps)
-
-    if " OR " in expr.upper():
-        parts = re.split(r'\bOR\b', expr, flags=re.IGNORECASE)
+    parts = _split_top_level(expr, " OR ")
+    if len(parts) > 1:
         preds = [_parse_condition(p) for p in parts]
         return lambda r, ps=preds: any(p(r) for p in ps)
+
+    parts = _split_top_level(expr, " AND ")
+    if len(parts) > 1:
+        preds = [_parse_condition(p) for p in parts]
+        return lambda r, ps=preds: all(p(r) for p in ps)
 
     if expr.upper().startswith("NOT "):
         inner = _parse_condition(expr[4:])
