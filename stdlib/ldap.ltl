@@ -36,15 +36,24 @@ pub fn enc_integer(v: int) -> list {
     if v == 0 {
         return enc_tlv(tag_integer(), [0])
     }
+    if v == -1 {
+        return enc_tlv(tag_integer(), [255])
+    }
     let bytes_list = []
     let n = v
-    while n > 0 {
+    while n != 0 and n != -1 {
         bytes_list = [n & 255] + bytes_list
-        n = n / 256
+        // Lateralus 位移或除法 (模拟 arithmetic shift right)
+        if n < 0 {
+            n = (n - (n & 255)) / 256
+        } else {
+            n = n / 256
+        }
     }
-    // Prepend 0 if high bit set, so it stays positive.
-    if bytes_list[0] >= 128 {
+    if v > 0 and bytes_list[0] >= 128 {
         bytes_list = [0] + bytes_list
+    } else if v < 0 and bytes_list[0] < 128 {
+        bytes_list = [255] + bytes_list
     }
     return enc_tlv(tag_integer(), bytes_list)
 }
@@ -71,12 +80,17 @@ pub fn enc_enumerated(v: int) -> list {
 /// Decode the tag/length/value starting at `i`.
 /// Returns [tag, value_bytes, next_index].
 pub fn decode_tlv(buf: list, i: int) -> list {
+    if i + 1 >= len(buf) { throw ValueError("decode_tlv: truncated tag or length") }
     let tag = buf[i]
     let b = buf[i + 1]
     let off = i + 2
     let length = b
-    if b >= 0x80 {
-        let nlen = b - 0x80
+    if b == 0x80 {
+        throw ValueError("decode_tlv: BER indefinite length (0x80) not supported")
+    }
+    if b > 0x80 {
+        let nlen = b & 0x7f
+        if off + nlen > len(buf) { throw ValueError("decode_tlv: truncated extended length") }
         length = 0
         let k = 0
         while k < nlen {
@@ -85,6 +99,7 @@ pub fn decode_tlv(buf: list, i: int) -> list {
         }
         off = off + nlen
     }
+    if off + length > len(buf) { throw ValueError("decode_tlv: truncated value body") }
     let value = slice(buf, off, off + length)
     return [tag, value, off + length]
 }
@@ -98,7 +113,7 @@ pub fn bind_request(message_id: int, version: int,
     // BindRequest body
     let body = enc_integer(version)
         + enc_octet_string(bind_dn)
-        + [0x80] + enc_len(len(password)) + bytes_of(password)  // [0] simple
+        + [0x80] + enc_len(len(bytes_of(password))) + bytes_of(password)  // [0] simple
     // APPLICATION 0, constructed
     let app = [0x60] + enc_len(len(body)) + body
     let msg = enc_integer(message_id) + app
