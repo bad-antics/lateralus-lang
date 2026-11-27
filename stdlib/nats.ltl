@@ -1,132 +1,249 @@
-// ===================================================================
-// stdlib/nats.ltl  —  NATS core line protocol
-// -------------------------------------------------------------------
-// Minimal client-side codec for NATS (text-based, \r\n delimited).
-// Commands:
-//     CONNECT {json}\r\n
-//     PUB <subject> [reply] <#bytes>\r\n<payload>\r\n
-//     SUB <subject> [queue] <sid>\r\n
-//     UNSUB <sid> [max]\r\n
-//     PING\r\n  PONG\r\n
-// Server → client:
-//     MSG <subject> <sid> [reply] <#bytes>\r\n<payload>\r\n
-//     +OK\r\n  -ERR '<reason>'\r\n  INFO {json}\r\n
-// ===================================================================
+// stdlib/nats.ltl -- NATS client protocol helpers (command builders + parser)
+//
+// All builders return Result<String, String>:
+//   Ok(wire_bytes_as_string) on success
+//   Err(reason)              when an argument would corrupt the protocol
+//
+// parse_message returns Result<Option<Message>, String>:
+//   Ok(Some(msg)) -> a full frame was parsed
+//   Ok(None)      -> not enough data yet (caller should read more)
+//   Err(reason)   -> protocol violation
 
-// -- Client → server ------------------------------------------------
+import "stdlib/strings"
 
-pub fn connect(opts_json: str) -> str {
-    return "CONNECT " + opts_json + "\r\n"
+let CRLF = "\r\n"
+
+// ---------------------------------------------------------------------------
+// Validation helpers
+// ---------------------------------------------------------------------------
+
+// True if `s` contains CR, LF or NUL.
+fn has_ctl(s) {
+    return contains(s, "\r") || contains(s, "\n") || contains(s, "\0")
 }
 
-pub fn pub_msg(subject: str, reply: str, payload: str) -> str {
-    let hdr = "PUB " + subject
-    if reply != "" { hdr = hdr + " " + reply }
-    hdr = hdr + " " + str(len(payload)) + "\r\n"
-    return hdr + payload + "\r\n"
+// True if `s` contains any whitespace delimiter used by NATS framing.
+fn has_ws(s) {
+    return contains(s, " ") || contains(s, "\t")
 }
 
-pub fn sub(subject: str, queue: str, sid: str) -> str {
-    let out = "SUB " + subject
-    if queue != "" { out = out + " " + queue }
-    out = out + " " + sid + "\r\n"
-    return out
+// Validate a whitespace-delimited protocol token (subject, reply, queue, sid).
+// `allow_empty` lets optional fields (reply/queue) be "".
+fn check_token(name, value, allow_empty) {
+    if len(value) == 0 {
+        if allow_empty {
+            return Ok(value)
+        }
+        return Err(name + " must not be empty")
+    }
+    if has_ctl(value) {
+        return Err(name + " must not contain CR, LF or NUL")
+    }
+    if has_ws(value) {
+        return Err(name + " must not contain whitespace")
+    }
+    return Ok(value)
 }
 
-pub fn unsub(sid: str, max: int) -> str {
-    let out = "UNSUB " + sid
-    if max > 0 { out = out + " " + str(max) }
-    return out + "\r\n"
+// Validate a free-form protocol line argument (e.g. CONNECT JSON): no CR/LF/NUL.
+fn check_line(name, value) {
+    if has_ctl(value) {
+        return Err(name + " must not contain CR, LF or NUL")
+    }
+    return Ok(value)
 }
 
-pub fn ping() -> str { return "PING\r\n" }
-pub fn pong() -> str { return "PONG\r\n" }
-
-// -- Server → client parser ----------------------------------------
-
-fn split_ws(s: str) -> list {
-    // Split on runs of spaces/tabs; NATS uses single spaces but be
-    // forgiving.
-    let out = []
-    let cur = ""
+// True if `s` is a non-empty string of ASCII digits only.
+fn is_uint_str(s) {
+    if len(s) == 0 {
+        return false
+    }
     let i = 0
     while i < len(s) {
-        let c = char_at(s, i)
-        if c == " " || c == "\t" {
-            if len(cur) > 0 { out = out + [cur]; cur = "" }
-        } else {
-            cur = cur + c
+        let c = slice(s, i, i + 1)
+        if c < "0" || c > "9" {
+            return false
         }
         i = i + 1
     }
-    if len(cur) > 0 { out = out + [cur] }
+    return true
+}
+
+// ---------------------------------------------------------------------------
+// Command builders
+// ---------------------------------------------------------------------------
+
+fn connect(opts_json) {
+    let checked = check_line("opts_json", opts_json)
+    if is_err(checked) {
+        return checked
+    }
+    return Ok("CONNECT " + opts_json + CRLF)
+}
+
+fn pub_msg(subject, reply, payload) {
+    let s = check_token("subject", subject, false)
+    if is_err(s) {
+        return s
+    }
+    let r = check_token("reply", reply, true)
+    if is_err(r) {
+        return r
+    }
+    // Payload is length-prefixed, so it may legally contain any bytes (incl. CRLF).
+    // The length MUST be the UTF-8 byte length, not the character count.
+    let nbytes = len(bytes_of(payload))
+    let head = "PUB " + subject
+    if len(reply) > 0 {
+        head = head + " " + reply
+    }
+    head = head + " " + str(nbytes) + CRLF
+    return Ok(head + payload + CRLF)
+}
+
+fn sub(subject, queue, sid) {
+    let s = check_token("subject", subject, false)
+    if is_err(s) {
+        return s
+    }
+    let q = check_token("queue", queue, true)
+    if is_err(q) {
+        return q
+    }
+    let i = check_token("sid", sid, false)
+    if is_err(i) {
+        return i
+    }
+    let head = "SUB " + subject
+    if len(queue) > 0 {
+        head = head + " " + queue
+    }
+    return Ok(head + " " + sid + CRLF)
+}
+
+fn unsub(sid, max) {
+    let i = check_token("sid", sid, false)
+    if is_err(i) {
+        return i
+    }
+    // `max` is optional: "" / nil means unsubscribe immediately.
+    if max == nil || max == "" {
+        return Ok("UNSUB " + sid + CRLF)
+    }
+    let max_s = str(max)
+    if !is_uint_str(max_s) {
+        return Err("max must be a non-negative integer")
+    }
+    return Ok("UNSUB " + sid + " " + max_s + CRLF)
+}
+
+fn ping() {
+    return "PING" + CRLF
+}
+
+fn pong() {
+    return "PONG" + CRLF
+}
+
+// ---------------------------------------------------------------------------
+// Parser
+// ---------------------------------------------------------------------------
+
+// Split a protocol line on single spaces, dropping empty fragments.
+fn split_ws(line) {
+    let out = []
+    let parts = split(line, " ")
+    for p in parts {
+        if len(p) > 0 {
+            out = out + [p]
+        }
+    }
     return out
 }
 
-/// Parse one server line (and payload if MSG) out of `buf`.
-/// Returns a map with at least {"op": "...", "consumed": N} or
-/// nil if the frame is incomplete.
-pub fn parse_message(buf: str) -> map {
-    let n = len(buf)
-    let line_end = index_of(buf, "\r\n")
-    if line_end < 0 { return nil }
-    let line = slice(buf, 0, line_end)
-    let rest_start = line_end + 2
-    let m = {}
-    if starts_with(line, "PING") {
-        m["op"] = "PING"
-        m["consumed"] = rest_start
-        return m
+// Parse one server frame from the front of `buf`.
+// On success returns Ok(Some({kind, ..., consumed})) where `consumed` is the
+// number of bytes of `buf` used by the frame.
+fn parse_message(buf) {
+    let eol = index_of(buf, CRLF)
+    if eol < 0 {
+        return Ok(None)    // need more data
     }
-    if starts_with(line, "PONG") {
-        m["op"] = "PONG"
-        m["consumed"] = rest_start
-        return m
+    let line = slice(buf, 0, eol)
+    let line_end = eol + 2
+
+    if line == "PING" {
+        return Ok(Some({ kind: "PING", consumed: line_end }))
     }
-    if starts_with(line, "+OK") {
-        m["op"] = "OK"
-        m["consumed"] = rest_start
-        return m
+    if line == "PONG" {
+        return Ok(Some({ kind: "PONG", consumed: line_end }))
     }
-    if starts_with(line, "-ERR") {
-        m["op"] = "ERR"
-        m["reason"] = slice(line, 5, len(line))
-        m["consumed"] = rest_start
-        return m
+    if line == "+OK" {
+        return Ok(Some({ kind: "OK", consumed: line_end }))
     }
+
     if starts_with(line, "INFO ") {
-        m["op"] = "INFO"
-        m["info"] = slice(line, 5, len(line))
-        m["consumed"] = rest_start
-        return m
+        return Ok(Some({
+            kind: "INFO",
+            json: slice(line, 5, len(line)),
+            consumed: line_end
+        }))
     }
+
+    // "-ERR" may be bare, or followed by a space and a message.
+    if line == "-ERR" {
+        return Ok(Some({ kind: "ERR", message: "", consumed: line_end }))
+    }
+    if starts_with(line, "-ERR ") {
+        return Ok(Some({
+            kind: "ERR",
+            message: slice(line, 5, len(line)),
+            consumed: line_end
+        }))
+    }
+
     if starts_with(line, "MSG ") {
-        let parts = split_ws(slice(line, 4, len(line)))
-        let np = len(parts)
-        if np < 3 { return nil }
-        let subject = parts[0]
-        let sid = parts[1]
-        let reply = ""
-        let nbytes = 0
-        if np == 3 {
-            nbytes = try_int(parts[2], 0)
-        } else {
-            reply = parts[2]
-            nbytes = try_int(parts[3], 0)
+        let parts = split_ws(line)
+        // MSG <subject> <sid> [reply] <#bytes>
+        if len(parts) != 4 && len(parts) != 5 {
+            return Err("malformed MSG header")
         }
-        if n < rest_start + nbytes + 2 { return nil }
-        let payload = slice(buf, rest_start, rest_start + nbytes)
-        m["op"] = "MSG"
-        m["subject"] = subject
-        m["sid"] = sid
-        m["reply"] = reply
-        m["payload"] = payload
-        m["consumed"] = rest_start + nbytes + 2
-        return m
+        let subject = parts[1]
+        let sid = parts[2]
+        let reply = ""
+        let nbytes_s = parts[3]
+        if len(parts) == 5 {
+            reply = parts[3]
+            nbytes_s = parts[4]
+        }
+        if !is_uint_str(nbytes_s) {
+            return Err("invalid MSG #bytes: " + nbytes_s)
+        }
+        let nbytes = try_int(nbytes_s, -1)
+        if nbytes < 0 {
+            return Err("invalid MSG #bytes: " + nbytes_s)
+        }
+
+        // Work in bytes so framing is correct for multi-byte payloads.
+        let rest = bytes_of(slice(buf, line_end, len(buf)))
+        if len(rest) < nbytes + 2 {
+            return Ok(None)    // payload / trailing CRLF not fully received yet
+        }
+        let payload_bytes = slice(rest, 0, nbytes)
+        let trailer = slice(rest, nbytes, nbytes + 2)
+        if trailer != bytes_of(CRLF) {
+            return Err("MSG payload not terminated by CRLF")
+        }
+        let consumed = line_end + nbytes + 2
+        return Ok(Some({
+            kind: "MSG",
+            subject: subject,
+            sid: sid,
+            reply: reply,
+            payload: string_from_bytes(payload_bytes),
+            consumed: consumed
+        }))
     }
-    // Unknown / partial.
-    m["op"] = "UNKNOWN"
-    m["raw"] = line
-    m["consumed"] = rest_start
-    return m
+
+    return Err("unknown NATS frame: " + line)
 }
