@@ -1,170 +1,167 @@
-// Lateralus Standard Library — http.ltl  (v1.5.0)
-// HTTP client for making web requests
+// stdlib/http.ltl: HTTP client helpers and URL parsing
 
-module stdlib.http
+import "stdlib/json"
 
-// -- Core requests ------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Internal string helpers (index-based, first/last occurrence aware)
+// ---------------------------------------------------------------------------
 
-pub fn get(url: str) -> map {
-    // Returns {"status": int, "body": str, "headers": map}
-    return http_request("GET", url, "", {})
-}
-
-pub fn post(url: str, body: str) -> map {
-    return http_request("POST", url, body, {"Content-Type": "application/json"})
-}
-
-pub fn put(url: str, body: str) -> map {
-    return http_request("PUT", url, body, {"Content-Type": "application/json"})
-}
-
-pub fn delete(url: str) -> map {
-    return http_request("DELETE", url, "", {})
-}
-
-pub fn patch(url: str, body: str) -> map {
-    return http_request("PATCH", url, body, {"Content-Type": "application/json"})
-}
-
-pub fn head(url: str) -> map {
-    return http_request("HEAD", url, "", {})
-}
-
-// -- With headers -------------------------------------------------------------
-
-pub fn get_with_headers(url: str, headers: map) -> map {
-    return http_request("GET", url, "", headers)
-}
-
-pub fn post_with_headers(url: str, body: str, headers: map) -> map {
-    return http_request("POST", url, body, headers)
-}
-
-// -- JSON helpers -------------------------------------------------------------
-
-pub fn get_json(url: str) -> map {
-    let resp = get(url)
-    if resp["status"] >= 200 && resp["status"] < 300 {
-        return {"ok": true, "data": json_parse(resp["body"]),
-                "status": resp["status"]}
+// Returns the index of the first occurrence of `needle` in `s`, or -1.
+fn _http_find(s, needle) {
+    let n = len(s)
+    let m = len(needle)
+    if m == 0 { return 0 }
+    let i = 0
+    while i + m <= n {
+        if str_slice(s, i, i + m) == needle { return i }
+        i = i + 1
     }
-    return {"ok": false, "data": null, "status": resp["status"],
-            "error": resp["body"]}
+    return -1
 }
 
-pub fn post_json(url: str, data: map) -> map {
-    let body = json_encode(data)
-    let resp = post(url, body)
-    if resp["status"] >= 200 && resp["status"] < 300 {
-        return {"ok": true, "data": json_parse(resp["body"]),
-                "status": resp["status"]}
+// Returns the index of the last occurrence of `needle` in `s`, or -1.
+fn _http_find_last(s, needle) {
+    let n = len(s)
+    let m = len(needle)
+    if m == 0 { return n }
+    let i = n - m
+    while i >= 0 {
+        if str_slice(s, i, i + m) == needle { return i }
+        i = i - 1
     }
-    return {"ok": false, "data": null, "status": resp["status"],
-            "error": resp["body"]}
+    return -1
 }
 
-// -- URL utilities ------------------------------------------------------------
-
-pub fn encode_uri(s: str) -> str {
-    return url_encode(s)
-}
-
-pub fn decode_uri(s: str) -> str {
-    return url_decode(s)
-}
-
-pub fn build_url(base: str, params: map) -> str {
-    let mut parts = []
-    for key in keys(params) {
-        let encoded_key = url_encode(key)
-        let encoded_val = url_encode(to_str(params[key]))
-        parts = push(parts, encoded_key + "=" + encoded_val)
+// True if `s` is non-empty and consists solely of ASCII digits.
+fn _http_is_digits(s) {
+    let n = len(s)
+    if n == 0 { return false }
+    let i = 0
+    while i < n {
+        let c = str_slice(s, i, i + 1)
+        if c < "0" || c > "9" { return false }
+        i = i + 1
     }
-    if len(parts) == 0 { return base }
-    return base + "?" + str_join(parts, "&")
+    return true
 }
 
-pub fn parse_url(url: str) -> map {
-    // Simple URL parser
-    let mut result = {"scheme": "", "host": "", "port": 0,
-                      "path": "", "query": "", "fragment": ""}
+fn _http_default_port(scheme) {
+    if scheme == "https" { return 443 }
+    if scheme == "http" { return 80 }
+    if scheme == "wss" { return 443 }
+    if scheme == "ws" { return 80 }
+    return 0
+}
 
-    let mut s = url
+// ---------------------------------------------------------------------------
+// JSON helpers
+// ---------------------------------------------------------------------------
 
-    // Extract fragment
-    if str_contains(s, "#") {
-        let parts = str_split(s, "#")
-        s = parts[0]
-        result["fragment"] = parts[1]
+fn get_json(url) {
+    let resp = http_get(url)
+    return json_parse(resp)
+}
+
+fn post_json(url, data) {
+    // json_stringify is the canonical encoder (json_encode does not exist).
+    let body = json_stringify(data)
+    return http_post(url, body, {"Content-Type": "application/json"})
+}
+
+// ---------------------------------------------------------------------------
+// URL parsing
+// ---------------------------------------------------------------------------
+
+// Parses a URL into a record:
+//   { scheme, userinfo, host, port, path, query, fragment }
+// Splits only on the first '#', first '?' and first '://'; handles IPv6
+// literals and userinfo; never raises on malformed ports.
+fn parse_url(url) {
+    let s = url
+    let fragment = ""
+    let query = ""
+    let scheme = ""
+    let userinfo = ""
+    let host = ""
+    let port = 0
+    let path = "/"
+
+    // 1. Fragment: split at the FIRST '#'.
+    let hi = _http_find(s, "#")
+    if hi >= 0 {
+        fragment = str_slice(s, hi + 1, len(s))
+        s = str_slice(s, 0, hi)
     }
 
-    // Extract query
-    if str_contains(s, "?") {
-        let parts = str_split(s, "?")
-        s = parts[0]
-        result["query"] = parts[1]
+    // 2. Query: split at the FIRST '?'.
+    let qi = _http_find(s, "?")
+    if qi >= 0 {
+        query = str_slice(s, qi + 1, len(s))
+        s = str_slice(s, 0, qi)
     }
 
-    // Extract scheme
-    if str_contains(s, "://") {
-        let parts = str_split(s, "://")
-        result["scheme"] = parts[0]
-        s = parts[1]
+    // 3. Scheme: split at the FIRST "://".
+    let rest = s
+    let si = _http_find(s, "://")
+    if si >= 0 {
+        scheme = str_slice(s, 0, si)
+        rest = str_slice(s, si + 3, len(s))
     }
 
-    // Extract path
-    let slash_idx = str_index_of(s, "/")
-    if slash_idx >= 0 {
-        result["path"] = slice(s, slash_idx, len(s))
-        s = slice(s, 0, slash_idx)
+    // 4. Authority vs path: split at the FIRST '/'.
+    let authority = rest
+    let pi = _http_find(rest, "/")
+    if pi >= 0 {
+        authority = str_slice(rest, 0, pi)
+        path = str_slice(rest, pi, len(rest))
     }
 
-    // Extract port
-    if str_contains(s, ":") {
-        let parts = str_split(s, ":")
-        result["host"] = parts[0]
-        result["port"] = to_int(parts[1])
+    // 5. Userinfo: everything before the LAST '@' in the authority.
+    let ai = _http_find_last(authority, "@")
+    if ai >= 0 {
+        userinfo = str_slice(authority, 0, ai)
+        authority = str_slice(authority, ai + 1, len(authority))
+    }
+
+    // 6. Host and port.
+    let port_str = ""
+    if len(authority) > 0 && str_slice(authority, 0, 1) == "[" {
+        // Bracketed IPv6 literal: [addr] or [addr]:port
+        let close = _http_find(authority, "]")
+        if close >= 0 {
+            host = str_slice(authority, 0, close + 1)
+            let after = str_slice(authority, close + 1, len(authority))
+            if len(after) > 0 && str_slice(after, 0, 1) == ":" {
+                port_str = str_slice(after, 1, len(after))
+            }
+        } else {
+            // Unterminated bracket: treat the whole thing as the host.
+            host = authority
+        }
     } else {
-        result["host"] = s
+        let ci = _http_find_last(authority, ":")
+        if ci >= 0 {
+            host = str_slice(authority, 0, ci)
+            port_str = str_slice(authority, ci + 1, len(authority))
+        } else {
+            host = authority
+        }
     }
 
-    return result
-}
+    // 7. Port: only accept purely numeric ports; otherwise use scheme default.
+    if _http_is_digits(port_str) {
+        port = to_int(port_str)
+    } else {
+        port = _http_default_port(scheme)
+    }
 
-// -- Response helpers ---------------------------------------------------------
-
-pub fn is_ok(resp: map) -> bool {
-    return resp["status"] >= 200 && resp["status"] < 300
-}
-
-pub fn is_redirect(resp: map) -> bool {
-    return resp["status"] >= 300 && resp["status"] < 400
-}
-
-pub fn is_client_error(resp: map) -> bool {
-    return resp["status"] >= 400 && resp["status"] < 500
-}
-
-pub fn is_server_error(resp: map) -> bool {
-    return resp["status"] >= 500 && resp["status"] < 600
-}
-
-pub fn status_text(code: int) -> str {
-    if code == 200 { return "OK" }
-    if code == 201 { return "Created" }
-    if code == 204 { return "No Content" }
-    if code == 301 { return "Moved Permanently" }
-    if code == 302 { return "Found" }
-    if code == 304 { return "Not Modified" }
-    if code == 400 { return "Bad Request" }
-    if code == 401 { return "Unauthorized" }
-    if code == 403 { return "Forbidden" }
-    if code == 404 { return "Not Found" }
-    if code == 405 { return "Method Not Allowed" }
-    if code == 409 { return "Conflict" }
-    if code == 429 { return "Too Many Requests" }
-    if code == 500 { return "Internal Server Error" }
-    if code == 502 { return "Bad Gateway" }
-    if code == 503 { return "Service Unavailable" }
-    return "Unknown"
+    return {
+        "scheme": scheme,
+        "userinfo": userinfo,
+        "host": host,
+        "port": port,
+        "path": path,
+        "query": query,
+        "fragment": fragment
+    }
 }
