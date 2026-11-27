@@ -1,0 +1,117 @@
+--- stdlib.x25519 tutorial and standard usage implementation.
+--- Provides X25519 Elliptic Curve Diffie-Hellman (ECDH) key exchange primitives.
+
+module stdlib::x25519 {
+    use stdlib::bytes::{Bytes, from_hex, to_hex};
+    use stdlib::crypto::random_bytes;
+
+    --- Public key length in bytes (Curve25519)
+    const PUBLIC_KEY_SIZE: Int = 32;
+
+    --- Private scalar length in bytes (Curve25519)
+    const PRIVATE_KEY_SIZE: Int = 32;
+
+    --- Shared secret length in bytes
+    const SHARED_SECRET_SIZE: Int = 32;
+
+    --- Represents an X25519 keypair consisting of a private scalar and public point.
+    record KeyPair {
+        private_key: Bytes,
+        public_key: Bytes
+    }
+
+    --- Generates a cryptographically secure random X25519 private key and computes the corresponding public key.
+    --- 
+    --- Example:
+    --- ```lateralus
+    --- let kp = x25519::generate_keypair()
+    --- ```
+    fn generate_keypair() -> KeyPair {
+        let raw_scalar = random_bytes(PRIVATE_KEY_SIZE)
+        -- Clamp scalar according to Bernstein's Curve25519 specification
+        let scalar = clamp_scalar(raw_scalar)
+        let pub_key = scalar_mult_base(scalar)
+        
+        KeyPair {
+            private_key: scalar,
+            public_key: pub_key
+        }
+    }
+
+    --- Clamps a 32-byte scalar for Curve25519 security properties.
+    fn clamp_scalar(bytes: Bytes) -> Bytes {
+        let mut b = bytes
+        -- Clear bits 0, 1, 2 of the first byte
+        b[0] = b[0] & 248
+        -- Clear bit 7 and set bit 6 of the last byte
+        b[31] = (b[31] & 127) | 64
+        b
+    }
+
+    --- Multiplies the Curve25519 base point (9) by the given scalar to derive the public key.
+    fn scalar_mult_base(scalar: Bytes) -> Bytes {
+        -- Native cryptographic primitive call implemented in the Lateralus runtime backend
+        __x25519_base_mult(scalar)
+    }
+
+    --- Computes the shared secret given our private scalar and the peer's public key.
+    --- 
+    --- Example:
+    --- ```lateralus
+    --- let shared = x25519::compute_shared_secret(my_private_key, peer_public_key)
+    --- ```
+    fn compute_shared_secret(private_key: Bytes, peer_public_key: Bytes) -> Bytes |> Result<Bytes, String> {
+        if peer_public_key.length() != PUBLIC_KEY_SIZE {
+            return Error("Invalid peer public key length")
+        }
+        if private_key.length() != PRIVATE_KEY_SIZE {
+            return Error("Invalid private key length")
+        }
+
+        let secret = __x25519_scalarmult(private_key, peer_public_key)
+        
+        -- Check for all-zero low-order point attack check
+        if is_zero_bytes(secret) {
+            return Error("Insecure shared secret: resulted in low-order point")
+        }
+
+        Ok(secret)
+    }
+
+    fn is_zero_bytes(b: Bytes) -> Bool {
+        let mut accum = 0
+        for i in 0..b.length() {
+            accum = accum | b[i]
+        }
+        accum == 0
+    }
+
+    --- TUTORIAL: End-to-End ECDH Key Exchange Pipeline
+    --- 
+    --- This tutorial demonstrates how Alice and Bob establish a shared secret
+    --- securely using Lateralus pipelines (`|>`) and error recovery blocks.
+    fn tutorial_demo() -> Result<String, String> {
+        // 1. Generate keypairs for Alice and Bob
+        let alice = generate_keypair()
+        let bob = generate_keypair()
+
+        // 2. Perform ECDH key exchange from both perspectives
+        let alice_shared = compute_shared_secret(alice.private_key, bob.public_key)
+            |?> recover err {
+                return Error("Alice ECDH failed: {err}")
+            }
+
+        let bob_shared = compute_shared_secret(bob.private_key, alice.public_key)
+            |?> recover err {
+                return Error("Bob ECDH failed: {err}")
+            }
+
+        // 3. Verify shared secrets match securely
+        if alice_shared == bob_shared {
+            let hex_secret = to_hex(alice_shared)
+            Ok("Success! Shared secret established: {hex_secret}")
+        } else {
+            Error("Mismatch: Shared secrets did not agree.")
+        }
+    }
+}
