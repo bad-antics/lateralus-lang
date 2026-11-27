@@ -79,11 +79,13 @@ class LateralusFormatter:
         return result
 
     def _normalize_whitespace(self, lines: list[str]) -> list[str]:
-        """Remove trailing whitespace and normalize tabs to spaces."""
+        """Remove trailing whitespace and normalize indentation tabs to spaces."""
         result = []
         for line in lines:
-            # Convert tabs to spaces
-            line = line.replace("\t", " " * self.config.indent_size)
+            # Tabs inside literals are data; only normalize leading indentation.
+            prefix_end = len(line) - len(line.lstrip(" \t"))
+            prefix = line[:prefix_end].replace("\t", " " * self.config.indent_size)
+            line = prefix + line[prefix_end:]
             # Remove trailing whitespace
             line = line.rstrip()
             result.append(line)
@@ -258,7 +260,11 @@ class LateralusFormatter:
         import_lines.sort()
 
         if import_lines:
-            return import_lines + [""] + other_lines
+            # Reuse one separator instead of accumulating blanks on every pass.
+            first_content = 0
+            while first_content < len(other_lines) and other_lines[first_content] == "":
+                first_content += 1
+            return import_lines + [""] + other_lines[first_content:]
         return other_lines
 
     def _normalize_trailing_commas(self, lines: list[str]) -> list[str]:

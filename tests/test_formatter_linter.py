@@ -2,6 +2,7 @@
 Tests for the LATERALUS formatter and linter.
 """
 from lateralus_lang.formatter import FormatConfig, LateralusFormatter
+from lateralus_lang.lexer import TK, lex
 from lateralus_lang.linter import LateralusLinter, Severity
 
 
@@ -103,6 +104,49 @@ class TestFormatter:
             if line.strip().startswith("pub fn"):
                 if i > 0 and lines[i - 1].strip() != "":
                     assert lines[i - 1].strip() == "", "Expected blank line before pub fn"
+
+    def test_string_literal_tab_preserved(self):
+        source = 'println("A\tB")\n'
+        result = self.fmt.format(source)
+        values = [t.value for t in lex(result) if t.kind == TK.STRING]
+        assert values == ["A\tB"]
+
+    def test_raw_string_literal_tab_preserved(self):
+        source = 'println(r"A\tB")\n'
+        result = self.fmt.format(source)
+        values = [t.value for t in lex(result) if t.kind == TK.RAW_STRING]
+        assert values == ["A\tB"]
+
+    def test_char_literal_tab_preserved(self):
+        source = "let value = '\t'\n"
+        result = self.fmt.format(source)
+        values = [t.value for t in lex(result) if t.kind == TK.CHAR]
+        assert values == ["\t"]
+
+    def test_tab_after_escaped_quote_preserved(self):
+        source = 'println("A\\\"\tB")\n'
+        result = self.fmt.format(source)
+        values = [t.value for t in lex(result) if t.kind == TK.STRING]
+        assert values == ['A"\tB']
+
+    def test_literal_tab_with_custom_indentation(self):
+        fmt = LateralusFormatter(FormatConfig(indent_size=2))
+        source = 'fn hello() {\n\tprintln("A\tB")\n}\n'
+        result = fmt.format(source)
+        assert result.splitlines()[1].startswith('  println(')
+        values = [t.value for t in lex(result) if t.kind == TK.STRING]
+        assert values == ["A\tB"]
+
+    def test_trailing_code_tab_removed_without_changing_literal(self):
+        source = 'println("A\tB")\t\n'
+        result = self.fmt.format(source)
+        assert result == 'println("A\tB")\n'
+
+    def test_import_sorting_idempotent(self):
+        for separator in ("", "\n", "\n\n", "\n\n\n"):
+            source = 'import "zebra"\nimport "alpha"\n' + separator + 'let x = 42\n'
+            once = self.fmt.format(source)
+            assert self.fmt.format(once) == once
 
 
 class TestLinter:
