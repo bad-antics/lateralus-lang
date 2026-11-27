@@ -29,6 +29,7 @@ MANIFEST_FILE = "lateralus.toml"
 MANIFEST_FILE_JSON = "lateralus.json"       # legacy compat
 LOCK_FILE = "lateralus-lock.json"
 LTL_MODULES_DIR = "ltl_modules"
+VENDOR_DIR = "vendor"
 
 DEFAULT_MAIN = "src/main.ltl"
 DEFAULT_TEST = "tests/"
@@ -467,6 +468,7 @@ class ProjectManifest:
     workspace: Optional[Workspace] = None
     cfg_features: list[str] = field(default_factory=list)
     targets: dict[str, dict] = field(default_factory=dict)
+    registry_url: Optional[str] = None
 
     @classmethod
     def from_toml(cls, path: Path) -> "ProjectManifest":
@@ -536,6 +538,13 @@ class ProjectManifest:
         # Parse targets
         targets = data.get("targets", {})
 
+        # Parse registry URL
+        registry_url = None
+        if isinstance(data.get("registry"), dict):
+            registry_url = data["registry"].get("url")
+        elif isinstance(pkg.get("registry"), str):
+            registry_url = pkg.get("registry")
+
         return cls(
             name=pkg.get("name", "unnamed"),
             version=pkg.get("version", "0.1.0"),
@@ -553,6 +562,7 @@ class ProjectManifest:
             workspace=ws,
             cfg_features=cfg_features,
             targets=targets,
+            registry_url=registry_url,
         )
 
     @staticmethod
@@ -651,6 +661,10 @@ class ProjectManifest:
             lines.append("\n[scripts]")
             for name, cmd in self.scripts.items():
                 lines.append(f'{name} = "{cmd}"')
+
+        if self.registry_url:
+            lines.append("\n[registry]")
+            lines.append(f'url = "{self.registry_url}"')
 
         return "\n".join(lines) + "\n"
 
@@ -1138,7 +1152,16 @@ __pycache__/
     return project_dir
 
 
-# --- Package Publishing ----------------------------------------------
+# --- Package Publishing & Registry Integration ------------------------
+
+def _load_registry_module():
+    """Import tools.registry.registry, adding repo root to sys.path if needed."""
+    repo_root = Path(__file__).resolve().parent.parent
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from tools.registry import registry as reg_mod
+    return reg_mod
+
 
 @dataclass
 class PackageBundle:
@@ -1149,22 +1172,28 @@ class PackageBundle:
     files: list[str]
     integrity: str
     size: int
+    tarball_bytes: bytes = field(default=b"", repr=False)
 
     @classmethod
     def create(cls, project_dir: Path,
                manifest: ProjectManifest) -> "PackageBundle":
-        """Create a package bundle for publishing."""
+        """Create a deterministic package bundle for publishing."""
         files = []
-        h = hashlib.sha256()
 
         for pattern in ["src/**/*.ltl", "tests/**/*.ltl", "docs/**/*",
                         "examples/**/*.ltl", MANIFEST_FILE, "README.md",
                         "LICENSE*"]:
             for p in sorted(project_dir.glob(pattern)):
                 if p.is_file():
-                    rel = str(p.relative_to(project_dir))
-                    files.append(rel)
-                    h.update(p.read_bytes())
+                    rel = str(p.relative_to(project_dir)).replace("\\", "/")
+                    if rel not in files:
+                        files.append(rel)
+
+        files.sort()
+        reg_mod = _load_registry_module()
+        tarball_bytes, sha256_digest = reg_mod.build_deterministic_tarball(
+            project_dir, files
+        )
 
         total_size = sum(
             (project_dir / f).stat().st_size for f in files
@@ -1176,9 +1205,16 @@ class PackageBundle:
             version=manifest.version,
             manifest=manifest,
             files=files,
-            integrity=f"sha256-{h.hexdigest()}",
+            integrity=sha256_digest,
             size=total_size,
+            tarball_bytes=tarball_bytes,
         )
+
+    def pack(self, output_path: Path) -> Path:
+        """Write the deterministic `.tar.gz` archive to `output_path`."""
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(self.tarball_bytes)
+        return output_path
 
     def to_dict(self) -> dict:
         return {
@@ -1188,6 +1224,127 @@ class PackageBundle:
             "integrity": self.integrity,
             "size": self.size,
         }
+
+
+def publish_package(
+    project_dir: Path,
+    registry_url: Optional[str] = None,
+    dry_run: bool = False,
+) -> dict:
+    """Pack and publish a Lateralus project from `project_dir` to the configured registry."""
+    manifest_path = project_dir / MANIFEST_FILE
+    if not manifest_path.exists():
+        manifest_path = project_dir / MANIFEST_FILE_JSON
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"No {MANIFEST_FILE} found in {project_dir}")
+
+    manifest = ProjectManifest.from_file(manifest_path)
+    bundle = PackageBundle.create(project_dir, manifest)
+
+    effective_registry = (
+        registry_url
+        or manifest.registry_url
+    )
+
+    if dry_run:
+        return {
+            "name": bundle.name,
+            "version": bundle.version,
+            "files": bundle.files,
+            "size": bundle.size,
+            "tarball_size": len(bundle.tarball_bytes),
+            "integrity": bundle.integrity,
+            "registry": str(effective_registry or "tools/registry"),
+            "dry_run": True,
+        }
+
+    reg_mod = _load_registry_module()
+    client = reg_mod.RegistryClient(effective_registry)
+    entry = client.publish_project(project_dir)
+    return {
+        "name": entry.name,
+        "version": entry.version,
+        "tarball": entry.tarball,
+        "integrity": entry.normalized_integrity,
+        "size": entry.size,
+        "registry": client.registry_url,
+        "dry_run": False,
+    }
+
+
+def add_dependency(
+    project_dir: Path,
+    package: str,
+    version: str = "*",
+    path: Optional[str] = None,
+    git: Optional[str] = None,
+    dev: bool = False,
+    registry_url: Optional[str] = None,
+) -> Optional[Path]:
+    """Add `package` to `lateralus.toml` and unpack into `vendor/<package>` when resolved from registry."""
+    manifest_path = project_dir / MANIFEST_FILE
+    if not manifest_path.exists():
+        manifest_path = project_dir / MANIFEST_FILE_JSON
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"No {MANIFEST_FILE} found in {project_dir}")
+
+    manifest = ProjectManifest.from_file(manifest_path)
+    reg_mod = _load_registry_module()
+
+    effective_registry = registry_url or manifest.registry_url
+    explicit_registry = bool(
+        effective_registry or os.environ.get("LATERALUS_REGISTRY_URL")
+    )
+
+    vendored_path: Optional[Path] = None
+    resolved_version = version
+
+    if not path and not git:
+        client = reg_mod.RegistryClient(effective_registry)
+        lock_path = project_dir / LOCK_FILE
+        lock = LockFile.from_file(lock_path)
+        pinned_hash = None
+        if package in lock.entries and lock.entries[package].integrity.startswith("sha256-"):
+            if version in ("*", lock.entries[package].version):
+                pinned_hash = lock.entries[package].integrity
+
+        try:
+            index = client.fetch_index()
+            entry = index.resolve_version(package, version)
+        except Exception:
+            if explicit_registry:
+                raise
+            entry = None
+
+        if entry is not None or explicit_registry:
+            entry, vendored_path = client.install_package(
+                name=package,
+                version_spec=version,
+                vendor_dir=project_dir / VENDOR_DIR,
+                pinned_sha256=pinned_hash,
+            )
+            resolved_version = entry.version if version == "*" else version
+            lock.entries[package] = LockEntry(
+                name=package,
+                version=entry.version,
+                resolved=f"{client.registry_url}/{entry.tarball.lstrip('/')}",
+                integrity=entry.normalized_integrity,
+                dependencies=dict(entry.dependencies),
+            )
+            lock.save(lock_path)
+
+    dep = Dependency(
+        name=package,
+        version=resolved_version,
+        path=path,
+        git=git,
+    )
+    if dev:
+        manifest.dev_dependencies[package] = dep
+    else:
+        manifest.dependencies[package] = dep
+    manifest.save(manifest_path)
+    return vendored_path
 
 
 # --- CLI Entry Point --------------------------------------------------
@@ -1216,6 +1373,8 @@ def main():
     add_p.add_argument("--path", default=None)
     add_p.add_argument("--git", default=None)
     add_p.add_argument("--dev", action="store_true")
+    add_p.add_argument("--registry", default=None,
+                       help="Registry URL or static directory path")
 
     # remove
     rm_p = sub.add_parser("remove", help="Remove a dependency")
@@ -1242,6 +1401,8 @@ def main():
     pub_p = sub.add_parser("publish", help="Publish package")
     pub_p.add_argument("--dry-run", action="store_true",
                        help="Show what would be published without uploading")
+    pub_p.add_argument("--registry", default=None,
+                       help="Registry URL or static directory path")
 
     # info
     sub.add_parser("info", help="Show project info")
@@ -1289,19 +1450,21 @@ def main():
         if not manifest_path:
             print("No lateralus.toml found.")
             sys.exit(1)
-        manifest = ProjectManifest.from_file(manifest_path)
-        dep = Dependency(
-            name=args.package,
+        vendored = add_dependency(
+            manifest_path.parent,
+            args.package,
             version=args.version,
             path=args.path,
             git=getattr(args, "git", None),
+            dev=args.dev,
+            registry_url=getattr(args, "registry", None),
         )
-        if args.dev:
-            manifest.dev_dependencies[args.package] = dep
-        else:
-            manifest.dependencies[args.package] = dep
-        manifest.save(manifest_path)
-        print(f"Added {args.package}@{args.version}")
+        manifest = ProjectManifest.from_file(manifest_path)
+        dep_map = manifest.dev_dependencies if args.dev else manifest.dependencies
+        resolved_ver = dep_map[args.package].version
+        print(f"Added {args.package}@{resolved_ver}")
+        if vendored:
+            print(f"  Unpacked → {vendored}")
 
     elif args.command == "remove":
         manifest_path = _find_manifest()
@@ -1352,21 +1515,25 @@ def main():
         if not manifest_path:
             print("No lateralus.toml found.")
             sys.exit(1)
-        manifest = ProjectManifest.from_file(manifest_path)
-        bundle = PackageBundle.create(manifest_path.parent, manifest)
-        if getattr(args, "dry_run", False):
-            print(f"Would publish {bundle.name}@{bundle.version}")
-            print(f"  Files: {len(bundle.files)}")
-            print(f"  Size:  {bundle.size:,} bytes")
-            print(f"  Integrity: {bundle.integrity}")
-            for f in bundle.files[:10]:
+        info = publish_package(
+            manifest_path.parent,
+            registry_url=getattr(args, "registry", None),
+            dry_run=getattr(args, "dry_run", False),
+        )
+        if info["dry_run"]:
+            print(f"Would publish {info['name']}@{info['version']}")
+            print(f"  Files: {len(info['files'])}")
+            print(f"  Size:  {info['size']:,} bytes")
+            print(f"  Integrity: {info['integrity']}")
+            for f in info["files"][:10]:
                 print(f"    {f}")
-            if len(bundle.files) > 10:
-                print(f"    ... and {len(bundle.files) - 10} more")
+            if len(info["files"]) > 10:
+                print(f"    ... and {len(info['files']) - 10} more")
         else:
-            print(f"Publishing {bundle.name}@{bundle.version}"
-                  f" to registry.lateralus.dev ...")
-            print("  (Registry not yet available — use --dry-run to preview)")
+            print(f"Published {info['name']}@{info['version']}"
+                  f" to {info['registry']}")
+            print(f"  Tarball:   {info['tarball']} ({info['size']:,} bytes)")
+            print(f"  Integrity: {info['integrity']}")
 
     else:
         parser.print_help()

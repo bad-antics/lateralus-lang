@@ -247,11 +247,15 @@ def main(argv=None) -> int:
     add_p.add_argument("--path", default=None)
     add_p.add_argument("--git", default=None)
     add_p.add_argument("--dev", action="store_true")
+    add_p.add_argument("--registry", default=None,
+                       help="Registry URL or static directory path")
 
     # publish  (v1.7)
     pub_p = sub.add_parser("publish", help="Publish package to registry")
     pub_p.add_argument("--dry-run", action="store_true",
                        help="Preview without uploading")
+    pub_p.add_argument("--registry", default=None,
+                       help="Registry URL or static directory path")
 
     # serve  (v2.2)
     serve_p = sub.add_parser("serve", help="Serve .ltlml docs as HTML pages")
@@ -705,47 +709,61 @@ print(f"\n  {_passed} passed  {_failed} failed")
         return 0
 
     elif ns.cmd == "add":
-        from .package_manager import Dependency, ProjectManifest, _find_manifest
+        from .package_manager import ProjectManifest, _find_manifest, add_dependency
         manifest_path = _find_manifest()
         if not manifest_path:
             print("No lateralus.toml found. Run 'lateralus init' first.",
                   file=sys.stderr)
             return 1
+        try:
+            vendored = add_dependency(
+                manifest_path.parent,
+                ns.package,
+                version=getattr(ns, "version", "*"),
+                path=getattr(ns, "path", None),
+                git=getattr(ns, "git", None),
+                dev=getattr(ns, "dev", False),
+                registry_url=getattr(ns, "registry", None),
+            )
+        except Exception as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
         manifest = ProjectManifest.from_file(manifest_path)
-        dep = Dependency(
-            name=ns.package,
-            version=getattr(ns, "version", "*"),
-            path=getattr(ns, "path", None),
-            git=getattr(ns, "git", None),
-        )
-        if getattr(ns, "dev", False):
-            manifest.dev_dependencies[ns.package] = dep
-        else:
-            manifest.dependencies[ns.package] = dep
-        manifest.save(manifest_path)
-        print(f"Added {ns.package}@{dep.version}")
+        dep_map = manifest.dev_dependencies if getattr(ns, "dev", False) else manifest.dependencies
+        resolved_ver = dep_map[ns.package].version
+        print(f"Added {ns.package}@{resolved_ver}")
+        if vendored:
+            print(f"  Unpacked → {vendored}")
         return 0
 
     elif ns.cmd == "publish":
-        from .package_manager import PackageBundle, ProjectManifest, _find_manifest
+        from .package_manager import _find_manifest, publish_package
         manifest_path = _find_manifest()
         if not manifest_path:
             print("No lateralus.toml found.", file=sys.stderr)
             return 1
-        manifest = ProjectManifest.from_file(manifest_path)
-        bundle = PackageBundle.create(manifest_path.parent, manifest)
-        if getattr(ns, "dry_run", False):
-            print(f"Would publish {bundle.name}@{bundle.version}")
-            print(f"  Files: {len(bundle.files)}")
-            print(f"  Size:  {bundle.size:,} bytes")
-            print(f"  Integrity: {bundle.integrity}")
-            for f in bundle.files[:10]:
+        try:
+            info = publish_package(
+                manifest_path.parent,
+                registry_url=getattr(ns, "registry", None),
+                dry_run=getattr(ns, "dry_run", False),
+            )
+        except Exception as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        if info["dry_run"]:
+            print(f"Would publish {info['name']}@{info['version']}")
+            print(f"  Files: {len(info['files'])}")
+            print(f"  Size:  {info['size']:,} bytes")
+            print(f"  Integrity: {info['integrity']}")
+            for f in info["files"][:10]:
                 print(f"    {f}")
-            if len(bundle.files) > 10:
-                print(f"    ... and {len(bundle.files) - 10} more")
+            if len(info["files"]) > 10:
+                print(f"    ... and {len(info['files']) - 10} more")
         else:
-            print(f"Publishing {bundle.name}@{bundle.version}")
-            print("  (Registry not yet available — use --dry-run to preview)")
+            print(f"Published {info['name']}@{info['version']} to {info['registry']}")
+            print(f"  Tarball:   {info['tarball']} ({info['size']:,} bytes)")
+            print(f"  Integrity: {info['integrity']}")
         return 0
 
     elif ns.cmd == "serve":
