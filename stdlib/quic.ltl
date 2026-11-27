@@ -33,12 +33,14 @@ pub fn enc_varint(v: int) -> list {
 
 /// Decode one varint. Returns [value, bytes_consumed].
 pub fn dec_varint(buf: list, i: int) -> list {
+    if i >= len(buf) { throw ValueError("dec_varint: out of bounds") }
     let b0 = buf[i]
     let length_bits = (b0 >> 6) & 3
     let vlen = 1
     if length_bits == 1 { vlen = 2 }
     if length_bits == 2 { vlen = 4 }
     if length_bits == 3 { vlen = 8 }
+    if i + vlen > len(buf) { throw ValueError("dec_varint: out of bounds") }
     let v = b0 & 0x3f
     let k = 1
     while k < vlen {
@@ -75,26 +77,40 @@ pub fn pkt_type_retry()     -> int { return 3 }
 /// {type, version, dcid, scid, token, length, payload_offset}
 /// Cryptographic unprotection of the header byte and PN is NOT done.
 pub fn parse_long_header(buf: list) -> map {
+    if len(buf) < 6 { throw ValueError("parse_long_header: out of bounds") }
     let out = {}
     let b0 = buf[0]
     out["type"] = long_packet_type(b0)
     out["version"] = buf[1] * 16777216 + buf[2] * 65536 + buf[3] * 256 + buf[4]
     let dcil = buf[5]
+    if dcil > 20 { throw ValueError("parse_long_header: dcil > 20") }
     let dcid_start = 6
+    if dcid_start + dcil > len(buf) { throw ValueError("parse_long_header: out of bounds") }
     out["dcid"] = slice(buf, dcid_start, dcid_start + dcil)
     let scil_off = dcid_start + dcil
+    if scil_off >= len(buf) { throw ValueError("parse_long_header: out of bounds") }
     let scil = buf[scil_off]
+    if scil > 20 { throw ValueError("parse_long_header: scil > 20") }
     let scid_start = scil_off + 1
+    if scid_start + scil > len(buf) { throw ValueError("parse_long_header: out of bounds") }
     out["scid"] = slice(buf, scid_start, scid_start + scil)
     let off = scid_start + scil
 
     if out["type"] == pkt_type_initial() {
         let tvl = dec_varint(buf, off)
         off = off + tvl[1]
+        if off + tvl[0] > len(buf) { throw ValueError("parse_long_header: out of bounds") }
         out["token"] = slice(buf, off, off + tvl[0])
         off = off + tvl[0]
     } else {
         out["token"] = []
+    }
+    if out["type"] == pkt_type_retry() {
+        if off > len(buf) { throw ValueError("parse_long_header: out of bounds") }
+        out["retry_token"] = slice(buf, off, len(buf))
+        out["length"] = 0
+        out["payload_offset"] = len(buf)
+        return out
     }
     let lvl = dec_varint(buf, off)
     off = off + lvl[1]
@@ -109,6 +125,7 @@ pub fn parse_long_header(buf: list) -> map {
 /// must know it from the connection state. This returns a map with
 /// `dcid` and `payload_offset`.
 pub fn parse_short_header(buf: list, dcid_len: int) -> map {
+    if len(buf) < 1 + dcid_len { throw ValueError("parse_short_header: out of bounds") }
     let out = {}
     out["spin_bit"] = (buf[0] >> 5) & 1
     out["key_phase"] = (buf[0] >> 2) & 1
