@@ -1,0 +1,151 @@
+#!/usr/bin/env python3
+"""
+Otsu threshold selection for a grayscale histogram.
+Ported for the Lateralus language repository bounty program.
+"""
+
+import time
+
+def otsu_threshold(histogram: list[int]) -> int:
+    """
+    Selects the optimal threshold for separating a grayscale histogram into
+    light and dark pixels using Otsu's method.
+    
+    Takes a 256-bin histogram (list of non-negative integers representing pixel counts)
+    and returns the lowest optimal threshold when scores tie.
+    """
+    total_pixels = sum(histogram)
+    if total_pixels == 0:
+        return 0
+
+    # If all pixels are in a single bin or total is single-valued
+    if len(histogram) <= 1:
+        return 0
+
+    sum_total = sum(i * count for i, count in enumerate(histogram))
+    
+    sum_background = 0
+    weight_background = 0
+    max_variance = -1.0
+    optimal_threshold = 0
+
+    for t in range(len(histogram)):
+        weight_background += histogram[t]
+        if weight_background == 0:
+            continue
+        
+        weight_foreground = total_pixels - weight_background
+        if weight_foreground == 0:
+            break
+
+        sum_background += t * histogram[t]
+        
+        mean_background = sum_background / weight_background
+        sum_foreground = sum_total - sum_background
+        mean_foreground = sum_foreground / weight_foreground
+
+        # Between-class variance
+        variance = weight_background * weight_foreground * (mean_background - mean_foreground) ** 2
+
+        if variance > max_variance:
+            max_variance = variance
+            optimal_threshold = t
+        # Note: We keep the lowest optimal threshold on ties, which is naturally 
+        # preserved by using strict '>' rather than '>='
+
+    return optimal_threshold
+
+def run_tests():
+    # 1. Empty histogram
+    assert otsu_threshold([0] * 256) == 0, "Test empty failed"
+
+    # 2. Single-valued histogram
+    single = [0] * 256
+    single[100] = 500
+    assert otsu_threshold(single) == 100 or otsu_threshold(single) == 0, "Test single-valued passed/handled"
+
+    # 3. Two-peaked (bimodal) histogram
+    bimodal = [0] * 256
+    for i in range(50):
+        bimodal[i] = 10
+    for i in range(200, 256):
+        bimodal[i] = 10
+    thresh = otsu_threshold(bimodal)
+    assert 50 <= thresh <= 200, f"Test bimodal failed with threshold {thresh}"
+
+    print("All Python Otsu tests passed successfully!")
+
+def benchmark():
+    hist = [i % 10 for i in range(256)]
+    start = time.perf_counter()
+    for _ in range(10000):
+        otsu_threshold(hist)
+    end = time.perf_counter()
+    print(f"Wall-time for 10,000 iterations: {end - start:.4f} seconds")
+
+if __name__ == "__main__":
+    run_tests()
+    benchmark()
+--- Otsu threshold selection implementation in Lateralus
+--- Selects the optimal threshold for a 256-bin grayscale histogram.
+
+fn sum_histogram(hist: List[Int]) -> Int {
+    let mut total = 0
+    let mut i = 0
+    while i < hist.len() {
+        total = total + hist[i]
+        i = i + 1
+    }
+    total
+}
+
+fn otsu_threshold(histogram: List[Int]) -> Int {
+    let total_pixels = sum_histogram(histogram)
+    if total_pixels == 0 {
+        return 0
+    }
+
+    if histogram.len() <= 1 {
+        return 0
+    }
+
+    let mut sum_total = 0
+    let mut i = 0
+    while i < histogram.len() {
+        sum_total = sum_total + (i * histogram[i])
+        i = i + 1
+    }
+
+    let mut sum_background = 0
+    let mut weight_background = 0
+    let mut max_variance = 0.0
+    let mut optimal_threshold = 0
+
+    let mut t = 0
+    while t < histogram.len() {
+        weight_background = weight_background + histogram[t]
+        if weight_background != 0 {
+            let weight_foreground = total_pixels - weight_background
+            if weight_foreground == 0 {
+                break
+            }
+
+            sum_background = sum_background + (t * histogram[t])
+            
+            let mean_background = (sum_background as Float) / (weight_background as Float)
+            let sum_foreground = sum_total - sum_background
+            let mean_foreground = (sum_foreground as Float) / (weight_foreground as Float)
+
+            let mean_diff = mean_background - mean_foreground
+            let variance = (weight_background as Float) * (weight_foreground as Float) * (mean_diff * mean_diff)
+
+            if variance > max_variance {
+                max_variance = variance
+                optimal_threshold = t
+            }
+        }
+        t = t + 1
+    }
+
+    optimal_threshold
+}
