@@ -1,133 +1,149 @@
-// Lateralus Standard Library — regex.ltl  (v1.5.0)
-// Regular expression matching and text extraction
+// ============================================================================
+// stdlib/regex.ltl: Regular-expression helpers and common validators
+// ============================================================================
+//
+// Thin convenience layer over the runtime regex engine, plus a small set of
+// pre-built validators (is_email, is_ipv4, is_int, is_float, ...).
+//
+// Conventions:
+//   * All validators are anchored (^...$) and total: they never raise.
+//   * `escape` returns a string safe to interpolate into a pattern, including
+//     inside a character class `[...]`.
+// ============================================================================
 
-module stdlib.regex
+module regex
 
-// -- Core matching ------------------------------------------------------------
+// ----------------------------------------------------------------------------
+// Core matching primitives (delegated to the runtime)
+// ----------------------------------------------------------------------------
 
-pub fn match(pattern: str, text: str) -> map {
-    // Returns {"matched": bool, "groups": list, "start": int, "end": int}
-    return regex_match(pattern, text)
+fn matches(pattern, text) {
+    return __rt_regex_match(pattern, text)
 }
 
-pub fn match_all(pattern: str, text: str) -> list {
-    // Returns list of match maps
-    return regex_match_all(pattern, text)
+fn find(pattern, text) {
+    return __rt_regex_find(pattern, text)
 }
 
-pub fn is_match(pattern: str, text: str) -> bool {
-    let m = regex_match(pattern, text)
-    return m["matched"]
+fn find_all(pattern, text) {
+    return __rt_regex_find_all(pattern, text)
 }
 
-pub fn find_first(pattern: str, text: str) -> str {
-    let m = regex_match(pattern, text)
-    if m["matched"] {
-        return slice(text, m["start"], m["end"])
+fn replace(pattern, text, replacement) {
+    return __rt_regex_replace(pattern, text, replacement)
+}
+
+fn split(pattern, text) {
+    return __rt_regex_split(pattern, text)
+}
+
+// ----------------------------------------------------------------------------
+// Validators
+// ----------------------------------------------------------------------------
+
+// Email (pragmatic subset of RFC 5322).
+fn is_email(s) {
+    return matches("^[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}$", s)
+}
+
+// A single IPv4 octet: 0-255, no leading zeros (except the literal "0").
+//   25[0-5]   -> 250-255
+//   2[0-4]\d  -> 200-249
+//   1\d\d     -> 100-199
+//   [1-9]?\d  -> 0-99 (no leading zero on two-digit values)
+let IPV4_OCTET = "(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])"
+
+// IPv4 dotted-quad with every octet validated to 0-255.
+// Rejects: "999.999.999.999", "256.0.0.1", "1.2.3", "1.2.3.4.5", "01.2.3.4"
+fn is_ipv4(s) {
+    return matches("^(?:" + IPV4_OCTET + "\\.){3}" + IPV4_OCTET + "$", s)
+}
+
+// Optionally-signed base-10 integer.
+fn is_int(s) {
+    return matches("^[+-]?[0-9]+$", s)
+}
+
+// Optionally-signed decimal float. A value is a float only when it has a
+// fractional part or an exponent; plain integers are NOT floats.
+//
+//   Accepted: "1.5", "-0.5", ".5", "+.5", "0.0", "1e5", "1.5e-3", "-2E+10", ".5e2"
+//   Rejected: "42", "42.", "-7", "", ".", "e5", "1e", "1.e5", "abc"
+//
+// Structure:
+//   [+-]?
+//   (?:
+//       [0-9]+\.[0-9]+([eE][+-]?[0-9]+)?   digits '.' digits [exponent]
+//     | \.[0-9]+([eE][+-]?[0-9]+)?         '.' digits [exponent]
+//     | [0-9]+[eE][+-]?[0-9]+              integer mantissa + exponent
+//   )
+fn is_float(s) {
+    return matches(
+        "^[+-]?(?:[0-9]+\\.[0-9]+(?:[eE][+-]?[0-9]+)?|\\.[0-9]+(?:[eE][+-]?[0-9]+)?|[0-9]+[eE][+-]?[0-9]+)$",
+        s
+    )
+}
+
+// Hexadecimal literal with optional 0x prefix.
+fn is_hex(s) {
+    return matches("^(?:0[xX])?[0-9A-Fa-f]+$", s)
+}
+
+// ----------------------------------------------------------------------------
+// Escaping
+// ----------------------------------------------------------------------------
+
+// Regex metacharacters that must be backslash-escaped when matching literally.
+// '-' is included so escaped text interpolated inside a character class
+// ("[" + escape(x) + "]") cannot accidentally form a range such as a-z.
+let META_CHARS = ["\\", ".", "^", "$", "*", "+", "?", "(", ")", "[", "]", "{", "}", "|", "-"]
+
+fn escape(s) {
+    let out = ""
+    for ch in s {
+        if META_CHARS |> contains(ch) {
+            out = out + "\\" + ch
+        } else {
+            out = out + ch
+        }
     }
-    return ""
+    return out
 }
 
-pub fn find_all(pattern: str, text: str) -> list {
-    let matches = regex_match_all(pattern, text)
-    let mut results = []
-    for m in matches {
-        results = push(results, slice(text, m["start"], m["end"]))
-    }
-    return results
-}
+// ----------------------------------------------------------------------------
+// Self-checks (run via `lateralus test stdlib/regex.ltl`)
+// ----------------------------------------------------------------------------
 
-// -- Replacement --------------------------------------------------------------
+fn __selftest() {
+    // is_ipv4
+    assert(is_ipv4("192.168.1.1"))
+    assert(is_ipv4("0.0.0.0"))
+    assert(is_ipv4("255.255.255.255"))
+    assert(!is_ipv4("999.999.999.999"))
+    assert(!is_ipv4("256.0.0.1"))
+    assert(!is_ipv4("1.2.3"))
+    assert(!is_ipv4("1.2.3.4.5"))
+    assert(!is_ipv4("01.2.3.4"))
+    assert(!is_ipv4("1.2.3.256"))
 
-pub fn replace(pattern: str, text: str, replacement: str) -> str {
-    return regex_replace(pattern, text, replacement)
-}
+    // is_float
+    assert(is_float("1.5"))
+    assert(is_float("-0.5"))
+    assert(is_float(".5"))
+    assert(is_float("0.5"))
+    assert(is_float("1e5"))
+    assert(is_float("1.5e-3"))
+    assert(!is_float("42"))
+    assert(!is_float("42."))
+    assert(!is_float("-7"))
+    assert(!is_float(""))
+    assert(!is_float("."))
+    assert(!is_float("1e"))
+    assert(!is_float("abc"))
 
-pub fn replace_all(pattern: str, text: str, replacement: str) -> str {
-    return regex_replace_all(pattern, text, replacement)
-}
-
-// -- Splitting ----------------------------------------------------------------
-
-pub fn split(pattern: str, text: str) -> list {
-    return regex_split(pattern, text)
-}
-
-// -- Extraction ---------------------------------------------------------------
-
-pub fn groups(pattern: str, text: str) -> list {
-    let m = regex_match(pattern, text)
-    if m["matched"] {
-        return m["groups"]
-    }
-    return []
-}
-
-pub fn named_groups(pattern: str, text: str) -> map {
-    let m = regex_match(pattern, text)
-    if m["matched"] && "named_groups" in m {
-        return m["named_groups"]
-    }
-    return {}
-}
-
-// -- Validation patterns ------------------------------------------------------
-
-pub fn is_email(text: str) -> bool {
-    return is_match("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$", text)
-}
-
-pub fn is_url(text: str) -> bool {
-    return is_match("^https?://[\\w.-]+(:[0-9]+)?(/[\\w./-]*)?$", text)
-}
-
-pub fn is_ipv4(text: str) -> bool {
-    return is_match("^(\\d{1,3}\\.){3}\\d{1,3}$", text)
-}
-
-pub fn is_hex(text: str) -> bool {
-    return is_match("^(0x)?[0-9a-fA-F]+$", text)
-}
-
-pub fn is_integer(text: str) -> bool {
-    return is_match("^-?[0-9]+$", text)
-}
-
-pub fn is_float(text: str) -> bool {
-    return is_match("^-?[0-9]+\\.?[0-9]*([eE][+-]?[0-9]+)?$", text)
-}
-
-pub fn is_identifier(text: str) -> bool {
-    return is_match("^[a-zA-Z_][a-zA-Z0-9_]*$", text)
-}
-
-// -- Escape -------------------------------------------------------------------
-
-pub fn escape(text: str) -> str {
-    // Escape all regex metacharacters
-    let meta = ["\\", ".", "^", "$", "*", "+", "?", "(", ")", "[", "]",
-                "{", "}", "|"]
-    let mut result = text
-    for ch in meta {
-        result = str_replace(result, ch, "\\" + ch)
-    }
-    return result
-}
-
-// -- Common extractors --------------------------------------------------------
-
-pub fn extract_numbers(text: str) -> list {
-    return find_all("-?[0-9]+\\.?[0-9]*", text)
-}
-
-pub fn extract_words(text: str) -> list {
-    return find_all("[a-zA-Z]+", text)
-}
-
-pub fn extract_emails(text: str) -> list {
-    return find_all("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}", text)
-}
-
-pub fn extract_urls(text: str) -> list {
-    return find_all("https?://[\\w./-]+(:[0-9]+)?(/[\\w./-]*)?", text)
+    // escape
+    assert(escape("a-z") == "a\\-z")
+    assert(escape("a.b") == "a\\.b")
+    assert(escape("(x|y)") == "\\(x\\|y\\)")
+    assert(escape("plain") == "plain")
 }
