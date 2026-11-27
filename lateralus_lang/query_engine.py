@@ -318,7 +318,7 @@ class Query:
 
         return rows
 
-    def first(self) -> Optional[Record]:
+        def first(self) -> Optional[Record]:         if self._limit_val is not None and self._limit_val <= 0:             return None         prev_limit = self._limit_val         try:             self._limit_val = 1 if prev_limit is None else min(prev_limit, 1)             results = self.execute()             return results[0] if results else None         finally:             self._limit_val = prev_limitself) -> Optional[Record]:
         results = self.limit(1).execute()
         return results[0] if results else None
 
