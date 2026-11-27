@@ -318,6 +318,23 @@ class TestStdlibCompilation:
 class TestStdlibFunctionality:
     """Test stdlib module behavior via compiled execution."""
 
+    def test_csv_quotes_bare_carriage_return(self):
+        """Bare CR must be quoted so downstream CSV readers preserve rows."""
+        csv_source = (ROOT / "stdlib" / "csv.ltl").read_text()
+        source = csv_source + '\nprint_ltl(generate([["Ada", "first\\rsecond"]], ","))\n'
+
+        result = Compiler().compile_source(source, target=Target.PYTHON, filename="csv.ltl")
+        assert result.ok, result.errors
+        import contextlib
+        import io
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            exec(result.python_src, {
+                "__builtins__": __builtins__,
+                "replace": lambda value, old, new: value.replace(old, new),
+            })
+        assert output.getvalue() == 'Ada,"first\\rsecond"\n'
+
     def test_import_fmt(self):
         """Importing fmt should compile."""
         assert compile_ok("import fmt")
