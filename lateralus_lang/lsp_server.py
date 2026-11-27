@@ -16,6 +16,7 @@ import logging
 import re
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Optional
 
 # --- Compiler integration (real diagnostics) --------------------------
@@ -398,6 +399,78 @@ def get_completions(doc: TextDocument, line: int, character: int) -> list[dict]:
     return items
 
 
+# --- stdlib signatures (hover for standard-library functions) ---------
+#
+# Signatures are parsed straight out of stdlib/*.ltl on first use, so the
+# hover provider can never drift from the library that actually ships and
+# needs no generated data file.  Every ``fn`` / ``pub fn`` declaration is
+# indexed with its optional ``-> Return`` type and the first ``///`` doc
+# line written directly above it.
+
+_STDLIB_DIR = Path(__file__).resolve().parents[1] / "stdlib"
+_RE_STDLIB_DOC = re.compile(r"^\s*///\s?(.*)$")
+_RE_STDLIB_FN = re.compile(
+    r"^\s*(?:pub\s+)?(?:async\s+)?fn\s+([A-Za-z_]\w*)\s*\(([^)]*)\)"
+    r"\s*(?:->\s*([^{]+?))?\s*(?:\{.*)?$"
+)
+
+_stdlib_signatures: Optional[dict[str, dict[str, str]]] = None
+
+
+def load_stdlib_signatures(refresh: bool = False) -> dict[str, dict[str, str]]:
+    """Index ``fn`` declarations in ``stdlib/*.ltl``.
+
+    Returns ``{name: {"signature", "doc", "module"}}``.  The result is cached
+    for the lifetime of the process; pass ``refresh=True`` to rebuild it.
+    """
+    global _stdlib_signatures
+    if _stdlib_signatures is not None and not refresh:
+        return _stdlib_signatures
+
+    index: dict[str, dict[str, str]] = {}
+    try:
+        paths = sorted(_STDLIB_DIR.glob("*.ltl"))
+    except OSError:                                  # pragma: no cover
+        paths = []
+
+    for path in paths:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:                              # pragma: no cover
+            continue
+
+        doc_lines: list[str] = []
+        for raw in text.splitlines():
+            m_doc = _RE_STDLIB_DOC.match(raw)
+            if m_doc:
+                doc_lines.append(m_doc.group(1).strip())
+                continue
+
+            m_fn = _RE_STDLIB_FN.match(raw)
+            if m_fn:
+                name = m_fn.group(1)
+                params = " ".join(m_fn.group(2).split())
+                ret = (m_fn.group(3) or "").strip()
+                signature = f"fn {name}({params})"
+                if ret:
+                    signature += f" -> {ret}"
+                first_doc = next((d for d in doc_lines if d), "")
+                index.setdefault(name, {
+                    "signature": signature,
+                    "doc": first_doc,
+                    "module": path.stem,
+                })
+                doc_lines = []
+                continue
+
+            # Any other code line ends a doc block.
+            if raw.strip() and not raw.strip().startswith("//"):
+                doc_lines = []
+
+    _stdlib_signatures = index
+    return index
+
+
 def get_hover(doc: TextDocument, line: int, character: int) -> Optional[dict]:
     """Get hover information at position."""
     word = doc.get_word_at(line, character)
@@ -438,6 +511,19 @@ def get_hover(doc: TextDocument, line: int, character: int) -> Optional[dict]:
             "contents": {
                 "kind": "markdown",
                 "value": keyword_docs[word],
+            },
+        }
+
+    # Check stdlib functions (indexed from stdlib/*.ltl on first hover)
+    stdlib_entry = load_stdlib_signatures().get(word)
+    if stdlib_entry:
+        value = f"```lateralus\n{stdlib_entry['signature']}\n```"
+        if stdlib_entry["doc"]:
+            value += f"\n\n{stdlib_entry['doc']}"
+        return {
+            "contents": {
+                "kind": "markdown",
+                "value": value,
             },
         }
 
