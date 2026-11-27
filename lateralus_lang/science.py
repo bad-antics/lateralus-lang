@@ -281,9 +281,9 @@ def fft(x: list[complex]) -> list[complex]:
 
 def ifft(x: list[complex]) -> list[complex]:
     """Inverse FFT."""
-    n = len(x)
     conjugated = [z.conjugate() for z in x]
     result = fft(conjugated)
+    n = len(result)
     return [z.conjugate() / n for z in result]
 
 
@@ -351,7 +351,10 @@ def normal_cdf(x: float, mu: float = 0, sigma: float = 1) -> float:
 
 def poisson_pmf(k: int, lam: float) -> float:
     """Poisson probability mass function."""
-    return (lam ** k) * math.exp(-lam) / math.factorial(k)
+    if lam <= 0:
+        return 1.0 if k == 0 else 0.0
+    # log-space: lam**k overflows for large k even when the pmf is tiny
+    return math.exp(k * math.log(lam) - lam - math.lgamma(k + 1))
 
 
 def exponential_pdf(x: float, lam: float = 1) -> float:
@@ -363,7 +366,14 @@ def exponential_pdf(x: float, lam: float = 1) -> float:
 
 def binomial_pmf(k: int, n: int, p: float) -> float:
     """Binomial probability mass function."""
-    return math.comb(n, k) * (p ** k) * ((1 - p) ** (n - k))
+    if p <= 0:
+        return 1.0 if k == 0 else 0.0
+    if p >= 1:
+        return 1.0 if k == n else 0.0
+    # log-space via lgamma: comb(n,k) * p**k * (1-p)**(n-k) overflows
+    log_pmf = (math.lgamma(n + 1) - math.lgamma(k + 1) - math.lgamma(n - k + 1)
+               + k * math.log(p) + (n - k) * math.log1p(-p))
+    return math.exp(log_pmf)
 
 
 def chi_squared_pdf(x: float, k: int) -> float:
@@ -371,7 +381,11 @@ def chi_squared_pdf(x: float, k: int) -> float:
     if x <= 0:
         return 0.0
     half_k = k / 2
-    return (x ** (half_k - 1) * math.exp(-x / 2)) / (2 ** half_k * math.gamma(half_k))
+    # log-space: x**(half_k-1) and 2**half_k * gamma(half_k) overflow
+    # for large k even though the pdf value fits in a float
+    log_pdf = ((half_k - 1) * math.log(x) - x / 2
+               - half_k * math.log(2) - math.lgamma(half_k))
+    return math.exp(log_pdf)
 
 
 # --- Interpolation ----------------------------------------------------
