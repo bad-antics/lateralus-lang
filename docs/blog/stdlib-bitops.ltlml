@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Standard Library Tour: Bit Manipulation Primitives in Lateralus</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "Standard Library Tour: Bit Manipulation Primitives"
+author: bad-antics
+date: 2026-11-27
+abstract: A comprehensive guide to Lateralus's stdlib.bitops module, covering individual bit operations, field extraction and insertion, population count, leading and trailing zeros, byte swapping, rotations, and power-of-two utilities.
+---
+
+# Standard Library Tour: Bit Manipulation Primitives
+
+Low-level bit twiddling is essential for operating-system development, driver code, protocol parsing, and performance-critical paths. Lateralus ships a pure, self-contained implementation in `stdlib/bitops.ltl`, exposing a uniform API over `u64`/`u32`/`u16` values.
+
+---
+
+## Module Overview
+
+The `stdlib/bitops.ltl` module implements the following public API:
+
+```lateralus
+// Individual bit operations
+pub fn bit_set(val: u64, n: u32) -> u64
+pub fn bit_clear(val: u64, n: u32) -> u64
+pub fn bit_toggle(val: u64, n: u32) -> u64
+pub fn bit_test(val: u64, n: u32) -> bool
+
+// Field extraction and insertion
+pub fn extract_bits(val: u64, pos: u32, width: u32) -> u64
+pub fn insert_bits(val: u64, field: u64, pos: u32, width: u32) -> u64
+pub fn mask(pos: u32, width: u32) -> u64
+
+// Population and position queries
+pub fn popcount(val: u64) -> u32
+pub fn clz(val: u64) -> u32
+pub fn ctz(val: u64) -> u32
+pub fn highest_bit(val: u64) -> int
+pub fn lowest_bit(val: u64) -> int
+
+// Byte order and rotation
+pub fn bswap16(val: u16) -> u16
+pub fn bswap32(val: u32) -> u32
+pub fn bswap64(val: u64) -> u64
+pub fn rotl32(val: u32, n: u32) -> u32
+pub fn rotr32(val: u32, n: u32) -> u32
+pub fn rotl64(val: u64, n: u32) -> u64
+pub fn rotr64(val: u64, n: u32) -> u64
+
+// Power-of-two helpers
+pub fn is_power_of_2(val: u64) -> bool
+pub fn next_power_of_2(val: u64) -> u64
+pub fn log2(val: u64) -> u32
+```
+
+---
+
+## 1. Individual Bit Operations
+
+Setting, clearing, toggling, and testing a single bit by index (0-based from the least significant bit) are the foundation of flag and register manipulation.
+
+```lateralus
+import stdlib.bitops as bitops
+
+let v = 0b1010  // 10
+let s = bitops.bit_set(v, 0)     // 0b1011 = 11
+let c = bitops.bit_clear(v, 1)    // 0b1000 = 8
+let t = bitops.bit_toggle(v, 3)   // 0b0010 = 2
+let b = bitops.bit_test(v, 3)     // true
+```
+
+---
+
+## 2. Field Extraction and Insertion
+
+`extract_bits` reads `width` bits starting at position `pos`; `insert_bits` writes a field into the same window without clobbering neighbouring bits. `mask` produces the bitmask for a field.
+
+```lateralus
+import stdlib.bitops as bitops
+
+let val = 0b10110100  // 180
+let field = bitops.extract_bits(val, 2, 3)  // bits [4..2] = 0b101 = 5
+let m = bitops.mask(2, 3)                   // 0b00011100 = 28
+let out = bitops.insert_bits(0, 5, 2, 3)   // 0b00010100 = 20
+```
+
+---
+
+## 3. Population and Position Queries
+
+`popcount` counts set bits. `clz` and `ctz` count leading and trailing zeros. `highest_bit` and `lowest_bit` return the index of the topmost or bottommost set bit (-1 when the value is zero).
+
+```lateralus
+import stdlib.bitops as bitops
+
+let p = bitops.popcount(0b10110)   // 3
+let l = bitops.clz(0b00010000)     // 27 on u64
+let t = bitops.ctz(0b10110000)     // 4
+let h = bitops.highest_bit(0b10110) // 4
+let lo = bitops.lowest_bit(0b10110) // 1
+```
+
+---
+
+## 4. Byte Order and Rotation
+
+`bswap*` reverse the byte order of a value. `rotl*` and `rotr*` rotate bits left or right by `n` positions within the word width.
+
+```lateralus
+import stdlib.bitops as bitops
+
+let r16 = bitops.bswap16(0x1234)        // 0x3412
+let r32 = bitops.bswap32(0x12345678)    // 0x78563412
+let rot = bitops.rotl32(0x80000000, 1)  // 0x00000001
+```
+
+---
+
+## 5. Power-of-Two Utilities
+
+`is_power_of_2` tests whether a value is an exact power of two. `next_power_of_2` rounds up to the next power of two (or returns the value itself when it already is one). `log2` returns the base-2 logarithm for powers of two.
+
+```lateralus
+import stdlib.bitops as bitops
+
+let a = bitops.is_power_of_2(16)       // true
+let b = bitops.is_power_of_2(18)       // false
+let c = bitops.next_power_of_2(13)     // 16
+let d = bitops.log2(16)                // 4
+```
+
+---
+
+## Pinned Test Vectors
+
+| Input | Operation | Expected |
+|-------|-----------|----------|
+| `0b1010` | `bit_set(., 0)` | `0b1011` |
+| `0b1010` | `bit_clear(., 1)` | `0b1000` |
+| `0b1010` | `bit_toggle(., 3)` | `0b0010` |
+| `0b10110` | `popcount` | `3` |
+| `0x1234` | `bswap16` | `0x3412` |
+| `13` | `next_power_of_2` | `16` |
+
+---
+
+## Executable Program
+
+```lateralus
+import stdlib.bitops as bitops
+
+fn main() {
+    let v = 0b1010
+    println(bitops.bit_set(v, 0))        // 11
+    println(bitops.popcount(0b10110))    // 3
+    println(bitops.bswap16(0x1234))      // 0x3412
+    println(bitops.next_power_of_2(13))  // 16
+}
+```
+
+---
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>
