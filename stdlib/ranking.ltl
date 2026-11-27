@@ -245,35 +245,38 @@ pub fn tfidf_vector(tf: list, df: list, n: int) -> list {
     return [terms, weights]
 }
 
-fn sqrt_approx(x: float) -> float {
-    if x <= 0.0 { return 0.0 }
-    let r = x
+fn max_abs_weight(weights: list) -> float {
+    let largest = 0.0
     let i = 0
-    while i < 20 {
-        r = 0.5 * (r + x / r)
+    while i < len(weights) {
+        let magnitude = abs(weights[i])
+        if magnitude > largest { largest = magnitude }
         i = i + 1
     }
-    return r
+    return largest
 }
 
 /// Cosine similarity between two sparse [terms, weights] vectors.
 pub fn cosine_similarity(a: list, b: list) -> float {
     let at = a[0]; let aw = a[1]
     let bt = b[0]; let bw = b[1]
+    // Cosine is unchanged by a positive scale on either vector. Scale
+    // before multiplying to keep small and large finite weights in range.
+    let scale_a = max_abs_weight(aw)
+    let scale_b = max_abs_weight(bw)
+    if scale_a == 0.0 || scale_b == 0.0 { return 0.0 }
     let dot = 0.0
     let na = 0.0
     let nb = 0.0
     let i = 0
     while i < len(at) {
-        let w = aw[i]
+        let w = aw[i] / scale_a
         na = na + w * w
         // find term in b
         let j = 0
-        let found = false
         while j < len(bt) {
             if bt[j] == at[i] {
-                dot = dot + w * bw[j]
-                found = true
+                dot = dot + w * (bw[j] / scale_b)
                 j = len(bt)
             } else {
                 j = j + 1
@@ -283,10 +286,9 @@ pub fn cosine_similarity(a: list, b: list) -> float {
     }
     let k = 0
     while k < len(bt) {
-        nb = nb + bw[k] * bw[k]
+        let w = bw[k] / scale_b
+        nb = nb + w * w
         k = k + 1
     }
-    let denom = sqrt_approx(na) * sqrt_approx(nb)
-    if denom == 0.0 { return 0.0 }
-    return dot / denom
+    return dot / sqrt(na * nb)
 }
