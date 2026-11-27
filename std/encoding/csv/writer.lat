@@ -1,0 +1,92 @@
+-- ===========================================================================
+-- std/encoding/csv/writer.lat — CSV Writer implementation
+-- ===========================================================================
+
+module std::encoding::csv::writer
+
+use std::io::Write
+use std::string::String
+use std::vector::Vector
+
+pub struct Writer<W: Write> {
+    writer: W,
+    delimiter: char,
+    quote_char: char,
+    use_crlf: bool,
+}
+
+impl<W: Write> Writer<W> {
+    pub fn new(writer: W) -> Writer<W> {
+        Writer {
+            writer: writer,
+            delimiter: ',',
+            quote_char: '"',
+            use_crlf: true,
+        }
+    }
+
+    pub fn set_delimiter(&mut self, delim: char) {
+        self.delimiter = delim
+    }
+
+    pub fn set_use_crlf(&mut self, use_crlf: bool) {
+        self.use_crlf = use_crlf
+    }
+
+    pub fn write_record(&mut self, record: &Vector<String>) -> Result<(), IOError> {
+        let mut line = String::new()
+        let mut i = 0
+        while i < record.len() {
+            if i > 0 {
+                line.push(self.delimiter)
+            }
+            let field = record.get(i)
+            if self.needs_quoting(field) {
+                line.push(self.quote_char)
+                let mut j = 0
+                while j < field.len() {
+                    let c = field.char_at(j)
+                    if c == self.quote_char {
+                        line.push(self.quote_char)
+                        line.push(self.quote_char)
+                    } else {
+                        line.push(c)
+                    }
+                    j += 1
+                }
+                line.push(self.quote_char)
+            } else {
+                let mut j = 0
+                while j < field.len() {
+                    let c = field.char_at(j)
+                    -- Ensure bare carriage returns are handled or safely preserved 
+                    -- if inside a quoted field, or if unquoted, ensure they do not 
+                    -- corrupt record boundaries by forcing quotes if necessary.
+                    line.push(c)
+                    j += 1
+                }
+            }
+            i += 1
+        }
+
+        if self.use_crlf {
+            line.push_str("\r\n")
+        } else {
+            line.push('\n')
+        }
+
+        self.writer.write_all(line.as_bytes())
+    }
+
+    fn needs_quoting(&self, field: &String) -> bool {
+        let mut i = 0
+        while i < field.len() {
+            let c = field.char_at(i)
+            if c == self.delimiter || c == '"' || c == '\n' || c == '\r' {
+                return true
+            }
+            i += 1
+        }
+        false
+    }
+}
