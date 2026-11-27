@@ -284,6 +284,18 @@ class TestLQLParser:
         result = lql("SELECT * FROM users WHERE dept = 'eng'", context)
         assert len(result) == 3
 
+    def test_lql_where_combined_and_or_respects_precedence_and_parentheses(self):
+        orders = [{"id": 1, "urgent": 1, "paid": 0, "stocked": 0}]
+        context = {"orders": orders}
+        conditions = (
+            "urgent = 1",
+            "urgent = 1 OR paid = 1 AND stocked = 1",
+            "urgent = 1 OR (paid = 1 AND stocked = 1)",
+        )
+
+        for condition in conditions:
+            assert lql("SELECT id FROM orders WHERE " + condition, context) == [{"id": 1}]
+
     def test_lql_select_with_order(self):
         context = {"users": USERS}
         result = lql("SELECT * FROM users ORDER BY age", context)
