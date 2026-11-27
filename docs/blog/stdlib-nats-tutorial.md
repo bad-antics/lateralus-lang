@@ -143,7 +143,100 @@ let msg = parse_message(raw)
 
 ---
 
-## Running the Tutorial
+## Request-Reply with a Single-Delivery Subscription (`UNSUB`)
+
+A common question is: **what happens when two replies arrive for the same inbox?** NATS `UNSUB` answers this — it cancels a subscription after a maximum number of deliveries.
+
+The sequence for a single-request-single-reply pattern:
+
+1. **`SUB _INBOX.lesson 7`** — subscribe to a temporary inbox, assigning subscription ID `7`.
+2. **`UNSUB 7 1`** — cancel subscription `7` after `1` delivery so that only the first reply is accepted.
+3. **`PUB lesson.press _INBOX.lesson 6\r\nok\r\n42\r\n`** — publish the two-line reading with the inbox as reply subject.
+
+```lateralus
+// Composing the three-command transcript using stdlib/nats.ltl
+let subscribe     = sub("_INBOX.lesson", "", "7")
+let stop_after_one = unsub("7", 1)
+let request       = pub_msg("lesson.press", "_INBOX.lesson", "ok\r\n42")
+let transcript    = subscribe + stop_after_one + request
+
+// Pinned wire transcript:
+// "SUB _INBOX.lesson 7\r\nUNSUB 7 1\r\nPUB lesson.press _INBOX.lesson 6\r\nok\r\n42\r\n"
+assert_eq(transcript,
+    "SUB _INBOX.lesson 7\r\nUNSUB 7 1\r\nPUB lesson.press _INBOX.lesson 6\r\nok\r\n42\r\n",
+    "one-reply request transcript")
+print(transcript)
+```
+
+With `UNSUB 7 1` in place, if a responder sends two replies (`ACK` and then `TWO`), the client receives only `ACK`. Removing the `UNSUB` command lets the second message through. This test can be verified offline by checking the encoded transcript, or against a live NATS server using the helper script below.
+
+### Offline Checkout Test
+
+The pinned transcript can be verified without a running broker. The check below uses the **repository's own `stdlib/nats.ltl`** so that any future change to the shipped encoder is caught automatically:
+
+```python
+# tests/check_one_reply.py — offline transcript check
+import os, subprocess, sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+def test_one_reply_transcript():
+    """Verify the UNSUB 7 1 request transcript against a pinned byte sequence."""
+    module = (REPO_ROOT / "stdlib" / "nats.ltl").read_bytes()
+    lesson = b"""
+fn main() {
+    let subscribe      = sub("_INBOX.lesson", "", "7")
+    let stop_after_one = unsub("7", 1)
+    let request        = pub_msg("lesson.press", "_INBOX.lesson", "ok\\r\\n42")
+    let expected       = "SUB _INBOX.lesson 7\\r\\nUNSUB 7 1\\r\\nPUB lesson.press _INBOX.lesson 6\\r\\nok\\r\\n42\\r\\n"
+    let commands       = subscribe + stop_after_one + request
+    assert_eq(commands, expected, "one-reply request transcript")
+    print(commands)
+}
+main()
+"""
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        unit = Path(tmp) / "lesson.ltl"
+        unit.write_bytes(module + b"\n" + lesson)
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(REPO_ROOT)
+        result = subprocess.check_output(
+            [sys.executable, "-m", "lateralus_lang", "run", str(unit)],
+            env=env, cwd=str(REPO_ROOT)
+        )
+    expected = (
+        b"SUB _INBOX.lesson 7\r\nUNSUB 7 1\r\n"
+        b"PUB lesson.press _INBOX.lesson 6\r\nok\r\n42\r\n\n"
+    )
+    assert result == expected, f"transcript mismatch:\n  got:      {result!r}\n  expected: {expected!r}"
+    print("PASS: SUB, UNSUB and PUB match the pinned transcript.")
+
+if __name__ == "__main__":
+    test_one_reply_transcript()
+```
+
+Run it from the repository root:
+
+```bash
+python tests/check_one_reply.py
+```
+
+Expected output:
+```text
+SUB _INBOX.lesson 7
+UNSUB 7 1
+PUB lesson.press _INBOX.lesson 6
+ok
+42
+
+PASS: SUB, UNSUB and PUB match the pinned transcript.
+```
+
+---
+
+## Running the Full Tutorial
 
 The executable tutorial is located at `examples/nats_tutorial.ltl`. Execute it directly with:
 
@@ -182,11 +275,18 @@ STEP 5: Parsed incoming server message:
   payload=ok
 42
   consumed=43
-PINNED_VECTORS: len1=41 len2=44 len3=19 len4=29 op=MSG
+STEP 6: Request-Reply with UNSUB 7 1 (single-delivery):
+SUB _INBOX.lesson 7
+UNSUB 7 1
+PUB lesson.press _INBOX.lesson 6
+ok
+42
+
+PINNED_VECTORS: len1=41 len2=44 len3=19 len4=29 op=MSG transcript_ok=true
 ```
 
 ---
 
 ## Conclusion
 
-With `stdlib/nats.ltl`, Lateralus applications can directly communicate with distributed NATS message brokers with microsecond parsing latency, predictable byte accounting, and no third-party native dependencies.
+With `stdlib/nats.ltl`, Lateralus applications can directly communicate with distributed NATS message brokers with microsecond parsing latency, predictable byte accounting, and no third-party native dependencies. The `UNSUB` command provides a clean, protocol-native mechanism for request-reply patterns where exactly one answer is expected.

@@ -165,7 +165,23 @@ fn main() {
     print("  payload=" + parsed["payload"])
     print("  consumed=" + str(parsed["consumed"]))
 
-    print("PINNED_VECTORS: len1=" + str(len(f1)) + " len2=" + str(len(f2)) + " len3=" + str(len(f3)) + " len4=" + str(len(f4)) + " op=" + parsed["op"])
+    // 6. Request-Reply with UNSUB 7 1 (single-delivery subscription)
+    // The three-command transcript for a "send one reading, accept one reply" exchange:
+    //   SUB _INBOX.lesson 7     — subscribe with sid=7
+    //   UNSUB 7 1               — cancel after exactly 1 delivery
+    //   PUB lesson.press _INBOX.lesson 6\r\nok\r\n42\r\n — publish the reading
+    // With UNSUB 7 1 in place, only the FIRST reply reaches the requester.
+    let subscribe      = sub("_INBOX.lesson", "", "7")
+    let stop_after_one = unsub("7", 1)
+    let request        = pub_msg("lesson.press", "_INBOX.lesson", "ok\r\n42")
+    let transcript     = subscribe + stop_after_one + request
+    let expected_transcript = "SUB _INBOX.lesson 7\r\nUNSUB 7 1\r\nPUB lesson.press _INBOX.lesson 6\r\nok\r\n42\r\n"
+    assert_eq(transcript, expected_transcript, "one-reply request transcript")
+    print("STEP 6: Request-Reply with UNSUB 7 1 (single-delivery):")
+    print(transcript)
+
+    let transcript_ok = transcript == expected_transcript
+    print("PINNED_VECTORS: len1=" + str(len(f1)) + " len2=" + str(len(f2)) + " len3=" + str(len(f3)) + " len4=" + str(len(f4)) + " op=" + parsed["op"] + " transcript_ok=" + str(transcript_ok))
 }
 
 main()
