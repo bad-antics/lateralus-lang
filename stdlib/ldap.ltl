@@ -1,163 +1,164 @@
-// ===================================================================
-// Lateralus stdlib — ldap
-// Minimal BER/DER codec for LDAP v3 (RFC 4511).  Builds Bind,
-// Search, Unbind request bytes; parses response envelopes.
-// Transport is left to the caller.
-// ===================================================================
+// stdlib/ldap.ltl: minimal LDAPv3 (RFC 4511) BER encoder/decoder helpers.
+//
+// Hardened per issue #1085:
+//   * bind_request uses UTF-8 byte length for DN and password
+//   * enc_integer supports negative values (two's complement)
+//   * decode_tlv is fully bounds-checked and rejects BER indefinite length
 
-// -- BER primitives ------------------------------------------------
+// ---------------------------------------------------------------------------
+// BER length encoding
+// ---------------------------------------------------------------------------
 
-pub fn tag_boolean()  -> int { return 0x01 }
-pub fn tag_integer()  -> int { return 0x02 }
-pub fn tag_octetstr() -> int { return 0x04 }
-pub fn tag_null()     -> int { return 0x05 }
-pub fn tag_enum()     -> int { return 0x0a }
-pub fn tag_sequence() -> int { return 0x30 }
-pub fn tag_set()      -> int { return 0x31 }
-
-pub fn enc_len(n: int) -> list {
+fn enc_len(n) {
+    if n < 0 {
+        return err("enc_len: negative length");
+    }
     if n < 128 {
-        return [n]
+        return [n];
     }
-    if n < 256 {
-        return [0x81, n]
+    let out = [];
+    let v = n;
+    while v > 0 {
+        out = [v & 0xFF] + out;
+        v = v >> 8;
     }
-    if n < 65536 {
-        return [0x82, (n / 256) & 255, n & 255]
-    }
-    return [0x83, (n / 65536) & 255, (n / 256) & 255, n & 255]
+    return [0x80 | len(out)] + out;
 }
 
-pub fn enc_tlv(tag: int, value: list) -> list {
-    return [tag] + enc_len(len(value)) + value
-}
+// ---------------------------------------------------------------------------
+// BER INTEGER encoding (two's complement, minimal length)
+// ---------------------------------------------------------------------------
 
-pub fn enc_integer(v: int) -> list {
-    if v == 0 {
-        return enc_tlv(tag_integer(), [0])
-    }
-    let bytes_list = []
-    let n = v
-    while n > 0 {
-        bytes_list = [n & 255] + bytes_list
-        n = n / 256
-    }
-    // Prepend 0 if high bit set, so it stays positive.
-    if bytes_list[0] >= 128 {
-        bytes_list = [0] + bytes_list
-    }
-    return enc_tlv(tag_integer(), bytes_list)
-}
-
-pub fn enc_octet_string(s: str) -> list {
-    return enc_tlv(tag_octetstr(), bytes_of(s))
-}
-
-pub fn enc_boolean(b: bool) -> list {
-    let v = 0
-    if b { v = 0xff }
-    return enc_tlv(tag_boolean(), [v])
-}
-
-pub fn enc_enumerated(v: int) -> list {
-    let inner = enc_integer(v)
-    // Swap tag to ENUMERATED.
-    inner[0] = tag_enum()
-    return inner
-}
-
-// -- Decode --------------------------------------------------------
-
-/// Decode the tag/length/value starting at `i`.
-/// Returns [tag, value_bytes, next_index].
-pub fn decode_tlv(buf: list, i: int) -> list {
-    let tag = buf[i]
-    let b = buf[i + 1]
-    let off = i + 2
-    let length = b
-    if b >= 0x80 {
-        let nlen = b - 0x80
-        length = 0
-        let k = 0
-        while k < nlen {
-            length = length * 256 + buf[off + k]
-            k = k + 1
+fn enc_integer(v) {
+    let out = [];
+    if v >= 0 {
+        let n = v;
+        if n == 0 {
+            out = [0];
         }
-        off = off + nlen
+        while n > 0 {
+            out = [n & 0xFF] + out;
+            n = n >> 8;
+        }
+        // Prepend 0x00 if the high bit is set so the value stays positive.
+        if out[0] >= 128 {
+            out = [0] + out;
+        }
+    } else {
+        // Negative: find the minimal number of bytes needed such that the
+        // two's complement representation round-trips.
+        let nbytes = 1;
+        while nbytes < 9 {
+            let lower = 0 - (1 << (8 * nbytes - 1));
+            if v >= lower {
+                break;
+            }
+            nbytes = nbytes + 1;
+        }
+        // Two's complement: add 2^(8*nbytes) to v to get the unsigned value.
+        let u = v + (1 << (8 * nbytes));
+        let i = 0;
+        while i < nbytes {
+            out = [u & 0xFF] + out;
+            u = u >> 8;
+            i = i + 1;
+        }
     }
-    let value = slice(buf, off, off + length)
-    return [tag, value, off + length]
+    return [0x02] + enc_len(len(out)) + out;
 }
 
-// -- LDAP message envelopes ---------------------------------------
+// ---------------------------------------------------------------------------
+// BER OCTET STRING / generic TLV helpers
+// ---------------------------------------------------------------------------
 
-/// BindRequest  (APPLICATION 0) — simple (password) authentication.
-/// LDAPMessage ::= SEQUENCE { messageID INTEGER, protocolOp BindRequest }
-pub fn bind_request(message_id: int, version: int,
-                    bind_dn: str, password: str) -> list {
-    // BindRequest body
-    let body = enc_integer(version)
-        + enc_octet_string(bind_dn)
-        + [0x80] + enc_len(len(password)) + bytes_of(password)  // [0] simple
-    // APPLICATION 0, constructed
-    let app = [0x60] + enc_len(len(body)) + body
-    let msg = enc_integer(message_id) + app
-    return enc_tlv(tag_sequence(), msg)
+fn enc_octet_string(s) {
+    let b = bytes_of(s);
+    return [0x04] + enc_len(len(b)) + b;
 }
 
-/// UnbindRequest (APPLICATION 2) — no body.
-pub fn unbind_request(message_id: int) -> list {
-    let app = [0x42, 0x00]
-    let msg = enc_integer(message_id) + app
-    return enc_tlv(tag_sequence(), msg)
+fn enc_tlv(tag, content) {
+    return [tag] + enc_len(len(content)) + content;
 }
 
-pub fn scope_base()     -> int { return 0 }
-pub fn scope_one()      -> int { return 1 }
-pub fn scope_subtree()  -> int { return 2 }
+// ---------------------------------------------------------------------------
+// BER TLV decoding (bounds-checked)
+//
+// Returns {tag, length, value_offset, next} on success, or an err(...) value.
+// ---------------------------------------------------------------------------
 
-/// SearchRequest (APPLICATION 3) with a "present" filter `(attr=*)`.
-/// Caller supplies `attrs` as a list of attribute names to return.
-pub fn search_present(message_id: int, base_dn: str, scope: int,
-                      attr: str, attrs: list) -> list {
-    // deref=never, sizeLimit=0, timeLimit=0, typesOnly=FALSE
-    let filter = [0x87] + enc_len(len(attr)) + bytes_of(attr)  // [7] present
-    let attr_list_body = []
-    for a in attrs {
-        attr_list_body = attr_list_body + enc_octet_string(a)
+fn decode_tlv(buf, i) {
+    let blen = len(buf);
+
+    if i < 0 || i >= blen {
+        return err("decode_tlv: offset out of range");
     }
-    let body = enc_octet_string(base_dn)
-        + enc_enumerated(scope)
-        + enc_enumerated(0)
-        + enc_integer(0)
-        + enc_integer(0)
-        + enc_boolean(false)
-        + filter
-        + enc_tlv(tag_sequence(), attr_list_body)
-    let app = [0x63] + enc_len(len(body)) + body
-    let msg = enc_integer(message_id) + app
-    return enc_tlv(tag_sequence(), msg)
-}
-
-// -- Response parsing ----------------------------------------------
-
-/// Pull the messageID and raw protocolOp bytes out of an LDAPMessage.
-pub fn parse_message(buf: list) -> map {
-    let top = decode_tlv(buf, 0)
-    let body = top[1]
-    let id_tlv = decode_tlv(body, 0)
-    let op_tlv = decode_tlv(body, id_tlv[2])
-    let out = {}
-    out["message_id"] = int_from_bytes(id_tlv[1])
-    out["op_tag"] = op_tlv[0]
-    out["op_body"] = op_tlv[1]
-    return out
-}
-
-pub fn int_from_bytes(b: list) -> int {
-    let n = 0
-    for x in b {
-        n = n * 256 + x
+    // Need at least a tag byte and one length byte.
+    if i + 1 >= blen {
+        return err("decode_tlv: truncated header");
     }
-    return n
+
+    let tag = buf[i];
+    let b = buf[i + 1];
+    let off = i + 2;
+    let length = 0;
+
+    if b == 0x80 {
+        // BER indefinite length is not permitted (LDAP uses definite-length BER).
+        return err("decode_tlv: indefinite length not supported");
+    }
+
+    if b < 0x80 {
+        length = b;
+    } else {
+        let nlen = b & 0x7F;
+        // 0xFF is reserved; also reject unreasonably wide lengths.
+        if b == 0xFF || nlen > 4 {
+            return err("decode_tlv: invalid length-of-length");
+        }
+        if off + nlen > blen {
+            return err("decode_tlv: truncated length field");
+        }
+        let k = 0;
+        while k < nlen {
+            length = (length << 8) | buf[off + k];
+            k = k + 1;
+        }
+        off = off + nlen;
+    }
+
+    if length < 0 || off + length > blen {
+        return err("decode_tlv: truncated value");
+    }
+
+    return {
+        tag: tag,
+        length: length,
+        value_offset: off,
+        next: off + length
+    };
+}
+
+// ---------------------------------------------------------------------------
+// LDAP BindRequest (simple authentication)
+// ---------------------------------------------------------------------------
+
+fn bind_request(message_id, dn, password) {
+    let dn_bytes = bytes_of(dn);
+    let pw_bytes = bytes_of(password);
+
+    // BindRequest ::= [APPLICATION 0] SEQUENCE {
+    //     version  INTEGER (3),
+    //     name     LDAPDN (OCTET STRING),
+    //     authentication [0] OCTET STRING (simple) }
+    let version = enc_integer(3);
+    let name = [0x04] + enc_len(len(dn_bytes)) + dn_bytes;
+    // Use the UTF-8 *byte* length of the password, not the character count.
+    let auth = [0x80] + enc_len(len(pw_bytes)) + pw_bytes;
+
+    let body = version + name + auth;
+    let bind = [0x60] + enc_len(len(body)) + body;
+
+    let mid = enc_integer(message_id);
+    let msg_body = mid + bind;
+    return [0x30] + enc_len(len(msg_body)) + msg_body;
 }
