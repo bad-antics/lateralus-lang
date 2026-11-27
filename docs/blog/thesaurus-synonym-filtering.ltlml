@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Looking Up and Filtering Synonyms with grugbot.thesaurus</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "Looking Up and Filtering Synonyms with grugbot.thesaurus"
+author: Zwk-tech
+date: 2026-11-27
+abstract: A tour of stdlib/grugbot.thesaurus — how synonym lookup and negative-inhibition filtering work together, with a runnable example pinned to the vector ["quick", "rapid"].
+---
+
+## The thesaurus is more than a word list
+
+`stdlib/grugbot.thesaurus` models word relationships along three weighted dimensions — semantic, contextual, and associative — and keeps a separate *negative* thesaurus of antonym pairs. That negative side is what makes lookup useful: a raw list of related words is full of words that mean the **opposite** of what you want. Filtering those out is the whole trick.
+
+The two functions we care about here are:
+
+- `add_word(word, synonyms, antonyms, contexts, associations)` — registers an entry and links every antonym into the negative thesaurus.
+- `filter_negatives(base_word, candidates)` — drops any candidate that is a registered antonym of `base_word`.
+
+Antonym links are **bidirectional**. Calling `add_negative("fast", "slow")` records the pair in both directions, so filtering works no matter which end of the pair you start from.
+
+## Looking up synonyms
+
+`seed_common_words()` loads a small vocabulary. Ask it for the synonyms of a word and you get the raw list:
+
+// Straight from the module's seed data:
+//   add_word("fast", ["quick", "rapid", "swift"], ["slow", "sluggish"], ...)
+// so get_synonyms("fast") returns:
+let raw = ["quick", "rapid", "swift"]
+
+Three words — but one of them, `swift`, is fine. The problem appears when a candidate pool mixes synonyms and antonyms, which is exactly what a similarity search produces.
+
+## Filtering with negative inhibition
+
+Suppose a fuzzy matcher hands us four candidates for `fast`: two true synonyms (`quick`, `rapid`) and two antonyms (`slow`, `sluggish`). We want to keep the synonyms and discard the antonyms. `filter_negatives` does that in one call:
+
+fn lookup_and_filter() -> list {
+    seed_words()                       // add_negative("fast","slow"), add_negative("fast","sluggish")
+    let candidates = ["quick", "rapid", "slow", "sluggish"]
+    return filter_negatives("fast", candidates)
+}
+
+// lookup_and_filter() => ["quick", "rapid"]
+
+The base word `fast` has two registered antonyms — `slow` and `sluggish`. The filter walks `candidates` and keeps only entries that are not in that negative set, leaving `["quick", "rapid"]` — our pinned test vector.
+
+Because the links are bidirectional, starting from the other side works too. `filter_negatives("slow", ["fast", "quick", "rapid"])` drops `fast` (the recorded antonym) and returns `["quick", "rapid"]` as well.
+
+## Why the filtering step matters
+
+Similarity alone cannot tell you that `slow` is the *enemy* of `fast` — it only measures distance. The negative thesaurus adds the missing sign. This is the "negative inhibition" in the module's tagline: similar words excite, antonyms inhibit. In ranking, `combined_similarity` returns `0.0` outright for a negative pair, so the two mechanisms agree.
+
+## Run it yourself
+
+The companion example `examples/thesaurus_synonyms.ltl` is self-contained: it inlines the small slice of the module used here, so it runs on the Python backend without the v3.2.0 stdlib-import inlining limitation.
+
+    python -m lateralus_lang check examples/thesaurus_synonyms.ltl
+    python -m lateralus_lang py examples/thesaurus_synonyms.ltl -o out.py
+    python -m lateralus_lang run examples/thesaurus_synonyms.ltl
+
+Running it prints:
+
+    ['quick', 'rapid']
+
+and the two `@test` vectors — `test_filtered_synonyms` and `test_filter_is_symmetric` — both pass.
+
+## Takeaways
+
+- Synonym lookup gives you a *raw* related-word set.
+- Negative-inhibition filtering removes antonyms, giving you words that truly mean the same thing.
+- Antonym links are symmetric, so the filter is reliable from either direction.
+- The pinned `["quick", "rapid"]` vector is reproducible from the module's own seed data.
+
+  </script>
+</body>
+</html>
