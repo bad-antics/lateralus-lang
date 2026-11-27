@@ -1,170 +1,88 @@
-// Lateralus Standard Library — http.ltl  (v1.5.0)
-// HTTP client for making web requests
+// ===========================================================================
+// Module: stdlib/http.ltl
+// Description: HTTP status code response classifiers and offline tutorial
+// ===========================================================================
 
-module stdlib.http
+// ===========================================================================
+// Section: Status Classifiers
+// ===========================================================================
 
-// -- Core requests ------------------------------------------------------------
-
-pub fn get(url: str) -> map {
-    // Returns {"status": int, "body": str, "headers": map}
-    return http_request("GET", url, "", {})
+fn is_ok(status: int) -> bool {
+    status >= 200 and status <= 299
 }
 
-pub fn post(url: str, body: str) -> map {
-    return http_request("POST", url, body, {"Content-Type": "application/json"})
+fn is_redirect(status: int) -> bool {
+    status >= 300 and status <= 399
 }
 
-pub fn put(url: str, body: str) -> map {
-    return http_request("PUT", url, body, {"Content-Type": "application/json"})
+fn is_client_error(status: int) -> bool {
+    status >= 400 and status <= 499
 }
 
-pub fn delete(url: str) -> map {
-    return http_request("DELETE", url, "", {})
+fn is_server_error(status: int) -> bool {
+    status >= 500 and status <= 599
 }
 
-pub fn patch(url: str, body: str) -> map {
-    return http_request("PATCH", url, body, {"Content-Type": "application/json"})
-}
+// ===========================================================================
+// Section: Runnable Example & Report Generator
+// ===========================================================================
 
-pub fn head(url: str) -> map {
-    return http_request("HEAD", url, "", {})
-}
-
-// -- With headers -------------------------------------------------------------
-
-pub fn get_with_headers(url: str, headers: map) -> map {
-    return http_request("GET", url, "", headers)
-}
-
-pub fn post_with_headers(url: str, body: str, headers: map) -> map {
-    return http_request("POST", url, body, headers)
-}
-
-// -- JSON helpers -------------------------------------------------------------
-
-pub fn get_json(url: str) -> map {
-    let resp = get(url)
-    if resp["status"] >= 200 && resp["status"] < 300 {
-        return {"ok": true, "data": json_parse(resp["body"]),
-                "status": resp["status"]}
-    }
-    return {"ok": false, "data": null, "status": resp["status"],
-            "error": resp["body"]}
-}
-
-pub fn post_json(url: str, data: map) -> map {
-    let body = json_encode(data)
-    let resp = post(url, body)
-    if resp["status"] >= 200 && resp["status"] < 300 {
-        return {"ok": true, "data": json_parse(resp["body"]),
-                "status": resp["status"]}
-    }
-    return {"ok": false, "data": null, "status": resp["status"],
-            "error": resp["body"]}
-}
-
-// -- URL utilities ------------------------------------------------------------
-
-pub fn encode_uri(s: str) -> str {
-    return url_encode(s)
-}
-
-pub fn decode_uri(s: str) -> str {
-    return url_decode(s)
-}
-
-pub fn build_url(base: str, params: map) -> str {
-    let mut parts = []
-    for key in keys(params) {
-        let encoded_key = url_encode(key)
-        let encoded_val = url_encode(to_str(params[key]))
-        parts = push(parts, encoded_key + "=" + encoded_val)
-    }
-    if len(parts) == 0 { return base }
-    return base + "?" + str_join(parts, "&")
-}
-
-pub fn parse_url(url: str) -> map {
-    // Simple URL parser
-    let mut result = {"scheme": "", "host": "", "port": 0,
-                      "path": "", "query": "", "fragment": ""}
-
-    let mut s = url
-
-    // Extract fragment
-    if str_contains(s, "#") {
-        let parts = str_split(s, "#")
-        s = parts[0]
-        result["fragment"] = parts[1]
-    }
-
-    // Extract query
-    if str_contains(s, "?") {
-        let parts = str_split(s, "?")
-        s = parts[0]
-        result["query"] = parts[1]
-    }
-
-    // Extract scheme
-    if str_contains(s, "://") {
-        let parts = str_split(s, "://")
-        result["scheme"] = parts[0]
-        s = parts[1]
-    }
-
-    // Extract path
-    let slash_idx = str_index_of(s, "/")
-    if slash_idx >= 0 {
-        result["path"] = slice(s, slash_idx, len(s))
-        s = slice(s, 0, slash_idx)
-    }
-
-    // Extract port
-    if str_contains(s, ":") {
-        let parts = str_split(s, ":")
-        result["host"] = parts[0]
-        result["port"] = to_int(parts[1])
+fn classify_status(status: int) -> string {
+    if status |> is_ok {
+        "OK"
+    } else if status |> is_redirect {
+        "Redirect"
+    } else if status |> is_client_error {
+        "Client Error"
+    } else if status |> is_server_error {
+        "Server Error"
     } else {
-        result["host"] = s
+        "Unknown / Informational"
     }
-
-    return result
 }
 
-// -- Response helpers ---------------------------------------------------------
-
-pub fn is_ok(resp: map) -> bool {
-    return resp["status"] >= 200 && resp["status"] < 300
+fn generate_report(status: int) -> string {
+    let classification = status |> classify_status
+    "Status: " + status + " -> " + classification
 }
 
-pub fn is_redirect(resp: map) -> bool {
-    return resp["status"] >= 300 && resp["status"] < 400
-}
+// ===========================================================================
+// Section: Pinned Test Cases & Boundary Assertions
+// ===========================================================================
 
-pub fn is_client_error(resp: map) -> bool {
-    return resp["status"] >= 400 && resp["status"] < 500
-}
+fn run_assertions() -> bool {
+    // 199/200 boundary: 199 should be false for all standard response classifiers
+    let t199_ok = is_ok(199) == false
+    let t199_red = is_redirect(199) == false
+    let t199_cli = is_client_error(199) == false
+    let t199_srv = is_server_error(199) == false
 
-pub fn is_server_error(resp: map) -> bool {
-    return resp["status"] >= 500 && resp["status"] < 600
-}
+    let t200_ok = is_ok(200) == true
 
-pub fn status_text(code: int) -> str {
-    if code == 200 { return "OK" }
-    if code == 201 { return "Created" }
-    if code == 204 { return "No Content" }
-    if code == 301 { return "Moved Permanently" }
-    if code == 302 { return "Found" }
-    if code == 304 { return "Not Modified" }
-    if code == 400 { return "Bad Request" }
-    if code == 401 { return "Unauthorized" }
-    if code == 403 { return "Forbidden" }
-    if code == 404 { return "Not Found" }
-    if code == 405 { return "Method Not Allowed" }
-    if code == 409 { return "Conflict" }
-    if code == 429 { return "Too Many Requests" }
-    if code == 500 { return "Internal Server Error" }
-    if code == 502 { return "Bad Gateway" }
-    if code == 503 { return "Service Unavailable" }
-    return "Unknown"
+    // 299/300 boundary
+    let t299_ok = is_ok(299) == true
+    let t300_red = is_redirect(300) == true
+
+    // 399/400 boundary
+    let t399_red = is_redirect(399) == true
+    let t400_cli = is_client_error(400) == true
+
+    // 499/500 boundary
+    let t499_cli = is_client_error(499) == true
+    let t500_srv = is_server_error(500) == true
+
+    // 599/600 boundary: 600 should be false for all standard response classifiers
+    let t599_srv = is_server_error(599) == true
+    let t600_ok = is_ok(600) == false
+    let t600_red = is_redirect(600) == false
+    let t600_cli = is_client_error(600) == false
+    let t600_srv = is_server_error(600) == false
+
+    t199_ok and t199_red and t199_cli and t199_srv and
+    t200_ok and
+    t299_ok and t300_red and
+    t399_red and t400_cli and
+    t499_cli and t500_srv and
+    t599_srv and
+    t600_ok and t600_red and t600_cli and t600_srv
 }
