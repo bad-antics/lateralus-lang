@@ -145,6 +145,23 @@ class TestVector:
         v = Vector([3, 4])
         assert v.norm() == pytest.approx(5.0)
 
+    @pytest.mark.parametrize("scale", [1e200, 1e-200, 1e-310])
+    def test_norm_and_direction_are_scale_invariant(self, scale):
+        v = Vector([3 * scale, 4 * scale])
+        assert v.norm() == pytest.approx(5 * scale, abs=0)
+        assert list(v.normalize()) == pytest.approx([0.6, 0.8])
+
+    @pytest.mark.parametrize("value", [math.ulp(0.0), 1.7e308])
+    def test_diagonal_direction_at_float_limits(self, value):
+        direction = Vector([value, -value]).normalize()
+        component = math.sqrt(0.5)
+        assert list(direction) == pytest.approx([component, -component])
+
+    @pytest.mark.parametrize("values", [[], [0.0, 0.0]])
+    def test_normalize_zero_vector(self, values):
+        with pytest.raises(ValueError, match="cannot normalize zero vector"):
+            Vector(values).normalize()
+
     def test_cross_product(self):
         i = Vector([1, 0, 0])
         j = Vector([0, 1, 0])
