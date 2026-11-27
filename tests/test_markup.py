@@ -238,3 +238,15 @@ fn main() {
         assert "E = mc^2" in html
         assert "admonition" in html
         assert "<table" in html
+
+
+def test_stdlib_levenshtein_tutorial_renders():
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(here, "docs", "blog", "stdlib-levenshtein.ltlml")
+    with open(path, encoding="utf-8") as fh:
+        source = fh.read()
+    html = render_ltlml(source)
+    assert "<html" in html
+    assert "stdlib-levenshtein" in html
+    assert "Wagner-Fischer" in html

@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>stdlib-levenshtein</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "stdlib-levenshtein"
+author: bad-antics
+date: 2026-04-06
+abstract: Edit distance for text. Covers the classic Wagner-Fischer dynamic program, a banded early-exit variant, normalised similarity, and the Damerau-Levenshtein transposition extension, with fixed canonical vectors.
+
+# Edit Distance
+
+The Levenshtein distance between two strings is the minimum number of single-character insertions, deletions, and substitutions required to turn one string into the other. The module exposes four public functions.
+
+// Public surface
+distance(a, b)        // classic O(nm) Wagner-Fischer DP
+bounded(a, b, k)      // banded DP, early exit once a row exceeds k
+similarity(a, b)      // 1.0 - distance / max(|a|, |b|)
+damerau(a, b)         // adds transposition as a single edit
+
+# Classic Distance
+
+`distance` runs the Wagner-Fischer dynamic program in O(nm) time and O(min(n,m)) space by keeping only two rows. The shorter string is chosen as the column axis to minimise the working row width.
+
+// Distance between two words
+distance("kitten", "sitting")   // 3
+
+// Empty strings collapse to the length of the other
+distance("", "abc")             // 3
+distance("abc", "")             // 3
+
+// Identical strings have distance zero
+distance("lateralus", "lateralus")  // 0
+
+# Bounded Distance
+
+`bounded` stops as soon as the minimum value of a row exceeds the bound `k`, returning `k + 1` to signal that the true distance is provably larger. This is O(k * min(n,m)) for small `k`.
+
+// Within the bound the exact distance is returned
+bounded("kitten", "sitting", 3)   // 3
+
+// Beyond the bound it reports k + 1
+bounded("kitten", "sitting", 2)   // 3
+
+# Similarity
+
+`similarity` normalises the distance into the interval [0, 1], where 1.0 means identical and 0.0 means maximally different for the given lengths.
+
+// Identical strings score 1.0
+similarity("abc", "abc")          // 1.0
+
+// Two edits over five characters
+similarity("abcde", "abXde")      // 0.8
+
+# Damerau-Levenshtein
+
+`damerau` extends the model with transposition of two adjacent characters as a single edit, using a full (n+1) x (m+1) matrix.
+
+// A single transposition counts as one edit
+damerau("ab", "ba")               // 1
+
+// Classic distance would report two substitutions here
+distance("ab", "ba")              // 2
+
+# Canonical Vectors
+
+Fixed vectors used across the test suite:
+
+- distance("", "") -> 0
+- distance("", "abc") -> 3
+- distance("abc", "abc") -> 0
+- distance("kitten", "sitting") -> 3
+- distance("flaw", "lawn") -> 2
+- bounded("kitten", "sitting", 2) -> 3
+- similarity("abc", "abc") -> 1.0
+- damerau("ab", "ba") -> 1
+
+# Executable Program
+
+fn main() {
+    print(distance("kitten", "sitting"))
+    print(bounded("kitten", "sitting", 2))
+    print(similarity("abcde", "abXde"))
+    print(damerau("ab", "ba"))
+}
+
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>
