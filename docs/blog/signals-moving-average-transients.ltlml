@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Why moving_average treats the start of a clip differently</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "Why moving_average treats the start of a clip differently"
+author: Zwk-tech
+date: 2026-11-27
+abstract: A tour of stdlib/signals.moving_average — why a transient at the start of a clip reads differently from one in the middle, explained through the running denominator, with a runnable example pinned to [0, 0, 2, 2, 2, 0] and [6, 3, 2, 0].
+---
+
+## One function, two different-looking impulses
+
+`stdlib/signals.ltl` provides `moving_average(s, window)`, a running mean over a
+sliding window. Feed it the same spike — a single sample of amplitude 6 — and
+where that spike sits in the clip changes what you see at the output:
+
+// Impulse in the middle of a six-sample clip:
+moving_average([0, 0, 6, 0, 0, 0], 3)  =>  [0, 0, 2, 2, 2, 0]
+
+// The same impulse, but now at sample 0 of a four-sample clip:
+moving_average([6, 0, 0, 0], 3)        =>  [6, 3, 2, 0]
+
+The middle impulse flattens into a plateau of three 2s. The leading impulse
+starts tall at 6 and decays 6, 3, 2 before vanishing. Same spike, same window
+size — so what gives?
+
+## The denominator is the whole story
+
+Here is the heart of the implementation:
+
+    cumsum = 0.0
+    for i in range(n):
+        cumsum += samples[i]
+        if i >= w:
+            cumsum -= samples[i - w]
+        count = min(i + 1, w)
+        out.append(cumsum / count)
+
+There are two moving parts. The numerator, `cumsum`, is a running total that
+drops samples older than the window (`samples[i - w]`). That part behaves the
+same everywhere in the clip. The part that does not behave the same everywhere
+is the denominator:
+
+    count = min(i + 1, w)
+
+At sample 0 there is only one sample in the window, so `count` is 1. At sample 1
+it is 2, at sample 2 it is 3 — and from then on it is pinned at the window size
+`w`. Before the window has filled, `moving_average` is really dividing by *how
+many samples exist so far*, not by `w`.
+
+## Walk the middle impulse
+
+For `[0, 0, 6, 0, 0, 0]` with `w = 3`, the denominator ramp is `1, 2, 3, 3, 3, 3`:
+
+    i=0  count=1  cumsum=0        out=0      (nothing yet)
+    i=1  count=2  cumsum=0        out=0      (nothing yet)
+    i=2  count=3  cumsum=0+6=6    out=2      <-- spike arrives, count already 3
+    i=3  count=3  cumsum=6+0=6    out=2
+    i=4  count=3  cumsum=6+0=6    out=2
+    i=5  count=3  cumsum=6-6=0    out=0      <-- spike leaves the window
+
+When the 6 arrives at sample 2, the denominator has already reached 3. The spike
+is split evenly across three samples, giving the flat `2, 2, 2` plateau. It is
+then subtracted cleanly at i=5 when `samples[i - w] = samples[2]` falls out.
+
+## Walk the leading impulse
+
+For `[6, 0, 0, 0]` with `w = 3`, the same denominator ramp tells a different
+story because the spike is present *while the denominator is still growing*:
+
+    i=0  count=1  cumsum=6        out=6/1 = 6
+    i=1  count=2  cumsum=6+0=6    out=6/2 = 3
+    i=2  count=3  cumsum=6+0=6    out=6/3 = 2
+    i=3  count=3  cumsum=6-6=0    out=0      <-- spike leaves the window
+
+The running total stays at 6 for those first three samples, but the divisor
+climbs 1 -> 2 -> 3 underneath it. That is the entire reason the output decays
+`6, 3, 2` instead of sitting at a plateau. This is a startup transient of the
+estimator, not a property of the signal.
+
+## Why this matters for audio
+
+On a real clip, the first few milliseconds of any moving-average filter are
+computed over a partially-filled window. If you treat the very first samples as
+a steady-state average, you will misread a leading click or impulse — the
+`min(i + 1, w)` denominator deliberately shrinks the support so the average is
+well-defined from sample 0, at the cost of a short ramp. Once `i >= w`, the
+filter is in steady state and behaves identically no matter where the impulse
+falls.
+
+## Run it yourself
+
+The companion example `examples/signals_moving_average.ltl` is self-contained:
+it reimplements the small slice of `stdlib/signals.ltl` used here in plain
+Lateralus, so it runs on the Python backend without the v3.2.0 stdlib-import
+inlining limitation.
+
+    python bin/ltlc check examples/signals_moving_average.ltl
+    python bin/ltlc run   examples/signals_moving_average.ltl
+
+Running it prints:
+
+    [0.0, 0.0, 2.0, 2.0, 2.0, 0.0]
+    [6.0, 3.0, 2.0, 0.0]
+    [1, 2, 3, 3, 3, 3]
+
+The three `@test` vectors — `test_middle_transient`, `test_leading_transient`,
+and `test_denominator_ramp` — all pass, pinning the two waveforms and the
+denominator ramp described above.
+
+## Takeaways
+
+- `moving_average` divides by `min(i + 1, w)`, not always by `w`.
+- Before the window fills, that growing denominator turns a leading spike into
+  a decaying `6, 3, 2` ramp.
+- After the window fills, the same spike becomes a flat `2, 2, 2` plateau.
+- The difference is a startup transient of the estimator, not a change in the
+  signal — and the pinned vectors `["0,0,2,2,2,0"]` and `["6,3,2,0"]` make it
+  reproducible.
+
+  </script>
+</body>
+</html>
