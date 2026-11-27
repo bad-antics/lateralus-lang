@@ -15,26 +15,33 @@
 
 // -- Client → server ------------------------------------------------
 
+fn check_crlf(s: str) -> str {
+    if index_of(s, "\r") >= 0 || index_of(s, "\n") >= 0 {
+        throw ValueError("CRLF injection detected")
+    }
+    return s
+}
+
 pub fn connect(opts_json: str) -> str {
-    return "CONNECT " + opts_json + "\r\n"
+    return "CONNECT " + check_crlf(opts_json) + "\r\n"
 }
 
 pub fn pub_msg(subject: str, reply: str, payload: str) -> str {
-    let hdr = "PUB " + subject
-    if reply != "" { hdr = hdr + " " + reply }
-    hdr = hdr + " " + str(len(payload)) + "\r\n"
+    let hdr = "PUB " + check_crlf(subject)
+    if reply != "" { hdr = hdr + " " + check_crlf(reply) }
+    hdr = hdr + " " + str(len(bytes_of(payload))) + "\r\n"
     return hdr + payload + "\r\n"
 }
 
 pub fn sub(subject: str, queue: str, sid: str) -> str {
-    let out = "SUB " + subject
-    if queue != "" { out = out + " " + queue }
-    out = out + " " + sid + "\r\n"
+    let out = "SUB " + check_crlf(subject)
+    if queue != "" { out = out + " " + check_crlf(queue) }
+    out = out + " " + check_crlf(sid) + "\r\n"
     return out
 }
 
 pub fn unsub(sid: str, max: int) -> str {
-    let out = "UNSUB " + sid
+    let out = "UNSUB " + check_crlf(sid)
     if max > 0 { out = out + " " + str(max) }
     return out + "\r\n"
 }
@@ -90,7 +97,11 @@ pub fn parse_message(buf: str) -> map {
     }
     if starts_with(line, "-ERR") {
         m["op"] = "ERR"
-        m["reason"] = slice(line, 5, len(line))
+        if len(line) > 5 {
+            m["reason"] = slice(line, 5, len(line))
+        } else {
+            m["reason"] = ""
+        }
         m["consumed"] = rest_start
         return m
     }
