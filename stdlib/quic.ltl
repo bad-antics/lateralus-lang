@@ -1,136 +1,269 @@
-// ===================================================================
-// Lateralus stdlib — quic
-// Variable-length integer (RFC 9000 §16) and long/short header
-// parsing.  Cryptographic packet protection is OUT OF SCOPE — this
-// is the wire-format primer that higher layers build on.
-// ===================================================================
+// stdlib/quic.ltl
+// QUIC v1 (RFC 9000) wire-format helpers: variable-length integers and
+// long/short packet header parsing.
+//
+// All parsing functions are total: truncated or malformed input yields `nil`
+// rather than an out-of-bounds crash.
 
-// -- Varint encode/decode ------------------------------------------
+let QUIC_VERSION_1 = 1
+let QUIC_MAX_CID_LEN = 20
+let QUIC_VARINT_MAX = 4611686018427387903 // 2^62 - 1
+let QUIC_RETRY_TAG_LEN = 16
 
-/// Encode a 62-bit unsigned int per RFC 9000 §16.
-pub fn enc_varint(v: int) -> list {
+// ---------------------------------------------------------------------------
+// Packet type helpers (long header, QUIC v1)
+// ---------------------------------------------------------------------------
+fn pkt_type_initial() { return 0 }
+fn pkt_type_zero_rtt() { return 1 }
+fn pkt_type_handshake() { return 2 }
+fn pkt_type_retry() { return 3 }
+
+// ---------------------------------------------------------------------------
+// Variable-length integer encoding (RFC 9000 §16)
+// ---------------------------------------------------------------------------
+// Returns a list of bytes, or nil if `v` is not an integer in [0, 2^62 - 1].
+fn enc_varint(v) {
+    if typeof(v) != "int" {
+        return nil
+    }
+    if v < 0 {
+        return nil
+    }
+    if v > QUIC_VARINT_MAX {
+        return nil
+    }
     if v < 64 {
         return [v]
     }
     if v < 16384 {
-        let hi = (v / 256) & 0x3f
-        return [0x40 | hi, v & 255]
+        return [64 | (v >> 8), v & 255]
     }
     if v < 1073741824 {
-        let b0 = 0x80 | ((v / 16777216) & 0x3f)
-        return [b0, (v / 65536) & 255, (v / 256) & 255, v & 255]
+        return [
+            128 | (v >> 24),
+            (v >> 16) & 255,
+            (v >> 8) & 255,
+            v & 255
+        ]
     }
-    let b0 = 0xc0 | ((v / 72057594037927936) & 0x3f)
-    return [b0,
-        (v / 281474976710656) & 255,
-        (v / 1099511627776)   & 255,
-        (v / 4294967296)      & 255,
-        (v / 16777216)        & 255,
-        (v / 65536)           & 255,
-        (v / 256)             & 255,
-        v & 255]
+    return [
+        192 | (v >> 56),
+        (v >> 48) & 255,
+        (v >> 40) & 255,
+        (v >> 32) & 255,
+        (v >> 24) & 255,
+        (v >> 16) & 255,
+        (v >> 8) & 255,
+        v & 255
+    ]
 }
 
-/// Decode one varint. Returns [value, bytes_consumed].
-pub fn dec_varint(buf: list, i: int) -> list {
-    let b0 = buf[i]
-    let length_bits = (b0 >> 6) & 3
-    let vlen = 1
-    if length_bits == 1 { vlen = 2 }
-    if length_bits == 2 { vlen = 4 }
-    if length_bits == 3 { vlen = 8 }
-    let v = b0 & 0x3f
+// Decode a varint from `buf` starting at index `i`.
+// Returns [value, next_index] or nil if the buffer is too short / index invalid.
+fn dec_varint(buf, i) {
+    if buf == nil {
+        return nil
+    }
+    if typeof(i) != "int" {
+        return nil
+    }
+    let n = len(buf)
+    if i < 0 {
+        return nil
+    }
+    if i >= n {
+        return nil
+    }
+    let first = buf[i]
+    let prefix = (first >> 6) & 3
+    let size = 1
+    if prefix == 1 {
+        size = 2
+    } else if prefix == 2 {
+        size = 4
+    } else if prefix == 3 {
+        size = 8
+    }
+    // Entire encoded varint must be present in the buffer.
+    if i + size > n {
+        return nil
+    }
+    let value = first & 63
     let k = 1
-    while k < vlen {
-        v = v * 256 + buf[i + k]
+    while k < size {
+        value = (value << 8) | (buf[i + k] & 255)
         k = k + 1
     }
-    return [v, vlen]
+    return [value, i + size]
 }
 
-// -- Packet-header discrimination ----------------------------------
+// ---------------------------------------------------------------------------
+// Header parsing
+// ---------------------------------------------------------------------------
 
-/// Return 1 for long-header, 0 for short-header. Bit 7 of first byte.
-pub fn header_form(first_byte: int) -> int {
-    return (first_byte >> 7) & 1
+// Read a 32-bit big-endian value; caller guarantees 4 bytes are available.
+fn read_u32_be(buf, off) {
+    return ((buf[off] & 255) << 24)
+        | ((buf[off + 1] & 255) << 16)
+        | ((buf[off + 2] & 255) << 8)
+        | (buf[off + 3] & 255)
 }
 
-/// Return 1 for a fixed-bit-respecting packet (always 1 in QUIC v1).
-pub fn fixed_bit(first_byte: int) -> int {
-    return (first_byte >> 6) & 1
-}
-
-pub fn long_packet_type(first_byte: int) -> int {
-    return (first_byte >> 4) & 3
-}
-
-pub fn pkt_type_initial()   -> int { return 0 }
-pub fn pkt_type_zero_rtt()  -> int { return 1 }
-pub fn pkt_type_handshake() -> int { return 2 }
-pub fn pkt_type_retry()     -> int { return 3 }
-
-// -- Long header parse ---------------------------------------------
-
-/// Parse a QUIC v1 long-header frame prefix. Returns a map:
-/// {type, version, dcid, scid, token, length, payload_offset}
-/// Cryptographic unprotection of the header byte and PN is NOT done.
-pub fn parse_long_header(buf: list) -> map {
-    let out = {}
-    let b0 = buf[0]
-    out["type"] = long_packet_type(b0)
-    out["version"] = buf[1] * 16777216 + buf[2] * 65536 + buf[3] * 256 + buf[4]
-    let dcil = buf[5]
-    let dcid_start = 6
-    out["dcid"] = slice(buf, dcid_start, dcid_start + dcil)
-    let scil_off = dcid_start + dcil
-    let scil = buf[scil_off]
-    let scid_start = scil_off + 1
-    out["scid"] = slice(buf, scid_start, scid_start + scil)
-    let off = scid_start + scil
-
-    if out["type"] == pkt_type_initial() {
-        let tvl = dec_varint(buf, off)
-        off = off + tvl[1]
-        out["token"] = slice(buf, off, off + tvl[0])
-        off = off + tvl[0]
-    } else {
-        out["token"] = []
+// Slice [start, end) of a list, with bounds assumed valid by the caller.
+fn slice_bytes(buf, start, end) {
+    let out = []
+    let k = start
+    while k < end {
+        push(out, buf[k])
+        k = k + 1
     }
-    let lvl = dec_varint(buf, off)
-    off = off + lvl[1]
-    out["length"] = lvl[0]
-    out["payload_offset"] = off
     return out
 }
 
-// -- Short header (1-RTT) ------------------------------------------
+// Parse a long header packet.
+// Returns a map describing the header, or nil if the buffer is truncated or
+// violates QUIC v1 invariants (e.g. connection ID length > 20).
+fn parse_long_header(buf) {
+    if buf == nil {
+        return nil
+    }
+    let n = len(buf)
+    // first byte (1) + version (4) + dcil (1) minimum
+    if n < 6 {
+        return nil
+    }
+    let first = buf[0] & 255
+    // Header form bit must be 1 for a long header.
+    if (first & 128) == 0 {
+        return nil
+    }
+    let version = read_u32_be(buf, 1)
 
-/// The DCID length on a short header is not self-describing — callers
-/// must know it from the connection state. This returns a map with
-/// `dcid` and `payload_offset`.
-pub fn parse_short_header(buf: list, dcid_len: int) -> map {
-    let out = {}
-    out["spin_bit"] = (buf[0] >> 5) & 1
-    out["key_phase"] = (buf[0] >> 2) & 1
-    out["dcid"] = slice(buf, 1, 1 + dcid_len)
-    out["payload_offset"] = 1 + dcid_len
-    return out
+    let dcil = buf[5] & 255
+    // RFC 9000 §17.2: CID lengths are capped at 20 for QUIC v1.
+    // Version negotiation (version 0) and unknown versions follow RFC 8999
+    // invariants, which permit up to 255.
+    if version == QUIC_VERSION_1 && dcil > QUIC_MAX_CID_LEN {
+        return nil
+    }
+    let dcid_off = 6
+    if dcid_off + dcil > n {
+        return nil
+    }
+    let dcid = slice_bytes(buf, dcid_off, dcid_off + dcil)
+
+    let scil_off = dcid_off + dcil
+    if scil_off >= n {
+        return nil
+    }
+    let scil = buf[scil_off] & 255
+    if version == QUIC_VERSION_1 && scil > QUIC_MAX_CID_LEN {
+        return nil
+    }
+    let scid_off = scil_off + 1
+    if scid_off + scil > n {
+        return nil
+    }
+    let scid = slice_bytes(buf, scid_off, scid_off + scil)
+    let off = scid_off + scil
+
+    let pkt_type = (first >> 4) & 3
+
+    let hdr = {
+        "form": "long",
+        "first_byte": first,
+        "version": version,
+        "dcil": dcil,
+        "dcid": dcid,
+        "scil": scil,
+        "scid": scid
+    }
+
+    // Version Negotiation packet: version == 0, remainder is a list of versions.
+    if version == 0 {
+        hdr["type"] = "version_negotiation"
+        hdr["payload_offset"] = off
+        return hdr
+    }
+
+    hdr["type"] = pkt_type
+
+    // Retry packet (RFC 9000 §17.2.5): no Length field. Remaining bytes are
+    // Retry Token followed by a 16-byte Retry Integrity Tag.
+    if version == QUIC_VERSION_1 && pkt_type == pkt_type_retry() {
+        let remaining = n - off
+        if remaining < QUIC_RETRY_TAG_LEN {
+            return nil
+        }
+        let tag_off = n - QUIC_RETRY_TAG_LEN
+        hdr["retry_token"] = slice_bytes(buf, off, tag_off)
+        hdr["retry_integrity_tag"] = slice_bytes(buf, tag_off, n)
+        hdr["payload_offset"] = off
+        return hdr
+    }
+
+    // Initial packets carry a Token Length + Token before the Length field.
+    if version == QUIC_VERSION_1 && pkt_type == pkt_type_initial() {
+        let tl = dec_varint(buf, off)
+        if tl == nil {
+            return nil
+        }
+        let token_len = tl[0]
+        off = tl[1]
+        if token_len > n - off {
+            return nil
+        }
+        hdr["token"] = slice_bytes(buf, off, off + token_len)
+        off = off + token_len
+    }
+
+    // Length (remaining bytes of packet number + payload).
+    let ln = dec_varint(buf, off)
+    if ln == nil {
+        return nil
+    }
+    let length = ln[0]
+    off = ln[1]
+    if length > n - off {
+        return nil
+    }
+    hdr["length"] = length
+    hdr["payload_offset"] = off
+    return hdr
 }
 
-// -- Frame type enum ------------------------------------------------
-
-pub fn frame_padding()            -> int { return 0x00 }
-pub fn frame_ping()               -> int { return 0x01 }
-pub fn frame_ack()                -> int { return 0x02 }
-pub fn frame_crypto()              -> int { return 0x06 }
-pub fn frame_stream_base()        -> int { return 0x08 }
-pub fn frame_connection_close()   -> int { return 0x1c }
-
-/// Tag `frame_stream_base` with the low 3-bit flags (OFF, LEN, FIN).
-pub fn stream_frame_tag(off: bool, has_len: bool, fin: bool) -> int {
-    let t = frame_stream_base()
-    if off      { t = t | 0x04 }
-    if has_len  { t = t | 0x02 }
-    if fin      { t = t | 0x01 }
-    return t
+// Parse a short header packet. `dcid_len` is the (externally known) length of
+// the destination connection ID.
+// Returns a map or nil on truncated / invalid input.
+fn parse_short_header(buf, dcid_len) {
+    if buf == nil {
+        return nil
+    }
+    if typeof(dcid_len) != "int" {
+        return nil
+    }
+    if dcid_len < 0 || dcid_len > QUIC_MAX_CID_LEN {
+        return nil
+    }
+    let n = len(buf)
+    if n < 1 {
+        return nil
+    }
+    let first = buf[0] & 255
+    // Header form bit must be 0 for a short header.
+    if (first & 128) != 0 {
+        return nil
+    }
+    if 1 + dcid_len > n {
+        return nil
+    }
+    let dcid = slice_bytes(buf, 1, 1 + dcid_len)
+    return {
+        "form": "short",
+        "first_byte": first,
+        "spin_bit": (first >> 5) & 1,
+        "key_phase": (first >> 2) & 1,
+        "dcid": dcid,
+        "payload_offset": 1 + dcid_len
+    }
 }
