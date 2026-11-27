@@ -59,9 +59,15 @@ def main(argv=None) -> int:
                       help="Module format (default: esm)")
 
     # wasm  (compile to WebAssembly)
-    wasm_p = sub.add_parser("wasm", help="Compile .ltl → WebAssembly (.wat)")
+    wasm_p = sub.add_parser("wasm", help="Compile .ltl -> WebAssembly (.wat or .wasm)")
     wasm_p.add_argument("file")
     wasm_p.add_argument("-o", "--output")
+    wasm_p.add_argument(
+        "-b",
+        "--binary",
+        action="store_true",
+        help="Emit binary WebAssembly (.wasm) instead of text (.wat)",
+    )
 
     # check
     chk_p = sub.add_parser("check", help="Type-check only")
@@ -373,9 +379,16 @@ def main(argv=None) -> int:
         result = c.compile_file(ns.file, target=Target.WASM)
         if result.ok:
             import pathlib
-            out = ns.output or (pathlib.Path(ns.file).stem + ".wat")
-            pathlib.Path(out).write_text(result.wasm_src, encoding="utf-8")
-            print(f"Compiled → {out}")
+            emit_bin = getattr(ns, "binary", False) or (
+                bool(ns.output) and str(ns.output).lower().endswith(".wasm")
+            )
+            default_ext = ".wasm" if emit_bin else ".wat"
+            out = ns.output or (pathlib.Path(ns.file).stem + default_ext)
+            if emit_bin and result.wasm_bytes is not None:
+                pathlib.Path(out).write_bytes(result.wasm_bytes)
+            else:
+                pathlib.Path(out).write_text(result.wasm_src or "", encoding="utf-8")
+            print(f"Compiled -> {out}")
         else:
             _print_errors(result)
         return 0 if result.ok else 1
