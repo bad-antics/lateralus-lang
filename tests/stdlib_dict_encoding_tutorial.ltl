@@ -1,0 +1,134 @@
+// ===================================================================
+// tests/stdlib_dict_encoding_tutorial.ltl
+// Pinned test vectors for the stdlib/dict_encoding columnar tutorial.
+// ===================================================================
+
+import dict_encoding
+
+pub fn test_basic_roundtrip() -> bool {
+    let dataset = ["alpha", "beta", "gamma", "alpha", "beta", "alpha", "delta"]
+    let enc = dict_encoding.encode(dataset)
+    let dec = dict_encoding.decode(enc)
+
+    if len(dec) != len(dataset) { return false }
+    let i = 0
+    while i < len(dataset) {
+        if dataset[i] != dec[i] { return false }
+        i = i + 1
+    }
+
+    if dict_encoding.cardinality(enc) != 4 { return false }
+    return true
+}
+
+pub fn test_first_seen_order() -> bool {
+    // Dictionary symbols MUST appear in order of first encounter
+    let dataset = ["tokyo", "paris", "tokyo", "london", "paris", "berlin"]
+    let enc = dict_encoding.encode(dataset)
+    let dict_syms = enc["dictionary"]
+    let indices = enc["indices"]
+
+    if len(dict_syms) != 4 { return false }
+    if dict_syms[0] != "tokyo" { return false }
+    if dict_syms[1] != "paris" { return false }
+    if dict_syms[2] != "london" { return false }
+    if dict_syms[3] != "berlin" { return false }
+
+    // Indices should accurately map to those slots: [0, 1, 0, 2, 1, 3]
+    if indices[0] != 0 { return false }
+    if indices[1] != 1 { return false }
+    if indices[2] != 0 { return false }
+    if indices[3] != 2 { return false }
+    if indices[4] != 1 { return false }
+    if indices[5] != 3 { return false }
+
+    return true
+}
+
+pub fn test_edge_cases_empty_and_single() -> bool {
+    // 1. Empty dataset
+    let empty_enc = dict_encoding.encode([])
+    let empty_dec = dict_encoding.decode(empty_enc)
+    if len(empty_enc["dictionary"]) != 0 { return false }
+    if len(empty_enc["indices"]) != 0 { return false }
+    if len(empty_dec) != 0 { return false }
+    if dict_encoding.cardinality(empty_enc) != 0 { return false }
+    if dict_encoding.index_bit_width(empty_enc) != 1 { return false }
+
+    // 2. Single item dataset
+    let single_enc = dict_encoding.encode(["lone_wolf"])
+    let single_dec = dict_encoding.decode(single_enc)
+    if len(single_enc["dictionary"]) != 1 { return false }
+    if single_enc["indices"][0] != 0 { return false }
+    if single_dec[0] != "lone_wolf" { return false }
+    if dict_encoding.cardinality(single_enc) != 1 { return false }
+    if dict_encoding.index_bit_width(single_enc) != 1 { return false }
+
+    // 3. Monolithic repeated dataset
+    let mono_enc = dict_encoding.encode(["status_ok", "status_ok", "status_ok", "status_ok"])
+    let mono_dec = dict_encoding.decode(mono_enc)
+    if dict_encoding.cardinality(mono_enc) != 1 { return false }
+    if dict_encoding.index_bit_width(mono_enc) != 1 { return false }
+    if len(mono_enc["indices"]) != 4 { return false }
+    if mono_dec[3] != "status_ok" { return false }
+
+    return true
+}
+
+pub fn test_bit_width_scaling() -> bool {
+    // Verify mathematical scaling of ceil(log2(N)) across cardinalities:
+    // N=1 -> 1 bit
+    // N=2 -> 1 bit
+    // N=3..4 -> 2 bits
+    // N=5..8 -> 3 bits
+    // N=9..16 -> 4 bits
+
+    let c1 = dict_encoding.encode(["a"])
+    if dict_encoding.index_bit_width(c1) != 1 { return false }
+
+    let c2 = dict_encoding.encode(["a", "b"])
+    if dict_encoding.index_bit_width(c2) != 1 { return false }
+
+    let c3 = dict_encoding.encode(["a", "b", "c"])
+    if dict_encoding.index_bit_width(c3) != 2 { return false }
+
+    let c4 = dict_encoding.encode(["a", "b", "c", "d"])
+    if dict_encoding.index_bit_width(c4) != 2 { return false }
+
+    let c5 = dict_encoding.encode(["a", "b", "c", "d", "e"])
+    if dict_encoding.index_bit_width(c5) != 3 { return false }
+
+    let c8 = dict_encoding.encode(["1", "2", "3", "4", "5", "6", "7", "8"])
+    if dict_encoding.index_bit_width(c8) != 3 { return false }
+
+    let c9 = dict_encoding.encode(["1", "2", "3", "4", "5", "6", "7", "8", "9"])
+    if dict_encoding.index_bit_width(c9) != 4 { return false }
+
+    return true
+}
+
+pub fn test_numeric_elements() -> bool {
+    // Dictionary encoding handles integer/numeric values by converting keys to strings internally
+    let numbers = [404, 200, 500, 200, 404, 200]
+    let enc = dict_encoding.encode(numbers)
+    let dec = dict_encoding.decode(enc)
+
+    if dict_encoding.cardinality(enc) != 3 { return false }
+    if len(dec) != 6 { return false }
+    if dec[0] != 404 { return false }
+    if dec[1] != 200 { return false }
+    if dec[2] != 500 { return false }
+    if dec[5] != 200 { return false }
+
+    return true
+}
+
+pub fn main() {
+    print("Running stdlib/dict_encoding tutorial test suite...")
+    if not test_basic_roundtrip() { print("FAIL: test_basic_roundtrip"); return }
+    if not test_first_seen_order() { print("FAIL: test_first_seen_order"); return }
+    if not test_edge_cases_empty_and_single() { print("FAIL: test_edge_cases_empty_and_single"); return }
+    if not test_bit_width_scaling() { print("FAIL: test_bit_width_scaling"); return }
+    if not test_numeric_elements() { print("FAIL: test_numeric_elements"); return }
+    print("ALL 5 PINNED TEST VECTOR SUITES PASSED! [100% OK]")
+}
