@@ -351,7 +351,11 @@ def normal_cdf(x: float, mu: float = 0, sigma: float = 1) -> float:
 
 def poisson_pmf(k: int, lam: float) -> float:
     """Poisson probability mass function."""
-    return (lam ** k) * math.exp(-lam) / math.factorial(k)
+    if lam == 0:
+        return 1.0 if k == 0 else 0.0
+    # Evaluated in log space: lam**k and k! each overflow long before the
+    # probability itself does (e.g. k=200, lam=200 is ~0.028).
+    return math.exp(k * math.log(lam) - lam - math.lgamma(k + 1))
 
 
 def exponential_pdf(x: float, lam: float = 1) -> float:
