@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Standard Library Tour: RFC 4648 Base64 in Lateralus</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "Standard Library Tour: RFC 4648 Base64"
+author: bad-antics
+date: 2026-11-27
+abstract: A practical guide to Lateralus's stdlib.base64 module, covering RFC 4648 encoding, decoding, URL-safe variants, validation invariants, buffer sizing, and pinned standard test vectors.
+---
+
+# Standard Library Tour: RFC 4648 Base64
+
+Base64 encoding is an essential building block for binary serialization, network data exchange, and embedding binary payloads into text-based protocols like JSON, URLs, and MIME headers. Lateralus ships with a pure standard library module at `stdlib/base64.ltl` providing RFC 4648 compliant encoding and decoding without external dependencies.
+
+In this tutorial, we will explore the module architecture, understand its API surface, review the official RFC 4648 test vectors, and see a complete runnable example.
+
+---
+
+## Module Overview
+
+The `stdlib/base64.ltl` module implements:
+
+1. **Standard Base64 Encoding & Decoding** with standard padding (`=`).
+2. **URL-Safe Base64** translating `+` to `-` and `/` to `_`.
+3. **Format Validation** ensuring byte lengths are multiples of 4 and characters belong to the Base64 alphabet.
+4. **Length Computation** calculating encoded byte length ahead of allocation and estimating payload size from encoded headers.
+
+```lateralus
+// Module signature overview
+pub fn encode(data: str) -> str
+pub fn decode(encoded: str) -> str
+pub fn encode_url(data: str) -> str
+pub fn decode_url(encoded: str) -> str
+pub fn is_valid(s: str) -> bool
+pub fn encoded_length(n: int) -> int
+pub fn decoded_length(encoded: str) -> int
+```
+
+---
+
+## 1. Encoding and Decoding Data
+
+Standard encoding takes raw string bytes, processes them in 3-byte chunks (24 bits), splits them into four 6-bit sextets, and maps each sextet to the standard alphabet `[A-Za-z0-9+/]`.
+
+When the input length is not a multiple of 3, the output is padded with `=` to maintain the 4-character alignment invariant.
+
+```lateralus
+import stdlib.base64 as b64
+
+fn main() {
+    let payload = "Lateralus Standard Library"
+    let encoded = b64.encode(payload)
+    let decoded = b64.decode(encoded)
+
+    println("Raw:     " + payload)
+    println("Encoded: " + encoded)
+    println("Decoded: " + decoded)
+
+    assert(decoded == payload)
+}
+```
+
+---
+
+## 2. URL-Safe Variants
+
+Standard Base64 characters `+` and `/` carry special meanings in URL query strings and URI path segments. The `encode_url` and `decode_url` functions provide seamless RFC 4648 Section 5 compatibility by mapping:
+
+- `+` to `-`
+- `/` to `_`
+
+```lateralus
+import stdlib.base64 as b64
+
+let safe_token = b64.encode_url("auth?user=alice&session=99281")
+let recovered = b64.decode_url(safe_token)
+
+assert(recovered == "auth?user=alice&session=99281")
+```
+
+---
+
+## 3. Pre-computation and Validation
+
+Before allocating memory or transmitting data across networks, you can compute expected sizes and validate received tokens:
+
+- `encoded_length(n)` calculates the exact size of the Base64 output for `n` input bytes: `((n + 2) / 3) * 4`.
+- `decoded_length(encoded)` computes decoded payload size by inspecting trailing `=` padding.
+- `is_valid(s)` confirms that `s` has length multiple of 4 and contains only valid alphabet symbols and padding.
+
+```lateralus
+import stdlib.base64 as b64
+
+let input_len = 100
+let needed_capacity = b64.encoded_length(input_len) // returns 136 bytes
+
+let valid = b64.is_valid("Zm9vYmFy") // true
+let invalid = b64.is_valid("Zm9v!@#$") // false
+```
+
+---
+
+## 4. RFC 4648 Pinned Test Vectors
+
+The implementation is verified against the canonical RFC 4648 Section 10 test vectors:
+
+| Input Text | Byte Length | Base64 Output |
+| :--- | :--- | :--- |
+| `""` (empty) | 0 | `""` |
+| `"f"` | 1 | `"Zg=="` |
+| `"fo"` | 2 | `"Zm8="` |
+| `"foo"` | 3 | `"Zm9v"` |
+| `"foob"` | 4 | `"Zm9vYg=="` |
+| `"fooba"` | 5 | `"Zm9vYmE="` |
+| `"foobar"` | 6 | `"Zm9vYmFy"` |
+
+---
+
+## 5. Complete Runnable Example
+
+Below is a complete program demonstrating roundtrip transformation, RFC test vector verification, and error-resilient validation in Lateralus:
+
+```lateralus
+import stdlib.base64 as b64
+
+fn verify_vector(input: str, expected: str) {
+    let actual = b64.encode(input)
+    assert(actual == expected)
+    let back = b64.decode(actual)
+    assert(back == input)
+    println("Vector passed: '" + input + "' -> '" + actual + "'")
+}
+
+fn main() {
+    println("=== RFC 4648 Base64 Verification ===")
+
+    // 1. Pinned test vectors
+    verify_vector("", "")
+    verify_vector("f", "Zg==")
+    verify_vector("fo", "Zm8=")
+    verify_vector("foo", "Zm9v")
+    verify_vector("foob", "Zm9vYg==")
+    verify_vector("fooba", "Zm9vYmE=")
+    verify_vector("foobar", "Zm9vYmFy")
+
+    // 2. URL-Safe roundtrip
+    let binary_data = chr(251) + chr(239) + chr(190) // generates + and / in standard b64
+    let std_b64 = b64.encode(binary_data)
+    let url_b64 = b64.encode_url(binary_data)
+
+    println("Standard: " + std_b64)
+    println("URL-Safe: " + url_b64)
+
+    assert(b64.decode_url(url_b64) == binary_data)
+
+    // 3. Validation checks
+    assert(b64.is_valid("Zm9vYmFy") == true)
+    assert(b64.is_valid("invalid-length") == false)
+
+    println("All base64 verification checks passed successfully!")
+}
+```
+
+---
+
+## Conclusion
+
+With `stdlib/base64.ltl`, Lateralus provides a zero-dependency, RFC-compliant utility that fits directly into pipelines and network handlers. By relying on pure language primitives, it works identically across bytecode VM, C-backend, and WebAssembly compilation targets.
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>
