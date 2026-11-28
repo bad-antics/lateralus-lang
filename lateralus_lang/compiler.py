@@ -424,6 +424,9 @@ class Compiler:
         warns = [c for c in reporter.all() if c.severity == Severity.WARNING]
         return CompileResult(ok=False, target=target, source_file=filename,
                              ir_module=ir_module, elapsed_ms=elapsed,
+                             
+                    exit_code=1,
+
                              errors=errs, warnings=warns)
 
     @staticmethod

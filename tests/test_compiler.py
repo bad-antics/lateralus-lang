@@ -172,3 +172,15 @@ class TestCompileResult:
     def test_result_error_list_empty_on_success(self):
         r = check("fn f() { }")
         assert r.errors == [] or all(e.severity.value == "warning" for e in r.errors)
+    def test_result_exit_code_on_failure(self):
+        
+        r = check("fn main() { let x = (1 + 2 }")
+        
+        assert not r.ok
+        
+        assert r.exit_code == 1
+        
+
+
+
+
