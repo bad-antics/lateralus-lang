@@ -1,0 +1,139 @@
+// Advent of Code 2024 · Day 20 · Race Condition
+// Single-path racetrack; one cheat may pass through walls for up to N ps.
+// Part 1 counts cheats saving >= 100 ps with a 2 ps cheat; part 2 uses 20 ps.
+// Sample grid copied verbatim from https://adventofcode.com/2024/day/20
+// (that page's example racetrack, best time 84 ps).
+
+let SAMPLE = "###############
+#...#...#.....#
+#.#.#.#.#.###.#
+#S#...#.#.#...#
+#######.#.#.###
+#######.#.#...#
+#######.#.###.#
+###..E#...#...#
+###.#######.###
+#...###...#...#
+#.#####.#.###.#
+#.#...#.#.#...#
+#.#.#.#.#.#.###
+#...#...#...###
+###############"
+
+fn lines_of(text: str) -> list {
+    let out = []
+    for line in str_split(text, "\n") {
+        let l = str_trim(line)
+        if len(l) > 0 { out = out + [l] }
+    }
+    return out
+}
+
+fn find_char(grid: list, target: str) -> list {
+    let r = 0
+    while r < len(grid) {
+        let c = 0
+        while c < len(grid[r]) {
+            if slice(grid[r], c, c + 1) == target { return [r, c] }
+            c = c + 1
+        }
+        r = r + 1
+    }
+    return [-1, -1]
+}
+
+// BFS distances from a start tile over open track (S, E and .).
+fn distances(grid: list, start: list) -> dict {
+    let dist = {}
+    let key = str(start[0]) + "," + str(start[1])
+    dist[key] = 0
+    let queue = [start]
+    let head = 0
+    while head < len(queue) {
+        let cur = queue[head]
+        head = head + 1
+        let r = cur[0]
+        let c = cur[1]
+        let dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+        for dd in dirs {
+            let nr = r + dd[0]
+            let nc = c + dd[1]
+            if nr < 0 || nc < 0 || nr >= len(grid) || nc >= len(grid[nr]) { continue }
+            let ch = slice(grid[nr], nc, nc + 1)
+            if ch == "#" { continue }
+            let nk = str(nr) + "," + str(nc)
+            if contains(dist, nk) { continue }
+            dist[nk] = dist[str(r) + "," + str(c)] + 1
+            queue = queue + [[nr, nc]]
+        }
+    }
+    return dist
+}
+
+// Count cheats: for every pair of track tiles within `budget` Manhattan
+// distance, the time saved is distFromStart[a] + budget' - distFromEnd[b].
+fn count_cheats(grid: list, budget: int, min_save: int) -> int {
+    let s = find_char(grid, "S")
+    let e = find_char(grid, "E")
+    let from_start = distances(grid, s)
+    let from_end = distances(grid, e)
+    let tiles = keys(from_start)
+    let total = 0
+    for a in tiles {
+        let ac = str_split(a, ",")
+        let ar = int(ac[0])
+        let av = int(ac[1])
+        for b in tiles {
+            let bc = str_split(b, ",")
+            let br = int(bc[0])
+            let bv = int(bc[1])
+            let manhattan = abs(ar - br) + abs(av - bv)
+            if manhattan > budget || manhattan == 0 { continue }
+            if not contains(from_end, b) { continue }
+            // walking normally from a to b costs from_start[b] - from_start[a];
+            // the cheat costs `manhattan`, so the saving is the difference.
+            let saved = (from_start[b] - from_start[a]) - manhattan
+            if saved >= min_save { total = total + 1 }
+        }
+    }
+    return total
+}
+
+fn abs(x: int) -> int {
+    if x < 0 { return -x }
+    return x
+}
+
+@test
+fn test_part1_sample() {
+    // cheat counts published on the page: one saves 40 ps, one saves 64 ps,
+    // four save 8 ps, and 14 save 2 ps.
+    // cumulative counts derived from the published histogram
+    assert_eq(count_cheats(lines_of(SAMPLE), 2, 64), 1)
+    assert_eq(count_cheats(lines_of(SAMPLE), 2, 40), 2)
+    assert_eq(count_cheats(lines_of(SAMPLE), 2, 8), 14)
+    assert_eq(count_cheats(lines_of(SAMPLE), 2, 2), 44)
+}
+
+@test
+fn test_part2_sample() {
+    // 20 ps cheats: 3 save >= 76 ps, 285 save >= 50 ps
+    assert_eq(count_cheats(lines_of(SAMPLE), 20, 76), 3)
+    assert_eq(count_cheats(lines_of(SAMPLE), 20, 50), 285)
+}
+
+@test
+fn test_baseline_path() {
+    let g = lines_of(SAMPLE)
+    let d = distances(g, find_char(g, "S"))
+    let e = find_char(g, "E")
+    // the fastest time without cheating is 84 ps
+    assert_eq(d[str(e[0]) + "," + str(e[1])], 84)
+}
+
+fn main() {
+    print("Day 20 baseline: " + str(distances(lines_of(SAMPLE), find_char(lines_of(SAMPLE), "S"))[str(find_char(lines_of(SAMPLE), "E")[0]) + "," + str(find_char(lines_of(SAMPLE), "E")[1])]))
+    print("Day 20 cheats saving >=2 (2ps): " + str(count_cheats(lines_of(SAMPLE), 2, 2)))
+}
+
+main()

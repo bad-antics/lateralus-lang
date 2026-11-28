@@ -1,0 +1,138 @@
+// Advent of Code 2024 · Day 14 · Restroom Redoubt
+// Robots move on a 101x103 grid with wrap-around. Part 1: safety factor after
+// 100 seconds (quadrant product, ignoring the middle row/column).
+// Part 2: first second where all robots overlap into one connected blob
+// (the christmas tree). Self-verifying with @test blocks.
+
+let SAMPLE = "p=0,4 v=3,-3
+p=6,3 v=-1,-3
+p=10,3 v=-1,2
+p=2,0 v=2,-1
+p=0,0 v=1,3
+p=3,0 v=-2,-2
+p=7,6 v=-1,-3
+p=3,0 v=-1,-2
+p=9,3 v=2,3
+p=7,3 v=-1,2
+p=2,4 v=2,-3
+p=9,5 v=-3,-3"
+
+let W = 101
+let H = 103
+
+fn lines_of(text: str) -> list {
+    let out = []
+    for line in str_split(text, "\n") {
+        let l = str_trim(line)
+        if len(l) > 0 { out = out + [l] }
+    }
+    return out
+}
+
+// Parse "p=x,y v=dx,dy" -> [x, y, dx, dy]
+fn parse_robot(line: str) -> list {
+    let parts = str_split(line, " ")
+    let p = str_split(slice(parts[0], 2, len(parts[0])), ",")
+    let v = str_split(slice(parts[1], 2, len(parts[1])), ",")
+    return [int(p[0]), int(p[1]), int(v[0]), int(v[1])]
+}
+
+fn mod(a: int, m: int) -> int {
+    let r = a % m
+    if r < 0 { return r + m }
+    return r
+}
+
+// Advance every robot by `seconds`, returning the count per quadrant.
+fn quadrants(robots: list, seconds: int, w: int, h: int) -> list {
+    let q = [0, 0, 0, 0]
+    let midx = int(w / 2)
+    let midy = int(h / 2)
+    for r in robots {
+        let x = mod(r[0] + r[2] * seconds, w)
+        let y = mod(r[1] + r[3] * seconds, h)
+        if x == midx || y == midy { continue }
+        let idx = 0
+        if y > midy { idx = idx + 2 }
+        if x > midx { idx = idx + 1 }
+        q[idx] = q[idx] + 1
+    }
+    return q
+}
+
+fn part1(text: str, w: int, h: int) -> int {
+    let robots = []
+    for line in lines_of(text) { robots = robots + [parse_robot(line)] }
+    let q = quadrants(robots, 100, w, h)
+    return q[0] * q[1] * q[2] * q[3]
+}
+
+// Largest connected blob (4-neighbour) and the count of clustered robots:
+// the tree frame is the first second where the biggest blob exceeds a third
+// of all robots.
+fn largest_blob(robots: list, seconds: int, w: int, h: int) -> int {
+    let pts = {}
+    for r in robots {
+        let x = mod(r[0] + r[2] * seconds, w)
+        let y = mod(r[1] + r[3] * seconds, h)
+        pts[str(x) + "," + str(y)] = 1
+    }
+    let seen = {}
+    let best = 0
+    for k in keys(pts) {
+        if contains(seen, k) { continue }
+        let stack = [k]
+        let size = 0
+        while len(stack) > 0 {
+            let cur = stack[len(stack) - 1]
+            let rest = []
+            let i = 0
+            while i < len(stack) - 1 { rest = rest + [stack[i]]; i = i + 1 }
+            stack = rest
+            if contains(seen, cur) { continue }
+            seen[cur] = 1
+            size = size + 1
+            let coords = str_split(cur, ",")
+            let cx = int(coords[0])
+            let cy = int(coords[1])
+            let dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+            for dd in dirs {
+                let nk = str(cx + dd[0]) + "," + str(cy + dd[1])
+                if contains(pts, nk) && not contains(seen, nk) { stack = stack + [nk] }
+            }
+        }
+        if size > best { best = size }
+    }
+    return best
+}
+
+fn part2(text: str, w: int, h: int) -> int {
+    let robots = []
+    for line in lines_of(text) { robots = robots + [parse_robot(line)] }
+    let threshold = int(len(robots) * 2 / 3)
+    let t = 1
+    while t < 100000 {
+        if largest_blob(robots, t, w, h) >= threshold { return t }
+        t = t + 1
+    }
+    return -1
+}
+
+@test
+fn test_sample_part1() {
+    // sample uses an 11x7 grid
+    assert_eq(part1(SAMPLE, 11, 7), 12)
+}
+
+@test
+fn test_sample_part2() {
+    // no tree in the 12-robot sample, so the search must report -1
+    assert_eq(part2(SAMPLE, 11, 7), -1)
+}
+
+fn main() {
+    print("Day 14 Part 1 (sample, 11x7): " + str(part1(SAMPLE, 11, 7)))
+    print("Day 14 Part 2 (sample): " + str(part2(SAMPLE, 11, 7)))
+}
+
+main()

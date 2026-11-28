@@ -1,0 +1,149 @@
+// Advent of Code 2024 · Day 5 · Print Queue
+// Part 1: sum the middle page of every update already in rule order.
+// Part 2: sum the middle page of every update after topological repair.
+// Self-verifying with @test blocks; no external data files.
+
+let RULES = "47|53
+97|13
+97|61
+97|47
+75|29
+61|13
+75|53
+29|13
+97|29
+53|29
+61|53
+97|53
+61|29
+47|13
+75|47
+97|75
+47|61
+75|61
+47|29
+75|13
+53|13"
+
+let UPDATES = "75,47,61,53,29
+97,61,53,29,13
+75,29,13
+75,97,47,61,53
+61,13,29
+97,13,75,29,47"
+
+fn nonempty_lines(text: str) -> list {
+    let lines = str_split(text, "\n")
+    let out = []
+    let i = 0
+    while i < len(lines) {
+        let line = str_trim(lines[i])
+        if len(line) > 0 { out = out + [line] }
+        i = i + 1
+    }
+    return out
+}
+
+fn parse_rules(text: str) -> list {
+    let out = []
+    for line in nonempty_lines(text) {
+        let p = str_split(line, "|")
+        out = out + [[int(p[0]), int(p[1])]]
+    }
+    return out
+}
+
+fn parse_updates(text: str) -> list {
+    let out = []
+    for line in nonempty_lines(text) {
+        let toks = str_split(line, ",")
+        let nums = []
+        for t in toks { nums = nums + [int(t)] }
+        out = out + [nums]
+    }
+    return out
+}
+
+fn pos(xs: list, v: int) -> int {
+    let i = 0
+    while i < len(xs) {
+        if xs[i] == v { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn in_order(rules: list, pages: list) -> bool {
+    for r in rules {
+        let a = pos(pages, r[0])
+        let b = pos(pages, r[1])
+        if a >= 0 && b >= 0 && a > b { return false }
+    }
+    return true
+}
+
+fn middle(pages: list) -> int {
+    let idx = (len(pages) - 1) / 2
+    return pages[int(idx)]
+}
+
+// Greedy topological repair: repeatedly take the left-most page that no
+// still-pending page must precede.
+fn repair(rules: list, pages: list) -> list {
+    let remaining = pages
+    let out = []
+    while len(remaining) > 0 {
+        let pick = remaining[0]
+        let i = 0
+        while i < len(remaining) {
+            let cand = remaining[i]
+            let free = true
+            for r in rules {
+                if r[1] == cand && pos(remaining, r[0]) >= 0 { free = false }
+            }
+            if free { pick = cand; i = len(remaining) } else { i = i + 1 }
+        }
+        out = out + [pick]
+        let rest = []
+        for x in remaining { if x != pick { rest = rest + [x] } }
+        remaining = rest
+    }
+    return out
+}
+
+fn part1(rules: list, updates: list) -> int {
+    let total = 0
+    for pages in updates {
+        if in_order(rules, pages) { total = total + middle(pages) }
+    }
+    return total
+}
+
+fn part2(rules: list, updates: list) -> int {
+    let total = 0
+    for pages in updates {
+        if not in_order(rules, pages) {
+            total = total + middle(repair(rules, pages))
+        }
+    }
+    return total
+}
+
+@test
+fn test_part1() {
+    assert_eq(part1(parse_rules(RULES), parse_updates(UPDATES)), 143)
+}
+
+@test
+fn test_part2() {
+    assert_eq(part2(parse_rules(RULES), parse_updates(UPDATES)), 123)
+}
+
+fn main() {
+    let rules = parse_rules(RULES)
+    let updates = parse_updates(UPDATES)
+    print("Day 5 Part 1: " + str(part1(rules, updates)))
+    print("Day 5 Part 2: " + str(part2(rules, updates)))
+}
+
+main()

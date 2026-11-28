@@ -1,0 +1,141 @@
+// Advent of Code 2024 · Day 12 · Garden Groups
+// Part 1: sum over regions of area * perimeter.
+// Part 2: sum over regions of area * number of distinct sides (corners).
+// Self-verifying with @test blocks; sample from the AoC statement.
+
+let SAMPLE = "RRRRIICCFF
+RRRRIICCCF
+VVRRRCCFFF
+VVRCCCJFFF
+VVVVCJJCFE
+VVIVCCJJEE
+VVIIICJJEE
+MIIIIIJJEE
+MIIISIJEEE
+MMMISSJEEE"
+
+fn lines_of(text: str) -> list {
+    let out = []
+    for line in str_split(text, "\n") {
+        let l = str_trim(line)
+        if len(l) > 0 { out = out + [l] }
+    }
+    return out
+}
+
+fn ch(grid: list, r: int, c: int) -> str {
+    if r < 0 || c < 0 || r >= len(grid) { return "." }
+    if c >= len(grid[r]) { return "." }
+    return slice(grid[r], c, c + 1)
+}
+
+fn in_grid(grid: list, r: int, c: int) -> bool {
+    return r >= 0 && c >= 0 && r < len(grid) && c < len(grid[r])
+}
+
+// Flood fill returning [cells, perimeter]
+fn flood(grid: list, r: int, c: int, seen: dict) -> list {
+    let letter = ch(grid, r, c)
+    let stack = [[r, c]]
+    let cells = []
+    while len(stack) > 0 {
+        let p = stack[len(stack) - 1]
+        let rest = []
+        let i = 0
+        while i < len(stack) - 1 { rest = rest + [stack[i]]; i = i + 1 }
+        stack = rest
+        let pr = p[0]
+        let pc = p[1]
+        let key = str(pr) + "," + str(pc)
+        if contains(seen, key) { continue }
+        seen[key] = 1
+        cells = cells + [[pr, pc]]
+        let dirs = [[-1, 0], [1, 0], [0, -1], [0, 1]]
+        for dd in dirs {
+            let nr = pr + dd[0]
+            let nc = pc + dd[1]
+            if in_grid(grid, nr, nc) && ch(grid, nr, nc) == letter && not contains(seen, str(nr) + "," + str(nc)) {
+                stack = stack + [[nr, nc]]
+            }
+        }
+    }
+    let perim = 0
+    for cell in cells {
+        let dirs = [[-1, 0], [1, 0], [0, -1], [0, 1]]
+        for dd in dirs {
+            if ch(grid, cell[0] + dd[0], cell[1] + dd[1]) != letter { perim = perim + 1 }
+        }
+    }
+    return [cells, perim]
+}
+
+// Count corners of the region that contains (r, c).
+fn corners(grid: list, cells: list) -> int {
+    let set = {}
+    for cell in cells { set[str(cell[0]) + "," + str(cell[1])] = 1 }
+    let total = 0
+    for cell in cells {
+        let r = cell[0]
+        let c = cell[1]
+        let up = contains(set, str(r - 1) + "," + str(c))
+        let down = contains(set, str(r + 1) + "," + str(c))
+        let left = contains(set, str(r) + "," + str(c - 1))
+        let right = contains(set, str(r) + "," + str(c + 1))
+        let ul = contains(set, str(r - 1) + "," + str(c - 1))
+        let ur = contains(set, str(r - 1) + "," + str(c + 1))
+        let dl = contains(set, str(r + 1) + "," + str(c - 1))
+        let dr2 = contains(set, str(r + 1) + "," + str(c + 1))
+        // outer corner: both orthogonal neighbours absent
+        if not up && not left { total = total + 1 }
+        if not up && not right { total = total + 1 }
+        if not down && not left { total = total + 1 }
+        if not down && not right { total = total + 1 }
+        // inner corner: both orthogonal present but the diagonal is absent
+        if up && left && not ul { total = total + 1 }
+        if up && right && not ur { total = total + 1 }
+        if down && left && not dl { total = total + 1 }
+        if down && right && not dr2 { total = total + 1 }
+    }
+    return total
+}
+
+fn solve(text: str, sides: bool) -> int {
+    let grid = lines_of(text)
+    let seen = {}
+    let total = 0
+    let r = 0
+    while r < len(grid) {
+        let c = 0
+        while c < len(grid[r]) {
+            if not contains(seen, str(r) + "," + str(c)) {
+                let res = flood(grid, r, c, seen)
+                let area = len(res[0])
+                if sides {
+                    total = total + area * corners(grid, res[0])
+                } else {
+                    total = total + area * res[1]
+                }
+            }
+            c = c + 1
+        }
+        r = r + 1
+    }
+    return total
+}
+
+@test
+fn test_part1() {
+    assert_eq(solve(SAMPLE, false), 1930)
+}
+
+@test
+fn test_part2() {
+    assert_eq(solve(SAMPLE, true), 1206)
+}
+
+fn main() {
+    print("Day 12 Part 1: " + str(solve(SAMPLE, false)))
+    print("Day 12 Part 2: " + str(solve(SAMPLE, true)))
+}
+
+main()

@@ -1,0 +1,277 @@
+// Advent of Code 2024 · Day 16 · Reindeer Maze
+// Lowest score from S to E where a step costs 1 and a 90 degree turn costs 1000.
+// Part 1: the best score. Part 2: how many tiles lie on any best path.
+// Sample answers from https://adventofcode.com/2024/day/16
+// (7036 with 45 tiles, 11048 with 64 tiles).
+
+let SAMPLE = "###############
+#.......#....E#
+#.#.###.#.###.#
+#.....#.#...#.#
+#.###.#####.#.#
+#.#.#.......#.#
+#.#.#####.###.#
+#...........#.#
+###.#.#####.#.#
+#...#.....#.#.#
+#.#.#.###.#.#.#
+#.....#...#.#.#
+#.###.#.#.#.#.#
+#S..#.....#...#
+###############"
+
+let SAMPLE2 = "#################
+#...#...#...#..E#
+#.#.#.#.#.#.#.#.#
+#.#.#.#...#...#.#
+#.#.#.#.###.#.#.#
+#...#.#.#.....#.#
+#.#.#.#.#.#####.#
+#.#...#.#.#.....#
+#.#.#####.#.###.#
+#.#.#.......#...#
+#.#.###.#####.###
+#.#.#...#.....#.#
+#.#.#.#####.###.#
+#.#.#.........#.#
+#.#.#.#########.#
+#S#.............#
+#################"
+
+let INF = 1000000000000
+
+fn chars(s: str) -> list {
+    let out = []
+    let i = 0
+    while i < len(s) {
+        out = out + [slice(s, i, i + 1)]
+        i = i + 1
+    }
+    return out
+}
+
+fn lines_of(text: str) -> list {
+    let out = []
+    for line in str_split(text, "\n") {
+        let l = str_trim(line)
+        if len(l) > 0 { out = out + [l] }
+    }
+    return out
+}
+
+fn parse(text: str) -> list {
+    let grid = []
+    for line in lines_of(text) { grid = grid + [chars(line)] }
+    let sr = 0
+    let sc = 0
+    let er = 0
+    let ec = 0
+    let r = 0
+    while r < len(grid) {
+        let c = 0
+        while c < len(grid[r]) {
+            if grid[r][c] == "S" { sr = r; sc = c }
+            if grid[r][c] == "E" { er = r; ec = c }
+            c = c + 1
+        }
+        r = r + 1
+    }
+    return [grid, sr, sc, er, ec]
+}
+
+// Direction order: 0 north, 1 east, 2 south, 3 west.
+fn dr_of(d: int) -> int {
+    if d == 0 { return -1 }
+    if d == 1 { return 0 }
+    if d == 2 { return 1 }
+    return 0
+}
+
+fn dc_of(d: int) -> int {
+    if d == 0 { return 0 }
+    if d == 1 { return 1 }
+    if d == 2 { return 0 }
+    return -1
+}
+
+fn make3d(rows: int, cols: int, fill: int) -> list {
+    let out = []
+    let r = 0
+    while r < rows {
+        let plane = []
+        let c = 0
+        while c < cols {
+            plane = plane + [[fill, fill, fill, fill]]
+            c = c + 1
+        }
+        out = out + [plane]
+        r = r + 1
+    }
+    return out
+}
+
+// Dijkstra over (row, col, facing) states. Small grids, so a linear scan for
+// the next closest state keeps the example dependency free.
+fn distances(grid: list, sr: int, sc: int) -> list {
+    let rows = len(grid)
+    let cols = len(grid[0])
+    let dist = make3d(rows, cols, INF)
+    let done = make3d(rows, cols, 0)
+    dist[sr][sc][1] = 0
+    let total = rows * cols * 4
+    let iter = 0
+    while iter < total {
+        // closest unfinished state
+        let best = INF
+        let br = -1
+        let bc = -1
+        let bd = -1
+        let r = 0
+        while r < rows {
+            let c = 0
+            while c < cols {
+                let d = 0
+                while d < 4 {
+                    if done[r][c][d] == 0 && dist[r][c][d] < best {
+                        best = dist[r][c][d]
+                        br = r
+                        bc = c
+                        bd = d
+                    }
+                    d = d + 1
+                }
+                c = c + 1
+            }
+            r = r + 1
+        }
+        if br < 0 { iter = total } else {
+            done[br][bc][bd] = 1
+            // rotate in place
+            let nd1 = (bd + 1) % 4
+            let nd2 = (bd + 3) % 4
+            if dist[br][bc][bd] + 1000 < dist[br][bc][nd1] {
+                dist[br][bc][nd1] = dist[br][bc][bd] + 1000
+            }
+            if dist[br][bc][bd] + 1000 < dist[br][bc][nd2] {
+                dist[br][bc][nd2] = dist[br][bc][bd] + 1000
+            }
+            // step forward
+            let nr = br + dr_of(bd)
+            let nc = bc + dc_of(bd)
+            if grid[nr][nc] != "#" {
+                if dist[br][bc][bd] + 1 < dist[nr][nc][bd] {
+                    dist[nr][nc][bd] = dist[br][bc][bd] + 1
+                }
+            }
+            iter = iter + 1
+        }
+    }
+    return dist
+}
+
+fn best_score(dist: list, er: int, ec: int) -> int {
+    let best = INF
+    let d = 0
+    while d < 4 {
+        if dist[er][ec][d] < best { best = dist[er][ec][d] }
+        d = d + 1
+    }
+    return best
+}
+
+// Walk every optimal path backwards and collect the tiles it crosses.
+fn tiles_on_best(dist: list, grid: list, sr: int, sc: int, er: int, ec: int) -> int {
+    let best = best_score(dist, er, ec)
+    let rows = len(grid)
+    let cols = len(grid[0])
+    let seen = make3d(rows, cols, 0)
+    let tiles = make3d(rows, cols, 0)
+    let stack = []
+    let d = 0
+    while d < 4 {
+        if dist[er][ec][d] == best {
+            stack = stack + [[er, ec, d]]
+            seen[er][ec][d] = 1
+        }
+        d = d + 1
+    }
+    while len(stack) > 0 {
+        let cur = stack[len(stack) - 1]
+        stack = slice_list(stack, 0, len(stack) - 1)
+        let r = cur[0]
+        let c = cur[1]
+        let fd = cur[2]
+        tiles[r][c] = 1
+        let here = dist[r][c][fd]
+        // predecessor by rotation
+        let nd1 = (fd + 1) % 4
+        let nd2 = (fd + 3) % 4
+        if dist[r][c][nd1] + 1000 == here && seen[r][c][nd1] == 0 {
+            seen[r][c][nd1] = 1
+            stack = stack + [[r, c, nd1]]
+        }
+        if dist[r][c][nd2] + 1000 == here && seen[r][c][nd2] == 0 {
+            seen[r][c][nd2] = 1
+            stack = stack + [[r, c, nd2]]
+        }
+        // predecessor by stepping forward into this cell
+        let pr = r - dr_of(fd)
+        let pc = c - dc_of(fd)
+        if dist[pr][pc][fd] + 1 == here && seen[pr][pc][fd] == 0 {
+            seen[pr][pc][fd] = 1
+            stack = stack + [[pr, pc, fd]]
+        }
+    }
+    let count = 0
+    let r = 0
+    while r < rows {
+        let c = 0
+        while c < cols {
+            if tiles[r][c] == 1 { count = count + 1 }
+            c = c + 1
+        }
+        r = r + 1
+    }
+    return count
+}
+
+fn part1(text: str) -> int {
+    let parsed = parse(text)
+    let dist = distances(parsed[0], parsed[1], parsed[2])
+    return best_score(dist, parsed[3], parsed[4])
+}
+
+fn part2(text: str) -> int {
+    let parsed = parse(text)
+    let dist = distances(parsed[0], parsed[1], parsed[2])
+    return tiles_on_best(dist, parsed[0], parsed[1], parsed[2], parsed[3], parsed[4])
+}
+
+@test
+fn test_part1_first() {
+    assert_eq(part1(SAMPLE), 7036)
+}
+
+@test
+fn test_part1_second() {
+    assert_eq(part1(SAMPLE2), 11048)
+}
+
+@test
+fn test_part2_first() {
+    assert_eq(part2(SAMPLE), 45)
+}
+
+@test
+fn test_part2_second() {
+    assert_eq(part2(SAMPLE2), 64)
+}
+
+fn main() {
+    print("Day 16 Part 1 (sample): " + str(part1(SAMPLE)))
+    print("Day 16 Part 2 (sample): " + str(part2(SAMPLE)))
+    print("Day 16 Part 1 (second): " + str(part1(SAMPLE2)))
+    print("Day 16 Part 2 (second): " + str(part2(SAMPLE2)))
+}
+
+main()

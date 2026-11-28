@@ -1,0 +1,125 @@
+// Advent of Code 2024 · Day 18 · RAM Run
+// Bytes fall into a grid; find the shortest path, then the first byte that
+// makes the exit unreachable. Sample verified against
+// https://adventofcode.com/2024/day/18 (7x7 grid, 12 bytes, 22 steps, 6,1).
+
+let SAMPLE = "5,4
+4,2
+4,5
+3,0
+2,1
+6,3
+2,4
+1,5
+0,6
+3,3
+2,6
+5,1
+1,2
+5,5
+2,5
+6,5
+1,4
+0,4
+6,4
+1,1
+6,1
+1,0
+0,5
+1,6
+2,0"
+
+fn lines_of(text: str) -> list {
+    let out = []
+    for line in str_split(text, "\n") {
+        let l = str_trim(line)
+        if len(l) > 0 { out = out + [l] }
+    }
+    return out
+}
+
+fn parse(text: str) -> list {
+    let pts = []
+    for line in lines_of(text) {
+        let parts = str_split(line, ",")
+        pts = pts + [[int(str_trim(parts[0])), int(str_trim(parts[1]))]]
+    }
+    return pts
+}
+
+// BFS shortest path length, or -1 when the exit is unreachable.
+fn bfs(blocked: dict, size: int) -> int {
+    let start = "0,0"
+    let goal = str(size) + "," + str(size)
+    if contains(blocked, start) || contains(blocked, goal) { return -1 }
+    let dist = {}
+    dist[start] = 0
+    let queue = [start]
+    let head = 0
+    while head < len(queue) {
+        let cur = queue[head]
+        head = head + 1
+        if cur == goal { return dist[cur] }
+        let coords = str_split(cur, ",")
+        let x = int(coords[0])
+        let y = int(coords[1])
+        let dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+        for dd in dirs {
+            let nx = x + dd[0]
+            let ny = y + dd[1]
+            if nx < 0 || ny < 0 || nx > size || ny > size { continue }
+            let nk = str(nx) + "," + str(ny)
+            if contains(blocked, nk) { continue }
+            if contains(dist, nk) { continue }
+            dist[nk] = dist[cur] + 1
+            queue = queue + [nk]
+        }
+    }
+    return -1
+}
+
+fn blocked_set(pts: list, n: int) -> dict {
+    let b = {}
+    let i = 0
+    while i < n && i < len(pts) {
+        b[str(pts[i][0]) + "," + str(pts[i][1])] = 1
+        i = i + 1
+    }
+    return b
+}
+
+fn part1(text: str, size: int, nbytes: int) -> int {
+    return bfs(blocked_set(parse(text), nbytes), size)
+}
+
+// First byte (in falling order) that cuts off the exit; returned as "x,y".
+fn part2(text: str, size: int) -> str {
+    let pts = parse(text)
+    let lo = 0
+    let hi = len(pts)
+    // binary search on the number of fallen bytes for the first disconnect
+    while lo < hi {
+        let mid = int((lo + hi) / 2)
+        if bfs(blocked_set(pts, mid), size) < 0 { hi = mid } else { lo = mid + 1 }
+    }
+    if lo == 0 { return "none" }
+    let p = pts[lo - 1]
+    return str(p[0]) + "," + str(p[1])
+}
+
+@test
+fn test_part1() {
+    assert_eq(part1(SAMPLE, 6, 12), 22)
+}
+
+@test
+fn test_part2() {
+    assert_eq(part2(SAMPLE, 6), "6,1")
+}
+
+fn main() {
+    print("Day 18 Part 1 (sample): " + str(part1(SAMPLE, 6, 12)))
+    print("Day 18 Part 2 (sample): " + part2(SAMPLE, 6))
+}
+
+main()
