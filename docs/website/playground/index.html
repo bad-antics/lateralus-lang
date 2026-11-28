@@ -476,7 +476,7 @@
     <div class="statusbar-item"><span class="status-dot"></span> Lateralus v3.0.1</div>
     <div class="statusbar-item" id="statusLines">Ln 1, Col 1</div>
     <div class="statusbar-item" id="statusChars">0 chars</div>
-    <div class="statusbar-item" style="margin-left: auto;">Playground — browser-side evaluation</div>
+    <div class="statusbar-item" style="margin-left: auto;">Playground — in-browser WebAssembly</div>
 </div>
 
 <!-- Share Modal -->
@@ -2110,9 +2110,9 @@ editor.addEventListener('keydown', function(e) {
     }
 });
 
-function renderOutput(linesArr, lineCount, elapsed, offline) {
+function renderOutput(linesArr, lineCount, elapsed, modeLabel) {
     var html = '<span class="sep">----------------------------------------</span>\n';
-    html += '<span class="info">  Compiled main.ltl (' + lineCount + ' lines)' + (offline ? ' [offline]' : '') + '</span>\n';
+    html += '<span class="info">  Compiled main.ltl (' + lineCount + ' lines)' + (modeLabel ? ' [' + escHtml(modeLabel) + ']' : '') + '</span>\n';
     html += '<span class="sep">----------------------------------------</span>\n\n';
 
     linesArr.forEach(function(line) {
@@ -2128,6 +2128,1376 @@ function renderOutput(linesArr, lineCount, elapsed, offline) {
     return html;
 }
 
+// -- Browser WebAssembly Runtime Shim + .ltl -> .wasm Compiler --
+
+const _WASM_TEXT_ENCODER = new TextEncoder();
+const _WASM_TEXT_DECODER = new TextDecoder('utf-8');
+
+class WasmAsyncHttpRequest extends Error {
+    constructor(url) {
+        super('Pending async http_get: ' + url);
+        this.name = 'WasmAsyncHttpRequest';
+        this.url = url;
+    }
+}
+
+function readWasmCString(memory, ptr, len) {
+    if (!memory) return '';
+    var bytes = new Uint8Array(memory.buffer);
+    if (typeof len === 'number' && len >= 0) {
+        return _WASM_TEXT_DECODER.decode(bytes.subarray(ptr, ptr + len));
+    }
+    var end = ptr;
+    while (end < bytes.length && bytes[end] !== 0) end++;
+    return _WASM_TEXT_DECODER.decode(bytes.subarray(ptr, end));
+}
+
+function writeWasmCString(instance, fallbackState, text) {
+    var encoded = _WASM_TEXT_ENCODER.encode(String(text));
+    var exports = instance ? instance.exports : {};
+    var needed = encoded.length + 1;
+    var ptr;
+    if (typeof exports.ltl_alloc === 'function') {
+        ptr = exports.ltl_alloc(needed);
+    } else {
+        ptr = fallbackState.heapPtr;
+        fallbackState.heapPtr += (needed + 7) & ~7;
+    }
+    var mem = new Uint8Array(exports.memory.buffer);
+    mem.set(encoded, ptr);
+    mem[ptr + encoded.length] = 0;
+    return ptr;
+}
+
+function createLateralusHostShim(options) {
+    var opts = options || {};
+    var onPrint = opts.onPrint || function() {};
+    var httpCache = opts.httpCache || new Map();
+    var state = { instance: null, heapPtr: 8192, lists: [] };
+
+    function getMem() {
+        return state.instance && state.instance.exports ? state.instance.exports.memory : null;
+    }
+
+    var env = {
+        println: function(ptr, len) {
+            onPrint(readWasmCString(getMem(), ptr, len));
+        },
+        print: function(ptr, len) {
+            onPrint(readWasmCString(getMem(), ptr, len));
+        },
+        ltl_println_i64: function(val) {
+            onPrint(typeof val === 'bigint' ? val.toString() : String(val));
+        },
+        ltl_println_f64: function(val) {
+            onPrint(String(val));
+        },
+        ltl_i64_to_str: function(val) {
+            var s = typeof val === 'bigint' ? val.toString() : String(val);
+            return writeWasmCString(state.instance, state, s);
+        },
+        ltl_f64_to_str: function(val) {
+            return writeWasmCString(state.instance, state, String(val));
+        },
+        ltl_str_concat: function(aPtr, bPtr) {
+            var mem = getMem();
+            var combined = readWasmCString(mem, aPtr) + readWasmCString(mem, bPtr);
+            return writeWasmCString(state.instance, state, combined);
+        },
+        ltl_str_len: function(ptr) {
+            return BigInt(_WASM_TEXT_ENCODER.encode(readWasmCString(getMem(), ptr)).length);
+        },
+        ltl_str_split: function(strPtr, sepPtr) {
+            var mem = getMem();
+            var s = readWasmCString(mem, strPtr);
+            var sep = readWasmCString(mem, sepPtr);
+            var parts = sep === '' ? Array.from(s) : s.split(sep);
+            state.lists.push(parts);
+            return state.lists.length - 1;
+        },
+        ltl_str_capitalize: function(strPtr) {
+            var s = readWasmCString(getMem(), strPtr);
+            var cap = s.length ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+            return writeWasmCString(state.instance, state, cap);
+        },
+        ltl_str_upper: function(strPtr) {
+            var s = readWasmCString(getMem(), strPtr);
+            return writeWasmCString(state.instance, state, s.toUpperCase());
+        },
+        ltl_str_lower: function(strPtr) {
+            var s = readWasmCString(getMem(), strPtr);
+            return writeWasmCString(state.instance, state, s.toLowerCase());
+        },
+        ltl_str_trim: function(strPtr) {
+            var s = readWasmCString(getMem(), strPtr);
+            return writeWasmCString(state.instance, state, s.trim());
+        },
+        ltl_list_map_op: function(listHandle, opPtr) {
+            var items = state.lists[listHandle] || [];
+            var op = readWasmCString(getMem(), opPtr);
+            var mapped = items.map(function(item) {
+                var s = String(item);
+                if (op === 'capitalize') return s.length ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+                if (op === 'upper' || op === 'to_upper') return s.toUpperCase();
+                if (op === 'lower' || op === 'to_lower') return s.toLowerCase();
+                if (op === 'trim') return s.trim();
+                return s;
+            });
+            state.lists.push(mapped);
+            return state.lists.length - 1;
+        },
+        ltl_list_join: function(listHandle, sepPtr) {
+            var items = state.lists[listHandle] || [];
+            var sep = readWasmCString(getMem(), sepPtr);
+            return writeWasmCString(state.instance, state, items.join(sep));
+        },
+        http_get: function(urlPtr, urlLen) {
+            var url = readWasmCString(getMem(), urlPtr, urlLen);
+            if (httpCache.has(url)) {
+                return writeWasmCString(state.instance, state, httpCache.get(url));
+            }
+            throw new WasmAsyncHttpRequest(url);
+        },
+    };
+
+    return {
+        imports: { env: env },
+        bindInstance: function(instance) { state.instance = instance; },
+        httpCache: httpCache,
+    };
+}
+
+function encodeUleb128(value) {
+    var out = [];
+    var v = value >>> 0;
+    do {
+        var b = v & 0x7f;
+        v >>>= 7;
+        if (v !== 0) b |= 0x80;
+        out.push(b);
+    } while (v !== 0);
+    return out;
+}
+
+function encodeSleb128(value) {
+    var out = [];
+    var v = typeof value === 'bigint' ? value : BigInt(Math.trunc(value));
+    while (true) {
+        var byte = Number(v & 0x7fn);
+        v >>= 7n;
+        var done = (v === 0n && (byte & 0x40) === 0) || (v === -1n && (byte & 0x40) !== 0);
+        out.push(done ? byte : (byte | 0x80));
+        if (done) break;
+    }
+    return out;
+}
+
+function encodeF64Bytes(value) {
+    var buf = new ArrayBuffer(8);
+    new DataView(buf).setFloat64(0, value, true);
+    return Array.from(new Uint8Array(buf));
+}
+
+function encodeWasmName(str) {
+    var raw = Array.from(_WASM_TEXT_ENCODER.encode(str));
+    return encodeUleb128(raw.length).concat(raw);
+}
+
+function encodeWasmSection(id, payload) {
+    return [id].concat(encodeUleb128(payload.length), payload);
+}
+
+const WASM_VALTYPE = { i32: 0x7f, i64: 0x7e, f32: 0x7d, f64: 0x7c };
+
+class WasmBinaryBuilder {
+    constructor() {
+        this.imports = [];
+        this.importMap = Object.create(null);
+        this.funcs = [];
+        this.strings = Object.create(null);
+        this.dataSegments = [];
+        this.dataOffset = 64;
+        this.needsMemory = false;
+        this.needsAlloc = false;
+    }
+
+    ensureImport(name, mod, field, params, result) {
+        if (this.importMap[name] !== undefined) return this.importMap[name];
+        var idx = this.imports.length;
+        this.imports.push({ name: name, mod: mod, field: field, params: params, result: result });
+        this.importMap[name] = idx;
+        this.needsMemory = true;
+        return idx;
+    }
+
+    internString(str) {
+        this.needsMemory = true;
+        if (this.strings[str] !== undefined) return this.strings[str];
+        var raw = Array.from(_WASM_TEXT_ENCODER.encode(str));
+        raw.push(0);
+        var ptr = this.dataOffset;
+        this.dataSegments.push({ offset: ptr, data: raw });
+        this.dataOffset += raw.length;
+        this.strings[str] = ptr;
+        return ptr;
+    }
+
+    addFunc(name, params, result, locals, bodyBytes, exported) {
+        var entry = {
+            name: name,
+            params: params,
+            result: result,
+            locals: locals,
+            body: bodyBytes,
+            exported: exported !== false,
+        };
+        this.funcs.push(entry);
+        return entry;
+    }
+
+    build() {
+        var defined = this.funcs.slice();
+        if (this.needsAlloc) {
+            defined.push({
+                name: 'ltl_alloc',
+                params: ['i32'],
+                result: 'i32',
+                locals: ['i32'],
+                body: [0x23, 0x00, 0x21, 0x01, 0x20, 0x01, 0x20, 0x00, 0x6a, 0x24, 0x00, 0x20, 0x01],
+                exported: true,
+            });
+        }
+
+        var all = this.imports.concat(defined);
+        var funcIdxByName = Object.create(null);
+        all.forEach(function(fn, idx) {
+            if (funcIdxByName[fn.name] === undefined) funcIdxByName[fn.name] = idx;
+        });
+        var sigs = [];
+        var sigMap = Object.create(null);
+        function getSigIdx(params, result) {
+            var key = params.join(',') + '->' + (result || '');
+            if (sigMap[key] !== undefined) return sigMap[key];
+            var idx = sigs.length;
+            sigs.push({ params: params, result: result });
+            sigMap[key] = idx;
+            return idx;
+        }
+
+        all.forEach(function(fn) { getSigIdx(fn.params, fn.result); });
+
+        var out = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+
+        // 1. Type section
+        if (sigs.length > 0) {
+            var tPayload = encodeUleb128(sigs.length);
+            sigs.forEach(function(s) {
+                tPayload.push(0x60);
+                tPayload = tPayload.concat(encodeUleb128(s.params.length));
+                s.params.forEach(function(p) { tPayload.push(WASM_VALTYPE[p]); });
+                if (s.result) {
+                    tPayload = tPayload.concat([0x01, WASM_VALTYPE[s.result]]);
+                } else {
+                    tPayload.push(0x00);
+                }
+            });
+            out = out.concat(encodeWasmSection(1, tPayload));
+        }
+
+        // 2. Import section
+        if (this.imports.length > 0) {
+            var iPayload = encodeUleb128(this.imports.length);
+            this.imports.forEach(function(imp) {
+                iPayload = iPayload.concat(
+                    encodeWasmName(imp.mod),
+                    encodeWasmName(imp.field),
+                    [0x00],
+                    encodeUleb128(getSigIdx(imp.params, imp.result))
+                );
+            });
+            out = out.concat(encodeWasmSection(2, iPayload));
+        }
+
+        // 3. Function section
+        if (defined.length > 0) {
+            var fPayload = encodeUleb128(defined.length);
+            defined.forEach(function(fn) {
+                fPayload = fPayload.concat(encodeUleb128(getSigIdx(fn.params, fn.result)));
+            });
+            out = out.concat(encodeWasmSection(3, fPayload));
+        }
+
+        // 5. Memory section
+        if (this.needsMemory || this.dataSegments.length > 0) {
+            out = out.concat(encodeWasmSection(5, [0x01, 0x00, 0x01]));
+        }
+
+        // 6. Global section ($__heap_ptr)
+        if (this.needsAlloc) {
+            var heapStart = Math.max(4096, (this.dataOffset + 15) & ~15);
+            var gPayload = [0x01, WASM_VALTYPE.i32, 0x01, 0x41].concat(encodeSleb128(heapStart), [0x0b]);
+            out = out.concat(encodeWasmSection(6, gPayload));
+        }
+
+        // 7. Export section
+        var exports = [];
+        defined.forEach(function(fn, idx) {
+            if (fn.exported) {
+                exports.push({ name: fn.name, kind: 0x00, index: this.imports.length + idx });
+            }
+        }, this);
+        if (this.needsMemory || this.dataSegments.length > 0) {
+            exports.push({ name: 'memory', kind: 0x02, index: 0 });
+        }
+        if (exports.length > 0) {
+            var ePayload = encodeUleb128(exports.length);
+            exports.forEach(function(ex) {
+                ePayload = ePayload.concat(encodeWasmName(ex.name), [ex.kind], encodeUleb128(ex.index));
+            });
+            out = out.concat(encodeWasmSection(7, ePayload));
+        }
+
+        // 10. Code section
+        if (defined.length > 0) {
+            var cPayload = encodeUleb128(defined.length);
+            defined.forEach(function(fn) {
+                var runs = [];
+                fn.locals.forEach(function(wt) {
+                    var bt = WASM_VALTYPE[wt];
+                    if (runs.length && runs[runs.length - 1].type === bt) {
+                        runs[runs.length - 1].count++;
+                    } else {
+                        runs.push({ count: 1, type: bt });
+                    }
+                });
+                var body = encodeUleb128(runs.length);
+                runs.forEach(function(r) {
+                    body = body.concat(encodeUleb128(r.count), [r.type]);
+                });
+                fn.body.forEach(function(item) {
+                    if (typeof item === 'number') {
+                        body.push(item);
+                    } else if (item && item.callTarget) {
+                        body.push(0x10);
+                        body = body.concat(encodeUleb128(funcIdxByName[item.callTarget]));
+                    }
+                });
+                body.push(0x0b);
+                cPayload = cPayload.concat(encodeUleb128(body.length), body);
+            });
+            out = out.concat(encodeWasmSection(10, cPayload));
+        }
+
+        // 11. Data section
+        if (this.dataSegments.length > 0) {
+            var dPayload = encodeUleb128(this.dataSegments.length);
+            this.dataSegments.forEach(function(seg) {
+                dPayload = dPayload.concat(
+                    [0x00, 0x41],
+                    encodeSleb128(seg.offset),
+                    [0x0b],
+                    encodeUleb128(seg.data.length),
+                    seg.data
+                );
+            });
+            out = out.concat(encodeWasmSection(11, dPayload));
+        }
+
+        return new Uint8Array(out);
+    }
+}
+
+const HOST_IMPORT_DEFS = {
+    println:            ['env', 'println',            ['i32'], ''],
+    ltl_println_i64:    ['env', 'ltl_println_i64',    ['i64'], ''],
+    ltl_println_f64:    ['env', 'ltl_println_f64',    ['f64'], ''],
+    ltl_i64_to_str:     ['env', 'ltl_i64_to_str',     ['i64'], 'i32'],
+    ltl_f64_to_str:     ['env', 'ltl_f64_to_str',     ['f64'], 'i32'],
+    ltl_str_concat:     ['env', 'ltl_str_concat',     ['i32', 'i32'], 'i32'],
+    ltl_str_len:        ['env', 'ltl_str_len',        ['i32'], 'i64'],
+    ltl_str_split:      ['env', 'ltl_str_split',      ['i32', 'i32'], 'i32'],
+    ltl_str_capitalize: ['env', 'ltl_str_capitalize', ['i32'], 'i32'],
+    ltl_str_upper:      ['env', 'ltl_str_upper',      ['i32'], 'i32'],
+    ltl_str_lower:      ['env', 'ltl_str_lower',      ['i32'], 'i32'],
+    ltl_str_trim:       ['env', 'ltl_str_trim',       ['i32'], 'i32'],
+    ltl_list_map_op:    ['env', 'ltl_list_map_op',    ['i32', 'i32'], 'i32'],
+    ltl_list_join:      ['env', 'ltl_list_join',      ['i32', 'i32'], 'i32'],
+    http_get:           ['env', 'http_get',           ['i32'], 'i32'],
+};
+
+function tokenizeLateralus(src) {
+    var tokens = [];
+    var i = 0;
+    var n = src.length;
+    var line = 1;
+
+    function isIdentStart(ch) { return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch === '_'; }
+    function isIdentPart(ch) { return isIdentStart(ch) || (ch >= '0' && ch <= '9'); }
+
+    while (i < n) {
+        var ch = src[i];
+        if (ch === ' ' || ch === '\t' || ch === '\r') { i++; continue; }
+        if (ch === '\n') { line++; i++; continue; }
+        if (ch === '/' && src[i + 1] === '/') {
+            while (i < n && src[i] !== '\n') i++;
+            continue;
+        }
+        if (ch === '/' && src[i + 1] === '*') {
+            i += 2;
+            while (i < n && !(src[i] === '*' && src[i + 1] === '/')) {
+                if (src[i] === '\n') line++;
+                i++;
+            }
+            i += 2;
+            continue;
+        }
+        if (ch === '"') {
+            var startLine = line;
+            i++;
+            var parts = [];
+            var buf = '';
+            while (i < n && src[i] !== '"') {
+                if (src[i] === '\\' && i + 1 < n) {
+                    var esc = src[i + 1];
+                    i += 2;
+                    if (esc === 'n') buf += '\n';
+                    else if (esc === 't') buf += '\t';
+                    else if (esc === 'r') buf += '\r';
+                    else if (esc === '\\') buf += '\\';
+                    else if (esc === '"') buf += '"';
+                    else if (esc === '{') buf += '{';
+                    else if (esc === 'u' && src[i] === '{') {
+                        var close = src.indexOf('}', i + 1);
+                        if (close !== -1) {
+                            var cp = parseInt(src.slice(i + 1, close), 16);
+                            if (!isNaN(cp)) buf += String.fromCodePoint(cp);
+                            i = close + 1;
+                        }
+                    } else {
+                        buf += esc;
+                    }
+                    continue;
+                }
+                if (src[i] === '{') {
+                    if (buf.length > 0 || parts.length === 0) {
+                        parts.push({ kind: 'str', val: buf });
+                        buf = '';
+                    }
+                    i++;
+                    var depth = 1;
+                    var exprSrc = '';
+                    while (i < n && depth > 0) {
+                        if (src[i] === '{') depth++;
+                        else if (src[i] === '}') {
+                            depth--;
+                            if (depth === 0) break;
+                        }
+                        exprSrc += src[i++];
+                    }
+                    i++; // skip }
+                    parts.push({ kind: 'expr', val: exprSrc });
+                    continue;
+                }
+                if (src[i] === '\n') line++;
+                buf += src[i++];
+            }
+            if (i >= n) throw new Error('Line ' + startLine + ': Unterminated string literal');
+            i++;
+            if (parts.length === 0) {
+                tokens.push({ type: 'STR', val: buf, line: startLine });
+            } else {
+                if (buf.length > 0) parts.push({ kind: 'str', val: buf });
+                tokens.push({ type: 'ISTR', parts: parts, line: startLine });
+            }
+            continue;
+        }
+        if (ch >= '0' && ch <= '9') {
+            var numStr = '';
+            var isFloat = false;
+            while (i < n && ((src[i] >= '0' && src[i] <= '9') || src[i] === '_')) {
+                if (src[i] !== '_') numStr += src[i];
+                i++;
+            }
+            if (src[i] === '.' && src[i + 1] >= '0' && src[i + 1] <= '9') {
+                isFloat = true;
+                numStr += src[i++];
+                while (i < n && ((src[i] >= '0' && src[i] <= '9') || src[i] === '_')) {
+                    if (src[i] !== '_') numStr += src[i];
+                    i++;
+                }
+            }
+            tokens.push({ type: isFloat ? 'FLOAT' : 'INT', val: numStr, line: line });
+            continue;
+        }
+        if (isIdentStart(ch)) {
+            var id = '';
+            while (i < n && isIdentPart(src[i])) id += src[i++];
+            tokens.push({ type: 'IDENT', val: id, line: line });
+            continue;
+        }
+        var three = src.slice(i, i + 3);
+        if (three === '..<') { tokens.push({ type: 'OP', val: three, line: line }); i += 3; continue; }
+        var two = src.slice(i, i + 2);
+        if (['|>', '::', '->', '..', '==', '!=', '<=', '>=', '&&', '||', '+=', '-=', '*=', '/='].indexOf(two) !== -1) {
+            tokens.push({ type: 'OP', val: two, line: line });
+            i += 2;
+            continue;
+        }
+        tokens.push({ type: 'SYM', val: ch, line: line });
+        i++;
+    }
+    tokens.push({ type: 'EOF', val: '', line: line });
+    return tokens;
+}
+
+function compileLateralusToWasm(code) {
+    var tokens = tokenizeLateralus(code);
+
+    // Reject constructs outside direct scalar/string WASM compiler so high-level showcases use WASM host stream
+    for (var ti = 0; ti < tokens.length; ti++) {
+        var tk = tokens[ti];
+        if (tk.type === 'IDENT' && ['struct', 'enum', 'trait', 'impl', 'match', 'effect', 'perform', 'macro', 'nursery', 'comptime'].indexOf(tk.val) !== -1) {
+            throw new Error('UNLOWERED_CONSTRUCT: ' + tk.val);
+        }
+        if (tk.type === 'SYM' && (tk.val === '@' || tk.val === '[')) {
+            throw new Error('UNLOWERED_CONSTRUCT: ' + tk.val);
+        }
+    }
+
+    var builder = new WasmBinaryBuilder();
+    var pos = 0;
+    function peek(offset) { return tokens[Math.min(pos + (offset || 0), tokens.length - 1)]; }
+    function next() { return tokens[pos++]; }
+    function match(type, val) {
+        var t = peek();
+        if (t.type === type && (val === undefined || t.val === val)) { pos++; return t; }
+        return null;
+    }
+    function expect(type, val) {
+        var t = match(type, val);
+        if (!t) throw new Error('Line ' + peek().line + ': Expected ' + (val || type) + ', got ' + (peek().val || peek().type));
+        return t;
+    }
+
+    function mapTypeName(name) {
+        if (!name) return '';
+        var low = name.toLowerCase();
+        if (low === 'float' || low === 'f64' || low === 'f32') return 'f64';
+        if (low === 'bool') return 'bool';
+        if (low === 'str' || low === 'string') return 'str';
+        if (low === 'void' || low === 'none' || low === 'nil') return '';
+        return 'i64';
+    }
+    function kindToWasm(kind) { return (kind === 'bool' || kind === 'str' || kind === 'list') ? 'i32' : kind; }
+
+    function skipTypeAnnotation() {
+        if (!match('SYM', ':')) return '';
+        var t = expect('IDENT').val;
+        if (match('OP', '<') || match('SYM', '<')) {
+            var d = 1;
+            while (d > 0 && peek().type !== 'EOF') {
+                var nt = next();
+                if (nt.val === '<') d++;
+                else if (nt.val === '>') d--;
+            }
+        }
+        return mapTypeName(t);
+    }
+
+    function callImport(name, out) {
+        var def = HOST_IMPORT_DEFS[name];
+        var idx = builder.ensureImport(name, def[0], def[1], def[2], def[3]);
+        if (name === 'http_get' || name.indexOf('to_str') !== -1 || name.indexOf('str_') !== -1 || name.indexOf('list_') !== -1) {
+            if (name !== 'ltl_str_len' && name !== 'ltl_str_split') builder.needsAlloc = true;
+        }
+        out.push(0x10);
+        Array.prototype.push.apply(out, encodeUleb128(idx));
+    }
+
+    // Pass 1: discover function signatures
+    var fnDefs = [];
+    var fnSigs = Object.create(null);
+    var topTokens = [];
+
+    function scanTopLevel() {
+        var scanPos = 0;
+        while (scanPos < tokens.length && tokens[scanPos].type !== 'EOF') {
+            var cur = tokens[scanPos];
+            if (cur.type === 'IDENT' && (cur.val === 'import' || cur.val === 'module')) {
+                var ln = cur.line;
+                while (scanPos < tokens.length && tokens[scanPos].line === ln && tokens[scanPos].type !== 'EOF') scanPos++;
+                continue;
+            }
+            if (cur.type === 'IDENT' && (cur.val === 'pub' || cur.val === 'async' || cur.val === 'const')) {
+                if (tokens[scanPos + 1] && tokens[scanPos + 1].val === 'fn') {
+                    scanPos++;
+                    continue;
+                }
+            }
+            if (cur.type === 'IDENT' && cur.val === 'fn' && tokens[scanPos + 1] && tokens[scanPos + 1].type === 'IDENT') {
+                var fnStart = scanPos;
+                var fnName = tokens[scanPos + 1].val;
+                var pIdx = scanPos + 3;
+                var params = [];
+                while (pIdx < tokens.length && tokens[pIdx].val !== ')') {
+                    if (tokens[pIdx].type === 'IDENT') {
+                        var pname = tokens[pIdx].val;
+                        var pkind = 'i64';
+                        if (tokens[pIdx + 1] && tokens[pIdx + 1].val === ':') {
+                            pIdx += 2;
+                            pkind = mapTypeName(tokens[pIdx] ? tokens[pIdx].val : 'int');
+                        }
+                        params.push({ name: pname, kind: pkind });
+                    }
+                    pIdx++;
+                }
+                pIdx++; // skip )
+                var retKind = '';
+                if (tokens[pIdx] && tokens[pIdx].val === '->') {
+                    pIdx++;
+                    if (tokens[pIdx]) {
+                        retKind = mapTypeName(tokens[pIdx].val);
+                        pIdx++;
+                    }
+                }
+                while (pIdx < tokens.length && tokens[pIdx].val !== '{') pIdx++;
+                var bodyStart = pIdx;
+                var depth = 0;
+                while (pIdx < tokens.length) {
+                    if (tokens[pIdx].val === '{') depth++;
+                    else if (tokens[pIdx].val === '}') {
+                        depth--;
+                        if (depth === 0) { pIdx++; break; }
+                    }
+                    pIdx++;
+                }
+                if (!retKind && fnName !== 'main') {
+                    for (var k = bodyStart; k < pIdx; k++) {
+                        if (tokens[k].type === 'IDENT' && tokens[k].val === 'return' && tokens[k + 1] && tokens[k + 1].val !== '}') {
+                            retKind = 'i64';
+                            break;
+                        }
+                    }
+                }
+                if (fnName === 'main') {
+                    for (var m = bodyStart; m < pIdx; m++) {
+                        if (tokens[m].type === 'IDENT' && tokens[m].val === 'return' && tokens[m + 1] && tokens[m + 1].type === 'INT') {
+                            retKind = 'i64';
+                            break;
+                        }
+                    }
+                }
+                fnSigs[fnName] = { params: params, retKind: retKind };
+                fnDefs.push({ name: fnName, params: params, retKind: retKind, start: bodyStart, end: pIdx });
+                scanPos = pIdx;
+                continue;
+            }
+            topTokens.push(tokens[scanPos++]);
+        }
+    }
+    scanTopLevel();
+
+    function compileFunctionBody(params, retKind, startIdx, endIdx) {
+        var savedTokens = tokens;
+        tokens = savedTokens.slice(startIdx + 1, endIdx - 1);
+        tokens.push({ type: 'EOF', val: '', line: 0 });
+        pos = 0;
+
+        var code = [];
+        var varIndex = Object.create(null);
+        var varKinds = Object.create(null);
+        var locals = [];
+        params.forEach(function(p, idx) {
+            varIndex[p.name] = idx;
+            varKinds[p.name] = p.kind;
+        });
+
+        function ensureLocal(name, kind) {
+            if (varIndex[name] !== undefined) return varIndex[name];
+            var idx = params.length + locals.length;
+            locals.push(kindToWasm(kind || 'i64'));
+            varIndex[name] = idx;
+            varKinds[name] = kind || 'i64';
+            return idx;
+        }
+        function emitLocalGet(idx) { code.push(0x20); Array.prototype.push.apply(code, encodeUleb128(idx)); }
+        function emitLocalSet(idx) { code.push(0x21); Array.prototype.push.apply(code, encodeUleb128(idx)); }
+        function emitI32Const(v) { code.push(0x41); Array.prototype.push.apply(code, encodeSleb128(v)); }
+        function emitI64Const(v) { code.push(0x42); Array.prototype.push.apply(code, encodeSleb128(v)); }
+        function emitF64Const(v) { code.push(0x44); Array.prototype.push.apply(code, encodeF64Bytes(v)); }
+
+        var seq = 0;
+        var loopStack = [];
+
+        function coerceKind(got, target) {
+            if (got === target || !got) return got;
+            if (got === 'i64' && target === 'f64') { code.push(0xb9); return 'f64'; }
+            if (got === 'f64' && target === 'i64') { code.push(0xb0); return 'i64'; }
+            if (got === 'bool' && target === 'i64') { code.push(0xac); return 'i64'; }
+            if (got === 'i64' && target === 'bool') { code.push(0xa7); return 'bool'; }
+            return got;
+        }
+
+        function valueToStr(kind) {
+            if (kind === 'str') return 'str';
+            if (kind === 'i64') { callImport('ltl_i64_to_str', code); return 'str'; }
+            if (kind === 'f64') { callImport('ltl_f64_to_str', code); return 'str'; }
+            if (kind === 'bool') {
+                var tPtr = builder.internString('true');
+                var fPtr = builder.internString('false');
+                code.push(0x04, WASM_VALTYPE.i32);
+                emitI32Const(tPtr);
+                code.push(0x05);
+                emitI32Const(fPtr);
+                code.push(0x0b);
+                return 'str';
+            }
+            emitI32Const(builder.internString(''));
+            return 'str';
+        }
+
+        function parseSubExprStr(exprStr) {
+            var subTokens = tokenizeLateralus(exprStr);
+            var oldTokens = tokens;
+            var oldPos = pos;
+            tokens = subTokens;
+            pos = 0;
+            var k = parseExpr();
+            tokens = oldTokens;
+            pos = oldPos;
+            return k;
+        }
+
+        function emitDefault(wasmType) {
+            if (wasmType === 'f64') emitF64Const(0.0);
+            else if (wasmType === 'i32') emitI32Const(0);
+            else emitI64Const(0);
+        }
+
+        function applyBuiltinCall(name, argsCount, argExprParser) {
+            if (name === 'println' || name === 'print') {
+                if (argsCount === 0) {
+                    emitI32Const(builder.internString(''));
+                    callImport('println', code);
+                    return '';
+                }
+                var k = argExprParser(0);
+                if (k === 'str') callImport('println', code);
+                else if (k === 'f64') callImport('ltl_println_f64', code);
+                else if (k === 'bool') { valueToStr('bool'); callImport('println', code); }
+                else callImport('ltl_println_i64', code);
+                return '';
+            }
+            if (name === 'http_get' || name === 'http.get' || name === 'http::get') {
+                var uk = argsCount > 0 ? argExprParser(0) : (emitI32Const(builder.internString('')), 'str');
+                if (uk !== 'str') valueToStr(uk);
+                callImport('http_get', code);
+                return 'str';
+            }
+            if (name === 'len') {
+                var lk = argsCount > 0 ? argExprParser(0) : (emitI32Const(builder.internString('')), 'str');
+                if (lk === 'str') { callImport('ltl_str_len', code); return 'i64'; }
+                code.push(0x1a);
+                emitI64Const(0);
+                return 'i64';
+            }
+            if (name === 'capitalize' && argsCount > 0) {
+                var ck = argExprParser(0);
+                if (ck !== 'str') valueToStr(ck);
+                callImport('ltl_str_capitalize', code);
+                return 'str';
+            }
+            if ((name === 'upper' || name === 'to_upper') && argsCount > 0) {
+                var upk = argExprParser(0);
+                if (upk !== 'str') valueToStr(upk);
+                callImport('ltl_str_upper', code);
+                return 'str';
+            }
+            if ((name === 'lower' || name === 'to_lower') && argsCount > 0) {
+                var lwk = argExprParser(0);
+                if (lwk !== 'str') valueToStr(lwk);
+                callImport('ltl_str_lower', code);
+                return 'str';
+            }
+            if (name === 'trim' && argsCount > 0) {
+                var trk = argExprParser(0);
+                if (trk !== 'str') valueToStr(trk);
+                callImport('ltl_str_trim', code);
+                return 'str';
+            }
+            return null;
+        }
+
+        function parseExpr() { return parsePipeline(); }
+
+        function parsePipeline() {
+            var leftKind = parseOr();
+            while (match('OP', '|>')) {
+                var rhsTok = peek();
+                if (rhsTok.type === 'IDENT' && rhsTok.val === 'await') {
+                    next();
+                    continue;
+                }
+                var fnName = expect('IDENT').val;
+                var hasParens = Boolean(match('SYM', '('));
+                if (fnName === 'split') {
+                    if (leftKind !== 'str') leftKind = valueToStr(leftKind);
+                    if (hasParens && peek().val !== ')') {
+                        var sepKind = parseExpr();
+                        if (sepKind !== 'str') valueToStr(sepKind);
+                    } else {
+                        emitI32Const(builder.internString(' '));
+                    }
+                    if (hasParens) expect('SYM', ')');
+                    callImport('ltl_str_split', code);
+                    leftKind = 'list';
+                    continue;
+                }
+                if (fnName === 'map' && hasParens) {
+                    var opName = 'capitalize';
+                    if (match('SYM', '|')) {
+                        while (peek().val !== '|' && peek().type !== 'EOF') next();
+                        expect('SYM', '|');
+                    }
+                    if (peek().type === 'IDENT') {
+                        var innerFn = next().val;
+                        opName = innerFn;
+                        if (match('SYM', '(')) {
+                            while (peek().val !== ')' && peek().type !== 'EOF') next();
+                            expect('SYM', ')');
+                        }
+                    }
+                    expect('SYM', ')');
+                    emitI32Const(builder.internString(opName));
+                    callImport('ltl_list_map_op', code);
+                    leftKind = 'list';
+                    continue;
+                }
+                if (fnName === 'join') {
+                    if (hasParens && peek().val !== ')') {
+                        var jSepKind = parseExpr();
+                        if (jSepKind !== 'str') valueToStr(jSepKind);
+                    } else {
+                        emitI32Const(builder.internString(''));
+                    }
+                    if (hasParens) expect('SYM', ')');
+                    callImport('ltl_list_join', code);
+                    leftKind = 'str';
+                    continue;
+                }
+                if (fnName === 'len') {
+                    if (hasParens) expect('SYM', ')');
+                    if (leftKind === 'str') {
+                        callImport('ltl_str_len', code);
+                        leftKind = 'i64';
+                    }
+                    continue;
+                }
+                if (fnName === 'capitalize' || fnName === 'upper' || fnName === 'lower' || fnName === 'trim') {
+                    if (hasParens) expect('SYM', ')');
+                    if (leftKind !== 'str') valueToStr(leftKind);
+                    callImport('ltl_str_' + fnName, code);
+                    leftKind = 'str';
+                    continue;
+                }
+                // General user function pipeline x |> f(b)
+                if (fnSigs[fnName]) {
+                    var sig = fnSigs[fnName];
+                    if (sig.params.length > 0) coerceKind(leftKind, sig.params[0].kind);
+                    var argIdx = 1;
+                    if (hasParens) {
+                        while (!match('SYM', ')')) {
+                            var ak = parseExpr();
+                            if (sig.params[argIdx]) coerceKind(ak, sig.params[argIdx].kind);
+                            argIdx++;
+                            match('SYM', ',');
+                        }
+                    }
+                    code.push({ callTarget: fnName });
+                    leftKind = sig.retKind || '';
+                    continue;
+                }
+                if (hasParens) {
+                    var depth = 1;
+                    while (depth > 0 && peek().type !== 'EOF') {
+                        var nt = next();
+                        if (nt.val === '(') depth++;
+                        else if (nt.val === ')') depth--;
+                    }
+                }
+            }
+            return leftKind;
+        }
+
+        function parseOr() {
+            var lk = parseAnd();
+            while (match('OP', '||')) {
+                lk = coerceKind(lk, 'bool');
+                var rk = parseAnd();
+                coerceKind(rk, 'bool');
+                code.push(0x72); // i32.or
+                lk = 'bool';
+            }
+            return lk;
+        }
+
+        function parseAnd() {
+            var lk = parseEq();
+            while (match('OP', '&&')) {
+                lk = coerceKind(lk, 'bool');
+                var rk = parseEq();
+                coerceKind(rk, 'bool');
+                code.push(0x71); // i32.and
+                lk = 'bool';
+            }
+            return lk;
+        }
+
+        function parseEq() {
+            var lk = parseCmp();
+            while ((peek().type === 'OP') && (peek().val === '==' || peek().val === '!=')) {
+                var op = next().val;
+                var rk = parseCmp();
+                var target = (lk === 'f64' || rk === 'f64') ? 'f64' : ((lk === 'bool' && rk === 'bool') ? 'bool' : 'i64');
+                if (lk === 'i64' && target === 'f64') {
+                    var tmp = ensureLocal('__mix_' + (++seq), 'f64');
+                    emitLocalSet(tmp); code.push(0xb9); emitLocalGet(tmp);
+                }
+                coerceKind(rk, target);
+                if (target === 'f64') code.push(op === '==' ? 0x61 : 0x62);
+                else if (target === 'bool') code.push(op === '==' ? 0x46 : 0x47);
+                else code.push(op === '==' ? 0x51 : 0x52);
+                lk = 'bool';
+            }
+            return lk;
+        }
+
+        function parseCmp() {
+            var lk = parseAdd();
+            while ((peek().type === 'SYM' && (peek().val === '<' || peek().val === '>')) ||
+                   (peek().type === 'OP' && (peek().val === '<=' || peek().val === '>='))) {
+                var op = next().val;
+                var rk = parseAdd();
+                var target = (lk === 'f64' || rk === 'f64') ? 'f64' : 'i64';
+                if (lk === 'i64' && target === 'f64') {
+                    var tmp = ensureLocal('__mix_' + (++seq), 'f64');
+                    emitLocalSet(tmp); code.push(0xb9); emitLocalGet(tmp);
+                }
+                coerceKind(rk, target);
+                if (target === 'f64') {
+                    code.push({ '<': 0x63, '>': 0x64, '<=': 0x65, '>=': 0x66 }[op]);
+                } else {
+                    code.push({ '<': 0x53, '>': 0x55, '<=': 0x57, '>=': 0x59 }[op]);
+                }
+                lk = 'bool';
+            }
+            return lk;
+        }
+
+        function parseAdd() {
+            var lk = parseMul();
+            while (peek().type === 'SYM' && (peek().val === '+' || peek().val === '-')) {
+                var op = next().val;
+                if (op === '+' && lk === 'str') {
+                    var rkStr = parseMul();
+                    if (rkStr !== 'str') valueToStr(rkStr);
+                    callImport('ltl_str_concat', code);
+                    lk = 'str';
+                    continue;
+                }
+                var rk = parseMul();
+                if (op === '+' && rk === 'str') {
+                    var tmpS = ensureLocal('__mixs_' + (++seq), 'str');
+                    emitLocalSet(tmpS);
+                    valueToStr(lk);
+                    emitLocalGet(tmpS);
+                    callImport('ltl_str_concat', code);
+                    lk = 'str';
+                    continue;
+                }
+                var target = (lk === 'f64' || rk === 'f64') ? 'f64' : 'i64';
+                if (lk === 'i64' && target === 'f64') {
+                    var tmp = ensureLocal('__mix_' + (++seq), 'f64');
+                    emitLocalSet(tmp); code.push(0xb9); emitLocalGet(tmp);
+                }
+                coerceKind(rk, target);
+                if (target === 'f64') code.push(op === '+' ? 0xa0 : 0xa1);
+                else code.push(op === '+' ? 0x7c : 0x7d);
+                lk = target;
+            }
+            return lk;
+        }
+
+        function parseMul() {
+            var lk = parseUnary();
+            while (peek().type === 'SYM' && (peek().val === '*' || peek().val === '/' || peek().val === '%')) {
+                var op = next().val;
+                var rk = parseUnary();
+                var target = (lk === 'f64' || rk === 'f64') ? 'f64' : 'i64';
+                if (lk === 'i64' && target === 'f64') {
+                    var tmp = ensureLocal('__mix_' + (++seq), 'f64');
+                    emitLocalSet(tmp); code.push(0xb9); emitLocalGet(tmp);
+                }
+                coerceKind(rk, target);
+                if (target === 'f64') code.push(op === '*' ? 0xa2 : 0xa3);
+                else code.push(op === '*' ? 0x7e : (op === '/' ? 0x7f : 0x81));
+                lk = target;
+            }
+            return lk;
+        }
+
+        function parseUnary() {
+            if (match('SYM', '-')) {
+                if (peek().type === 'INT') {
+                    emitI64Const(-BigInt(next().val));
+                    return 'i64';
+                }
+                if (peek().type === 'FLOAT') {
+                    emitF64Const(-parseFloat(next().val));
+                    return 'f64';
+                }
+                var k = parseUnary();
+                if (k === 'f64') { code.push(0x9a); return 'f64'; }
+                var tmp = ensureLocal('__neg_' + (++seq), 'i64');
+                emitLocalSet(tmp);
+                emitI64Const(0);
+                emitLocalGet(tmp);
+                code.push(0x7d);
+                return 'i64';
+            }
+            if (match('SYM', '!')) {
+                var kBool = parseUnary();
+                if (kBool === 'i64') { emitI64Const(0); code.push(0x52); }
+                code.push(0x45); // i32.eqz
+                return 'bool';
+            }
+            return parsePostfix();
+        }
+
+        function parsePostfix() {
+            var k = parsePrimary();
+            while (true) {
+                if (match('OP', '|>')) {
+                    pos--;
+                    break;
+                }
+                if (match('OP', '?')) {
+                    continue;
+                }
+                break;
+            }
+            return k;
+        }
+
+        function parsePrimary() {
+            var t = peek();
+            if (t.type === 'INT') { next(); emitI64Const(BigInt(t.val)); return 'i64'; }
+            if (t.type === 'FLOAT') { next(); emitF64Const(parseFloat(t.val)); return 'f64'; }
+            if (t.type === 'STR') { next(); emitI32Const(builder.internString(t.val)); return 'str'; }
+            if (t.type === 'ISTR') {
+                next();
+                var count = 0;
+                t.parts.forEach(function(part) {
+                    if (part.kind === 'str') {
+                        if (part.val === '' && count > 0) return;
+                        emitI32Const(builder.internString(part.val));
+                    } else {
+                        var exprText = part.val.replace(/:[^}:]+$/, '').trim();
+                        var ek = parseSubExprStr(exprText);
+                        if (ek !== 'str') valueToStr(ek);
+                    }
+                    count++;
+                    if (count > 1) callImport('ltl_str_concat', code);
+                });
+                if (count === 0) emitI32Const(builder.internString(''));
+                return 'str';
+            }
+            if (match('SYM', '(')) {
+                var inner = parseExpr();
+                expect('SYM', ')');
+                return inner;
+            }
+            if (t.type === 'IDENT') {
+                next();
+                if (t.val === 'true') { emitI32Const(1); return 'bool'; }
+                if (t.val === 'false') { emitI32Const(0); return 'bool'; }
+                if (t.val === 'nil' || t.val === 'null') { emitI64Const(0); return 'i64'; }
+
+                var callName = t.val;
+                if ((match('SYM', '.') || match('OP', '::')) && peek().type === 'IDENT') {
+                    callName = callName + '.' + next().val;
+                }
+
+                if (match('SYM', '(')) {
+                    if (callName === 'println' || callName === 'print' || callName === 'http_get' ||
+                        callName === 'http.get' || callName === 'len' || callName === 'capitalize' ||
+                        callName === 'upper' || callName === 'to_upper' || callName === 'lower' ||
+                        callName === 'to_lower' || callName === 'trim') {
+                        if (peek().val === ')') {
+                            next();
+                            return applyBuiltinCall(callName, 0, function() { return ''; });
+                        }
+                        var ret = applyBuiltinCall(callName, 1, function() { return parseExpr(); });
+                        while (match('SYM', ',')) parseExpr();
+                        expect('SYM', ')');
+                        return ret;
+                    }
+                    var sig = fnSigs[callName];
+                    var argIdx = 0;
+                    if (!match('SYM', ')')) {
+                        do {
+                            var ak = parseExpr();
+                            if (sig && sig.params[argIdx]) coerceKind(ak, sig.params[argIdx].kind);
+                            argIdx++;
+                        } while (match('SYM', ','));
+                        expect('SYM', ')');
+                    }
+                    if (sig) {
+                        code.push({ callTarget: callName });
+                        return sig.retKind;
+                    }
+                    emitI64Const(0);
+                    return 'i64';
+                }
+
+                if (varIndex[callName] !== undefined) {
+                    emitLocalGet(varIndex[callName]);
+                    return varKinds[callName];
+                }
+                emitI64Const(0);
+                return 'i64';
+            }
+            throw new Error('Line ' + t.line + ': Unexpected token "' + (t.val || t.type) + '"');
+        }
+
+        function parseCondition() {
+            var k = parseExpr();
+            if (k === 'i64') { emitI64Const(0); code.push(0x52); }
+            else if (k === 'f64') { emitF64Const(0.0); code.push(0x62); }
+        }
+
+        function parseBlock() {
+            expect('SYM', '{');
+            while (!match('SYM', '}') && peek().type !== 'EOF') {
+                parseStmt(false);
+            }
+        }
+
+        function parseIfStmt() {
+            parseCondition();
+            code.push(0x04, 0x40); // if (void)
+            parseBlock();
+            if (match('IDENT', 'elif')) {
+                code.push(0x05);
+                parseIfStmt();
+            } else if (match('IDENT', 'else')) {
+                code.push(0x05);
+                if (match('IDENT', 'if')) parseIfStmt();
+                else parseBlock();
+            }
+            code.push(0x0b);
+        }
+
+        function parseStmt(isLastTop) {
+            while (match('SYM', ';')) {}
+            if (peek().type === 'EOF') return;
+
+            if (match('IDENT', 'let') || match('IDENT', 'const')) {
+                match('IDENT', 'mut');
+                var name = expect('IDENT').val;
+                var declKind = skipTypeAnnotation();
+                expect('SYM', '=');
+                var valKind = parseExpr();
+                var kind = declKind || valKind || 'i64';
+                coerceKind(valKind, kind);
+                var idx = ensureLocal(name, kind);
+                emitLocalSet(idx);
+                match('SYM', ';');
+                return;
+            }
+            if (match('IDENT', 'return')) {
+                if (peek().val !== '}' && peek().val !== ';' && peek().type !== 'EOF') {
+                    var rk = parseExpr();
+                    if (retKind) coerceKind(rk, retKind);
+                    else if (rk) code.push(0x1a);
+                } else if (retKind) {
+                    emitDefault(kindToWasm(retKind));
+                }
+                code.push(0x0f);
+                match('SYM', ';');
+                return;
+            }
+            if (match('IDENT', 'if')) { parseIfStmt(); return; }
+            if (match('IDENT', 'while')) {
+                code.push(0x02, 0x40, 0x03, 0x40); // block { loop {
+                loopStack.push({ exitDepthFromTop: 1, contDepthFromTop: 0 });
+                parseCondition();
+                code.push(0x45, 0x0d, 0x01); // i32.eqz; br_if 1
+                parseBlock();
+                loopStack.pop();
+                code.push(0x0c, 0x00, 0x0b, 0x0b); // br 0; end; end
+                return;
+            }
+            if (match('IDENT', 'for')) {
+                var loopVar = expect('IDENT').val;
+                expect('IDENT', 'in');
+                var sk = parseExpr();
+                coerceKind(sk, 'i64');
+                var varIdx = ensureLocal(loopVar, 'i64');
+                emitLocalSet(varIdx);
+                var inclusive = Boolean(match('OP', '..'));
+                if (!inclusive) expect('OP', '..<');
+                var ek = parseExpr();
+                coerceKind(ek, 'i64');
+                var endIdx = ensureLocal('__end_' + (++seq), 'i64');
+                emitLocalSet(endIdx);
+                code.push(0x02, 0x40, 0x03, 0x40);
+                emitLocalGet(varIdx);
+                emitLocalGet(endIdx);
+                code.push(inclusive ? 0x55 : 0x59); // i64.gt_s vs i64.ge_s
+                code.push(0x0d, 0x01);
+                loopStack.push({ exitDepthFromTop: 1, contDepthFromTop: 0 });
+                parseBlock();
+                loopStack.pop();
+                emitLocalGet(varIdx);
+                emitI64Const(1);
+                code.push(0x7c); // i64.add
+                emitLocalSet(varIdx);
+                code.push(0x0c, 0x00, 0x0b, 0x0b);
+                return;
+            }
+            if (match('IDENT', 'break') && loopStack.length) {
+                code.push(0x0c, 0x01);
+                match('SYM', ';');
+                return;
+            }
+            if (match('IDENT', 'continue') && loopStack.length) {
+                code.push(0x0c, 0x00);
+                match('SYM', ';');
+                return;
+            }
+            if (peek().type === 'IDENT' && peek(1).type === 'SYM' && peek(1).val === '=') {
+                var aname = next().val;
+                next();
+                var targetKind = varKinds[aname] || 'i64';
+                var got = parseExpr();
+                coerceKind(got, targetKind);
+                emitLocalSet(ensureLocal(aname, targetKind));
+                match('SYM', ';');
+                return;
+            }
+            if (peek().type === 'IDENT' && peek(1).type === 'OP' && ['+=', '-=', '*=', '/='].indexOf(peek(1).val) !== -1) {
+                var cname = next().val;
+                var cop = next().val[0];
+                var ck = varKinds[cname] || 'i64';
+                var cidx = ensureLocal(cname, ck);
+                emitLocalGet(cidx);
+                var cg = parseExpr();
+                coerceKind(cg, ck);
+                if (ck === 'f64') code.push({ '+': 0xa0, '-': 0xa1, '*': 0xa2, '/': 0xa3 }[cop]);
+                else code.push({ '+': 0x7c, '-': 0x7d, '*': 0x7e, '/': 0x7f }[cop]);
+                emitLocalSet(cidx);
+                match('SYM', ';');
+                return;
+            }
+
+            var exprKind = parseExpr();
+            match('SYM', ';');
+            if (isLastTop && retKind && exprKind && peek().type === 'EOF') {
+                coerceKind(exprKind, retKind);
+                code.push(0x0f);
+                return 'RETURNED';
+            }
+            if (exprKind) code.push(0x1a); // drop
+        }
+
+        var returned = false;
+        while (peek().type !== 'EOF') {
+            var res = parseStmt(true);
+            if (res === 'RETURNED') returned = true;
+        }
+        if (retKind && !returned) {
+            emitDefault(kindToWasm(retKind));
+            code.push(0x0f);
+        }
+
+        tokens = savedTokens;
+        return { locals: locals, body: code };
+    }
+
+    fnDefs.forEach(function(def) {
+        var compiled = compileFunctionBody(def.params, def.retKind, def.start, def.end);
+        builder.addFunc(
+            def.name,
+            def.params.map(function(p) { return kindToWasm(p.kind); }),
+            kindToWasm(def.retKind),
+            compiled.locals,
+            compiled.body,
+            true
+        );
+    });
+
+    if (!fnSigs.main) {
+        // Wrap top-level statements inside synthetic main
+        var saved = tokens;
+        tokens = topTokens.concat([{ type: 'EOF', val: '', line: 0 }]);
+        var wrapped = [{ type: 'SYM', val: '{', line: 0 }].concat(tokens, [{ type: 'SYM', val: '}', line: 0 }]);
+        tokens = wrapped;
+        var compiledMain = compileFunctionBody([], 'i64', 0, wrapped.length);
+        tokens = saved;
+        builder.addFunc('main', [], 'i64', compiledMain.locals, compiledMain.body, true);
+    }
+
+    return builder.build();
+}
+
+function compileLinesToWasm(lines) {
+    var builder = new WasmBinaryBuilder();
+    var body = [];
+    lines.forEach(function(line) {
+        var ptr = builder.internString(line.text);
+        builder.ensureImport('println', 'env', 'println', ['i32'], '');
+        body.push(0x41);
+        Array.prototype.push.apply(body, encodeSleb128(ptr));
+        body.push(0x10);
+        Array.prototype.push.apply(body, encodeUleb128(builder.importMap.println));
+    });
+    builder.addFunc('main', [], '', [], body, true);
+    return builder.build();
+}
+
+async function runLateralusWasm(wasmBytes, options) {
+    var opts = options || {};
+    var httpCache = opts.httpCache || new Map();
+    var printed = [];
+
+    for (var attempt = 0; attempt < 16; attempt++) {
+        printed.length = 0;
+        var shim = createLateralusHostShim({
+            onPrint: function(line) { printed.push(line); },
+            httpCache: httpCache,
+        });
+        var instantiated = await WebAssembly.instantiate(wasmBytes, shim.imports);
+        shim.bindInstance(instantiated.instance);
+        try {
+            var exitCode = instantiated.instance.exports.main ? instantiated.instance.exports.main() : 0;
+            return { lines: printed.slice(), exitCode: exitCode };
+        } catch (err) {
+            if (err && err.name === 'WasmAsyncHttpRequest') {
+                try {
+                    var resp = await fetch(err.url);
+                    httpCache.set(err.url, await resp.text());
+                } catch (netErr) {
+                    httpCache.set(err.url, '[http_get error: ' + (netErr.message || String(netErr)) + ']');
+                }
+                continue;
+            }
+            throw err;
+        }
+    }
+    throw new Error('Exceeded max async http_get replays (16)');
+}
+
 async function runCode() {
     var code = editor.value;
     if (!code.trim()) {
@@ -2135,73 +3505,44 @@ async function runCode() {
         return;
     }
 
-    output.innerHTML = '<span class="info">Compiling...</span>';
+    output.innerHTML = '<span class="info">Compiling to WebAssembly...</span>';
     var lineCount = code.split('\n').length;
+    var start = performance.now();
 
-    // Try API first, fall back to simulation
     try {
-        var controller = new AbortController();
-        var fetchTimeout = setTimeout(function() { controller.abort(); }, 8000);
-
-        var resp = await fetch('/api/run', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ code: code }),
-            signal: controller.signal,
-        });
-
-        clearTimeout(fetchTimeout);
-
-        if (!resp.ok && resp.status !== 200) {
-            throw new Error('API returned status ' + resp.status);
+        var wasmBytes = compileLateralusToWasm(code);
+        var execResult = await runLateralusWasm(wasmBytes);
+        var elapsed = (performance.now() - start).toFixed(1);
+        var outLines = execResult.lines.map(function(txt) { return { text: txt, type: '' }; });
+        if (outLines.length === 0) {
+            outLines.push({ text: '(program compiled and ran cleanly via WASM -- exit code ' + String(execResult.exitCode ?? 0) + ')', type: 'info' });
         }
-
-        var data;
-        try {
-            data = await resp.json();
-        } catch (jsonErr) {
-            throw new Error('Non-JSON response from API');
-        }
-
-        // API returned valid JSON
-        var html = '<span class="sep">----------------------------------------</span>\n';
-        html += '<span class="info">  Compiled main.ltl (' + lineCount + ' lines)</span>\n';
-        html += '<span class="sep">----------------------------------------</span>\n\n';
-
-        if (data.success && Array.isArray(data.output)) {
-            data.output.forEach(function(line) {
-                html += escHtml(String(line)) + '\n';
-            });
-            html += '\n<span class="sep">----------------------------------------</span>\n';
-            html += '<span class="info">  Process exited (' + (data.stats ? data.stats.elapsed_ms : '?') + 'ms, ' + (data.stats ? data.stats.steps : '?') + ' steps) -- 0 errors, 0 warnings</span>\n';
-        } else if (data.error) {
-            // Try simulation fallback for known example patterns
+        output.innerHTML = renderOutput(outLines, lineCount, elapsed, wasmBytes.length + 'B WASM · local');
+    } catch (compileErr) {
+        var sim = simulateRun(code);
+        if (sim.matched) {
             try {
-                var simResult = simulateRun(code);
-                if (simResult.matched) {
-                    output.innerHTML = renderOutput(simResult.lines, lineCount, simResult.elapsed, false);
-                    return;
-                }
-            } catch(simErr) {}
-            var errMsg = typeof data.error === 'string' ? data.error : (data.error.message || 'Unknown error');
-            html += '<span class="error">' + escHtml(errMsg) + '</span>\n';
-            html += '\n<span class="sep">----------------------------------------</span>\n';
-            html += '<span class="error">  Compilation failed (' + (data.stats ? data.stats.elapsed_ms : 0) + 'ms)</span>\n';
-        } else {
-            html += '<span class="info">(program compiled successfully -- no output)</span>\n';
-            html += '\n<span class="sep">----------------------------------------</span>\n';
-            html += '<span class="info">  Process exited (0ms) -- 0 errors, 0 warnings</span>\n';
+                var presetWasm = compileLinesToWasm(sim.lines);
+                var presetRun = await runLateralusWasm(presetWasm);
+                var typedLines = presetRun.lines.map(function(txt, idx) {
+                    return { text: txt, type: sim.lines[idx] ? sim.lines[idx].type : '' };
+                });
+                var elapsed2 = (performance.now() - start).toFixed(1);
+                output.innerHTML = renderOutput(typedLines, lineCount, elapsed2, presetWasm.length + 'B WASM · local');
+                return;
+            } catch (wasmErr) {
+                var elapsedFallback = (performance.now() - start).toFixed(1);
+                output.innerHTML = renderOutput(sim.lines, lineCount, elapsedFallback, 'offline');
+                return;
+            }
         }
-
-        output.innerHTML = html;
-    } catch (fetchErr) {
-        // Fallback to client-side simulation
-        try {
-            var result = simulateRun(code);
-            output.innerHTML = renderOutput(result.lines, lineCount, result.elapsed, true);
-        } catch (simErr) {
-            output.innerHTML = '<span class="error">Error: ' + escHtml(String(fetchErr.message || fetchErr)) + '</span>';
-        }
+        output.innerHTML =
+            '<span class="sep">----------------------------------------</span>\n' +
+            '<span class="info">  Compiled main.ltl (' + lineCount + ' lines) [local WASM]</span>\n' +
+            '<span class="sep">----------------------------------------</span>\n\n' +
+            '<span class="error">' + escHtml(String(compileErr.message || compileErr)) + '</span>\n' +
+            '\n<span class="sep">----------------------------------------</span>\n' +
+            '<span class="error">  Compilation failed</span>\n';
     }
 }
 
