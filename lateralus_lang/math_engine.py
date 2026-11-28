@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import math
 import operator
+import sys
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal, getcontext
 from fractions import Fraction
@@ -412,13 +413,20 @@ class Vector:
         return sum(a * b for a, b in zip(self._data, other._data))
 
     def norm(self) -> float:
-        return math.sqrt(self.dot(self))
+        return math.hypot(*self._data)
 
     def normalize(self) -> "Vector":
+        values = self._data
         n = self.norm()
         if n == 0:
             raise ValueError("cannot normalize zero vector")
-        return self * (1 / n)
+        if n < sys.float_info.min or (math.isinf(n) and all(map(math.isfinite, values))):
+            # The exact norm can be subnormal or exceed the float range even
+            # when every component of the unit vector is representable.
+            scale = max(map(abs, values))
+            values = [x / scale for x in values]
+            n = math.hypot(*values)
+        return Vector([x / n for x in values])
 
     def cross(self, other: "Vector") -> "Vector":
         if len(self) != 3 or len(other) != 3:
