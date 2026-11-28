@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Linear Algebra in the Standard Library — Lateralus</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "Linear Algebra Without a Notebook: stdlib.linalg in Practice"
+author: celaltokmak61
+date: 2026-11-28
+abstract: A runnable tour of stdlib/linalg.ltl — vector arithmetic, dot and cross products, normalization and projection, row-major matrices, and the pinned vectors that prove the API behaves.
+---
+
+## The pitch
+
+Most programs that need "a vector" only need a list and a handful of operations. `stdlib/linalg.ltl` wraps those operations in one place: vectors are plain lists, matrices are row-major nested lists, and every function returns a new value instead of mutating its input.
+
+```lateralus
+import stdlib.linalg
+
+let a = [1, 2, 3]
+let b = [4, 5, 6]
+stdlib.linalg.dot_product(a, b)
+```
+
+## Vector arithmetic
+
+`vec_add`, `vec_sub`, and `vec_scale` walk the lists element by element. They assume equal lengths; that is a caller contract, not a runtime check.
+
+Pinned vectors:
+
+```lateralus
+@test
+fn vec_add_sums_elementwise() -> bool {
+    return stdlib.linalg.vec_add([1, 2, 3], [4, 5, 6]) == [5, 7, 9]
+}
+
+@test
+fn vec_scale_multiplies_each_element() -> bool {
+    return stdlib.linalg.vec_scale([1, 2, 3], 2.0) == [2.0, 4.0, 6.0]
+}
+```
+
+## Dot and cross products
+
+`dot_product` returns a scalar sum of pairwise products. `cross_product` is the 3D cross product and returns a new three-element list.
+
+Pinned vectors:
+
+```lateralus
+@test
+fn dot_product_returns_scalar() -> bool {
+    return stdlib.linalg.dot_product([1, 2, 3], [4, 5, 6]) == 32.0
+}
+
+@test
+fn cross_product_returns_orthogonal_axis() -> bool {
+    return stdlib.linalg.cross_product([1, 0, 0], [0, 1, 0]) == [0, 0, 1]
+}
+```
+
+## Length, direction, projection
+
+`magnitude` uses `dot_product(v, v)` and the math module's square root. `normalize` divides by that length and throws on a zero vector. `projection(a, b)` computes the component of `a` along `b`; projecting onto a zero vector also throws.
+
+Pinned vectors:
+
+```lateralus
+@test
+fn magnitude_uses_pythagoras() -> bool {
+    return stdlib.linalg.magnitude([3.0, 4.0]) == 5.0
+}
+
+@test
+fn projection_onto_axis_keeps_component() -> bool {
+    return stdlib.linalg.projection([3.0, 2.0], [1.0, 0.0]) == [3.0, 0.0]
+}
+```
+
+## Matrices are row-major
+
+`mat_zeros(rows, cols)` builds nested lists. `mat_mul` multiplies `ra x ca` by `ca x cb`; `mat_transpose` swaps rows and columns. Both return fresh matrices.
+
+Pinned vectors:
+
+```lateralus
+@test
+fn mat_mul_composes_transformations() -> bool {
+    let a = [[1.0, 2.0], [3.0, 4.0]]
+    let b = [[5.0, 6.0], [7.0, 8.0]]
+    return stdlib.linalg.mat_mul(a, b) == [[19.0, 22.0], [43.0, 50.0]]
+}
+
+@test
+fn mat_transpose_swaps_axes() -> bool {
+    let m = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
+    return stdlib.linalg.mat_transpose(m) == [[1.0, 4.0], [2.0, 5.0], [3.0, 6.0]]
+}
+```
+
+## Runnable example
+
+Save as `examples/linalg_tutorial.ltl` and run `lateralus test examples/linalg_tutorial.ltl`.
+
+```lateralus
+import stdlib.linalg
+
+@test
+fn vec_add_sums_elementwise() -> bool {
+    return stdlib.linalg.vec_add([1, 2, 3], [4, 5, 6]) == [5, 7, 9]
+}
+
+@test
+fn vec_scale_multiplies_each_element() -> bool {
+    return stdlib.linalg.vec_scale([1, 2, 3], 2.0) == [2.0, 4.0, 6.0]
+}
+
+@test
+fn dot_product_returns_scalar() -> bool {
+    return stdlib.linalg.dot_product([1, 2, 3], [4, 5, 6]) == 32.0
+}
+
+@test
+fn cross_product_returns_orthogonal_axis() -> bool {
+    return stdlib.linalg.cross_product([1, 0, 0], [0, 1, 0]) == [0, 0, 1]
+}
+
+@test
+fn magnitude_uses_pythagoras() -> bool {
+    return stdlib.linalg.magnitude([3.0, 4.0]) == 5.0
+}
+
+@test
+fn projection_onto_axis_keeps_component() -> bool {
+    return stdlib.linalg.projection([3.0, 2.0], [1.0, 0.0]) == [3.0, 0.0]
+}
+
+@test
+fn mat_mul_composes_transformations() -> bool {
+    let a = [[1.0, 2.0], [3.0, 4.0]]
+    let b = [[5.0, 6.0], [7.0, 8.0]]
+    return stdlib.linalg.mat_mul(a, b) == [[19.0, 22.0], [43.0, 50.0]]
+}
+
+@test
+fn mat_transpose_swaps_axes() -> bool {
+    let m = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
+    return stdlib.linalg.mat_transpose(m) == [[1.0, 4.0], [2.0, 5.0], [3.0, 6.0]]
+}
+```
+
+Expected output:
+
+```
+8/8 tests passed
+```
+
+## Practical notes
+
+- Pass equal-length vectors to vector operations; the module does not pad or reshape.
+- Use `1e-12` as the zero threshold when you write your own guards, matching the module.
+- For full numerical work with decompositions and solvers, use a dedicated numeric library. This module is the ergonomic layer for everyday geometry and small matrices.
+  </script>
+</body>
+</html>
