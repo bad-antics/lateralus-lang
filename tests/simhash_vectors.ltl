@@ -1,0 +1,100 @@
+// ===================================================================
+// tests/simhash_tutorial_vectors.ltl -- pinned test vectors for the
+// stdlib.simhash tutorial. Style follows tests/stdlib_spiral_wave_*.
+//
+// Every fingerprint constant below was recomputed from two sources
+// that must agree: stdlib/simhash.ltl (tokeniser + vote/threshold
+// rule) and stdlib/xxhash.ltl (the token hash). The recomputation
+// was validated against the constant this repo itself pins for
+// XXH64 of the empty input, 0xEF46DB3751D8E999
+// (tests/stdlib_spiral_wave_7.ltl), and against canonical XXH64.
+// ===================================================================
+
+let PASS = 0
+let FAIL = 0
+
+fn check(name: str, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        print("  ok  " + name)
+    } else {
+        FAIL = FAIL + 1
+        print("  FAIL " + name)
+    }
+}
+
+fn test_fingerprints() {
+    print("-- fingerprints --")
+    // With no tokens every accumulator stays 0 and the >= 0 rule
+    // sets all 64 bits: the empty text fingerprints to all ones.
+    check("empty is all ones", simhash_fingerprint("") == 18446744073709551615)
+
+    // A single token votes alone, so the fingerprint is exactly the
+    // token's XXH64 (seed 0): canonical values, not approximations.
+    check("single token a", simhash_fingerprint("a") == 15154266338359012955)
+    check("single token hello", simhash_fingerprint("hello") == 2794345569481354659)
+
+    // The four documents used by the tutorial example.
+    check("doc fox", simhash_fingerprint("the quick brown fox") == 9021808664844435374)
+    check("doc fox punct", simhash_fingerprint("The quick brown fox!") == 9021808664844435374)
+    check("doc fox jumps", simhash_fingerprint("the quick brown fox jumps") == 8733468285856048298)
+    check("doc quantum", simhash_fingerprint("quantum entanglement lecture notes") == 18260648562999156725)
+
+    // fingerprint_all maps the list in order.
+    let all = simhash_fingerprint_all(["the quick brown fox",
+                                       "quantum entanglement lecture notes"])
+    check("fingerprint_all", all == [9021808664844435374, 18260648562999156725])
+}
+
+fn test_tokeniser_invariance() {
+    print("-- tokeniser invariance --")
+    // Case and punctuation are stripped before hashing.
+    check("case and punct", simhash_fingerprint("Fox!") == simhash_fingerprint("fox"))
+    check("separators", simhash_fingerprint("brown-fox") == simhash_fingerprint("brown fox"))
+
+    // Repetition scales every vote by the same factor, so no sign
+    // flips and the fingerprint is unchanged.
+    check("repetition", simhash_fingerprint("hello hello hello") == simhash_fingerprint("hello"))
+}
+
+fn test_hamming() {
+    print("-- hamming --")
+    check("self distance", simhash_hamming(9021808664844435374, 9021808664844435374) == 0)
+    check("max distance", simhash_hamming(0, 18446744073709551615) == 64)
+    check("nibble pattern", simhash_hamming(10, 5) == 4)
+    check("byte pattern", simhash_hamming(65280, 4080) == 8)
+
+    // Pairwise distances for the tutorial documents: one added
+    // token moves 13 bits; unrelated texts land 24-31 bits apart.
+    let a = simhash_fingerprint("the quick brown fox")
+    let c = simhash_fingerprint("the quick brown fox jumps")
+    let d = simhash_fingerprint("quantum entanglement lecture notes")
+    check("one token added", simhash_hamming(a, c) == 13)
+    check("unrelated pair", simhash_hamming(a, d) == 24)
+    check("unrelated pair 2", simhash_hamming(c, d) == 31)
+}
+
+fn test_similarity_and_decisions() {
+    print("-- similarity and near-duplicate --")
+    let a = simhash_fingerprint("the quick brown fox")
+    let b = simhash_fingerprint("The quick brown fox!")
+    let c = simhash_fingerprint("the quick brown fox jumps")
+    let d = simhash_fingerprint("quantum entanglement lecture notes")
+
+    // Similarity endpoints only: 1.0 - hamming/64 at distance 0 and
+    // at distance 64 (the empty fingerprint is all ones).
+    check("similarity self", simhash_similarity(a, a) == 1.0)
+    check("similarity max distance", simhash_similarity(0, simhash_fingerprint("")) == 0.0)
+
+    // Threshold decisions on both sides of the boundary.
+    check("dup at threshold 0", simhash_near_duplicate(a, b, 0))
+    check("not dup at 3", simhash_near_duplicate(a, c, 3) == false)
+    check("dup at exact distance", simhash_near_duplicate(a, c, 13))
+    check("unrelated not dup", simhash_near_duplicate(a, d, 3) == false)
+}
+
+test_fingerprints()
+test_tokeniser_invariance()
+test_hamming()
+test_similarity_and_decisions()
+print("simhash vectors: {PASS} passed, {FAIL} failed")

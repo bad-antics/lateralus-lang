@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>stdlib-simhash-tutorial</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "stdlib-simhash-tutorial"
+author: money-agent (AI-assisted, human-reviewed before submission)
+date: 2026-11-28
+abstract: A hands-on tour of stdlib/simhash.ltl: tokenising text, building 64-bit SimHash fingerprints on top of stdlib's canonical XXH64, and measuring near-duplicates with Hamming distance, with a runnable dedupe example and pinned test vectors checked line by line against the module source.
+
+# stdlib.simhash: Near-Duplicate Detection in 64 Bits
+
+Exact hashing answers "are these two texts identical?". Most real
+questions are fuzzier: is this support ticket a re-worded copy of one
+we already answered? Did this article get reposted with a new title?
+`stdlib/simhash.ltl` implements SimHash, the classic locality-sensitive
+fingerprint: similar texts land on similar 64-bit values, so "how
+alike?" becomes "how many bits differ?".
+
+Public functions from the module are called with the `simhash_`
+prefix, the same convention the spiral test suites use for every
+stdlib module (compare `aho_corasick_build` for
+`stdlib/aho_corasick.ltl`).
+
+## How a Fingerprint Is Built
+
+`simhash_fingerprint(text)` works in three steps:
+
+1. **Tokenise.** The text is lowercased and split on every
+   non-alphanumeric character, so `"The Quick, brown-fox!"` becomes
+   `["the", "quick", "brown", "fox"]`. Case and punctuation never
+   reach the hash.
+2. **Vote.** Each token is hashed with XXH64 (the module builds on
+   `stdlib/xxhash.ltl`, whose output is canonical: XXH64 of the empty
+   input is `0xEF46DB3751D8E999`, pinned in
+   `tests/stdlib_spiral_wave_7.ltl`). For each of the 64 bit
+   positions, a token votes +1 when its hash has the bit set and -1
+   when it does not.
+3. **Threshold.** A fingerprint bit is set when its accumulator ends
+   at zero or above.
+
+    let a = simhash_fingerprint("the quick brown fox")
+    // a == 9021808664844435374
+
+    simhash_fingerprint("The quick brown fox!") == a   // true
+
+Because only the *sign* of each accumulator survives, repeating a
+token scales every vote without flipping any sign:
+
+    simhash_fingerprint("hello hello hello")
+        == simhash_fingerprint("hello")                // true
+
+Word order is ignored entirely — SimHash sees a bag of tokens, not a
+sentence.
+
+## Measuring Similarity
+
+`simhash_hamming(a, b)` counts the bits in which two fingerprints
+differ, from 0 (identical token multisets, up to sign) to 64:
+
+    simhash_hamming(0, 18446744073709551615)   // 64
+    simhash_hamming(10, 5)                     // 4  (1010 vs 0101)
+
+`simhash_near_duplicate(a, b, threshold)` is the decision form:
+true when the Hamming distance is at most `threshold`.
+`simhash_similarity(a, b)` expresses the same idea as
+`1.0 - hamming / 64`; the vectors pin its endpoints (1.0 for equal
+fingerprints, 0.0 at distance 64). `simhash_fingerprint_all(texts)`
+maps a whole list of texts to fingerprints in one call.
+
+Adding a single token to a four-token text moves the fingerprint by
+13 bits here — small edits move few bits, unrelated texts land far
+apart:
+
+    simhash_hamming(simhash_fingerprint("the quick brown fox"),
+                    simhash_fingerprint("the quick brown fox jumps"))
+    // 13
+
+    simhash_hamming(simhash_fingerprint("the quick brown fox"),
+                    simhash_fingerprint("quantum entanglement lecture notes"))
+    // 24
+
+## Two Gotchas, Pinned Rather Than Hidden
+
+**The empty text fingerprints to all ones.** With no tokens, every
+accumulator stays at 0, and the "zero or above" rule sets all 64
+bits:
+
+    simhash_fingerprint("") == 18446744073709551615   // 0xFFFFFFFFFFFFFFFF
+
+So the empty string is at distance `64 - popcount(x)` from any other
+fingerprint `x`. Filter empty documents out before fingerprinting.
+
+**The token hash call is one step removed from xxhash's public
+shape.** Inside `simhash.ltl`, each token is hashed as
+`xxhash_hash64(token)`, while `stdlib/xxhash.ltl` defines
+`hash64(bytes, seed)` and `hash64_str(text, seed)`. The pinned
+vectors use the only reading under which the module's own
+spiral-wave assertions hold: the token's bytes hashed with seed 0.
+Under that reading a single-token text fingerprints to exactly that
+token's XXH64 — `simhash_fingerprint("a")` is `15154266338359012955`,
+the canonical XXH64 of `"a"`.
+
+## Runnable Example: a Dedupe Scan
+
+The companion file `examples/simhash_tutorial.ltl` fingerprints four
+short documents and prints the Hamming distance for every pair,
+flagging pairs at distance 3 or less:
+
+    doc 0 vs doc 1: hamming 0 -> near duplicate
+    doc 0 vs doc 2: hamming 13
+    doc 0 vs doc 3: hamming 24
+    doc 1 vs doc 2: hamming 13
+    doc 1 vs doc 3: hamming 24
+    doc 2 vs doc 3: hamming 31
+    1 near-duplicate pair(s) at threshold 3
+
+Documents 0 and 1 differ only in case and punctuation, so the
+tokeniser makes them the same text. Document 2 adds one word and
+lands 13 bits away — above a strict dedupe threshold, which is the
+point: pick the threshold for the job. Catching reposts tolerates a
+wider distance than catching copy-paste duplicates.
+
+## Pinned Test Vectors
+
+The companion file `tests/simhash_tutorial_vectors.ltl` pins 24
+checks in the spiral-suite style: the all-ones empty fingerprint,
+single-token fingerprints equal to canonical XXH64 values, the
+four-document fingerprint table with every pairwise distance,
+tokeniser invariance under case, punctuation and repetition,
+similarity endpoints, and near-duplicate decisions on both sides of
+a threshold. Every constant was recomputed from the two module
+sources, and the XXH64 mirror used for the recomputation was first
+validated against the constant the repo itself pins for the empty
+input. Run it the same way as any other suite in `tests/`.
+
+## When to Reach for It
+
+Use `stdlib.simhash` wherever "roughly the same text" is the real
+question: dedupe queues, repost detection, clustering log lines or
+tickets before a human reads them, cheap pre-filters ahead of an
+expensive diff. It is a fingerprint, not a proof — confirm flagged
+pairs with an exact comparison before deleting anything.
+
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>
