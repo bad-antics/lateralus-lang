@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>X25519 Diffie-Hellman in Lateralus</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav"><span class="nav-brand">LATERALUS</span><a href="../index.ltlml">Home</a><a href="../tutorial.ltlml">Tutorial</a><a href="../cookbook.ltlml">Cookbook</a><a href="../language-spec.ltlml">Spec</a></nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "X25519 Diffie-Hellman in Lateralus"
+author: bad-antics
+date: 2026-11-28
+abstract: A runnable, pinned RFC 7748 X25519 key exchange using the Lateralus standard library.
+
+# The exchange
+
+X25519 is Diffie-Hellman over Curve25519. Each participant keeps a 32-byte scalar, derives a public u-coordinate with the base point 9, and combines that public value with the other participant's scalar. Both sides arrive at the same 32-byte shared secret.
+
+The implementation is in `stdlib/x25519.ltl`. It uses the RFC 7748 Montgomery ladder with the prime `2^255 - 19`, little-endian byte strings, and `a24 = 121665`.
+
+## Clamping is part of X25519
+
+The input scalar is not used verbatim. `clamp_scalar` clears the low three bits of byte 0, clears the high bit of byte 31, and sets bit 254. This is the RFC decoding rule; the example checks all three conditions before doing the exchange.
+
+## Pinned RFC 7748 vector
+
+`examples/x25519_diffie_hellman.ltl` contains the complete RFC 7748 section 6.1 vector. Alice's private scalar is `77076d0a...b92c2a`; Bob's is `5dab087e...88e0eb`. The expected public keys are:
+
+- Alice: `8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a`
+- Bob: `de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f`
+
+Both `x25519_scalar_mult(alice, bob_pk)` and `x25519_scalar_mult(bob, alice_pk)` must equal `4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742`.
+
+Run it with:
+
+```text
+python3 -m lateralus_lang run examples/x25519_diffie_hellman.ltl
+```
+
+The output reports `true` for clamping, both base-point derivations, both public-key checks, and the shared-secret check. The implementation deliberately documents that its arbitrary-precision arithmetic is not constant-time; use a constant-time implementation for hostile side-channel environments.
+
+## What to remember
+
+Public keys may be shared. Private scalars must not be. A real protocol should also reject an all-zero shared secret and feed the result, together with the transcript and public keys, into a suitable key-derivation function.
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>
