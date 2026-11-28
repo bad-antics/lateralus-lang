@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>stdlib.resp: Redis Serialization Protocol</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "stdlib.resp: Redis Serialization Protocol"
+author: Lateralus contributors
+date: 2026-11-28
+abstract: A practical RESP2 and RESP3 tutorial with pinned wire vectors and a runnable Lateralus client example.
+---
+
+# stdlib.resp: Redis Serialization Protocol
+
+Redis speaks a line-oriented protocol called RESP. A frame starts with a type byte, carries a value, and ends with **CRLF** (`\\r\\n`). The module at `stdlib/resp.ltl` encodes and decodes RESP2 values and the RESP3 types that it supports.
+
+## Framing rules
+
+RESP2 has five value types:
+
+| Type | Prefix | Wire shape |
+|---|---|---|
+| Simple string | `+` | `+text\\r\\n` |
+| Error | `-` | `-message\\r\\n` |
+| Integer | `:` | `:number\\r\\n` |
+| Bulk string | `$` | `$length\\r\\npayload\\r\\n` |
+| Array | `*` | `*count\\r\\n` followed by values |
+
+The length of a bulk string is its byte length on the wire, not the number of display characters. A null bulk string is `$-1\\r\\n`; a null array is `*-1\\r\\n`. A client must keep reading until the complete frame is present, because a TCP read may end in the middle of a header, payload, or nested value.
+
+RESP3 keeps the RESP2 prefixes and adds null (`_`), boolean (`#`), double (`,`), big number (`(`), map (`%`), and set (`~`). The RESP3 null and boolean examples below are deliberately kept separate from RESP2 nulls so a decoder can preserve the protocol version's meaning.
+
+## Pinned protocol vectors
+
+These vectors are byte-for-byte examples from the [Redis protocol specification](https://redis.io/docs/latest/develop/reference/protocol-spec/). The visible `\\r\\n` is two bytes: carriage return followed by line feed.
+
+### RESP2 values
+
+```text
++OK\\r\\n
+-ERR unknown command 'x'\\r\\n
+:1000\\r\\n
+$6\\r\\nfoobar\\r\\n
+$-1\\r\\n
+*2\\r\\n$3\\r\\nGET\\r\\n$3\\r\\nkey\\r\\n
+```
+
+### RESP3 values
+
+```text
+_\\r\\n
+#t\\r\\n
+#f\\r\\n
+,3.141592653589793\\r\\n
+%2\\r\\n+\u0001#t\\r\\n$4\\r\\nname\\r\\n$5\\r\\nAlice\\r\\n
+~2\\r\\n:1\\r\\n:2\\r\\n
+```
+
+The map vector uses the canonical RESP3 shape of a count followed by key/value pairs. In a source file, represent the control byte in the first key as the actual protocol byte; the escaped notation above keeps this tutorial's source text safe to copy and render.
+
+## Encoding values and commands
+
+The encoder functions make the framing explicit:
+
+```lateralus
+use "stdlib/resp.ltl"
+
+let ok = enc_simple_string("OK")
+let count = enc_integer(3)
+let message = enc_bulk_string("foobar")
+let request = enc_command(["SET", "key", "value"])
+
+println(ok)       // +OK\\r\\n
+println(count)    // :3\\r\\n
+println(message)  // $6\\r\\nfoobar\\r\\n
+println(request)  // *3 followed by three bulk strings
+```
+
+`enc_command` is the normal client-to-server workflow: each argument becomes a bulk string inside an array. It is safe for spaces and empty arguments because the payload length, rather than a delimiter, determines where each argument ends.
+
+## Decoding one complete frame
+
+`decode` accepts a buffer and an offset and returns `[value, next_offset]`. For an incomplete frame it returns `[nil, offset]`, so a network loop can retain the unread bytes and append the next read.
+
+```lateralus
+use "stdlib/resp.ltl"
+
+let wire = enc_command(["INCR", "visits"])
+let parsed = decode(wire, 0)
+println(parsed[0])       // ["INCR", "visits"]
+println(parsed[1])       // len(wire), the next frame offset
+
+let partial = "+OK\\r"
+let pending = decode(partial, 0)
+println(pending[0])      // nil: the LF has not arrived yet
+```
+
+The decoder handles nested arrays and maps recursively. A server should inspect an error value before treating a response as application data, and should reject malformed or over-sized lengths before allocating a payload in a production transport.
+
+## A small client/server exchange
+
+The protocol does not prescribe a socket API; it only defines bytes. A minimal exchange therefore has four steps:
+
+1. The client writes `enc_command(["PING"])`.
+2. The server reads a complete array and dispatches the command.
+3. The server writes `enc_simple_string("PONG")`.
+4. The client calls `decode(response, 0)` and advances by the returned offset.
+
+```lateralus
+use "stdlib/resp.ltl"
+
+fn handle_request(request: list) -> str {
+    if request[0] == "PING" {
+        return enc_simple_string("PONG")
+    }
+    return enc_error("ERR unknown command")
+}
+
+let request = decode(enc_command(["PING"]), 0)
+let response = handle_request(request[0])
+let result = decode(response, 0)
+println(result[0])
+```
+
+This example is runnable as a codec demonstration: replace the conceptual socket reads and writes with the I/O functions used by the application. For pipelining, concatenate several encoded commands and repeatedly call `decode` with the previous `next_offset` until the buffer is exhausted or the next value is incomplete.
+
+## Version and interoperability notes
+
+RESP2 clients can communicate with RESP3 servers for the common RESP2 subset. Use `enc_null3`, `enc_boolean`, `enc_double`, maps, and sets only when the peer negotiated RESP3 and the client understands those response types. Keep protocol vectors in tests as raw bytes; rendered documentation is explanatory, while the wire-level test is the compatibility boundary.
+
+The implementation and the protocol reference should be read together: this tutorial documents the supported surface of `stdlib/resp.ltl`, not a promise that every Redis command or every RESP3 attribute type is implemented by the module.
+
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>
