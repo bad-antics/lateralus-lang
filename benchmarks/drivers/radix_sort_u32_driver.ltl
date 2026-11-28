@@ -1,0 +1,63 @@
+
+// ── benchmark driver: 100,000 u32 keys, LSD byte radix sort ─────────
+fn hex_digit(v: int) -> str {
+    let chars = "0123456789abcdef"
+    return chars[v]
+}
+
+fn hex32(v: int) -> str {
+    let out = ""
+    let i = 7
+    while i >= 0 {
+        out = out + hex_digit((v >> (i * 4)) & 0xF)
+        i = i - 1
+    }
+    return out
+}
+
+fn xs_next(s: int) -> int {
+    let x = s & 0xFFFFFFFF
+    x = (x ^ ((x << 13) & 0xFFFFFFFF)) & 0xFFFFFFFF
+    x = (x ^ (x >> 17)) & 0xFFFFFFFF
+    x = (x ^ ((x << 5) & 0xFFFFFFFF)) & 0xFFFFFFFF
+    return x
+}
+
+fn gen_u32(n: int, seed: int) -> list {
+    let out = [0] * n
+    let s = seed & 0xFFFFFFFF
+    let i = 0
+    while i < n {
+        s = xs_next(s)
+        out[i] = s
+        i = i + 1
+    }
+    return out
+}
+
+fn adler32_u32_le(xs: list) -> int {
+    let a = 1
+    let b = 0
+    let i = 0
+    let n = len(xs)
+    while i < n {
+        let v = xs[i]
+        let k = 0
+        while k < 4 {
+            let byte = (v >> (k * 8)) & 0xFF
+            a = (a + byte) % 65521
+            b = (b + a) % 65521
+            k = k + 1
+        }
+        i = i + 1
+    }
+    return ((b << 16) | a) & 0xFFFFFFFF
+}
+
+fn main() -> int {
+    let n = 100000
+    let keys = gen_u32(n, 0xDEADBEEF)
+    let sorted = radix_sort_u32(keys)
+    println("radix_sort_u32 " + hex32(sorted[0]) + ":" + hex32(sorted[n - 1]) + ":" + hex32(adler32_u32_le(sorted)))
+    return 0
+}
