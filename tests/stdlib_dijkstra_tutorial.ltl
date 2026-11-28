@@ -1,0 +1,127 @@
+// Standard Library Dijkstra Shortest Path Tutorial Verification Suite
+// Validates single-source shortest path (SSSP), edge relaxation invariants, unreachable vertices, and path reconstruction.
+
+fn dijkstra(n: int, adj: dict, source: int) -> dict {
+    let INF = 1000000000;
+    let mut dist = [];
+    let mut visited = [];
+    let mut parent = [];
+    let mut i = 0;
+    while i < n {
+        dist = dist + [INF];
+        visited = visited + [false];
+        parent = parent + [-1];
+        i = i + 1;
+    }
+
+    dist[source] = 0;
+
+    let mut step = 0;
+    while step < n {
+        let mut u = -1;
+        let mut min_d = INF;
+        let mut j = 0;
+        while j < n {
+            if visited[j] == false && dist[j] < min_d {
+                min_d = dist[j];
+                u = j;
+            }
+            j = j + 1;
+        }
+
+        if u == -1 {
+            step = n; // All remaining vertices unreachable
+        } else {
+            visited[u] = true;
+            if contains(adj, u) {
+                let neighbors = adj[u];
+                let mut k = 0;
+                while k < len(neighbors) {
+                    let edge = neighbors[k];
+                    let v = edge[0];
+                    let weight = edge[1];
+                    if visited[v] == false {
+                        let candidate = dist[u] + weight;
+                        if candidate < dist[v] {
+                            dist[v] = candidate;
+                            parent[v] = u;
+                        }
+                    }
+                    k = k + 1;
+                }
+            }
+            step = step + 1;
+        }
+    }
+
+    let mut result = {};
+    result["dist"] = dist;
+    result["parent"] = parent;
+    return result;
+}
+
+fn reconstruct_path(parent: list, target: int) -> list {
+    let mut path = [];
+    let mut curr = target;
+    while curr != -1 {
+        path = [curr] + path;
+        curr = parent[curr];
+    }
+    return path;
+}
+
+fn main() -> int {
+    let INF = 1000000000;
+
+    // 1. Classical 5-node Weighted Graph
+    // 0 -> (1, weight 4), (2, weight 2)
+    // 1 -> (2, weight 1), (3, weight 5)
+    // 2 -> (3, weight 8), (4, weight 10)
+    // 3 -> (4, weight 2)
+    // 4 -> (none)
+    let mut adj = {};
+    adj[0] = [[1, 4], [2, 2]];
+    adj[1] = [[2, 1], [3, 5]];
+    adj[2] = [[3, 8], [4, 10]];
+    adj[3] = [[4, 2]];
+
+    let res = dijkstra(5, adj, 0);
+    let dist = res["dist"];
+    let parent = res["parent"];
+
+    // Shortest distances from source 0:
+    // dist[0] = 0
+    // dist[1] = 4 (0 -> 1)
+    // dist[2] = 2 (0 -> 2)
+    // dist[3] = 9 (0 -> 1 -> 3, cost 4 + 5 = 9 vs 0 -> 2 -> 3 cost 2 + 8 = 10)
+    // dist[4] = 11 (0 -> 1 -> 3 -> 4, cost 9 + 2 = 11 vs 0 -> 2 -> 4 cost 2 + 10 = 12)
+    assert(dist[0] == 0);
+    assert(dist[1] == 4);
+    assert(dist[2] == 2);
+    assert(dist[3] == 9);
+    assert(dist[4] == 11);
+
+    // 2. Path Reconstruction Invariant: 0 -> 1 -> 3 -> 4
+    let path4 = reconstruct_path(parent, 4);
+    assert(len(path4) == 4);
+    assert(path4[0] == 0);
+    assert(path4[1] == 1);
+    assert(path4[2] == 3);
+    assert(path4[3] == 4);
+
+    // 3. Unreachable Node Graph: Node 5 is completely disconnected
+    let mut adj_disc = {};
+    adj_disc[0] = [[1, 10]];
+    let res_disc = dijkstra(3, adj_disc, 0);
+    let dist_disc = res_disc["dist"];
+    assert(dist_disc[0] == 0);
+    assert(dist_disc[1] == 10);
+    assert(dist_disc[2] == INF); // Unreachable vertex maintains INF
+
+    // 4. Single-node Graph
+    let mut adj_single = {};
+    let res_single = dijkstra(1, adj_single, 0);
+    assert(res_single["dist"][0] == 0);
+
+    return 0;
+}
