@@ -1,6 +1,8 @@
 """
 tests/test_markup.py — Tests for the LTLML Markup Language
 """
+from pathlib import Path
+
 from lateralus_lang.markup import (
     NodeKind,
     parse_ltlml,
@@ -153,6 +155,19 @@ class TestLTLMLParser:
 
 
 class TestLTLMLRenderer:
+    def test_resp_tutorial_renders_from_source_file(self):
+        source_path = Path(__file__).parents[1] / "docs" / "blog" / "stdlib-resp.ltlml"
+        source = source_path.read_text(encoding="utf-8")
+
+        assert '<script id="ltlml-source" type="text/ltlml">' in source
+        html = render_ltlml(source.split('<script id="ltlml-source" type="text/ltlml">', 1)[1].split("</script>", 1)[0])
+
+        assert "RESP2" in html
+        assert "RESP3" in html
+        assert "enc_command" in html
+        assert "Redis protocol specification" in html
+        assert "<table" in html
+
     def test_renders_html(self):
         html = render_ltlml("# Hello\n\nWorld")
         assert "<html" in html
