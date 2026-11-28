@@ -466,7 +466,40 @@ async fn process_with_rate_limit(items: list[any], handler: fn, rate: int = 10) 
 }
 }
 
-{h3 Recipe 5.3 — Reactive Counter with Effects}
+{h3 Recipe 5.3 — Burst-Aware Token Bucket}
+
+{p
+  {strong Problem}: Allow a small burst of requests while making a rejected
+  request for several tokens atomic. This is useful for endpoints such as a
+  booking API, where a batch should be retried only if the whole batch can be
+  admitted.
+}
+
+{code lang="lateralus"
+import "rate_limit"
+
+let limiter = RateLimiter::new(2, 0.0)  -- two tokens, no refill
+
+-- A three-token burst is rejected and spends nothing.
+println(limiter.try_acquire_n(3))       -- false
+println(limiter.available())            -- 2
+
+-- The original two tokens are still available, one at a time.
+println(limiter.try_acquire())          -- true
+println(limiter.try_acquire())          -- true
+println(limiter.try_acquire())          -- false
+println(limiter.available())            -- 0
+}
+
+{p
+  The pinned vector is therefore {code}false, 2, true, true, false, 0{code}.
+  {code}try_acquire_n(3){code} checks the complete request before subtracting
+  anything, so the failed burst does not consume either token. With a nonzero
+  refill rate, retry after {code}time_until_available(n){code} rather than
+  retrying immediately; the bucket refills up to its configured capacity.
+}
+
+{h3 Recipe 5.4 — Reactive Counter with Effects}
 
 {code lang="lateralus"
 import "reactive"
