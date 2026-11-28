@@ -21,7 +21,48 @@ REF = ROOT / "reference"
 RESULTS = ROOT / "results"
 BUILD = ROOT / "build"
 
+# Repo root (two levels up from benchmarks/) — where stdlib/ lives.
+REPO_ROOT = ROOT.parent
+STDLIB = REPO_ROOT / "stdlib"
+
 BENCHMARKS = ["fib", "sieve", "mandelbrot", "binary_trees", "nbody"]
+
+# stdlib micro-benchmarks (bounty: benchmark-ingest, issue #156).
+# Each entry maps a bench name to the stdlib module that must be inlined
+# above the driver to form a single combined source file. The interpreter's
+# `import` resolves to a Python module (not a .ltl file), so modules are
+# concatenated with their driver instead of imported.
+STDLIB_BENCHMARKS = {
+    "xxhash": "xxhash",
+    "lz4": "lz4",
+    "chacha20": "chacha20",
+    "aho_corasick": "aho_corasick",
+    "radix_sort": "radix_sort",
+}
+
+
+def build_stdlib_source(bench: str) -> Path:
+    """Inline stdlib/<module>.ltl above benchmarks/src/stdlib/<bench>_driver.ltl
+    to produce a single combined .ltl source file. Returns the path.
+    """
+    module = STDLIB_BENCHMARKS[bench]
+    module_path = STDLIB / f"{module}.ltl"
+    driver_path = SRC / "stdlib" / f"{bench}_driver.ltl"
+    if not module_path.exists():
+        raise RuntimeError(f"stdlib module not found: {module_path}")
+    if not driver_path.exists():
+        raise RuntimeError(f"driver not found: {driver_path}")
+    BUILD.mkdir(parents=True, exist_ok=True)
+    combined = BUILD / f"stdlib_{bench}.ltl"
+    parts = [
+        f"// AUTO-GENERATED combined source for stdlib benchmark '{bench}'.\n",
+        f"// Inlines stdlib/{module}.ltl + benchmarks/src/stdlib/{bench}_driver.ltl\n",
+        module_path.read_text(),
+        "\n// ---- driver ----\n",
+        driver_path.read_text(),
+    ]
+    combined.write_text("\n".join(parts))
+    return combined
 
 
 def time_cmd(cmd: list[str], *, timeout: float = 120.0) -> tuple[float, str]:
@@ -92,10 +133,15 @@ def main() -> int:
     ap.add_argument("--filter", default=None, help="comma-separated bench names")
     ap.add_argument("--backends", default="lateralus,lateralus-c99,python,node")
     ap.add_argument("--json", default=str(RESULTS / "results.json"))
+    ap.add_argument("--stdlib", action="store_true",
+                    help="run the 5 stdlib micro-benchmarks (issue #156) instead of the core suite")
     args = ap.parse_args()
 
     RESULTS.mkdir(parents=True, exist_ok=True)
-    selected = args.filter.split(",") if args.filter else BENCHMARKS
+    if args.stdlib:
+        selected = args.filter.split(",") if args.filter else list(STDLIB_BENCHMARKS)
+    else:
+        selected = args.filter.split(",") if args.filter else BENCHMARKS
     backends = args.backends.split(",")
 
     # Sanity
@@ -123,6 +169,7 @@ def main() -> int:
             "node": subprocess.run(["node", "--version"], capture_output=True, text=True).stdout.strip() if have("node") else None,
             "iters": args.iters,
             "warmup": args.warmup,
+            "stdlib": args.stdlib,
         },
         "benchmarks": {},
     }
@@ -130,9 +177,19 @@ def main() -> int:
     for bench in selected:
         print(f"\n=== {bench} ===")
         results["benchmarks"][bench] = {}
+        # For stdlib benchmarks, build the combined source (stdlib module + driver).
+        lat_src = None
+        if args.stdlib:
+            try:
+                lat_src = build_stdlib_source(bench)
+                print(f"  combined source: {lat_src.relative_to(REPO_ROOT)}")
+            except Exception as e:
+                print(f"  lateralus    SKIP: {e}")
+                results["benchmarks"][bench]["lateralus"] = {"error": str(e)}
         for b in backends:
             if b == "lateralus":
-                cmd = [sys.executable, "-m", "lateralus_lang", "run", str(SRC / f"{bench}.ltl")]
+                src_path = lat_src if lat_src is not None else (SRC / f"{bench}.ltl")
+                cmd = [sys.executable, "-m", "lateralus_lang", "run", str(src_path)]
             elif b == "lateralus-c99":
                 if bench not in c99_bins:
                     print(f"  {b:14s} skipped (C99 build failed)")
@@ -153,11 +210,13 @@ def main() -> int:
                 print(f"  {b:14s} FAILED: {str(e).splitlines()[0][:80]}")
                 results["benchmarks"][bench][b] = {"error": str(e)}
 
-    # Cross-check outputs match
+    # Cross-check outputs match (normalize whitespace: Lateralus println emits
+    # one value per line, Python/Node emit space-separated — compare tokens).
     print("\n=== Correctness ===")
     for bench, backs in results["benchmarks"].items():
         outs = {b: v.get("output") for b, v in backs.items() if "output" in v}
-        unique = set(outs.values())
+        norm = {b: " ".join(o.split()) for b, o in outs.items()}
+        unique = set(norm.values())
         status = "OK" if len(unique) == 1 else "MISMATCH"
         print(f"  {bench:14s} {status}  {outs}")
 
@@ -179,8 +238,11 @@ def main() -> int:
         )
 
     Path(args.json).write_text(json.dumps(results, indent=2))
+    out_md = RESULTS / ("stdlib_results.md" if args.stdlib else "results.md")
     (RESULTS / "results.md").write_text("\n".join(md_lines) + "\n")
-    print(f"\nWrote {args.json} and {RESULTS / 'results.md'}")
+    if args.stdlib:
+        out_md.write_text("\n".join(md_lines) + "\n")
+    print(f"\nWrote {args.json} and {out_md}")
     return 0
 
 
