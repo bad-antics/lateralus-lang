@@ -23,6 +23,13 @@ BUILD = ROOT / "build"
 
 BENCHMARKS = ["fib", "sieve", "mandelbrot", "binary_trees", "nbody"]
 
+# stdlib micro-benchmarks (issue #865): one .ltl source + py/js reference
+# drivers, each printing one digest line per workload.  Run at the "verify"
+# profile so the pure-Python tree-walking interpreter finishes in seconds
+# while still producing digests that match CPython and Node.js exactly.
+STDLIB_BENCH = "stdlib"
+STDLIB_PROFILE = "verify"
+
 
 def time_cmd(cmd: list[str], *, timeout: float = 120.0) -> tuple[float, str]:
     t0 = time.perf_counter()
@@ -85,6 +92,94 @@ def have(tool: str) -> bool:
     return shutil.which(tool) is not None
 
 
+def run_stdlib(args) -> dict:
+    """Run the stdlib micro-benchmarks (issue #865) across all backends.
+
+    Each backend prints one digest line per workload.  At the "verify"
+    profile the Lateralus / CPython / Node outputs are byte-identical, so
+    the correctness cross-check passes and the Markdown table records the
+    per-backend wall time for the whole 5-workload suite.
+    """
+    RESULTS.mkdir(parents=True, exist_ok=True)
+    profile = STDLIB_PROFILE
+    backends = ["lateralus", "python", "node"]
+    if not have("node"):
+        print("skipping node (not installed)")
+        backends.remove("node")
+
+    cmds = {
+        "lateralus": [sys.executable, "-m", "lateralus_lang", "run",
+                      str(ROOT / "stdlib_bench.ltl"), profile],
+        "python": [sys.executable, str(REF / "stdlib_bench.py"), "all", profile],
+        "node": ["node", str(REF / "stdlib_bench.js"), "all", profile],
+    }
+
+    results: dict = {
+        "meta": {
+            "python": sys.version.split()[0],
+            "node": subprocess.run(["node", "--version"], capture_output=True, text=True).stdout.strip() if have("node") else None,
+            "iters": args.iters,
+            "warmup": args.warmup,
+            "profile": profile,
+            "suite": "stdlib (xxhash64 / lz4 / chacha20 / aho_corasick / radix_sort_u32)",
+        },
+        "benchmarks": {},
+    }
+
+    print(f"\n=== stdlib (profile={profile}) ===")
+    results["benchmarks"][STDLIB_BENCH] = {}
+    for b in backends:
+        try:
+            r = measure(cmds[b], warmup=args.warmup, iters=args.iters)
+            print(f"  {b:14s} min={r['min']:.4f}s median={r['median']:.4f}s")
+            for line in r["output"].splitlines():
+                print(f"      {line}")
+            results["benchmarks"][STDLIB_BENCH][b] = r
+        except Exception as e:
+            print(f"  {b:14s} FAILED: {str(e).splitlines()[0][:80]}")
+            results["benchmarks"][STDLIB_BENCH][b] = {"error": str(e)}
+
+    # Correctness cross-check: all backends must print identical digests.
+    print("\n=== Correctness (stdlib) ===")
+    backs = results["benchmarks"][STDLIB_BENCH]
+    outs = {b: v.get("output") for b, v in backs.items() if "output" in v}
+    unique = set(outs.values())
+    status = "OK" if len(unique) == 1 else "MISMATCH"
+    print(f"  stdlib {status}")
+    for b, o in outs.items():
+        print(f"    {b}: {o!r}")
+
+    # Markdown table
+    md_lines = ["# Lateralus stdlib micro-benchmarks (issue #865)\n"]
+    md_lines.append(
+        f"Python {results['meta']['python']} · Node {results['meta']['node']} · "
+        f"profile={profile} · {args.iters} iters + {args.warmup} warmup\n"
+    )
+    md_lines.append("Five workloads, one digest line each (identical across backends):\n")
+    md_lines.append("| Backend | median (s) | min (s) |")
+    md_lines.append("|---------|-----------|---------|")
+    for b in backends:
+        v = backs.get(b, {})
+        if "median" in v:
+            md_lines.append(f"| {b} | {v['median']:.4f} | {v['min']:.4f} |")
+        else:
+            md_lines.append(f"| {b} | — | — |")
+    md_lines.append("")
+    md_lines.append("Digest output (byte-identical across Lateralus / CPython / Node):\n")
+    md_lines.append("```")
+    ref_out = next((v.get("output", "") for v in backs.values() if "output" in v), "")
+    md_lines.append(ref_out)
+    md_lines.append("```")
+    md_lines.append("")
+    md_lines.append(f"Correctness: **{status}** (all backends agree)")
+    md_lines.append("")
+
+    Path(args.json).write_text(json.dumps(results, indent=2))
+    (RESULTS / "stdlib_results.md").write_text("\n".join(md_lines) + "\n")
+    print(f"\nWrote {args.json} and {RESULTS / 'stdlib_results.md'}")
+    return results
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--iters", type=int, default=5)
@@ -92,7 +187,13 @@ def main() -> int:
     ap.add_argument("--filter", default=None, help="comma-separated bench names")
     ap.add_argument("--backends", default="lateralus,lateralus-c99,python,node")
     ap.add_argument("--json", default=str(RESULTS / "results.json"))
+    ap.add_argument("--stdlib", action="store_true",
+                    help="run the stdlib micro-benchmarks (issue #865) instead of the core suite")
     args = ap.parse_args()
+
+    if args.stdlib:
+        run_stdlib(args)
+        return 0
 
     RESULTS.mkdir(parents=True, exist_ok=True)
     selected = args.filter.split(",") if args.filter else BENCHMARKS

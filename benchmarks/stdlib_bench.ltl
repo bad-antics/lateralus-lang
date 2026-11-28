@@ -1,0 +1,646 @@
+// ===================================================================
+// benchmarks/stdlib_bench.ltl  —  Lateralus stdlib micro-benchmarks
+// -------------------------------------------------------------------
+// Self-contained Lateralus port of the five stdlib workloads exercised
+// by benchmarks/reference/stdlib_bench.py (CPython) and .js (Node):
+//
+//   1. xxhash64        (stdlib/xxhash.ltl)
+//   2. lz4 round-trip  (stdlib/lz4.ltl)
+//   3. chacha20        (std/crypto/chacha20.ltl)
+//   4. aho_corasick    (stdlib/aho_corasick.ltl)
+//   5. radix_sort_u32  (stdlib/radix_sort.ltl)
+//
+// The stdlib sources are inlined (the interpreter does not resolve
+// `import`) and rewritten to the tree-walker dialect: `ord(s[i])`
+// instead of `char_at`/`bytes_of`, int-keyed dicts, `[x]*n` fills.
+//
+// Each workload prints exactly one digest line.  At the "verify" size
+// profile these lines are byte-for-byte identical to the CPython and
+// Node drivers (same XorShift32 seeds, same algorithms), so
+// `diff` of the three outputs is empty.  The "full" profile is the
+// headline benchmark table but is far too slow for the pure-Python
+// tree-walking interpreter (minutes per workload).
+//
+// Usage:  lateralus run benchmarks/stdlib_bench.ltl [profile]
+//         profile defaults to "verify".
+//
+// MIT licensed.  Original work.
+// ===================================================================
+
+// -- deterministic input generation (XorShift32, identical to .py/.js) ──
+let RNG = [0]
+
+fn seed_rng(s: int) {
+    RNG[0] = s & 0xFFFFFFFF
+}
+
+fn next_u32() -> int {
+    let x = RNG[0] & 0xFFFFFFFF
+    x = (x ^ ((x << 13) & 0xFFFFFFFF)) & 0xFFFFFFFF
+    x = x ^ (x >> 17)
+    x = (x ^ ((x << 5) & 0xFFFFFFFF)) & 0xFFFFFFFF
+    RNG[0] = x
+    return x
+}
+
+fn gen_bytes(n: int) -> list {
+    let out = []
+    let i = 0
+    while i < n {
+        out = push(out, next_u32() & 0xFF)
+        i = i + 1
+    }
+    return out
+}
+
+// ===================================================================
+// 1. xxHash64  (canonical Cyan4973 XXH64, single-shot)
+// ===================================================================
+let XXH_MASK = 0xFFFFFFFFFFFFFFFF
+let XXH_P1   = 0x9E3779B185EBCA87
+let XXH_P2   = 0xC2B2AE3D27D4EB4F
+let XXH_P3   = 0x165667B19E3779F9
+let XXH_P4   = 0x85EBCA77C2B2AE63
+let XXH_P5   = 0x27D4EB2F165667C5
+
+fn u64(x: int) -> int { return x & XXH_MASK }
+
+fn rotl64(v: int, r: int) -> int {
+    let v2 = v & XXH_MASK
+    return ((v2 << r) | (v2 >> (64 - r))) & XXH_MASK
+}
+
+fn read_u64_le(buf: list, i: int) -> int {
+    return  buf[i]
+         | (buf[i + 1] << 8)  | (buf[i + 2] << 16) | (buf[i + 3] << 24)
+         | (buf[i + 4] << 32) | (buf[i + 5] << 40) | (buf[i + 6] << 48)
+         | (buf[i + 7] << 56)
+}
+
+fn read_u32_le(buf: list, i: int) -> int {
+    return buf[i] | (buf[i + 1] << 8) | (buf[i + 2] << 16) | (buf[i + 3] << 24)
+}
+
+fn round64(acc: int, input: int) -> int {
+    acc = u64(acc + u64(input * XXH_P2))
+    acc = rotl64(acc, 31)
+    return u64(acc * XXH_P1)
+}
+
+fn merge_round(acc: int, val: int) -> int {
+    val = round64(0, val)
+    acc = acc ^ val
+    return u64(u64(acc * XXH_P1) + XXH_P4)
+}
+
+fn xxh64(buf: list, seed: int) -> int {
+    let n = len(buf)
+    let h = 0
+    let i = 0
+    if n >= 32 {
+        let v1 = u64(seed + XXH_P1 + XXH_P2)
+        let v2 = u64(seed + XXH_P2)
+        let v3 = u64(seed + 0)
+        let v4 = u64(seed - XXH_P1)
+        while i + 32 <= n {
+            v1 = round64(v1, read_u64_le(buf, i))
+            v2 = round64(v2, read_u64_le(buf, i + 8))
+            v3 = round64(v3, read_u64_le(buf, i + 16))
+            v4 = round64(v4, read_u64_le(buf, i + 24))
+            i = i + 32
+        }
+        h = u64(rotl64(v1, 1) + rotl64(v2, 7) + rotl64(v3, 12) + rotl64(v4, 18))
+        h = merge_round(h, v1)
+        h = merge_round(h, v2)
+        h = merge_round(h, v3)
+        h = merge_round(h, v4)
+    } else {
+        h = u64(seed + XXH_P5)
+    }
+    h = u64(h + n)
+    while i + 8 <= n {
+        let k1 = round64(0, read_u64_le(buf, i))
+        h = rotl64(h ^ k1, 27)
+        h = u64(u64(h * XXH_P1) + XXH_P4)
+        i = i + 8
+    }
+    if i + 4 <= n {
+        h = u64(h ^ u64(read_u32_le(buf, i) * XXH_P1))
+        h = rotl64(h, 23)
+        h = u64(u64(h * XXH_P2) + XXH_P3)
+        i = i + 4
+    }
+    while i < n {
+        h = u64(h ^ u64(buf[i] * XXH_P5))
+        h = u64(rotl64(h, 11) * XXH_P1)
+        i = i + 1
+    }
+    h = h ^ (h >> 33)
+    h = u64(h * XXH_P2)
+    h = h ^ (h >> 29)
+    h = u64(h * XXH_P3)
+    h = h ^ (h >> 32)
+    return h
+}
+
+fn adler32(buf: list) -> int {
+    let a = 1
+    let b = 0
+    let i = 0
+    while i < len(buf) {
+        a = (a + buf[i]) % 65521
+        b = (b + a) % 65521
+        i = i + 1
+    }
+    return (b << 16) | a
+}
+
+// ===================================================================
+// 2. LZ4 block format (greedy hash-chain matcher, "fast" mode)
+// ===================================================================
+let LZ4_MINMATCH  = 4
+let LZ4_HASH_SIZE = 4096
+let LZ4_HASH_MASK = 4095
+let LZ4_MF_LIMIT  = 12
+let LZ4_LAST_LITS = 5
+let LZ4_MAXD      = 65535
+
+fn lz4_hash4(buf: list, i: int) -> int {
+    let v = buf[i] | (buf[i + 1] << 8) | (buf[i + 2] << 16) | (buf[i + 3] << 24)
+    v = v & 0xFFFFFFFF
+    return ((v * 2654435761) & 0xFFFFFFFF) >> (32 - 12) & LZ4_HASH_MASK
+}
+
+fn emit_var_len(out: list, v: int) -> list {
+    while v >= 255 {
+        out = push(out, 255)
+        v = v - 255
+    }
+    return push(out, v)
+}
+
+fn lz4_compress(src: list) -> list {
+    let n = len(src)
+    let out = []
+    let anchor = 0
+    let i = 0
+    if n < LZ4_MF_LIMIT + LZ4_LAST_LITS {
+        let lit_len = n
+        if lit_len >= 15 {
+            out = push(out, 0xf0)
+            out = emit_var_len(out, lit_len - 15)
+        } else {
+            out = push(out, (lit_len << 4) & 0xff)
+        }
+        let k = 0
+        while k < n { out = push(out, src[k]); k = k + 1 }
+        return out
+    }
+    let htab = [-1] * LZ4_HASH_SIZE
+    let end_limit = n - LZ4_MF_LIMIT - LZ4_LAST_LITS
+    while i <= end_limit {
+        let hv = lz4_hash4(src, i)
+        let ref_pos = htab[hv]
+        htab[hv] = i
+        if ref_pos >= 0 && i - ref_pos <= LZ4_MAXD
+           && src[ref_pos]     == src[i]
+           && src[ref_pos + 1] == src[i + 1]
+           && src[ref_pos + 2] == src[i + 2]
+           && src[ref_pos + 3] == src[i + 3] {
+            let mlen = 4
+            while i + mlen < n - LZ4_LAST_LITS && src[ref_pos + mlen] == src[i + mlen] {
+                mlen = mlen + 1
+            }
+            let lit_len = i - anchor
+            let mlen_t = mlen - LZ4_MINMATCH
+            let t_lit = lit_len
+            if t_lit > 15 { t_lit = 15 }
+            let t_m = mlen_t
+            if t_m > 15 { t_m = 15 }
+            out = push(out, ((t_lit << 4) | t_m) & 0xff)
+            if lit_len >= 15 { out = emit_var_len(out, lit_len - 15) }
+            let k2 = 0
+            while k2 < lit_len { out = push(out, src[anchor + k2]); k2 = k2 + 1 }
+            let off = i - ref_pos
+            out = push(out, off & 0xff)
+            out = push(out, (off >> 8) & 0xff)
+            if mlen_t >= 15 { out = emit_var_len(out, mlen_t - 15) }
+            i = i + mlen
+            anchor = i
+        } else {
+            i = i + 1
+        }
+    }
+    let lit_len = n - anchor
+    if lit_len >= 15 {
+        out = push(out, 0xf0)
+        out = emit_var_len(out, lit_len - 15)
+    } else {
+        out = push(out, (lit_len << 4) & 0xff)
+    }
+    let k3 = 0
+    while k3 < lit_len { out = push(out, src[anchor + k3]); k3 = k3 + 1 }
+    return out
+}
+
+fn lz4_decompress(src: list) -> list {
+    let n = len(src)
+    let out = []
+    let i = 0
+    while i < n {
+        let tok = src[i]
+        i = i + 1
+        let lit_len = (tok >> 4) & 0x0f
+        if lit_len == 15 {
+            let more = true
+            while more {
+                let b = src[i]
+                i = i + 1
+                lit_len = lit_len + b
+                if b != 255 { more = false }
+            }
+        }
+        let k = 0
+        while k < lit_len { out = push(out, src[i + k]); k = k + 1 }
+        i = i + lit_len
+        if i >= n { return out }
+        let off = src[i] | (src[i + 1] << 8)
+        i = i + 2
+        let mlen = tok & 0x0f
+        if mlen == 15 {
+            let more2 = true
+            while more2 {
+                let b2 = src[i]
+                i = i + 1
+                mlen = mlen + b2
+                if b2 != 255 { more2 = false }
+            }
+        }
+        mlen = mlen + LZ4_MINMATCH
+        let start = len(out) - off
+        let m = 0
+        while m < mlen { out = push(out, out[start + m]); m = m + 1 }
+    }
+    return out
+}
+
+// ===================================================================
+// 3. ChaCha20 (RFC 8439) — interpreter dialect, mutable state list
+// ===================================================================
+fn rotl32(v: int, n: int) -> int {
+    let v2 = v & 0xFFFFFFFF
+    return ((v2 << n) | (v2 >> (32 - n))) & 0xFFFFFFFF
+}
+
+fn quarter_round(s: list, a: int, b: int, c: int, d: int) {
+    s[a] = (s[a] + s[b]) & 0xFFFFFFFF
+    s[d] = rotl32(s[d] ^ s[a], 16)
+    s[c] = (s[c] + s[d]) & 0xFFFFFFFF
+    s[b] = rotl32(s[b] ^ s[c], 12)
+    s[a] = (s[a] + s[b]) & 0xFFFFFFFF
+    s[d] = rotl32(s[d] ^ s[a], 8)
+    s[c] = (s[c] + s[d]) & 0xFFFFFFFF
+    s[b] = rotl32(s[b] ^ s[c], 7)
+}
+
+fn chacha20_block(key: list, counter: int, nonce: list) -> list {
+    let state = [0x61707865, 0x3320646E, 0x79622D32, 0x6B206574]
+    let i = 0
+    while i < 8 {
+        let k = key[i * 4] | (key[i * 4 + 1] << 8) | (key[i * 4 + 2] << 16) | (key[i * 4 + 3] << 24)
+        state = push(state, k & 0xFFFFFFFF)
+        i = i + 1
+    }
+    state = push(state, counter & 0xFFFFFFFF)
+    let j = 0
+    while j < 3 {
+        let w = nonce[j * 4] | (nonce[j * 4 + 1] << 8) | (nonce[j * 4 + 2] << 16) | (nonce[j * 4 + 3] << 24)
+        state = push(state, w & 0xFFFFFFFF)
+        j = j + 1
+    }
+    let working = state + []
+    let r = 0
+    while r < 10 {
+        quarter_round(working, 0, 4, 8, 12)
+        quarter_round(working, 1, 5, 9, 13)
+        quarter_round(working, 2, 6, 10, 14)
+        quarter_round(working, 3, 7, 11, 15)
+        quarter_round(working, 0, 5, 10, 15)
+        quarter_round(working, 1, 6, 11, 12)
+        quarter_round(working, 2, 7, 8, 13)
+        quarter_round(working, 3, 4, 9, 14)
+        r = r + 1
+    }
+    let out = []
+    let t = 0
+    while t < 16 {
+        let v = (working[t] + state[t]) & 0xFFFFFFFF
+        out = push(out, v & 0xff)
+        out = push(out, (v >> 8) & 0xff)
+        out = push(out, (v >> 16) & 0xff)
+        out = push(out, (v >> 24) & 0xff)
+        t = t + 1
+    }
+    return out
+}
+
+fn chacha20_encrypt(key: list, nonce: list, data: list) -> list {
+    let out = []
+    let counter = 0
+    let offset = 0
+    let n = len(data)
+    while offset < n {
+        let block = chacha20_block(key, counter, nonce)
+        counter = counter + 1
+        let remaining = n - offset
+        let block_len = remaining
+        if block_len > 64 { block_len = 64 }
+        let i = 0
+        while i < block_len {
+            out = push(out, data[offset + i] ^ block[i])
+            i = i + 1
+        }
+        offset = offset + block_len
+    }
+    return out
+}
+
+// ===================================================================
+// 4. Aho-Corasick multi-pattern matching
+// ===================================================================
+fn ac_new_node(auto: dict) {
+    let gm = auto["goto"]
+    let fl = auto["fail"]
+    let op = auto["output"]
+    gm = push(gm, {})
+    fl = push(fl, 0)
+    op = push(op, [])
+    auto["goto"]   = gm
+    auto["fail"]   = fl
+    auto["output"] = op
+}
+
+fn ac_build(patterns: list) -> dict {
+    let auto = {}
+    auto["goto"] = []
+    auto["fail"] = []
+    auto["output"] = []
+    auto["patterns"] = patterns
+    ac_new_node(auto)
+    let pi = 0
+    while pi < len(patterns) {
+        let p = patterns[pi]
+        let node = 0
+        let j = 0
+        while j < len(p) {
+            let c = ord(p[j])
+            let gm = auto["goto"]
+            let children = gm[node]
+            if contains(children, c) {
+                node = children[c]
+            } else {
+                ac_new_node(auto)
+                let new_id = len(auto["goto"]) - 1
+                gm = auto["goto"]
+                gm[node][c] = new_id
+                auto["goto"] = gm
+                node = new_id
+            }
+            j = j + 1
+        }
+        let op = auto["output"]
+        op[node] = push(op[node], pi)
+        auto["output"] = op
+        pi = pi + 1
+    }
+    // BFS fail pointers
+    let queue = []
+    let gm = auto["goto"]
+    let root_kids = gm[0]
+    let root_keys = keys(root_kids)
+    let k = 0
+    while k < len(root_keys) {
+        let kk = root_keys[k]
+        let child = root_kids[kk]
+        queue = push(queue, child)
+        k = k + 1
+    }
+    while len(queue) > 0 {
+        let u = queue[0]
+        queue = slice(queue, 1, len(queue))
+        let gm2 = auto["goto"]
+        let kids = gm2[u]
+        let ks = keys(kids)
+        let i = 0
+        while i < len(ks) {
+            let c = ks[i]
+            let v = kids[c]
+            queue = push(queue, v)
+            let f = auto["fail"][u]
+            while f > 0 && (contains(auto["goto"][f], c) == false) {
+                f = auto["fail"][f]
+            }
+            let fallback = 0
+            if contains(auto["goto"][f], c) && auto["goto"][f][c] != v {
+                fallback = auto["goto"][f][c]
+            }
+            let fl2 = auto["fail"]
+            fl2[v] = fallback
+            auto["fail"] = fl2
+            let op2 = auto["output"]
+            op2[v] = op2[v] + op2[fallback]
+            auto["output"] = op2
+            i = i + 1
+        }
+    }
+    return auto
+}
+
+fn ac_find_all(auto: dict, text: str) -> list {
+    let hits = []
+    let node = 0
+    let i = 0
+    while i < len(text) {
+        let c = ord(text[i])
+        while node > 0 && (contains(auto["goto"][node], c) == false) {
+            node = auto["fail"][node]
+        }
+        if contains(auto["goto"][node], c) {
+            node = auto["goto"][node][c]
+        }
+        let outs = auto["output"][node]
+        let j = 0
+        while j < len(outs) {
+            hits = push(hits, [outs[j], i + 1])
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return hits
+}
+
+// ===================================================================
+// 5. radix_sort_u32 (LSD byte radix, 4 passes)
+// ===================================================================
+fn radix_pass(xs: list, shift: int) -> list {
+    let buckets = []
+    let b = 0
+    while b < 256 { buckets = push(buckets, []); b = b + 1 }
+    let i = 0
+    while i < len(xs) {
+        let v = xs[i]
+        let k = (v >> shift) & 0xff
+        buckets[k] = push(buckets[k], v)
+        i = i + 1
+    }
+    let out = []
+    b = 0
+    while b < 256 {
+        out = out + buckets[b]
+        b = b + 1
+    }
+    return out
+}
+
+fn radix_sort_u32(xs: list) -> list {
+    xs = radix_pass(xs, 0)
+    xs = radix_pass(xs, 8)
+    xs = radix_pass(xs, 16)
+    xs = radix_pass(xs, 24)
+    return xs
+}
+
+// ===================================================================
+// hex formatting (lowercase, zero-padded)
+// ===================================================================
+fn hex64(v: int) -> str {
+    let x = v & XXH_MASK
+    let digits = "0123456789abcdef"
+    let s = ""
+    let i = 60
+    while i >= 0 {
+        let nib = (x >> i) & 0xf
+        s = s + digits[nib]
+        i = i - 4
+    }
+    return s
+}
+
+fn hex32(v: int) -> str {
+    let x = v & 0xFFFFFFFF
+    let digits = "0123456789abcdef"
+    let s = ""
+    let i = 28
+    while i >= 0 {
+        let nib = (x >> i) & 0xf
+        s = s + digits[nib]
+        i = i - 4
+    }
+    return s
+}
+
+// ===================================================================
+// driver
+// ===================================================================
+fn build_patterns(n: int) -> list {
+    let alphabet = "ACGT"
+    let patterns = []
+    let p = 0
+    while p < n {
+        let plen = 4 + (next_u32() % 5)
+        let s = ""
+        let k = 0
+        while k < plen {
+            s = s + alphabet[next_u32() % 4]
+            k = k + 1
+        }
+        patterns = push(patterns, s)
+        p = p + 1
+    }
+    return patterns
+}
+
+fn build_text(n: int) -> str {
+    let alphabet = "ACGT"
+    let s = ""
+    let i = 0
+    while i < n {
+        s = s + alphabet[next_u32() % 4]
+        i = i + 1
+    }
+    return s
+}
+
+fn main() {
+    // ---- verify profile sizes (match stdlib_bench.py/.js "verify") ----
+    let XXHASH_N = 512
+    let LZ4_N    = 2048
+    let CHACHA_N = 512
+    let AC_PATS  = 40
+    let AC_TEXT  = 2048
+    let RADIX_N  = 2000
+
+    // 1. xxhash64
+    seed_rng(0x1234ABCD)
+    let xdata = gen_bytes(XXHASH_N)
+    println("xxhash " + hex64(xxh64(xdata, 0)))
+
+    // 2. lz4 round-trip
+    seed_rng(0xFEEDFACE)
+    let src = gen_bytes(LZ4_N)
+    let packed = lz4_compress(src)
+    let back = lz4_decompress(packed)
+    let ok = "ok"
+    if len(back) != len(src) { ok = "BAD" }
+    let bi = 0
+    while bi < len(src) {
+        if back[bi] != src[bi] { ok = "BAD" }
+        bi = bi + 1
+    }
+    println("lz4 " + ok + ":" + to_str(len(src)) + ":" + hex32(adler32(back)) + ":" + to_str(len(packed)))
+
+    // 3. chacha20
+    seed_rng(0x0BADF00D)
+    let key = gen_bytes(32)
+    seed_rng(0x00C0FFEE)
+    let nonce = gen_bytes(12)
+    seed_rng(0xDEADBEEF)
+    let pdata = gen_bytes(CHACHA_N)
+    let ct = chacha20_encrypt(key, nonce, pdata)
+    let h1 = xxh64(ct, 0)
+    let h2 = xxh64(ct, 1)
+    println("chacha20 " + hex64(h1) + ":" + hex32(h2))
+
+    // 4. aho_corasick
+    seed_rng(0x5EED1234)
+    let patterns = build_patterns(AC_PATS)
+    let text = build_text(AC_TEXT)
+    let auto = ac_build(patterns)
+    let hits = ac_find_all(auto, text)
+    println("aho_corasick " + to_str(len(hits)))
+
+    // 5. radix_sort_u32
+    seed_rng(0x0BADCAFE)
+    let keys = []
+    let ki = 0
+    while ki < RADIX_N {
+        keys = push(keys, next_u32())
+        ki = ki + 1
+    }
+    let srt = radix_sort_u32(keys)
+    let first = 0
+    let last = 0
+    let acc = 0
+    if len(srt) > 0 {
+        first = srt[0]
+        last = srt[len(srt) - 1]
+    }
+    let si = 0
+    while si < len(srt) {
+        acc = (acc ^ srt[si]) & 0xFFFFFFFF
+        si = si + 1
+    }
+    println("radix_sort_u32 " + hex32(first) + ":" + hex32(last) + ":" + hex32(acc))
+}
+
+main()
