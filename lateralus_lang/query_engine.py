@@ -391,10 +391,21 @@ class Query:
 def _apply_join(left: Collection, clause) -> Collection:
     if isinstance(clause, LambdaJoinClause):
         result = []
+        matched_right: set[int] = set()
+        matched_left: set[int] = set()
         for l in left:
             for r in clause.right:
                 if clause.condition(l, r):
                     result.append({**l, **r})
+                    matched_left.add(id(l))
+                    matched_right.add(id(r))
+            if id(l) not in matched_left and clause.kind == "left":
+                result.append({**l, **{k: None for k in (clause.right[0].keys() if clause.right else [])}})
+
+        if clause.kind == "right":
+            for r in clause.right:
+                if id(r) not in matched_right:
+                    result.append({**{k: None for k in (left[0].keys() if left else [])}, **r})
         return result
     right = clause.right
     kind = clause.kind
