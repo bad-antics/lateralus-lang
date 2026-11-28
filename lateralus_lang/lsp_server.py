@@ -26,6 +26,18 @@ try:
 except Exception:          # pragma: no cover – graceful degradation
     _HAS_COMPILER = False
 
+# --- Stdlib Indexer (hover signatures for stdlib) ---------------------
+try:
+    from .stdlib_indexer import (
+        get_stdlib_function,
+        get_stdlib_hover,
+        get_stdlib_completions,
+        get_all_stdlib_names,
+    )
+    _HAS_STDLIB_INDEXER = True
+except Exception:
+    _HAS_STDLIB_INDEXER = False
+
 log = logging.getLogger("lateralus-lsp")
 
 
@@ -372,6 +384,17 @@ def get_completions(doc: TextDocument, line: int, character: int) -> list[dict]:
                 "documentation": info["doc"],
             })
 
+    # Stdlib function completions
+    if _HAS_STDLIB_INDEXER:
+        for completion in get_stdlib_completions(prefix):
+            if completion["label"].lower().startswith(prefix) or not prefix:
+                items.append({
+                    "label": completion["label"],
+                    "kind": 3,  # Function
+                    "detail": completion["detail"],
+                    "documentation": completion["documentation"],
+                })
+
     # Snippet completions
     for trigger, snippet in LATERALUS_SNIPPETS.items():
         if trigger.startswith(prefix) or not prefix:
@@ -403,6 +426,18 @@ def get_hover(doc: TextDocument, line: int, character: int) -> Optional[dict]:
     word = doc.get_word_at(line, character)
     if not word:
         return None
+
+    # Check stdlib functions first (module.name format)
+    if _HAS_STDLIB_INDEXER:
+        hover = get_stdlib_hover(word)
+        if hover:
+            return hover
+
+        # Also check if the word is a qualified name like "json.parse"
+        if "." in word:
+            hover = get_stdlib_hover(word)
+            if hover:
+                return hover
 
     # Check builtins
     if word in LATERALUS_BUILTINS:

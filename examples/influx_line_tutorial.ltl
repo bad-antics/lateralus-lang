@@ -1,0 +1,220 @@
+#!/usr/bin/env lateralus
+-- examples/influx_line_tutorial.ltl
+-- Runnable companion example for stdlib.influx_line tutorial
+
+import "influx_line"
+import "time"
+import "random"
+
+-- ============================================================
+-- Example 1: Basic line building
+-- ============================================================
+
+fn example_basic() {
+    print("=== Example 1: Basic Line Building ===")
+
+    let measurement = "cpu"
+    let tags = [["host", "server01"], ["region", "us-west"]]
+    let fields = [
+        ["usage_user", influx_line.field_float("12.5")],
+        ["usage_system", influx_line.field_float("5.2")],
+        ["usage_idle", influx_line.field_float("82.3")]
+    ]
+    let ts = 1699900000000000000  -- 2023-11-13 12:00:00 UTC in nanoseconds
+
+    let line = influx_line.line(measurement, tags, fields, ts)
+    print("Built line: " + line)
+
+    -- Parse it back
+    let parsed = influx_line.parse_line(line)
+    if parsed != nil {
+        print("Parsed measurement: " + parsed["measurement"])
+        print("Parsed tags: " + str(parsed["tags"]))
+        print("Parsed fields: " + str(parsed["fields"]))
+        print("Parsed timestamp: " + str(parsed["timestamp"]))
+    }
+}
+
+-- ============================================================
+-- Example 2: Escaping functions
+-- ============================================================
+
+fn example_escaping() {
+    print("\n=== Example 2: Escaping Functions ===")
+
+    -- Tag key/value escaping
+    let tag_k = influx_line.escape_ident("host,name")
+    let tag_v = influx_line.escape_ident("server 01")
+    print("escape_ident('host,name') = " + tag_k)
+    print("escape_ident('server 01') = " + tag_v)
+
+    -- Measurement escaping
+    let m1 = influx_line.escape_measurement("cpu,load")
+    let m2 = influx_line.escape_measurement("disk usage")
+    print("escape_measurement('cpu,load') = " + m1)
+    print("escape_measurement('disk usage') = " + m2)
+
+    -- String field escaping
+    let s1 = influx_line.escape_string_field('He said "hi"')
+    let s2 = influx_line.escape_string_field("path\\to")
+    print('escape_string_field(\'He said "hi"\') = ' + s1)
+    print('escape_string_field("path\\to") = ' + s2)
+}
+
+-- ============================================================
+-- Example 3: Field formatting
+-- ============================================================
+
+fn example_fields() {
+    print("\n=== Example 3: Field Formatting ===")
+
+    let fs = influx_line.field_string("hello world")
+    let fi = influx_line.field_int(42)
+    let ff = influx_line.field_float("12.5")
+    let fb = influx_line.field_bool(true)
+
+    print("field_string('hello world') = " + fs)
+    print("field_int(42) = " + fi)
+    print("field_float('12.5') = " + ff)
+    print("field_bool(true) = " + fb)
+}
+
+-- ============================================================
+-- Example 4: Complete telemetry exporter
+-- ============================================================
+
+fn export_cpu_metrics(host: str, cpu_pct: float, mem_pct: float) -> str {
+    let tags = [
+        ["host", host],
+        ["service", "monitoring-agent"]
+    ]
+    let fields = [
+        ["cpu_usage", influx_line.field_float(str(cpu_pct))],
+        ["mem_usage", influx_line.field_float(str(mem_pct))],
+        ["load_avg", influx_line.field_float(str(random.random() * 2.0))]
+    ]
+    return influx_line.line("system_metrics", tags, fields, time.now_ns())
+}
+
+fn example_telemetry() {
+    print("\n=== Example 4: Telemetry Exporter ===")
+
+    for i in range(3) {
+        let cpu = random.random() * 100.0
+        let mem = random.random() * 100.0
+        let line = export_cpu_metrics("server-01", cpu, mem)
+        print(line)
+    }
+}
+
+-- ============================================================
+-- Example 5: Parsing and interpreting
+-- ============================================================
+
+fn interpret_field(raw_value: str) -> any {
+    if raw_value.ends_with("i") {
+        return int(raw_value[:-1])  -- integer
+    } else if raw_value == "true" {
+        return true
+    } else if raw_value == "false" {
+        return false
+    } else if raw_value.starts_with("\"") and raw_value.ends_with("\"") {
+        -- unescape string field
+        return raw_value[1:-1].replace("\\\"", "\"").replace("\\\\", "\\")
+    } else {
+        return float(raw_value)  -- float
+    }
+}
+
+fn example_parsing() {
+    print("\n=== Example 5: Parsing and Interpreting ===")
+
+    let raw = 'cpu,host=server01,region=us-west usage_user=12.5,usage_system=5.2,usage_idle=82.3 1699900000000000000'
+    let parsed = influx_line.parse_line(raw)
+
+    if parsed != nil {
+        print("Measurement: " + parsed["measurement"])
+        print("Tags: " + str(parsed["tags"]))
+        print("Fields (raw): " + str(parsed["fields"]))
+        print("Timestamp: " + str(parsed["timestamp"]))
+
+        -- Interpret field values
+        print("\nInterpreted fields:")
+        for field in parsed["fields"] {
+            let name = field[0]
+            let raw_val = field[1]
+            let value = interpret_field(raw_val)
+            print("  " + name + " = " + str(value) + " (" + @type(value) + ")")
+        }
+    }
+}
+
+-- ============================================================
+-- Example 6: Roundtrip test
+-- ============================================================
+
+fn roundtrip_test() -> bool {
+    print("\n=== Example 6: Roundtrip Test ===")
+
+    let tags = [["host", "test-server"], ["env", "prod"]]
+    let fields = [
+        ["cpu", influx_line.field_float("45.5")],
+        ["active", influx_line.field_bool(true)]
+    ]
+    let ts = 1699900000000000000
+    let original = influx_line.line("test_metric", tags, fields, ts)
+
+    let parsed = influx_line.parse_line(original)
+    if parsed == nil {
+        print("FAIL: Parse returned nil")
+        return false
+    }
+
+    -- Verify measurement
+    if parsed["measurement"] != "test_metric" {
+        print("FAIL: measurement mismatch")
+        return false
+    }
+
+    -- Verify tags
+    let tags_ok = true
+    for tag in parsed["tags"] {
+        if not ((tag[0] == "host" and tag[1] == "test-server") or
+                (tag[0] == "env" and tag[1] == "prod")) {
+            tags_ok = false
+        }
+    }
+    if not tags_ok {
+        print("FAIL: tags mismatch")
+        return false
+    }
+
+    -- Verify timestamp
+    if parsed["timestamp"] != 1699900000000000000 {
+        print("FAIL: timestamp mismatch")
+        return false
+    }
+
+    print("SUCCESS: Roundtrip verified!")
+    return true
+}
+
+-- ============================================================
+-- Main
+-- ============================================================
+
+fn main() {
+    print("stdlib.influx_line Tutorial Examples")
+    print("=====================================\n")
+
+    example_basic()
+    example_escaping()
+    example_fields()
+    example_telemetry()
+    example_parsing()
+
+    assert(roundtrip_test())
+    print("\nAll examples completed successfully!")
+}
+
+main()
