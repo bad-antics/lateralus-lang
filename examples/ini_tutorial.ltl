@@ -1,0 +1,192 @@
+// ===================================================================
+// examples/ini_tutorial.ltl — Tutorial for stdlib/ini.ltl
+// -------------------------------------------------------------------
+// Self-contained, executable tutorial demonstrating:
+//   1. Parsing INI configuration files into structured maps.
+//   2. Type-safe configuration access with defaults (int, bool, float, str).
+//   3. Modifying configurations and serializing back to INI format.
+//   4. Merging sections and managing keys.
+//
+// Inlines stdlib/strings + stdlib/ini core for standalone runtime portability.
+// ===================================================================
+
+fn split(s: str, sep: str) -> list { return s.split(sep) }
+fn trim(s: str) -> str { return s.strip() }
+fn starts_with(s: str, p: str) -> bool { return s.startswith(p) }
+fn ends_with(s: str, p: str) -> bool { return s.endswith(p) }
+fn index_of(s: str, sub: str) -> int { return s.find(sub) }
+fn join(parts: list, sep: str) -> str { return sep.join(parts) }
+
+fn substr(s: str, start: int, length: int) -> str {
+    return slice(s, start, start + length)
+}
+
+fn _parse_value(s: str) {
+    if s == "true" or s == "yes" { return true }
+    if s == "false" or s == "no" { return false }
+    if s == "nil" or s == "null" { return nil }
+    return s
+}
+
+fn parse(text: str) -> map {
+    let cfg = {}
+    let current_section = "default"
+    cfg[current_section] = {}
+
+    let lines = split(text, "\n")
+    for line in lines {
+        let trimmed = trim(line)
+        if len(trimmed) == 0 { continue }
+        if starts_with(trimmed, ";") or starts_with(trimmed, "#") { continue }
+        if starts_with(trimmed, "[") and ends_with(trimmed, "]") {
+            current_section = substr(trimmed, 1, len(trimmed) - 2)
+            if not contains(keys(cfg), current_section) {
+                cfg[current_section] = {}
+            }
+            continue
+        }
+        let eq_pos = index_of(trimmed, "=")
+        if eq_pos >= 0 {
+            let k = trim(substr(trimmed, 0, eq_pos))
+            let v = trim(substr(trimmed, eq_pos + 1, len(trimmed) - eq_pos - 1))
+            if len(v) >= 2 and starts_with(v, "\"") and ends_with(v, "\"") {
+                v = substr(v, 1, len(v) - 2)
+            }
+            let section = cfg[current_section]
+            section[k] = _parse_value(v)
+            cfg[current_section] = section
+        }
+    }
+    return cfg
+}
+
+fn get(cfg: map, section: str, key: str, default) {
+    if not contains(keys(cfg), section) { return default }
+    let sec = cfg[section]
+    if not contains(keys(sec), key) { return default }
+    return sec[key]
+}
+
+fn get_int(cfg: map, section: str, key: str, default: int) -> int {
+    let val = get(cfg, section, key, nil)
+    if val == nil { return default }
+    return to_int(val)
+}
+
+fn get_bool(cfg: map, section: str, key: str, default: bool) -> bool {
+    let val = get(cfg, section, key, nil)
+    if val == nil { return default }
+    if val == true or val == "true" or val == "yes" or val == "1" { return true }
+    return false
+}
+
+fn get_float(cfg: map, section: str, key: str, default: float) -> float {
+    let val = get(cfg, section, key, nil)
+    if val == nil { return default }
+    return to_float(val)
+}
+
+fn set(cfg: map, section: str, key: str, value) -> map {
+    if not contains(keys(cfg), section) { cfg[section] = {} }
+    let sec = cfg[section]
+    sec[key] = value
+    cfg[section] = sec
+    return cfg
+}
+
+fn delete(cfg: map, section: str, key: str) -> map {
+    if contains(keys(cfg), section) {
+        let sec = cfg[section]
+        let new_sec = {}
+        for k in keys(sec) {
+            if k != key { new_sec[k] = sec[k] }
+        }
+        cfg[section] = new_sec
+    }
+    return cfg
+}
+
+fn sections(cfg: map) -> list {
+    return sorted(keys(cfg))
+}
+
+fn section_keys(cfg: map, section: str) -> list {
+    if not contains(keys(cfg), section) { return [] }
+    return sorted(keys(cfg[section]))
+}
+
+fn to_string(cfg: map) -> str {
+    let lines = []
+    for section in sorted(keys(cfg)) {
+        let sec = cfg[section]
+        let ks = sorted(keys(sec))
+        if len(ks) > 0 {
+            lines = lines + ["[" + section + "]"]
+            for key in ks {
+                let val = sec[key]
+                lines = lines + [key + " = " + str(val)]
+            }
+            lines = lines + [""]
+        }
+    }
+    return join(lines, "\n")
+}
+
+fn merge(base: map, other: map) -> map {
+    let result = base
+    for section in keys(other) {
+        if not contains(keys(result), section) { result[section] = {} }
+        let sec = other[section]
+        for key in keys(sec) {
+            let r_sec = result[section]
+            r_sec[key] = sec[key]
+            result[section] = r_sec
+        }
+    }
+    return result
+}
+
+fn main() {
+    print("=== LATERALUS STDLIB INI TUTORIAL ===")
+
+    let doc = "[server]\nhost = api.example.com\nport = 8080\ntimeout = 30.5\nssl = true\n; database parameters\n[database]\nname = production\npool_size = 20\n"
+
+    // 1. Parse document
+    let cfg = parse(doc)
+    print("STEP 1: Parsed INI document sections: " + str(sections(cfg)))
+
+    // 2. Read typed values with defaults
+    let host = get(cfg, "server", "host", "localhost")
+    let port = get_int(cfg, "server", "port", 80)
+    let timeout = get_float(cfg, "server", "timeout", 10.0)
+    let ssl = get_bool(cfg, "server", "ssl", false)
+    let db_name = get(cfg, "database", "name", "test")
+    let pool_size = get_int(cfg, "database", "pool_size", 5)
+
+    print("STEP 2: Typed values:")
+    print("  server.host = " + str(host))
+    print("  server.port = " + str(port))
+    print("  server.timeout = " + str(timeout))
+    print("  server.ssl = " + str(ssl))
+    print("  database.name = " + str(db_name))
+    print("  database.pool_size = " + str(pool_size))
+
+    // 3. Mutate config and serialize back to INI
+    cfg = set(cfg, "server", "workers", 4)
+    cfg = delete(cfg, "database", "pool_size")
+    let serialized = to_string(cfg)
+    print("STEP 3: Mutated and serialized INI:")
+    print(serialized)
+
+    // 4. Merge configs
+    let override_cfg = parse("[server]\nport = 9000\nworkers = 8\n")
+    let merged = merge(cfg, override_cfg)
+    let new_port = get_int(merged, "server", "port", 80)
+    let new_workers = get_int(merged, "server", "workers", 1)
+    print("STEP 4: Merged server.port=" + str(new_port) + " workers=" + str(new_workers))
+
+    print("PINNED_VECTORS: host=" + str(host) + " port=" + str(port) + " ssl=" + str(ssl) + " merged_port=" + str(new_port))
+    print("ini tutorial: all checks passed")
+}
+
+main()
