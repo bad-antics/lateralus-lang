@@ -1,0 +1,50 @@
+import stdlib.arena
+
+@test
+fn default_uses_1024_capacity() -> bool {
+    let a = stdlib.arena.default()
+    return stdlib.arena.block_count(a) == 1 && stdlib.arena.total_capacity(a) == 1024
+}
+
+@test
+fn alloc_rolls_over_to_new_block() -> bool {
+    let a = stdlib.arena.new(2)
+    let r1 = stdlib.arena.alloc(a, 10); a = r1[0]
+    let r2 = stdlib.arena.alloc(a, 20); a = r2[0]
+    let r3 = stdlib.arena.alloc(a, 30); a = r3[0]
+    return r1[1] == 0 && r2[1] == 1 && r3[1] == 2 &&
+           stdlib.arena.block_count(a) == 2 && stdlib.arena.get(a, 2) == 30
+}
+
+@test
+fn alloc_many_returns_ids_in_order() -> bool {
+    let a = stdlib.arena.new(4)
+    let result = stdlib.arena.alloc_many(a, [7, 8, 9])
+    a = result[0]
+    return result[1] == [0, 1, 2] && stdlib.arena.total(a) == 3
+}
+
+@test
+fn set_updates_and_get_rejects_unknown_slots() -> bool {
+    let a = stdlib.arena.new(2)
+    let r = stdlib.arena.alloc(a, 1); a = r[0]
+    a = stdlib.arena.set(a, 0, 99)
+    return stdlib.arena.get(a, 0) == 99 && stdlib.arena.get(a, 99) == nil
+}
+
+@test
+fn reset_clears_all_allocations() -> bool {
+    let a = stdlib.arena.new(2)
+    let r = stdlib.arena.alloc_many(a, [1, 2, 3]); a = r[0]
+    a = stdlib.arena.reset(a)
+    return stdlib.arena.total(a) == 0 && stdlib.arena.block_count(a) == 1 && stdlib.arena.to_list(a) == []
+}
+
+@test
+fn stats_reports_capacity_and_usage() -> bool {
+    let a = stdlib.arena.new(2)
+    let r = stdlib.arena.alloc(a, 5); a = r[0]
+    let s = stdlib.arena.stats(a)
+    return s["total_allocations"] == 1 && s["block_count"] == 1 &&
+           s["total_capacity"] == 2 && s["remaining_in_block"] == 1
+}
