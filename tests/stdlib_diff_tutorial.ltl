@@ -1,0 +1,236 @@
+# Test suite for stdlib/diff.ltl tutorial
+# Tests Myers diff algorithm, SES, LCS, and unified diff generation
+
+from stdlib.diff import diff_lines, format_unified_diff, find_ses, find_lcs
+
+# Test helper function
+func assert_equal(a, b, message) {
+    if a != b {
+        print("Test failed: " + message)
+        print("Expected: " + b)
+        print("Got: " + a)
+        return false
+    }
+    return true
+}
+
+# Test 1: Basic diff with additions and deletions
+func test_basic_diff() {
+    let old_lines = ["a", "b", "c", "d"]
+    let new_lines = ["a", "c", "e", "d"]
+    
+    let diff = diff_lines(old_lines, new_lines)
+    let expected = [
+        "--- old",
+        "+++ new",
+        "@@ -1,4 +1,4 @@",
+        " a",
+        "-b",
+        " c",
+n        "+e",
+        " d"
+    ]
+    
+    let unified = format_unified_diff(old_lines, new_lines, diff)
+    
+    if assert_equal(unified.length, expected.length, "Basic diff line count") {
+        for i in 0..unified.length-1 {
+            if !assert_equal(unified[i], expected[i], "Line " + i) {
+                return false
+            }
+        }
+    }
+    
+    return true
+}
+
+# Test 2: Empty file to non-empty
+func test_empty_to_nonempty() {
+    let old_lines = []
+    let new_lines = ["line 1", "line 2"]
+    
+    let diff = diff_lines(old_lines, new_lines)
+    let expected = [
+        "--- old",
+        "+++ new",
+        "@@ -0,0 +1,2 @@",
+        "+line 1",
+        "+line 2"
+    ]
+    
+    let unified = format_unified_diff(old_lines, new_lines, diff)
+    
+    return assert_equal(unified, expected, "Empty to non-empty diff")
+}
+
+# Test 3: Non-empty to empty
+func test_nonempty_to_empty() {
+    let old_lines = ["line 1", "line 2"]
+    let new_lines = []
+    
+    let diff = diff_lines(old_lines, new_lines)
+    let expected = [
+        "--- old",
+        "+++ new",
+        "@@ -1,2 +0,0 @@",
+        "-line 1",
+        "-line 2"
+    ]
+    
+    let unified = format_unified_diff(old_lines, new_lines, diff)
+    
+    return assert_equal(unified, expected, "Non-empty to empty diff")
+}
+
+# Test 4: Identical files
+func test_identical_files() {
+    let content = ["line 1", "line 2", "line 3"]
+    
+    let diff = diff_lines(content, content)
+    let expected = [
+        "--- old",
+        "+++ new",
+        "@@ -1,3 +1,3 @@",
+        " line 1",
+        " line 2",
+        " line 3"
+    ]
+    
+    let unified = format_unified_diff(content, content, diff)
+    
+    return assert_equal(unified, expected, "Identical files diff")
+}
+
+# Test 5: Shortest Edit Script
+func test_shortest_edit_script() {
+    let a = ["a", "b", "c", "d", "e"]
+    let b = ["a", "c", "d", "f"]
+    
+    let ses = find_ses(a, b)
+    let expected_ses = [
+        {type: "delete", value: "b"},
+        {type: "insert", value: "f"}
+    ]
+    
+    if !assert_equal(ses.length, expected_ses.length, "SES length") {
+        return false
+    }
+    
+    for i in 0..ses.length-1 {
+        if !assert_equal(ses[i].type, expected_ses[i].type, "SES type at " + i) {
+            return false
+        }
+        if !assert_equal(ses[i].value, expected_ses[i].value, "SES value at " + i) {
+            return false
+        }
+    }
+    
+    return true
+}
+
+# Test 6: Longest Common Subsequence
+func test_lcs() {
+    let a = ["a", "b", "c", "d", "e"]
+    let b = ["a", "c", "d", "f"]
+    
+    let lcs = find_lcs(a, b)
+    let expected_lcs = ["a", "c", "d"]
+    
+    return assert_equal(lcs, expected_lcs, "LCS result")
+}
+
+# Test 7: Complex multi-line diff
+func test_complex_diff() {
+    let old_lines = [
+        "function old() {",
+        "  console.log('old');",
+        "  return true;",
+        "}",
+        "",
+        "// Comment"
+    ]
+    
+    let new_lines = [
+        "function new() {",
+        "  console.log('new');",
+        "  return false;",
+        "}",
+        "",
+        "// Updated comment"
+    ]
+    
+    let diff = diff_lines(old_lines, new_lines)
+    let unified = format_unified_diff(old_lines, new_lines, diff)
+    
+    # Verify we have the expected number of changes
+    let additions = unified.filter(line => line.starts_with("+"))
+    let deletions = unified.filter(line => line.starts_with("-"))
+    
+    if !assert_equal(additions.length, 2, "Addition count") {
+        return false
+    }
+    
+    if !assert_equal(deletions.length, 2, "Deletion count") {
+        return false
+    }
+    
+    return true
+}
+
+# Test 8: Edge case - single character changes
+func test_single_char_diff() {
+    let old_lines = ["hello", "world"]
+    let new_lines = ["hallo", "world"]
+    
+    let diff = diff_lines(old_lines, new_lines)
+    let unified = format_unified_diff(old_lines, new_lines, diff)
+    
+    # Should show only the changed line
+    let changes = unified.filter(line => line.starts_with("+"))
+    
+    if !assert_equal(changes.length, 1, "Single change count") {
+        return false
+    }
+    
+    if !changes[0].contains("hallo") {
+        print("Expected change to show 'hallo'")
+        return false
+    }
+    
+    return true
+}
+
+# Run all tests
+func run_tests() {
+    print("Running stdlib diff tutorial tests...")
+    
+    let tests = [
+        {name: "Basic diff", func: test_basic_diff},
+        {name: "Empty to non-empty", func: test_empty_to_nonempty},
+        {name: "Non-empty to empty", func: test_nonempty_to_empty},
+        {name: "Identical files", func: test_identical_files},
+        {name: "Shortest Edit Script", func: test_shortest_edit_script},
+        {name: "Longest Common Subsequence", func: test_lcs},
+        {name: "Complex diff", func: test_complex_diff},
+        {name: "Single character diff", func: test_single_char_diff}
+    ]
+    
+    let passed = 0
+    let total = tests.length
+    
+    for test in tests {
+        print("Running test: " + test.name)
+        if test.func() {
+            print("✓ Passed: " + test.name)
+            passed = passed + 1
+        } else {
+            print("✗ Failed: " + test.name)
+        }
+    }
+    
+    print("\nTest Results: " + passed + " passed, " + (total - passed) + " failed")
+    return passed == total
+}
+
+# Execute tests
+run_tests()
