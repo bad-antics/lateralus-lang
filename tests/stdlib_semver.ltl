@@ -1,0 +1,59 @@
+// ===================================================================
+// tests/stdlib_semver.ltl — pinned SemVer 2.0.0 vectors
+// ===================================================================
+
+import semver
+
+pub fn test_parse_and_format() -> bool {
+    let v = parse("v1.2.3-beta.1+build.42")
+    return major(v) == 1 && minor(v) == 2 && patch(v) == 3
+        && prerelease(v) == "beta.1" && build_meta(v) == "build.42"
+        && to_string(v) == "1.2.3-beta.1+build.42"
+}
+
+pub fn test_semver_precedence_vectors() -> bool {
+    // SemVer 2.0.0 §11 ordering, pinned from the specification:
+    // alpha < alpha.1 < alpha.beta < beta < beta.2 < beta.11 < rc.1 < stable.
+    let ordered = [
+        "1.0.0-alpha",
+        "1.0.0-alpha.1",
+        "1.0.0-alpha.beta",
+        "1.0.0-beta",
+        "1.0.0-beta.2",
+        "1.0.0-beta.11",
+        "1.0.0-rc.1",
+        "1.0.0",
+    ]
+    let i = 0
+    while i < len(ordered) - 1 {
+        if not lt(parse(ordered[i]), parse(ordered[i + 1])) {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+pub fn test_build_metadata_does_not_change_precedence() -> bool {
+    let a = parse("1.0.0+build.1")
+    let b = parse("1.0.0+build.2")
+    return eq(a, b) && compare(a, b) == 0
+}
+
+pub fn test_bumps_clear_metadata() -> bool {
+    let v = parse("2.3.4-rc.1+build.9")
+    let major_v = bump_major(v)
+    let minor_v = bump_minor(v)
+    let patch_v = bump_patch(v)
+    return to_string(major_v) == "3.0.0"
+        && to_string(minor_v) == "2.4.0"
+        && to_string(patch_v) == "2.3.5"
+}
+
+pub fn test_ranges_and_channels() -> bool {
+    let v = parse("1.4.2")
+    let pre = parse("1.4.2-rc.1")
+    return is_valid("1.4.2") && is_stable(v) && is_prerelease(pre)
+        && satisfies_caret(v, 1, 3) && satisfies_tilde(v, 1, 4)
+        && not satisfies_tilde(v, 1, 5)
+}
