@@ -40,6 +40,11 @@ class LintIssue:
     column: int = 0
     suggestion: Optional[str] = None
 
+    @property
+    def col(self) -> int:
+        """Alias for column for backwards compatibility."""
+        return self.column
+
     def __str__(self):
         sev = self.severity.value.upper()
         loc = f"{self.file}:{self.line}"
