@@ -24,6 +24,7 @@ three backends produce byte-identical output before recording timings.
 | mandelbrot   | 150×100 grid, 255 max iterations           | 719122  |
 | binary_trees | Allocate & traverse a depth-12 binary tree | 8191    |
 | nbody        | 5-body gravitational sim, 5000 steps       | ≈ −14073.19 |
+| terrain_grid | Two fixed synthetic terrain grids            | `36`, `31`, `47`, `29` |
 
 ## Running
 
