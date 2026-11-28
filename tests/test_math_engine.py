@@ -2,6 +2,8 @@
 tests/test_math_engine.py — Tests for the LATERALUS Math Engine
 """
 import math
+from decimal import Decimal, localcontext
+from fractions import Fraction
 
 import pytest
 
@@ -45,6 +47,44 @@ class TestLTLNumber:
     def test_division_by_zero(self):
         with pytest.raises(ZeroDivisionError):
             LTLNumber(1) / LTLNumber(0)
+
+    @pytest.mark.parametrize("numerator, denominator", [
+        (2**53 + 1, 1),
+        (10**400, 1),
+        (1, 8),
+        (7, -4),
+        (-7, 4),
+        (0, 7),
+    ])
+    def test_integer_division_preserves_precision(self, numerator, denominator):
+        result = LTLNumber(numerator) / LTLNumber(denominator)
+        assert result.value == Fraction(numerator, denominator)
+
+    @pytest.mark.parametrize("precision, expected", [
+        (3, Decimal("0.333")),
+        (20, Decimal("0.33333333333333333333")),
+        (80, Decimal("0." + "3" * 80)),
+    ])
+    def test_integer_division_respects_decimal_precision(self, precision, expected):
+        with localcontext() as context:
+            context.prec = precision
+            assert (LTLNumber(1) / LTLNumber(3)).value == expected
+
+    def test_integer_division_accepts_raw_denominator(self):
+        assert (LTLNumber(2**53 + 1) / 1).value == 2**53 + 1
+
+    def test_integer_quotient_keeps_decimal_arithmetic(self):
+        assert (LTLNumber(1) / LTLNumber(2) + LTLNumber(Decimal("0.1"))).value == Decimal("0.6")
+
+    @pytest.mark.parametrize("value, expected", [
+        (Decimal("2"), Decimal("1.5")),
+        (Fraction(2, 3), Fraction(9, 2)),
+        (2 + 0j, 1.5 + 0j),
+    ])
+    def test_division_preserves_existing_promotions(self, value, expected):
+        result = LTLNumber(3) / LTLNumber(value)
+        assert type(result.value) is type(expected)
+        assert result.value == expected
 
     def test_comparison(self):
         assert LTLNumber(5) > LTLNumber(3)
