@@ -253,6 +253,16 @@ class TestDistributions:
         # Fair coin, n=2, P(X=1) = 0.5
         assert abs(binomial_pmf(1, 2, 0.5) - 0.5) < 1e-10
 
+    def test_binomial_pmf_large_n(self):
+        # 550 successes in 1100 trials, fair coin (issue #227)
+        val = binomial_pmf(550, 1100, 0.5)
+        assert abs(val - 0.024051657768231812) < 1e-12
+        # Boundary cases
+        assert binomial_pmf(-1, 10, 0.5) == 0.0
+        assert binomial_pmf(11, 10, 0.5) == 0.0
+        assert binomial_pmf(0, 10, 0.0) == 1.0
+        assert binomial_pmf(10, 10, 1.0) == 1.0
+
     def test_binomial_sum_to_one(self):
         total = sum(binomial_pmf(k, 10, 0.3) for k in range(11))
         assert abs(total - 1.0) < 1e-10
