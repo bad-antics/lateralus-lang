@@ -2,6 +2,7 @@
 tests/test_math_engine.py — Tests for the LATERALUS Math Engine
 """
 import math
+from decimal import Decimal
 
 import pytest
 
@@ -9,6 +10,7 @@ from lateralus_lang.math_engine import (
     Dual,
     Interval,
     LTLNumber,
+    MATH_BUILTINS,
     Matrix,
     Vector,
     bisection,
@@ -24,6 +26,22 @@ from lateralus_lang.math_engine import (
     trapezoidal_integrate,
     variance,
 )
+
+
+def test_cbrt_orders_real_inputs_and_preserves_zero_sign():
+    cbrt = MATH_BUILTINS["cbrt"]
+    assert sorted(cbrt(x) for x in (8.0, -8.0, 0.0)) == pytest.approx([-2, 0, 2])
+    assert math.copysign(1.0, cbrt(-0.0)) == -1.0
+
+
+def test_cbrt_distinguishes_wrapped_reals_and_explicit_complex_inputs():
+    cbrt = MATH_BUILTINS["cbrt"]
+    wrapped = cbrt(LTLNumber(-8.0))
+    assert isinstance(wrapped, LTLNumber)
+    assert float(wrapped) == pytest.approx(-2.0)
+    assert cbrt(Decimal('-0')).is_signed()
+    assert cbrt(-8 + 0j) == pytest.approx(1 + math.sqrt(3) * 1j)
+
 
 # -------------------------------------------------------------------------
 # LTLNumber
