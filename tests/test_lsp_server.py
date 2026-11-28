@@ -324,9 +324,21 @@ class TestDefinition:
 
     def test_find_let_binding(self):
         doc = self._doc("let x = 42\nprintln(x)")
-        defn = get_definition(doc, 1, 9)  # 'x' on the println line
+        defn = get_definition(doc, 1, 8)
         assert defn is not None
-        assert defn["range"]["start"]["line"] == 0
+        assert defn["range"] == {
+            "start": {"line": 0, "character": 4},
+            "end": {"line": 0, "character": 5},
+        }
+
+    def test_call_on_declaration_line(self):
+        doc = self._doc("fn again() { again() }")
+        defn = get_definition(doc, 0, 14)
+        assert defn is not None
+        assert defn["range"] == {
+            "start": {"line": 0, "character": 3},
+            "end": {"line": 0, "character": 8},
+        }
 
     def test_find_struct(self):
         doc = self._doc("struct Point {\n    x: float\n}\nlet p = Point(1.0)")
