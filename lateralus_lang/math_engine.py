@@ -175,6 +175,8 @@ def _coerce_op(a, b, op):
         fa = Fraction(a) if not isinstance(a, Fraction) else a
         fb = Fraction(b) if not isinstance(b, Fraction) else b
         return op(fa, fb)
+    if op is operator.truediv and isinstance(a, int) and isinstance(b, int):
+        return Decimal(a) / Decimal(b)
     return op(a, b)
 
 
