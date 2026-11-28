@@ -261,9 +261,35 @@ class TestStatistics:
     def test_variance(self):
         assert variance([2, 4, 4, 4, 5, 5, 7, 9]) == pytest.approx(4.571, abs=0.01)
 
+    def test_variance_population_single_value(self):
+        assert variance([7.0], population=True) == 0.0
+
+    def test_variance_sample_single_value_raises(self):
+        with pytest.raises(ValueError):
+            variance([7.0])
+
+    def test_variance_population_empty_raises(self):
+        with pytest.raises(ValueError):
+            variance([], population=True)
+
+    def test_variance_population_matches_pvariance(self):
+        from statistics import pvariance
+
+        data = [5.0, 9.0]
+        assert variance(data, population=True) == pytest.approx(pvariance(data))
+
     def test_std_dev(self):
         data = [2, 4, 4, 4, 5, 5, 7, 9]
         assert std_dev(data) == pytest.approx(math.sqrt(variance(data)))
+
+    def test_std_dev_population_single_value(self):
+        assert std_dev([7.0], population=True) == 0.0
+
+    def test_std_dev_population_matches_pstdev(self):
+        from statistics import pstdev
+
+        data = [5.0, 9.0]
+        assert std_dev(data, population=True) == pytest.approx(pstdev(data))
 
     def test_correlation_perfect(self):
         x = [1, 2, 3, 4, 5]
