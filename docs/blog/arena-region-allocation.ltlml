@@ -1,0 +1,150 @@
+---
+--- Pinned-Vector Arena Example
+--- Demonstrates arena region allocation, block rollover, batch allocation, and safe indexing.
+---
+
+use stdlib.arena
+
+fn main() -> Int {
+    -- 1. Default & New construction with custom block size (e.g., 64 bytes)
+    let region = arena::new(64)
+    
+    println("=== Arena Pinned-Vector Demo ===")
+    println("Initial block count: {region |> arena::block_count}")
+    println("Initial total capacity: {region |> arena::total}")
+    println("Initial remaining bytes: {region |> arena::remaining}")
+
+    -- 2. Allocate individual items and set/get values
+    let idx1 = region |> arena::alloc(10)
+    let idx2 = region |> arena::alloc(20)
+    let idx3 = region |> arena::alloc(30)
+
+    region |> arena::set(idx1, 100)
+    region |> arena::set(idx2, 200)
+    region |> arena::set(idx3, 300)
+
+    println("\nAllocated 3 slots individually:")
+    println("Item 1 at {idx1}: {region |> arena::get(idx1)}")
+    println("Item 2 at {idx2}: {region |> arena::get(idx2)}")
+    println("Item 3 at {idx3}: {region |> arena::get(idx3)}")
+
+    -- 3. Test block rollover by allocating more data than fits in the first 64-byte block
+    println("\nTriggering block rollover...")
+    let bulk_idx = region |> arena::alloc_many(5, 99)
+    println("Block count after rollover: {region |> arena::block_count}")
+    println("Total capacity after rollover: {region |> arena::total}")
+    println("Remaining bytes: {region |> arena::remaining}")
+
+    -- 4. Verify bulk allocated vector values
+    println("Bulk item at start of allocation: {region |> arena::get(bulk_idx)}")
+
+    -- 5. Out-of-range read testing
+    println("\nTesting out-of-range safety:")
+    let safe_read = try {
+        region |> arena::get(9999)
+    } recover err {
+        println("Caught expected out-of-range error: {err}")
+        0
+    }
+
+    println("\nArena demonstration completed successfully.")
+    0
+}
+---
+title: "Zero-Cost Region Allocation with stdlib/arena"
+author: "Lateralus Core Team"
+date: "2026-04-15"
+category: "Standard Library Tutorials"
+tags: ["arena", "memory", "performance", "stdlib", "tutorial"]
+---
+
+# Zero-Cost Region Allocation with `stdlib/arena`
+
+High-performance systems often require deterministic memory management without the overhead or unpredictability of general-purpose heap allocators. In Lateralus, the standard library provides `stdlib.arena`—a robust, chunk-based region allocator designed for high-throughput batch allocations, AST construction, and temporary scratchpads.
+
+In this tutorial, we will explore how to construct arenas, utilize pinned-vector allocations, handle automatic block rollovers, and safely interact with memory indices.
+
+---
+
+## 1. Introduction to Arena Regions
+
+An arena allocates memory in large contiguous blocks (chunks). Instead of freeing individual objects, you free or reset the entire arena region at once. This eliminates fragmentation and brings allocation overhead down to a simple pointer bump.
+
+### Creating an Arena
+
+You can initialize an arena with default settings or specify an explicit chunk size using `arena::new(bytes)`:
+
+```lateralus
+use stdlib.arena
+
+-- Create an arena with a custom block size of 1024 bytes
+let region = arena::new(1024)
+```
+
+---
+
+## 2. Pinned-Vector API and Operations
+
+The `stdlib/arena` module treats allocated regions as pinned vectors where objects remain stable in memory (preventing reallocation invalidation).
+
+### Key Functions
+
+| Function | Description |
+| :--- | :--- |
+| `arena::new(size)` | Allocates a new arena with the specified initial block size. |
+| `arena::alloc(val)` | Allocates a single item inside the arena and returns its pinned index. |
+| `arena::alloc_many(count, val)` | Allocates a contiguous run of `count` items initialized to `val`. |
+| `arena::get(index)` | Retrieves a reference to the item at the given pinned index. |
+| `arena::set(index, val)` | Updates the value at the given pinned index. |
+| `arena::total()` | Returns the total capacity in bytes across all allocated blocks. |
+| `arena::block_count()` | Returns the total number of memory blocks currently allocated. |
+| `arena::remaining()` | Returns the number of bytes available in the current active block. |
+
+---
+
+## 3. Complete Runnable Example
+
+Below is a complete example demonstrating construction, individual allocations, batch allocation (`alloc_many`), block rollover when capacity is exceeded, and out-of-range read protection.
+
+```lateralus
+-- Saved under examples/arena_vector.ltl
+use stdlib.arena
+
+fn main() -> Int {
+    let region = arena::new(64)
+    
+    println("=== Arena Pinned-Vector Demo ===")
+    println("Initial block count: {region |> arena::block_count}")
+    println("Initial total capacity: {region |> arena::total}")
+
+    -- Allocate individual items
+    let idx1 = region |> arena::alloc(10)
+    let idx2 = region |> arena::alloc(20)
+
+    region |> arena::set(idx1, 100)
+    region |> arena::set(idx2, 200)
+
+    println("Item 1: {region |> arena::get(idx1)}")
+    println("Item 2: {region |> arena::get(idx2)}")
+
+    -- Trigger block rollover by allocating past the 64-byte limit
+    let bulk_idx = region |> arena::alloc_many(10, 99)
+    println("Block count after rollover: {region |> arena::block_count}")
+
+    -- Out-of-range read safety
+    let safe_read = try {
+        region |> arena::get(9999)
+    } recover err {
+        println("Caught out-of-range error safely: {err}")
+        0
+    }
+
+    0
+}
+```
+
+---
+
+## 4. Summary
+
+The `stdlib/arena` module provides lightning-fast memory allocation combined with Lateralus's robust pipeline and error-handling semantics. By leveraging pinned vectors and automatic block rollovers, you can build high-performance systems with zero allocation anxiety.
