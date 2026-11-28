@@ -330,6 +330,26 @@ class TestStdlibFunctionality:
         """Importing csv should compile."""
         assert compile_ok("import csv")
 
+    def test_csv_preserves_unquoted_edge_spaces(self):
+        """Parsing must preserve spaces that are part of unquoted fields."""
+        namespace = {"__name__": "csv_regression"}
+        for module in ("strings", "csv"):
+            path = ROOT / "stdlib" / f"{module}.ltl"
+            result = Compiler().compile_source(
+                path.read_text(encoding="utf-8"),
+                target=Target.PYTHON,
+                filename=str(path),
+            )
+            assert result.ok, [error.message for error in result.errors]
+            exec(result.python_src, namespace)
+
+        rows = [["plain", "value"], [" 001", "400 "]]
+        expected = [["plain", "value"], [" 001", "400 "]]
+        encoded = namespace["generate"](rows, ",")
+
+        assert namespace["parse"](encoded, ",") == expected
+        assert namespace["parse"]('plain,value\n" 001","400 "\n', ",") == expected
+
     def test_import_logging(self):
         """Importing logging should compile."""
         assert compile_ok("import logging")
