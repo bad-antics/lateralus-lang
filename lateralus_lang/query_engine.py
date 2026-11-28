@@ -476,16 +476,18 @@ def _parse_condition(expr: str) -> Predicate:
     """
     expr = expr.strip()
 
-    # Try AND / OR splitting (simple, not nested)
-    if " AND " in expr.upper():
-        parts = re.split(r'\bAND\b', expr, flags=re.IGNORECASE)
-        preds = [_parse_condition(p) for p in parts]
-        return lambda r, ps=preds: all(p(r) for p in ps)
-
-    if " OR " in expr.upper():
-        parts = re.split(r'\bOR\b', expr, flags=re.IGNORECASE)
+    # Split only at the current level so that parentheses are respected.
+    # OR has lower precedence than AND, as in SQL.
+    expr = _strip_outer_parentheses(expr)
+    parts = _split_condition(expr, "OR")
+    if len(parts) > 1:
         preds = [_parse_condition(p) for p in parts]
         return lambda r, ps=preds: any(p(r) for p in ps)
+
+    parts = _split_condition(expr, "AND")
+    if len(parts) > 1:
+        preds = [_parse_condition(p) for p in parts]
+        return lambda r, ps=preds: all(p(r) for p in ps)
 
     if expr.upper().startswith("NOT "):
         inner = _parse_condition(expr[4:])
@@ -528,6 +530,70 @@ def _parse_condition(expr: str) -> Predicate:
 
     # Truthy field reference
     return lambda r, fn=expr: bool(_get_field(r, fn))
+
+
+def _strip_outer_parentheses(expr: str) -> str:
+    """Remove balanced parentheses surrounding the whole expression."""
+    while expr.startswith("(") and expr.endswith(")"):
+        depth = 0
+        quoted = None
+        encloses_all = True
+        for index, char in enumerate(expr):
+            if quoted:
+                if char == quoted and (index == 0 or expr[index - 1] != "\\"):
+                    quoted = None
+                continue
+            if char in "'\"":
+                quoted = char
+            elif char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0 and index != len(expr) - 1:
+                    encloses_all = False
+                    break
+        if encloses_all and depth == 0:
+            expr = expr[1:-1].strip()
+        else:
+            break
+    return expr
+
+
+def _split_condition(expr: str, operator_name: str) -> list[str]:
+    """Split a condition at top-level boolean operators outside literals."""
+    parts = []
+    start = 0
+    depth = 0
+    quoted = None
+    pattern = re.compile(rf"\b{operator_name}\b", re.IGNORECASE)
+    index = 0
+    while index < len(expr):
+        char = expr[index]
+        if quoted:
+            if char == quoted and (index == 0 or expr[index - 1] != "\\"):
+                quoted = None
+            index += 1
+            continue
+        if char in "'\"":
+            quoted = char
+            index += 1
+            continue
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif depth == 0:
+            match = pattern.match(expr, index)
+            if match:
+                parts.append(expr[start:index].strip())
+                start = match.end()
+                index = match.end()
+                continue
+        index += 1
+    if not parts:
+        return [expr]
+    parts.append(expr[start:].strip())
+    return parts
 
 
 def _parse_literal(s: str) -> Any:
