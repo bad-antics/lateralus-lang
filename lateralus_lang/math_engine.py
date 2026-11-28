@@ -399,16 +399,25 @@ class Vector:
     def __getitem__(self, idx):
         return self._data[idx]
 
+    def _check_dim(self, other: "Vector") -> None:
+        if len(self._data) != len(other._data):
+            raise ValueError(
+                f"vector dimension mismatch: {len(self._data)} != {len(other._data)}"
+            )
+
     def __add__(self, other: "Vector") -> "Vector":
+        self._check_dim(other)
         return Vector([a + b for a, b in zip(self._data, other._data)])
 
     def __sub__(self, other: "Vector") -> "Vector":
+        self._check_dim(other)
         return Vector([a - b for a, b in zip(self._data, other._data)])
 
     def __mul__(self, scalar) -> "Vector":
         return Vector([x * scalar for x in self._data])
 
     def dot(self, other: "Vector") -> float:
+        self._check_dim(other)
         return sum(a * b for a, b in zip(self._data, other._data))
 
     def norm(self) -> float:
