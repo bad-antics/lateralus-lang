@@ -441,6 +441,32 @@ class Vector:
 # Interval arithmetic — for error-bounded computation
 # -----------------------------------------------------------------------------
 
+def _two_sum(a: float, b: float) -> Tuple[float, float]:
+    s = a + b
+    if not math.isfinite(s):
+        return s, 0.0
+    z = s - a
+    err = (a - (s - z)) + (b - z)
+    return s, err
+
+def _add_down(a: float, b: float) -> float:
+    s, err = _two_sum(a, b)
+    if err < 0 and math.isfinite(s):
+        return math.nextafter(s, -math.inf)
+    return s
+
+def _add_up(a: float, b: float) -> float:
+    s, err = _two_sum(a, b)
+    if err > 0 and math.isfinite(s):
+        return math.nextafter(s, math.inf)
+    return s
+
+def _sub_down(a: float, b: float) -> float:
+    return _add_down(a, -b)
+
+def _sub_up(a: float, b: float) -> float:
+    return _add_up(a, -b)
+
 @dataclass(frozen=True)
 class Interval:
     """Closed interval [lo, hi] for guaranteed enclosure arithmetic.
@@ -484,10 +510,10 @@ class Interval:
         return self.lo <= other.hi and other.lo <= self.hi
 
     def __add__(self, other: "Interval") -> "Interval":
-        return Interval(self.lo + other.lo, self.hi + other.hi)
+        return Interval(_add_down(float(self.lo), float(other.lo)), _add_up(float(self.hi), float(other.hi)))
 
     def __sub__(self, other: "Interval") -> "Interval":
-        return Interval(self.lo - other.hi, self.hi - other.lo)
+        return Interval(_sub_down(float(self.lo), float(other.hi)), _sub_up(float(self.hi), float(other.lo)))
 
     def __mul__(self, other: "Interval") -> "Interval":
         products = [self.lo * other.lo, self.lo * other.hi,

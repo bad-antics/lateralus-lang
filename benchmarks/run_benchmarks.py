@@ -21,7 +21,12 @@ REF = ROOT / "reference"
 RESULTS = ROOT / "results"
 BUILD = ROOT / "build"
 
-BENCHMARKS = ["fib", "sieve", "mandelbrot", "binary_trees", "nbody"]
+BENCHMARKS = ["fib", "sieve", "mandelbrot", "binary_trees", "nbody",
+               "xxhash64", "lz4_rt", "chacha20", "aho_corasick", "radix_sort_u32"]
+
+# The stdlib benchmarks (benchmark-ingest) are also written to a separate
+# results file, benchmarks/results/stdlib_results.md, per the bounty spec.
+STDLIB_BENCHMARKS = ["xxhash64", "lz4_rt", "chacha20", "aho_corasick", "radix_sort_u32"]
 
 
 def time_cmd(cmd: list[str], *, timeout: float = 120.0) -> tuple[float, str]:
@@ -161,26 +166,38 @@ def main() -> int:
         status = "OK" if len(unique) == 1 else "MISMATCH"
         print(f"  {bench:14s} {status}  {outs}")
 
-    # Markdown table
-    md_lines = ["# Lateralus Benchmark Results\n"]
-    md_lines.append(f"Python {results['meta']['python']} · Node {results['meta']['node']} · gcc -O2 · {args.iters} iters + {args.warmup} warmup\n")
-    md_lines.append("| Benchmark | Lateralus C99 (s) | Lateralus interp (s) | Python (s) | Node (s) | Output |")
-    md_lines.append("|-----------|-------------------|----------------------|------------|----------|--------|")
-    for bench, backs in results["benchmarks"].items():
-        def cell(b):
-            v = backs.get(b, {})
-            if "error" in v or "median" not in v:
-                return "—"
-            return f"{v['median']:.4f}"
-        out = next((v.get("output", "") for v in backs.values() if "output" in v), "")
-        md_lines.append(
-            f"| {bench} | {cell('lateralus-c99')} | {cell('lateralus')} | "
-            f"{cell('python')} | {cell('node')} | `{out}` |"
-        )
+    # Markdown table (shared builder for the full table and the stdlib-only one)
+    def md_table(benches, title):
+        lines = [f"# {title}\n"]
+        lines.append(f"Python {results['meta']['python']} · Node {results['meta']['node']} · gcc -O2 · {args.iters} iters + {args.warmup} warmup\n")
+        lines.append("| Benchmark | Lateralus C99 (s) | Lateralus interp (s) | Python (s) | Node (s) | Output |")
+        lines.append("|-----------|-------------------|----------------------|------------|----------|--------|")
+        for bench in benches:
+            backs = results["benchmarks"].get(bench, {})
+
+            def cell(b):
+                v = backs.get(b, {})
+                if "error" in v or "median" not in v:
+                    return "—"
+                return f"{v['median']:.4f}"
+            out = next((v.get("output", "") for v in backs.values() if "output" in v), "")
+            lines.append(
+                f"| {bench} | {cell('lateralus-c99')} | {cell('lateralus')} | "
+                f"{cell('python')} | {cell('node')} | `{out}` |"
+            )
+        return lines
+
+    md_lines = md_table(selected, "Lateralus Benchmark Results")
 
     Path(args.json).write_text(json.dumps(results, indent=2))
     (RESULTS / "results.md").write_text("\n".join(md_lines) + "\n")
     print(f"\nWrote {args.json} and {RESULTS / 'results.md'}")
+    # Stdlib-only results file (bounty spec: benchmarks/results/stdlib_results.md)
+    stdlib_selected = [b for b in selected if b in STDLIB_BENCHMARKS]
+    if stdlib_selected:
+        stdlib_lines = md_table(stdlib_selected, "Lateralus Stdlib Benchmark Results")
+        (RESULTS / "stdlib_results.md").write_text("\n".join(stdlib_lines) + "\n")
+        print(f"Wrote {RESULTS / 'stdlib_results.md'}")
     return 0
 
 
