@@ -120,32 +120,36 @@ class Quantity:
     value: float
     dimension: Dimension
     unit_name: str = ""
+    scale: float = 1.0
+
+    def _base_value(self) -> float:
+        return self.value / self.scale
 
     def __add__(self, other: "Quantity") -> "Quantity":
         if self.dimension != other.dimension:
             raise ValueError(f"Cannot add {self.dimension} and {other.dimension}")
-        return Quantity(self.value + other.value, self.dimension)
+        return Quantity(self._base_value() + other._base_value(), self.dimension)
 
     def __sub__(self, other: "Quantity") -> "Quantity":
         if self.dimension != other.dimension:
             raise ValueError(f"Cannot subtract {self.dimension} from {other.dimension}")
-        return Quantity(self.value - other.value, self.dimension)
+        return Quantity(self._base_value() - other._base_value(), self.dimension)
 
     def __mul__(self, other):
         if isinstance(other, Quantity):
-            return Quantity(self.value * other.value, self.dimension * other.dimension)
-        return Quantity(self.value * other, self.dimension)
+            return Quantity(self._base_value() * other._base_value(), self.dimension * other.dimension)
+        return Quantity(self._base_value() * other, self.dimension)
 
     def __rmul__(self, other):
-        return Quantity(self.value * other, self.dimension)
+        return Quantity(self._base_value() * other, self.dimension)
 
     def __truediv__(self, other):
         if isinstance(other, Quantity):
-            return Quantity(self.value / other.value, self.dimension / other.dimension)
-        return Quantity(self.value / other, self.dimension)
+            return Quantity(self._base_value() / other._base_value(), self.dimension / other.dimension)
+        return Quantity(self._base_value() / other, self.dimension)
 
     def __pow__(self, n):
-        return Quantity(self.value ** n, self.dimension ** n)
+        return Quantity(self._base_value() ** n, self.dimension ** n)
 
     def __repr__(self):
         if self.unit_name:
@@ -154,7 +158,7 @@ class Quantity:
 
     def to(self, factor: float, unit_name: str = "") -> "Quantity":
         """Convert to different units."""
-        return Quantity(self.value * factor, self.dimension, unit_name)
+        return Quantity(self.value * factor, self.dimension, unit_name, self.scale * factor)
 
 
 # Convenience constructors
