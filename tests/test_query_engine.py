@@ -234,6 +234,34 @@ class TestJoins:
         # At least some results
         assert len(result) >= 1
 
+    def test_left_join_with_predicate_preserves_unmatched_left_rows(self):
+        left = [{"user_id": 1}, {"user_id": 2}]
+        right = [{"order_user_id": 2}, {"order_user_id": 3}]
+
+        result = (Query()
+                  .from_(left)
+                  .join(right, lambda user, order: user["user_id"] == order["order_user_id"], kind="left")
+                  .execute())
+
+        assert result == [
+            {"user_id": 1, "order_user_id": None},
+            {"user_id": 2, "order_user_id": 2},
+        ]
+
+    def test_right_join_with_predicate_preserves_unmatched_right_rows(self):
+        left = [{"user_id": 1}, {"user_id": 2}]
+        right = [{"order_user_id": 2}, {"order_user_id": 3}]
+
+        result = (Query()
+                  .from_(left)
+                  .join(right, lambda user, order: user["user_id"] == order["order_user_id"], kind="right")
+                  .execute())
+
+        assert result == [
+            {"user_id": 2, "order_user_id": 2},
+            {"user_id": None, "order_user_id": 3},
+        ]
+
 
 # ---------------------------------------------------------------------------
 # Pagination
