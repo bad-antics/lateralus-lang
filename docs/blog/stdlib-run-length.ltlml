@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Standard Library Tour: Run-Length Encoding (RLE) in Lateralus</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "Standard Library Tour: Run-Length Encoding (RLE)"
+author: bad-antics
+date: 2026-11-27
+abstract: A comprehensive exploration of Lateralus's stdlib.run_length module, covering run-length encoding concepts, pair-based versus packed representation, round-trip decoding, compression metrics in permille, worst-case expansions, and pinned test vectors.
+---
+
+# Standard Library Tour: Run-Length Encoding (RLE)
+
+Run-Length Encoding (RLE) is one of the simplest and most foundational lossless data compression algorithms in computer science. By replacing contiguous runs of identical elements with a single value and its repetition count, RLE drastically shrinks datasets exhibiting low entropy or high local redundancy—such as monochromatic bitmap graphics, sparse sensor time-series, columnar database indices, and mask buffers.
+
+Lateralus includes a lightweight, zero-dependency implementation in `stdlib/run_length.ltl`. In this guide, we review the module design, dual encoding models (pair vs. packed), round-trip decoding guarantees, compression efficiency metrics, and pinned verification vectors.
+
+---
+
+## Module Overview
+
+The `stdlib/run_length.ltl` module offers two distinct encoding formats and an efficiency evaluation helper:
+
+1. **Pair Representation (`encode_pairs` / `decode_pairs`)**: Encodes arbitrary element types into a structured list of 2-tuples `[value, count]`.
+2. **Packed Representation (`encode_packed` / `decode_packed`)**: Encodes sequences of integers into a flat alternating list `[v0, c0, v1, c1, ...]`. This layout is particularly cache-friendly and easy to stream over binary protocols.
+3. **Compression Ratio (`ratio_permille`)**: Computes the compression ratio expressed in permille (\u2030), where `1000` indicates parity (no compression), values under `1000` denote data reduction, and values over `1000` reflect expansion.
+
+```lateralus
+// Module public API signatures
+pub fn encode_pairs(xs: list) -> list
+pub fn decode_pairs(rle: list) -> list
+pub fn encode_packed(xs: list) -> list
+pub fn decode_packed(packed: list) -> list
+pub fn ratio_permille(orig_len: int, rle_pair_count: int) -> int
+```
+
+---
+
+## 1. Pair Encoding and Decoding
+
+Pair encoding works across any value type supported by Lateralus (integers, strings, booleans, or objects). Contiguous identical elements are grouped into `[element, count]` pairs.
+
+```lateralus
+import stdlib.run_length as rle
+
+let data = ["A", "A", "A", "B", "B", "C", "C", "C", "C", "D"]
+let encoded = rle.encode_pairs(data)
+// Result: [["A", 3], ["B", 2], ["C", 4], ["D", 1]]
+
+let restored = rle.decode_pairs(encoded)
+assert(restored == data)
+```
+
+For empty input collections, `encode_pairs([])` returns an empty list `[]`, and `decode_pairs([])` reliably returns `[]`.
+
+---
+
+## 2. Packed Encoding for Binary and Integer Streams
+
+In low-level protocols, columnar storage chunks, or graphics pipelines, flat arrays without nested lists provide superior memory locality and eliminate allocation overhead. `encode_packed` flattens the pairs into an alternating sequence:
+
+- Index `2 * k` holds the run value.
+- Index `2 * k + 1` holds the run length.
+
+```lateralus
+import stdlib.run_length as rle
+
+let mask = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0]
+let packed = rle.encode_packed(mask)
+// Result: [0, 8, 1, 2, 0, 4] (6 integers replacing 14 integers)
+
+let unpacked = rle.decode_packed(packed)
+assert(unpacked == mask)
+```
+
+---
+
+## 3. Compression Metrics and Expansion Hazards
+
+The module provides `ratio_permille(orig_len, rle_pair_count)` to calculate storage efficiency:
+
+$$\text{Ratio} = \frac{\text{rle\_pair\_count} \times 2 \times 1000}{\text{orig\_len}}$$
+
+- **Compression (Ratio < 1000)**: Long repeating runs compress efficiently. For example, 5 identical integers yielding 1 pair produce a ratio of $400\text{‰}$ (60% space reduction).
+- **Parity (Ratio = 1000)**: Empty input or streams where output length equals input length return $1000\text{‰}$.
+- **Worst-case Expansion (Ratio > 1000)**: If adjacent elements constantly alternate (e.g., `[1, 2, 1, 2]`), each individual element generates a full `[value, 1]` pair, doubling the storage footprint to $2000\text{‰}$ (100% expansion). RLE pipelines should therefore monitor ratios and fall back to raw storage when expansion occurs.
+
+---
+
+## 4. Pinned Test Vectors
+
+The table below documents canonical test vectors verifying edge cases, repeated runs, alternating sequences, and multi-symbol runs:
+
+| Category | Input Vector | Encoded Pairs | Encoded Packed | Ratio (\u2030) |
+| :--- | :--- | :--- | :--- | :--- |
+| **Empty** | `[]` | `[]` | `[]` | `1000` |
+| **Uniform Run** | `[1, 1, 1, 1, 1]` | `[[1, 5]]` | `[1, 5]` | `400` |
+| **Standard Runs** | `["A", "A", "A", "B", "B", "C", "C", "C", "C", "D"]` | `[["A", 3], ["B", 2], ["C", 4], ["D", 1]]` | N/A (strings) | `800` |
+| **Alternating (Expansion)** | `[1, 2, 1, 2]` | `[[1, 1], [2, 1], [1, 1], [2, 1]]` | `[1, 1, 2, 1, 1, 1, 2, 1]` | `2000` |
+| **Sparse Mask** | `[0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0]` | `[[0, 8], [1, 2], [0, 4]]` | `[0, 8, 1, 2, 0, 4]` | `428` |
+
+---
+
+## 5. Complete Runnable Example
+
+Below is a self-contained Lateralus verification program testing all functions and pinned vectors:
+
+```lateralus
+import stdlib.run_length as rle
+
+fn verify_roundtrip_pairs(xs: list, expected_pairs: list, expected_ratio: int) {
+    let enc = rle.encode_pairs(xs)
+    assert(enc == expected_pairs)
+    let dec = rle.decode_pairs(enc)
+    assert(dec == xs)
+    let rat = rle.ratio_permille(len(xs), len(enc))
+    assert(rat == expected_ratio)
+}
+
+fn verify_roundtrip_packed(xs: list, expected_packed: list) {
+    let enc = rle.encode_packed(xs)
+    assert(enc == expected_packed)
+    let dec = rle.decode_packed(enc)
+    assert(dec == xs)
+}
+
+fn main() {
+    println("=== Lateralus stdlib.run_length Verification ===")
+
+    // 1. Empty input validation
+    verify_roundtrip_pairs([], [], 1000)
+    verify_roundtrip_packed([], [])
+
+    // 2. Uniform repeated elements
+    let uniform = [1, 1, 1, 1, 1]
+    verify_roundtrip_pairs(uniform, [[1, 5]], 400)
+    verify_roundtrip_packed(uniform, [1, 5])
+
+    // 3. Multi-character standard runs
+    let letters = ["A", "A", "A", "B", "B", "C", "C", "C", "C", "D"]
+    verify_roundtrip_pairs(letters, [["A", 3], ["B", 2], ["C", 4], ["D", 1]], 800)
+
+    // 4. Alternating elements demonstrating worst-case expansion
+    let alternating = [1, 2, 1, 2]
+    verify_roundtrip_pairs(alternating, [[1, 1], [2, 1], [1, 1], [2, 1]], 2000)
+    verify_roundtrip_packed(alternating, [1, 1, 2, 1, 1, 1, 2, 1])
+
+    // 5. Binary sparse mask simulation
+    let mask = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0]
+    verify_roundtrip_pairs(mask, [[0, 8], [1, 2], [0, 4]], 428)
+    verify_roundtrip_packed(mask, [0, 8, 1, 2, 0, 4])
+
+    println("All stdlib.run_length test vectors passed successfully!")
+}
+```
+
+---
+
+## Conclusion
+
+With `stdlib/run_length.ltl`, Lateralus provides an accessible and predictable tool for basic data compression, run inspection, and structured streaming. Its clean pair and packed interfaces make it an excellent choice for lightweight data serialization across embedded and systems workflows.
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>

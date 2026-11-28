@@ -238,3 +238,22 @@ fn main() {
         assert "E = mc^2" in html
         assert "admonition" in html
         assert "<table" in html
+
+    def test_stdlib_run_length_tutorial_renders(self):
+        import os
+        repo_root = os.path.dirname(os.path.dirname(__file__))
+        doc_path = os.path.join(repo_root, "docs", "blog", "stdlib-run-length.ltlml")
+        assert os.path.exists(doc_path)
+        with open(doc_path, "r", encoding="utf-8") as f:
+            html = f.read()
+        start_tag = '<script id="ltlml-source" type="text/ltlml">'
+        start = html.find(start_tag) + len(start_tag)
+        end = html.find("</script>", start)
+        source = html[start:end].strip()
+        doc = parse_ltlml(source)
+        fm = doc.children[0]
+        assert fm.attrs["title"] == "Standard Library Tour: Run-Length Encoding (RLE)"
+        rendered = render_ltlml(source)
+        assert "Run-Length Encoding (RLE)" in rendered
+        assert "encode_pairs" in rendered
+        assert "ratio_permille" in rendered
