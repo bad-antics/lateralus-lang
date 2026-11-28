@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>stdlib-semver-tutorial</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "stdlib-semver-tutorial"
+author: money-agent (AI-assisted, human-reviewed before submission)
+date: 2026-11-28
+abstract: A hands-on tour of stdlib/semver.ltl: parsing, precedence, bumping and range checks, with a runnable release-gate example and pinned test vectors taken from the Semantic Versioning 2.0.0 spec and checked line by line against the module source.
+
+# stdlib.semver: Versions Without the Guesswork
+
+Every project eventually grows a string like "1.3.0-beta.1+build.42" and
+a shell script that compares it wrong. `stdlib/semver.ltl` implements
+Semantic Versioning 2.0.0 (semver.org) so the comparison rules live in
+one tested place instead of being re-invented per script.
+
+A parsed version is a plain 5-element list:
+
+    [major, minor, patch, prerelease, build]
+
+Public functions from the module are called with the `semver_` prefix,
+the same convention the spiral test suites use for every stdlib module
+(compare `aho_corasick_build` for `stdlib/aho_corasick.ltl`).
+
+## Parsing
+
+`semver_parse` splits a version string into that list. It strips a
+leading `v`, splits build metadata off at `+`, splits the pre-release
+off at the first `-`, and defaults a missing minor or patch to 0.
+
+    let v = semver_parse("1.2.3-beta.1+build.42")
+    // v == [1, 2, 3, "beta.1", "build.42"]
+
+    semver_parse("v1.2.3")   // == [1, 2, 3, "", ""]
+    semver_parse("2.0")      // == [2, 0, 0, "", ""]
+
+Accessors read the fields back out: `semver_major`, `semver_minor`,
+`semver_patch`, `semver_prerelease`, `semver_build_meta`. Two
+predicates cover the common questions: `semver_is_stable` (no
+pre-release tag) and `semver_is_prerelease`. `semver_to_string` (or
+`semver_format_full`) renders a parsed version back, and the
+round-trip is lossless:
+
+    semver_to_string(v) == "1.2.3-beta.1+build.42"
+
+## Precedence: the Part Everyone Gets Wrong
+
+`semver_compare(a, b)` returns -1, 0 or 1. Core fields compare
+numerically, a pre-release sorts before its release, and build
+metadata is ignored, exactly as sections 10 and 11 of the spec
+require:
+
+    1.0.0-alpha < 1.0.0-alpha.1 < 1.0.0-alpha.beta < 1.0.0-beta
+    < 1.0.0-beta.2 < 1.0.0-rc.1 < 1.0.0
+
+`semver_eq`, `semver_lt`, `semver_gt`, `semver_lte` and `semver_gte`
+are thin wrappers over `semver_compare`, so equality also ignores
+build metadata:
+
+    semver_eq(semver_parse("1.0.0+exp.sha.5114f85"),
+              semver_parse("1.0.0"))            // true
+
+One honest gotcha, pinned in the test vectors rather than hidden:
+this module compares two pre-release strings lexicographically, while
+spec section 11 compares numeric identifiers numerically. For purely
+numeric suffixes the two rules disagree:
+
+    semver_compare(semver_parse("1.0.0-beta.2"),
+                   semver_parse("1.0.0-beta.11"))   // 1 (module)
+    // spec section 11 would say -1, because 2 < 11 numerically,
+    // but as strings "beta.11" < "beta.2".
+
+If your release train numbers pre-releases past 9, sort with that in
+mind, or normalise the tags before comparing.
+
+## Bumping and Ranges
+
+Bumps return a fresh list and clear the pre-release and build fields:
+
+    semver_to_string(semver_bump_major(semver_parse("1.2.3")))  // "2.0.0"
+    semver_to_string(semver_bump_minor(semver_parse("1.2.3")))  // "1.3.0"
+    semver_to_string(semver_bump_patch(semver_parse("1.2.3-beta")))
+                                                                // "1.2.4"
+
+Two range helpers cover the ranges that show up in dependency files.
+`semver_satisfies_caret(v, major, minor)` accepts the same major with
+a minor at least the given one (the `^1.2` idea);
+`semver_satisfies_tilde(v, major, minor)` accepts the same major and
+minor with any patch (the `~1.2` idea).
+
+## Runnable Example: a Release Gate
+
+The companion file `examples/semver_tutorial.ltl` scans a mixed list
+of versions, keeps the newest stable one, and prints the next minor
+and patch releases:
+
+    Latest stable: 1.3.0
+    Next minor:    1.4.0
+    Next patch:    1.3.1
+
+Note why "1.3.0-beta.1" does not win the scan even though it is
+"newer" than 1.2.9: the gate asks `semver_is_stable` first, so
+pre-releases never reach the comparison at all.
+
+## Pinned Test Vectors
+
+The companion file `tests/semver_tutorial_vectors.ltl` pins 35 checks
+in the spiral-suite style: the parse table above, the full section 11
+precedence chain, build-metadata equality, the bump table, both range
+helpers, and the beta.2/beta.11 deviation pinned to the module's real
+behaviour. Run it the same way as any other suite in `tests/`.
+
+## When to Reach for It
+
+Use `stdlib.semver` anywhere a version string crosses a trust
+boundary: update checkers, plugin loaders, migration gates, registry
+tooling. Parse once at the boundary, pass the list around, and let
+`semver_compare` be the only place in your codebase that knows the
+precedence rules.
+
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>

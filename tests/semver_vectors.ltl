@@ -1,0 +1,106 @@
+// ===================================================================
+// tests/semver_tutorial_vectors.ltl -- pinned test vectors for the
+// stdlib.semver tutorial. Style follows tests/stdlib_spiral_wave_*.
+//
+// Every expected value below is pinned from two sources that must
+// agree: the Semantic Versioning 2.0.0 spec (semver.org) and the
+// actual implementation in stdlib/semver.ltl. Where the two differ,
+// the vector pins the IMPLEMENTATION's behaviour and says so.
+// ===================================================================
+
+let PASS = 0
+let FAIL = 0
+
+fn check(name: str, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        print("  ok  " + name)
+    } else {
+        FAIL = FAIL + 1
+        print("  FAIL " + name)
+    }
+}
+
+fn test_parse() {
+    print("-- parse --")
+    let v = semver_parse("1.2.3")
+    check("parse 1.2.3 major", v[0] == 1)
+    check("parse 1.2.3 minor", v[1] == 2)
+    check("parse 1.2.3 patch", v[2] == 3)
+    check("parse 1.2.3 no pre", v[3] == "")
+    check("parse 1.2.3 no build", v[4] == "")
+
+    // A leading v is stripped
+    check("parse v1.2.3", semver_parse("v1.2.3") == [1, 2, 3, "", ""])
+
+    // Pre-release and build metadata are split off
+    let full = semver_parse("1.2.3-beta.1+build.42")
+    check("parse full core", full[0] == 1 && full[1] == 2 && full[2] == 3)
+    check("parse full pre", full[3] == "beta.1")
+    check("parse full build", full[4] == "build.42")
+
+    // Missing minor/patch default to 0
+    check("parse 2.0", semver_parse("2.0") == [2, 0, 0, "", ""])
+
+    // Round-trip through to_string is lossless
+    check("round-trip", semver_to_string(full) == "1.2.3-beta.1+build.42")
+    check("format", semver_format(1, 2, 3) == "1.2.3")
+    check("format_full", semver_format_full(1, 0, 0, "rc.1", "") == "1.0.0-rc.1")
+}
+
+fn test_compare() {
+    print("-- compare --")
+    check("patch order", semver_compare(semver_parse("1.2.3"), semver_parse("1.2.4")) == -1)
+    check("patch order rev", semver_compare(semver_parse("1.2.4"), semver_parse("1.2.3")) == 1)
+    check("equal", semver_compare(semver_parse("1.2.3"), semver_parse("1.2.3")) == 0)
+    check("major wins", semver_compare(semver_parse("2.0.0"), semver_parse("1.9.9")) == 1)
+
+    // Pre-release < the same version without a pre-release (spec 9/11)
+    check("pre < stable", semver_compare(semver_parse("1.0.0-alpha"), semver_parse("1.0.0")) == -1)
+
+    // The semver.org section 11 precedence chain. Each step here also
+    // holds under this module's lexicographic pre-release comparison:
+    //   alpha < alpha.1 < alpha.beta < beta < beta.2 < rc.1 < release
+    check("chain 1", semver_compare(semver_parse("1.0.0-alpha"), semver_parse("1.0.0-alpha.1")) == -1)
+    check("chain 2", semver_compare(semver_parse("1.0.0-alpha.1"), semver_parse("1.0.0-alpha.beta")) == -1)
+    check("chain 3", semver_compare(semver_parse("1.0.0-alpha.beta"), semver_parse("1.0.0-beta")) == -1)
+    check("chain 4", semver_compare(semver_parse("1.0.0-beta"), semver_parse("1.0.0-beta.2")) == -1)
+    check("chain 5", semver_compare(semver_parse("1.0.0-rc.1"), semver_parse("1.0.0")) == -1)
+
+    // Build metadata is ignored by precedence (spec 10/11)
+    check("build ignored", semver_compare(semver_parse("1.0.0+build.1"), semver_parse("1.0.0+build.2")) == 0)
+    check("build eq", semver_eq(semver_parse("1.0.0+exp.sha.5114f85"), semver_parse("1.0.0")))
+
+    // PINNED DEVIATION: semver.org section 11 says numeric identifiers
+    // compare numerically, so 1.0.0-beta.2 < 1.0.0-beta.11. This module
+    // compares pre-release strings lexicographically, and as strings
+    // "beta.11" < "beta.2", so the module returns 1 here. The vector
+    // pins the module's real behaviour, not the spec's.
+    check("deviation beta.2 vs beta.11", semver_compare(semver_parse("1.0.0-beta.2"), semver_parse("1.0.0-beta.11")) == 1)
+}
+
+fn test_bump_and_ranges() {
+    print("-- bump and ranges --")
+    check("bump major", semver_to_string(semver_bump_major(semver_parse("1.2.3"))) == "2.0.0")
+    check("bump minor", semver_to_string(semver_bump_minor(semver_parse("1.2.3"))) == "1.3.0")
+    // Bumping clears the pre-release tag
+    check("bump patch clears pre", semver_to_string(semver_bump_patch(semver_parse("1.2.3-beta"))) == "1.2.4")
+
+    check("is_stable", semver_is_stable(semver_parse("1.0.0")))
+    check("is_prerelease", semver_is_prerelease(semver_parse("1.0.0-alpha")))
+    check("is_valid", semver_is_valid("1.2.3"))
+
+    // Caret range ^1.2: same major, minor at least 2
+    check("caret inside", semver_satisfies_caret(semver_parse("1.4.2"), 1, 2))
+    check("caret below", semver_satisfies_caret(semver_parse("1.1.0"), 1, 2) == false)
+    check("caret wrong major", semver_satisfies_caret(semver_parse("2.0.0"), 1, 2) == false)
+
+    // Tilde range ~1.2: same major and minor, any patch
+    check("tilde inside", semver_satisfies_tilde(semver_parse("1.2.9"), 1, 2))
+    check("tilde outside", semver_satisfies_tilde(semver_parse("1.3.0"), 1, 2) == false)
+}
+
+test_parse()
+test_compare()
+test_bump_and_ranges()
+print("semver vectors: {PASS} passed, {FAIL} failed")
