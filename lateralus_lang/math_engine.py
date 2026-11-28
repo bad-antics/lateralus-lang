@@ -400,15 +400,27 @@ class Vector:
         return self._data[idx]
 
     def __add__(self, other: "Vector") -> "Vector":
+        if len(self._data) != len(other._data):
+            raise ValueError(
+                f"vector dimension mismatch: {len(self._data)} != {len(other._data)}"
+            )
         return Vector([a + b for a, b in zip(self._data, other._data)])
 
     def __sub__(self, other: "Vector") -> "Vector":
+        if len(self._data) != len(other._data):
+            raise ValueError(
+                f"vector dimension mismatch: {len(self._data)} != {len(other._data)}"
+            )
         return Vector([a - b for a, b in zip(self._data, other._data)])
 
     def __mul__(self, scalar) -> "Vector":
         return Vector([x * scalar for x in self._data])
 
     def dot(self, other: "Vector") -> float:
+        if len(self._data) != len(other._data):
+            raise ValueError(
+                f"vector dimension mismatch: {len(self._data)} != {len(other._data)}"
+            )
         return sum(a * b for a, b in zip(self._data, other._data))
 
     def norm(self) -> float:
