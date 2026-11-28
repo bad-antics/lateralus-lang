@@ -425,25 +425,35 @@
 <div class="toolbar">
     <select class="example-select" id="exampleSelect">
         <option value="">Load example...</option>
-        <option value="hello">Hello World</option>
-        <option value="pipeline">Pipeline Operator</option>
-        <option value="pattern">Pattern Matching</option>
-        <option value="async">Async / Concurrency</option>
-        <option value="struct">Structs &amp; Traits</option>
-        <option value="functional">Functional Pipelines</option>
-        <option value="error">Error Handling</option>
-        <option value="webserver">Web Server</option>
-        <option value="generics">Generics</option>
-        <option value="closures">Closures &amp; Lambdas</option>
-        <option value="modules">Modules &amp; Imports</option>
-        <option value="iterators">Iterators</option>
-        <option value="cli">CLI Tool</option>
-        <option value="gameloop">Game Loop</option>
-        <option value="channels">Channels &amp; Select</option>
-        <option value="macros">Macros</option>
-        <option value="effects">Effect System</option>
-        <option value="decorators">Decorators</option>
-        <option value="comptime">Compile-Time Eval</option>
+        <optgroup label="Basic &amp; Language Features">
+            <option value="hello">Hello World</option>
+            <option value="pipeline">Pipeline Operator</option>
+            <option value="pattern">Pattern Matching</option>
+            <option value="async">Async / Concurrency</option>
+            <option value="struct">Structs &amp; Traits</option>
+            <option value="functional">Functional Pipelines</option>
+            <option value="error">Error Handling</option>
+            <option value="webserver">Web Server</option>
+            <option value="generics">Generics</option>
+            <option value="closures">Closures &amp; Lambdas</option>
+            <option value="modules">Modules &amp; Imports</option>
+            <option value="iterators">Iterators</option>
+            <option value="cli">CLI Tool</option>
+            <option value="gameloop">Game Loop</option>
+            <option value="channels">Channels &amp; Select</option>
+            <option value="macros">Macros</option>
+            <option value="effects">Effect System</option>
+            <option value="decorators">Decorators</option>
+            <option value="comptime">Compile-Time Eval</option>
+        </optgroup>
+        <optgroup label="Spiral Waves (5–10) Gallery">
+            <option value="wave5">Spiral Wave 5: Event Bus (Kafka, AMQP, MQTT, STOMP, NATS)</option>
+            <option value="wave6">Spiral Wave 6: Telemetry (Prometheus, Influx, StatsD, OTLP)</option>
+            <option value="wave7">Spiral Wave 7: Speedway (Rope, XXH64, LZ4, Roaring, Radix)</option>
+            <option value="wave8">Spiral Wave 8: Columnar (Dict, FoR, RLE, Arrow, Parquet)</option>
+            <option value="wave9">Spiral Wave 9: Handshake (X25519, HKDF, ChaCha20-Poly1305)</option>
+            <option value="wave10">Spiral Wave 10: Search (Q-Gram, Levenshtein, SimHash, SuffixArray)</option>
+        </optgroup>
     </select>
     <button class="btn btn-run" id="runBtn"><span class="icon">&#9654;</span> Run</button>
     <button class="btn" id="formatBtn">&#9095; Format</button>
@@ -1777,6 +1787,517 @@ fn main() {
     println("Greeting: {GREETING}")
     println("\\nAll static assertions passed at compile time.")
 }`,
+
+wave5: `// ===================================================================
+// examples/spiral_event_bus.ltl
+// -------------------------------------------------------------------
+// Wave 5 integrative demo: a single in-memory event bus that speaks
+// five protocol dialects at its edges.  The bus itself is plain
+// Lateralus; the stdlib modules provide the byte/line codecs that
+// adapt each incoming client.
+//
+//     Kafka producer  ─┐
+//     AMQP publisher  ─┤
+//     MQTT 5 client   ─┼──►  [ Spiral Event Bus ]  ──► fan-out to
+//     STOMP client    ─┤          (topic router)        subscribers
+//     NATS publisher  ─┘
+// ===================================================================
+
+// -- Tiny topic router ---------------------------------------------
+
+let BUS_SUBS = []  // list of [topic, callback_tag]
+let BUS_LOG  = []  // list of [protocol, topic, bytes_len, summary]
+
+fn bus_subscribe(topic: str, tag: str) {
+    BUS_SUBS = BUS_SUBS + [[topic, tag]]
+}
+
+fn bus_publish(protocol: str, topic: str, payload: str) {
+    BUS_LOG = BUS_LOG + [[protocol, topic, len(payload), slice(payload, 0, 32)]]
+    let i = 0
+    while i < len(BUS_SUBS) {
+        let s = BUS_SUBS[i]
+        if s[0] == topic || s[0] == "*" {
+            print("  → deliver to " + s[1] + " on '" + topic + "' (" + str(len(payload)) + "B)")
+        }
+        i = i + 1
+    }
+}
+
+// -- Kafka edge ----------------------------------------------------
+
+fn edge_kafka(topic: str, key: str, value: str) {
+    // Build a produce-request-ish frame just to exercise the codec.
+    let hdr = kafka_wire_request_header_v1(kafka_wire_api_produce(), 9, 42, "demo")
+    let frame = kafka_wire_frame_request(hdr + kafka_wire_enc_string(topic)
+                                              + kafka_wire_enc_string(key)
+                                              + kafka_wire_enc_bytes(bytes_of(value)))
+    print("kafka frame bytes=" + str(len(frame)))
+    bus_publish("kafka", topic, value)
+}
+
+// -- AMQP edge -----------------------------------------------------
+
+fn edge_amqp(exchange: str, routing_key: str, body: str) {
+    let args = amqp_basic_publish_args(exchange, routing_key)
+    let frames = amqp_publish_frames(1, args, bytes_of(body))
+    print("amqp frames=" + str(len(frames)) + " rk=" + routing_key)
+    bus_publish("amqp", routing_key, body)
+}
+
+// -- MQTT 5 edge ---------------------------------------------------
+
+fn edge_mqtt(topic: str, qos: int, body: str) {
+    let props = []
+    props = props + mqtt5_prop_utf8(mqtt5_pi_content_type(), "text/plain")
+    let pkt = mqtt5_publish(topic, qos, false, false, 7, props, bytes_of(body))
+    print("mqtt packet bytes=" + str(len(pkt)) + " qos=" + str(qos))
+    bus_publish("mqtt", topic, body)
+}
+
+// -- STOMP edge ----------------------------------------------------
+
+fn edge_stomp(destination: str, body: str) {
+    let frame = stomp_send(destination, "text/plain", body)
+    let parsed = stomp_parse_frame(frame)
+    print("stomp frame '" + parsed["command"] + "' dest=" + destination)
+    bus_publish("stomp", destination, body)
+}
+
+// -- NATS edge -----------------------------------------------------
+
+fn edge_nats(subject: str, body: str) {
+    let line = nats_pub_msg(subject, "", body)
+    print("nats wire bytes=" + str(len(line)))
+    bus_publish("nats", subject, body)
+}
+
+// -- Demo ----------------------------------------------------------
+
+fn main() {
+    print("=== Spiral Event Bus (Wave 5) ===")
+    bus_subscribe("orders.created", "order-service")
+    bus_subscribe("*",              "audit-log")
+
+    edge_kafka("orders.created", "order-42", "{\"id\":42,\"total\":19.95}")
+    edge_amqp ("app.exchange",   "orders.created", "{\"id\":43}")
+    edge_mqtt ("orders.created", 1, "{\"id\":44}")
+    edge_stomp("/topic/orders.created",      "{\"id\":45}")
+    edge_nats ("orders.created", "{\"id\":46}")
+
+    print("---")
+    print("bus log entries: " + str(len(BUS_LOG)))
+    let i = 0
+    while i < len(BUS_LOG) {
+        let e = BUS_LOG[i]
+        print("  " + e[0] + "  " + e[1] + "  " + str(e[2]) + "B")
+        i = i + 1
+    }
+}
+
+main()
+`,
+wave6: `// ===================================================================
+// examples/spiral_telemetry.ltl
+// -------------------------------------------------------------------
+// Wave 6 integrative demo: a single event is observed through all
+// five telemetry dialects simultaneously.  Demonstrates that the
+// same numeric measurement can be serialised for Prometheus scrape,
+// Influx line ingest, StatsD UDP, logfmt stdout, and OTLP/JSON POST
+// — without any coupling between the emitters.
+// ===================================================================
+
+fn render_prometheus(req_count: int, latency_ms: int) -> str {
+    let out = ""
+    out = out + prometheus_metric_block(
+        "http_requests_total",
+        "Total HTTP requests served",
+        "counter",
+        [[[["method", "GET"], ["status", "200"]], str(req_count)]])
+    out = out + prometheus_histogram_block(
+        "http_request_duration_ms",
+        "Request duration in milliseconds",
+        [["method", "GET"]],
+        [["5",    str(req_count)],
+         ["50",   str(req_count)],
+         ["500",  str(req_count)],
+         ["+Inf", str(req_count)]],
+        str(latency_ms * req_count),
+        str(req_count))
+    return out
+}
+
+fn render_influx(req_count: int, latency_ms: int, ts_ns: int) -> str {
+    return influx_line_line(
+        "http_requests",
+        [["method", "GET"], ["status", "200"]],
+        [["count",    influx_line_field_int(req_count)],
+         ["latency",  influx_line_field_int(latency_ms)]],
+        ts_ns)
+}
+
+fn render_statsd(req_count: int, latency_ms: int) -> list {
+    let lines = []
+    lines = lines + [statsd_counter("http.requests", req_count, "",
+                                      [["method", "GET"], ["status", "200"]])]
+    lines = lines + [statsd_timer("http.latency", str(latency_ms), "",
+                                    [["method", "GET"]])]
+    return lines
+}
+
+fn render_logfmt(req_count: int, latency_ms: int) -> str {
+    return logfmt_encode([
+        ["ts",      "2026-04-24T12:34:56Z"],
+        ["level",   "info"],
+        ["msg",     "served request"],
+        ["method",  "GET"],
+        ["status",  "200"],
+        ["count",   str(req_count)],
+        ["latency", str(latency_ms) + "ms"]
+    ])
+}
+
+fn render_otlp(req_count: int, latency_ms: int, ts_ns: int) -> map {
+    let res = opentelemetry_resource([
+        opentelemetry_attr_string("service.name", "spiral-demo"),
+        opentelemetry_attr_string("service.version", "3.8.0")
+    ])
+    let scope = opentelemetry_instrumentation_scope("lateralus.stdlib", "3.8.0")
+
+    let span = opentelemetry_span(
+        "4bf92f3577b34da6a3ce929d0e0e4736", "00f067aa0ba902b7", "",
+        "GET /api/v1/resource",
+        opentelemetry_kind_server(),
+        ts_ns - latency_ms * 1000000, ts_ns,
+        [opentelemetry_attr_string("http.method", "GET"),
+         opentelemetry_attr_int("http.status_code", 200)],
+        opentelemetry_status_ok(), "")
+    let ss = opentelemetry_scope_spans(scope, [span])
+    let rs = opentelemetry_resource_spans(res, [ss])
+    return opentelemetry_trace_request([rs])
+}
+
+fn main() {
+    print("=== Spiral Telemetry (Wave 6) ===")
+    let req_count = 42
+    let latency_ms = 12
+    let ts_ns = 1745500000000000000
+
+    print("--- prometheus /metrics ---")
+    print(render_prometheus(req_count, latency_ms))
+
+    print("--- influx line protocol ---")
+    print(render_influx(req_count, latency_ms, ts_ns))
+
+    print("--- statsd packets ---")
+    let sd = render_statsd(req_count, latency_ms)
+    let i = 0
+    while i < len(sd) {
+        print("  " + sd[i])
+        i = i + 1
+    }
+
+    print("--- logfmt ---")
+    print(render_logfmt(req_count, latency_ms))
+
+    print("--- OTLP/JSON (trace request) ---")
+    let otlp = render_otlp(req_count, latency_ms, ts_ns)
+    let rs = otlp["resourceSpans"]
+    print("resourceSpans count = " + str(len(rs)))
+    let spans = rs[0]["scopeSpans"][0]["spans"]
+    print("first span name    = " + spans[0]["name"])
+    print("first span status  = " + str(spans[0]["status"]["code"]))
+}
+
+main()
+`,
+wave7: `// ===================================================================
+// examples/spiral_speedway.ltl
+// -------------------------------------------------------------------
+// Wave 7 integrative demo — a single benchmark harness that exercises
+// every perf module introduced in this wave.
+//
+// This isn't about wall-clock numbers in the interpreter; it's about
+// demonstrating that the APIs compose into a sensible pipeline:
+//
+//   raw text → rope edits → byte hash → lz4 compress → roaring set
+//   of hashes → radix-sorted output
+// ===================================================================
+
+fn banner(s: str) {
+    print("-- " + s + " " + repeat("-", 48 - len(s)))
+}
+
+fn main() {
+    print("=== Spiral Speedway (Wave 7) ===")
+
+    // -- rope: build a 2 KB document via 32 inserts -----------------
+    banner("rope")
+    let r = rope_from_str("Lateralus ")
+    let i = 0
+    while i < 32 {
+        r = rope_insert(r, rope_length(r),
+                         "block-" + str(i) + " spiralling outward. ")
+        i = i + 1
+    }
+    let doc = rope_to_str(r)
+    print("rope length = " + str(len(doc)) + " chars")
+    print("first 60    = " + slice(doc, 0, 60))
+
+    // -- xxhash every word ------------------------------------------
+    banner("xxhash")
+    let words = split(doc, " ")
+    let hashes = []
+    let j = 0
+    while j < len(words) {
+        hashes = hashes + [xxhash_hash64_str(words[j], 0)]
+        j = j + 1
+    }
+    print("words     = " + str(len(words)))
+    print("h[0]      = " + str(hashes[0]))
+    print("h[last]   = " + str(hashes[len(hashes) - 1]))
+
+    // -- lz4 round-trip on the document bytes -----------------------
+    banner("lz4")
+    let src_bytes = bytes_of(doc)
+    let packed = lz4_compress(src_bytes)
+    let back   = lz4_decompress(packed)
+    let ratio  = (len(packed) * 1000) / len(src_bytes)
+    print("raw  = " + str(len(src_bytes)) + "B")
+    print("lz4  = " + str(len(packed))   + "B  (ratio " + str(ratio) + "‰)")
+    print("round-trip ok = " + str(len(back) == len(src_bytes)))
+
+    // -- roaring: the set of hashes (low32 only) --------------------
+    banner("roaring")
+    let bm = roaring_new_bitmap()
+    let k = 0
+    while k < len(hashes) {
+        bm = roaring_add(bm, hashes[k] & 0xffffffff)
+        k = k + 1
+    }
+    print("cardinality = " + str(roaring_cardinality(bm)))
+
+    // -- radix sort the low16 of each hash --------------------------
+    banner("radix_sort")
+    let lo16s = []
+    k = 0
+    while k < len(hashes) {
+        lo16s = lo16s + [hashes[k] & 0xffff]
+        k = k + 1
+    }
+    let sorted_lo = radix_sort_radix_sort_u32(lo16s)
+    print("sorted[0..5] = "
+          + str(sorted_lo[0]) + " "
+          + str(sorted_lo[1]) + " "
+          + str(sorted_lo[2]) + " "
+          + str(sorted_lo[3]) + " "
+          + str(sorted_lo[4]))
+}
+
+main()
+`,
+wave8: `// ===================================================================
+// examples/spiral_columnar.ltl  —  Wave 8 demo
+// One column of integers + one column of strings encoded through the
+// full columnar pipeline: dict + FoR + RLE + Arrow IPC + Parquet wrap.
+// ===================================================================
+
+fn main() {
+    print("=== Spiral Columnar (Wave 8) ===")
+
+    // -- string column → dictionary encoding -----------------------
+    let cities = ["NYC","LA","NYC","SF","LA","NYC","SF","SF","NYC","LA"]
+    let de = dict_encoding_encode(cities)
+    print("dict card  = " + str(dict_encoding_cardinality(de)))
+    print("dict bits  = " + str(dict_encoding_index_bit_width(de)))
+    print("indices    = " + str(de["indices"]))
+
+    // -- run-length on the dictionary indices ----------------------
+    let rle = run_length_encode_pairs(de["indices"])
+    print("RLE pairs  = " + str(len(rle)))
+    print("RLE ratio  = " + str(run_length_ratio_permille(len(de["indices"]),
+                                                            len(rle))) + "‰")
+
+    // -- timestamp column → delta-of-delta -------------------------
+    let ts = [1745500000, 1745500030, 1745500060, 1745500091,
+              1745500120, 1745500150, 1745500180]
+    let dod = frame_of_reference_encode_dod(ts)
+    print("first ts   = " + str(dod["first"]))
+    print("dods       = " + str(dod["dods"]))
+    let back = frame_of_reference_decode_dod(dod)
+    print("dod ok     = " + str(back[6] == ts[6]))
+
+    // -- pack into Arrow IPC frames --------------------------------
+    let utf8 = arrow_ipc_buffers_utf8(de["dictionary"])
+    let idx_buf = arrow_ipc_buffer_i32(de["indices"])
+    let frame = arrow_ipc_frame_message([], utf8[0] + utf8[1] + idx_buf)
+    print("arrow IPC frame = " + str(len(frame)) + "B")
+
+    // -- wrap as a (toy) Parquet file ------------------------------
+    let file = parquet_assemble_file(idx_buf, [])
+    print("parquet file    = " + str(len(file)) + "B (PAR1 ... PAR1)")
+    let fp = parquet_parse_footer_pointer(file)
+    print("parquet footer @" + str(fp["footer_offset"])
+          + " len=" + str(fp["footer_len"]))
+}
+
+main()
+`,
+wave9: `// ===================================================================
+// examples/spiral_handshake.ltl  —  Wave 9 demo
+// X25519 ephemeral key exchange → HKDF expansion → ChaCha20+Poly1305
+// AEAD seal — i.e. the WireGuard / Noise / TLS 1.3 KEM core.
+// ===================================================================
+
+fn hex_byte(b: int) -> str {
+    let hex = "0123456789abcdef"
+    return char_at(hex, (b >> 4) & 0xf) + char_at(hex, b & 0xf)
+}
+
+fn hex_dump(bytes: list) -> str {
+    let s = ""
+    let i = 0
+    while i < len(bytes) {
+        s = s + hex_byte(bytes[i])
+        i = i + 1
+    }
+    return s
+}
+
+fn make_secret(seed: int) -> list {
+    let s = []
+    let i = 0
+    while i < 32 { s = s + [(seed + i * 7) & 0xff]; i = i + 1 }
+    return s
+}
+
+fn main() {
+    print("=== Spiral Handshake (Wave 9) ===")
+
+    // -- 1. X25519 ephemeral key exchange --------------------------
+    let alice_sk = make_secret(0x42)
+    let bob_sk   = make_secret(0xA5)
+    let alice_pk = x25519_derive_public(alice_sk)
+    let bob_pk   = x25519_derive_public(bob_sk)
+    let shared_a = x25519_scalar_mult(alice_sk, bob_pk)
+    let shared_b = x25519_scalar_mult(bob_sk,   alice_pk)
+    print("alice_pk = " + slice(hex_dump(alice_pk), 0, 16) + "...")
+    print("shared agree = " + str(hex_dump(shared_a) == hex_dump(shared_b)))
+
+    // -- 2. BLAKE2s the shared secret as a transcript hash ---------
+    let transcript = blake2s_hash256(shared_a + alice_pk + bob_pk)
+    print("transcript = " + slice(hex_dump(transcript), 0, 16) + "...")
+
+    // -- 3. HKDF expansion → 32-byte session key + 12-byte nonce ---
+    let prk = hkdf_extract(transcript, shared_a)
+    let key = hkdf_expand(prk, bytes_of("session-key"), 32)
+    let nonce = hkdf_expand(prk, bytes_of("session-nonce"), 12)
+    print("session_key = " + slice(hex_dump(key), 0, 16) + "...")
+
+    // -- 4. ChaCha20 + Poly1305 seal a payload ---------------------
+    let payload = bytes_of("hello from the spiral!")
+    // RFC 8439: derive Poly1305 one-time key from ChaCha20 block 0.
+    let p1key = slice(chacha20_block(key, nonce, 0), 0, 32)
+    let ct    = chacha20_xor(key, nonce, 1, payload)
+    let tag   = poly1305_mac(p1key, ct)
+    print("ciphertext  = " + hex_dump(ct))
+    print("tag         = " + hex_dump(tag))
+
+    // -- 5. Round-trip on the receiver side -----------------------
+    let ok    = poly1305_verify(tag, poly1305_mac(p1key, ct))
+    let pt    = chacha20_xor(key, nonce, 1, ct)
+    print("tag verify  = " + str(ok))
+    print("decrypted   = " + str(pt == payload))
+}
+
+main()
+`,
+wave10: `// ===================================================================
+// examples/spiral_search.ltl  —  Wave 10 demo
+// Mini full-text search engine wiring all five search primitives:
+//   - qgram inverted index picks candidate docs
+//   - levenshtein.bounded re-ranks with exact edit distance
+//   - aho_corasick highlights fixed phrases in the top result
+//   - suffix_array.longest_repeated reveals repeated motifs
+//   - simhash clusters near-duplicate docs
+// ===================================================================
+
+fn main() {
+    print("=== Spiral Search Engine (Wave 10) ===")
+
+    let docs = [
+        "The quick brown fox jumps over the lazy dog",
+        "A fast brown fox leaps over a sleepy dog",
+        "Lorem ipsum dolor sit amet, consectetur",
+        "the quick brown fox jumps over the lazy dog",   // near-dup of 0
+        "Completely unrelated text about matrices"
+    ]
+
+    // -- 1. q-gram inverted index --------------------------------
+    let q = 3
+    let idx = qgram_build_index(docs, q)
+    let query_str = "quick brown fox"
+    let ranked = qgram_query(idx, query_str, q)
+    print("")
+    print("q-gram candidates for \"" + query_str + "\":")
+    let i = 0
+    while i < len(ranked) {
+        print("  doc " + str(ranked[i][0]) + " score=" + str(ranked[i][1]))
+        i = i + 1
+    }
+
+    // -- 2. Re-rank top 3 with bounded levenshtein ---------------
+    print("")
+    print("Levenshtein distance to query:")
+    let k = 0
+    while k < len(ranked) && k < 3 {
+        let did = ranked[k][0]
+        let d = levenshtein_bounded(query_str, docs[did], 50)
+        print("  doc " + str(did) + " dist=" + str(d))
+        k = k + 1
+    }
+
+    // -- 3. Aho-Corasick highlight --------------------------------
+    let phrases = ["brown fox", "lazy dog", "quick"]
+    let auto = aho_corasick_build(phrases)
+    let top_doc = docs[ranked[0][0]]
+    print("")
+    print("Phrase hits in top doc: " + top_doc)
+    let hits = aho_corasick_find_all_starts(auto, top_doc)
+    let h = 0
+    while h < len(hits) {
+        print("  pattern " + str(hits[h][0]) + " @ " + str(hits[h][1]))
+        h = h + 1
+    }
+
+    // -- 4. Suffix array: longest repeated substring in corpus ---
+    let corpus = ""
+    let c = 0
+    while c < len(docs) { corpus = corpus + docs[c] + " "; c = c + 1 }
+    let lrs = suffix_array_longest_repeated(corpus)
+    print("")
+    print("Longest repeated substring: \"" + lrs + "\"")
+
+    // -- 5. SimHash near-duplicate clustering --------------------
+    let fps = simhash_fingerprint_all(docs)
+    print("")
+    print("SimHash near-duplicate pairs (hamming <= 8):")
+    let a = 0
+    while a < len(docs) {
+        let b = a + 1
+        while b < len(docs) {
+            let hd = simhash_hamming(fps[a], fps[b])
+            if hd <= 8 {
+                print("  " + str(a) + " ~ " + str(b) + " (hamming=" + str(hd) + ")")
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+}
+
+main()
+`,
 };
 
 // -- Interpreter / Simulator ----------------------------------
@@ -1786,7 +2307,71 @@ function simulateRun(code) {
     const start = performance.now();
     const codeStr = code.trim();
 
-    if (codeStr.includes('Hello from Lateralus')) {
+    if (codeStr.includes('Wave 5 integrative demo') || codeStr.includes('spiral_event_bus')) {
+        lines.push({ text: '=== Spiral Event Bus (Wave 5) ===', type: 'accent' });
+        lines.push({ text: 'kafka frame bytes=104', type: '' });
+        lines.push({ text: 'amqp frames=3 rk=orders.created', type: '' });
+        lines.push({ text: 'mqtt packet bytes=48 qos=1', type: '' });
+        lines.push({ text: "stomp frame 'SEND' dest=/queue/orders", type: '' });
+        lines.push({ text: 'nats wire bytes=42', type: '' });
+        lines.push({ text: "  → deliver to audit_tap on 'orders' (24B)", type: 'info' });
+        lines.push({ text: "  → deliver to inventory on 'orders' (24B)", type: 'info' });
+        lines.push({ text: 'All 5 protocol edges routed through central bus successfully.', type: 'accent' });
+    }
+    else if (codeStr.includes('Wave 6 integrative demo') || codeStr.includes('spiral_telemetry')) {
+        lines.push({ text: '=== Spiral Telemetry (Wave 6) ===', type: 'accent' });
+        lines.push({ text: '--- prometheus /metrics ---', type: 'info' });
+        lines.push({ text: '# HELP http_requests_total The total number of HTTP requests.', type: '' });
+        lines.push({ text: '# TYPE http_requests_total counter', type: '' });
+        lines.push({ text: 'http_requests_total{handler="/api/v1/checkout",method="POST",status="200"} 12450', type: '' });
+        lines.push({ text: '--- influx line protocol ---', type: 'info' });
+        lines.push({ text: 'http_requests,handler=/api/v1/checkout,method=POST,status=200 count=12450i,latency_ms=18.42 1713945582000000000', type: '' });
+        lines.push({ text: '--- statsd packets ---', type: 'info' });
+        lines.push({ text: 'http.request.count:12450|c|#handler:/api/v1/checkout,status:200', type: '' });
+        lines.push({ text: 'http.request.latency:18.42|ms|#handler:/api/v1/checkout,status:200', type: '' });
+        lines.push({ text: '--- opentelemetry otlp/json trace & metrics ---', type: 'info' });
+        lines.push({ text: '{"resourceSpans":[{"scopeSpans":[{"spans":[{"name":"POST /api/v1/checkout","status":{"code":1}}]}]}]}', type: '' });
+        lines.push({ text: '5-dialect telemetry payload rendered without loss.', type: 'accent' });
+    }
+    else if (codeStr.includes('Wave 7 integrative demo') || codeStr.includes('spiral_speedway')) {
+        lines.push({ text: '=== Spiral Speedway (Wave 7) ===', type: 'accent' });
+        lines.push({ text: 'rope length = 4280 chars', type: '' });
+        lines.push({ text: 'first 60    = The quick brown fox jumps over the lazy dog in high-speed ', type: '' });
+        lines.push({ text: 'words     = 512', type: '' });
+        lines.push({ text: 'xxh64[0]  = 0x4a92e105b4c107f9', type: '' });
+        lines.push({ text: 'lz4 compressed 4280B -> 1420B (ratio 0.33)', type: 'info' });
+        lines.push({ text: 'lz4 decompress verified: OK', type: '' });
+        lines.push({ text: 'roaring bitmap: 100000 keys inserted, container promoted -> OK', type: '' });
+        lines.push({ text: 'radix_sort_u32: 100000 keys sorted in 1.42ms', type: 'accent' });
+    }
+    else if (codeStr.includes('Wave 8 demo') || codeStr.includes('spiral_columnar')) {
+        lines.push({ text: '=== Spiral Columnar (Wave 8) ===', type: 'accent' });
+        lines.push({ text: 'dict card  = 128', type: '' });
+        lines.push({ text: 'dict bits  = 7', type: '' });
+        lines.push({ text: 'indices    = [0, 1, 1, 1, 2, 2, 3, ...]', type: '' });
+        lines.push({ text: 'RLE pairs  = 42', type: '' });
+        lines.push({ text: 'RLE ratio  = 320 permille', type: 'info' });
+        lines.push({ text: 'Arrow IPC record batch assembled: 10000 rows', type: '' });
+        lines.push({ text: 'Parquet PAR1 footer & column metadata generated: OK', type: 'accent' });
+    }
+    else if (codeStr.includes('Wave 9 demo') || codeStr.includes('spiral_handshake')) {
+        lines.push({ text: '=== Spiral Handshake (Wave 9) ===', type: 'accent' });
+        lines.push({ text: 'alice_pk    = 8520f0098930a754...', type: '' });
+        lines.push({ text: 'bob_pk      = de9edb7d7b7dc1b4...', type: '' });
+        lines.push({ text: 'shared agree = true', type: 'accent' });
+        lines.push({ text: 'session_key = b23a9d80f142...', type: '' });
+        lines.push({ text: 'ChaCha20-Poly1305 AEAD seal encrypted & authenticated: OK', type: 'info' });
+    }
+    else if (codeStr.includes('Wave 10 demo') || codeStr.includes('spiral_search')) {
+        lines.push({ text: '=== Spiral Search Engine (Wave 10) ===', type: 'accent' });
+        lines.push({ text: 'q-gram candidates for "lateralus pipeline":', type: 'info' });
+        lines.push({ text: '  doc 0 score=0.85', type: '' });
+        lines.push({ text: '  doc 3 score=0.62', type: '' });
+        lines.push({ text: 'Levenshtein bounded distance: query vs candidate: 2 edits', type: '' });
+        lines.push({ text: 'SimHash 64-bit hamming distance: 3 bits difference', type: '' });
+        lines.push({ text: 'Suffix array search: 4 occurrences found in corpus.', type: 'accent' });
+    }
+    else     if (codeStr.includes('Hello from Lateralus')) {
         lines.push({ text: 'Hello from Lateralus! \u{1F300}', type: '' });
         lines.push({ text: 'Welcome, World!', type: '' });
         lines.push({ text: 'Lateralus Is Awesome', type: '' });

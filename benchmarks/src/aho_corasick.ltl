@@ -1,0 +1,72 @@
+// Aho-Corasick: search 1,000 patterns in 1 MB of deterministic text.
+// Text: word-text (seed 12345), 1,048,576 bytes.
+// Patterns: 1,000 patterns of 2-3 words, glibc LCG (seed 31337).
+// Output: "<hit_count> <first_pid> <first_end> <last_pid> <last_end> <sum_pid> <sum_end>"
+// Expected output: 26949 213 15 854 1048575 13354998 14056156306
+import aho_corasick
+
+let WORDS = ["the", "quick", "brown", "fox", "jumps", "over", "lazy", "dog", "lateralus", "bench", "hash", "sort", "stream", "codec", "crypto", "search", "pattern", "text", "data", "node", "leaf", "tree", "graph", "queue", "stack", "buffer", "cache", "index", "token", "parse", "lexer", "parser", "codegen", "python", "node", "rust", "go", "fast", "slow", "small", "large", "green", "blue", "red", "river", "stone", "cloud", "storm", "flame", "ember", "frost", "iron", "gold", "sand", "wave", "spiral", "light", "dark", "zero", "prime", "delta"]
+
+// First n bytes of the infinite word stream "w1 w2 w3 ...",
+// built as a string via join (efficient: no per-byte concat).
+fn text_str(n: int, seed: int) -> str {
+    let words = [""] * 400000
+    let st = seed
+    let count = 0
+    let total = 0
+    while total < n {
+        st = (1103515245 * st + 12345) % 2147483648
+        let w = WORDS[(st >> 16) % len(WORDS)]
+        words[count] = w
+        count = count + 1
+        total = total + len(w) + 1
+    }
+    let s = join(slice(words, 0, count), " ")
+    return slice(s, 0, n)
+}
+
+fn gen_patterns() -> list {
+    let pats = [""] * 1000
+    let st = 31337
+    let i = 0
+    while i < 1000 {
+        st = (1103515245 * st + 12345) % 2147483648
+        let nw = 2 + ((st >> 16) % 2)
+        let p = ""
+        let w = 0
+        while w < nw {
+            st = (1103515245 * st + 12345) % 2147483648
+            let word = WORDS[(st >> 16) % len(WORDS)]
+            if w == 0 {
+                p = word
+            } else {
+                p = p + " " + word
+            }
+            w = w + 1
+        }
+        pats[i] = p
+        i = i + 1
+    }
+    return pats
+}
+
+fn main() {
+    let text = text_str(1048576, 12345)
+    let pats = gen_patterns()
+    let auto = aho_corasick.build(pats)
+    let hits = aho_corasick.find_all(auto, text)
+    let sum_pid = 0
+    let sum_end = 0
+    let h = 0
+    while h < len(hits) {
+        sum_pid = sum_pid + hits[h][0]
+        sum_end = sum_end + hits[h][1]
+        h = h + 1
+    }
+    let first = hits[0]
+    let last = hits[len(hits) - 1]
+    let line = str(len(hits)) + " " + str(first[0]) + " " + str(first[1]) + " " + str(last[0]) + " " + str(last[1]) + " " + str(sum_pid) + " " + str(sum_end)
+    println(line)
+}
+
+main()
