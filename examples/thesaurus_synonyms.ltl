@@ -1,0 +1,85 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// Thesaurus lookup & negative-inhibition filtering
+// Companion runnable example for:
+//   docs/blog/thesaurus-synonym-filtering.ltlml
+//
+// This example is self-contained: the small slice of stdlib/grugbot/thesaurus
+// needed here is inlined so it runs with `lateralus run` on the Python backend
+// without relying on stdlib import inlining (which the v3.2.0 run mode does
+// not perform). The inlined logic mirrors the module exactly.
+// ═══════════════════════════════════════════════════════════════════════════
+
+
+// -- inlined from stdlib/grugbot/thesaurus -----------------------------
+
+let mut NEGATIVE_THESAURUS: map = {}
+
+fn add_negative(word1: str, word2: str) {
+    if not contains(keys(NEGATIVE_THESAURUS), word1) {
+        NEGATIVE_THESAURUS[word1] = []
+    }
+    if not contains(NEGATIVE_THESAURUS[word1], word2) {
+        NEGATIVE_THESAURUS[word1] = NEGATIVE_THESAURUS[word1] + [word2]
+    }
+    if not contains(keys(NEGATIVE_THESAURUS), word2) {
+        NEGATIVE_THESAURUS[word2] = []
+    }
+    if not contains(NEGATIVE_THESAURUS[word2], word1) {
+        NEGATIVE_THESAURUS[word2] = NEGATIVE_THESAURUS[word2] + [word1]
+    }
+}
+
+fn filter_negatives(base_word: str, candidates: list) -> list {
+    if not contains(keys(NEGATIVE_THESAURUS), base_word) {
+        return candidates
+    }
+    let negatives = NEGATIVE_THESAURUS[base_word]
+    let mut filtered = []
+    for candidate in candidates {
+        if not contains(negatives, candidate) {
+            filtered = filtered + [candidate]
+        }
+    }
+    return filtered
+}
+
+// Seed a couple of entries plus their antonym links, exactly as
+// grugbot.thesaurus.seed_common_words() does for "fast"/"slow".
+fn seed_words() {
+    add_negative("fast", "slow")
+    add_negative("fast", "sluggish")
+}
+
+// -- the runnable example ---------------------------------------------
+
+fn lookup_and_filter() -> list {
+    seed_words()
+    // A raw candidate pool: two true synonyms and two antonyms.
+    let candidates = ["quick", "rapid", "slow", "sluggish"]
+    return filter_negatives("fast", candidates)
+}
+
+fn main() {
+    let result = lookup_and_filter()
+    print(result)
+}
+
+// -- pinned test vector ------------------------------------------------
+
+@test
+fn test_filtered_synonyms() {
+    assert_eq(lookup_and_filter(), ["quick", "rapid"],
+              "negative inhibition drops slow/sluggish, keeping quick/rapid")
+}
+
+@test
+fn test_filter_is_symmetric() {
+    // add_negative links both directions, so filtering from "slow" also
+    // drops "fast" (its antonym link), keeping the true synonyms.
+    seed_words()
+    assert_eq(filter_negatives("slow", ["fast", "quick", "rapid"]),
+              ["quick", "rapid"],
+              "antonym links are bidirectional")
+}
+
+main()
