@@ -363,7 +363,18 @@ def exponential_pdf(x: float, lam: float = 1) -> float:
 
 def binomial_pmf(k: int, n: int, p: float) -> float:
     """Binomial probability mass function."""
-    return math.comb(n, k) * (p ** k) * ((1 - p) ** (n - k))
+    coeff = math.comb(n, k)
+    try:
+        return coeff * (p ** k) * ((1 - p) ** (n - k))
+    except OverflowError:
+        # coeff on its own is too large to convert to a float (n above
+        # roughly 1030), so evaluate the whole product as an exact ratio of
+        # integers and let the probability factors scale it down before the
+        # single conversion at the end.
+        p_num, p_den = p.as_integer_ratio()
+        q_num, q_den = (1 - p).as_integer_ratio()
+        numerator = coeff * p_num ** k * q_num ** (n - k)
+        return numerator / (p_den ** k * q_den ** (n - k))
 
 
 def chi_squared_pdf(x: float, k: int) -> float:
