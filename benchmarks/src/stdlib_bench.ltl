@@ -1,0 +1,166 @@
+// Combined stdlib benchmark source (benchmark-ingest).
+//
+// A single source file that imports all five stdlib modules and runs all
+// five micro-benchmarks in one process. This is the "combined source
+// file" of the bounty spec: it proves the five modules can be dropped
+// into one program and used together. The five timed micro-benchmarks
+// live in their own files (benchmarks/src/{xxhash64,lz4_rt,chacha20,
+// aho_corasick,radix_sort_u32}.ltl) so the harness can time each one
+// separately; this file is the integration run and is verified by
+// tests/test_stdlib_benchmarks.py (it must print the five expected
+// outputs, one per line, in order).
+//
+// Expected output (one line per benchmark, in order):
+//   16759434631272806465
+//   2165510 11572300857478106302 2001074385271547492
+//   10941187508525638281
+//   26949 213 15 854 1048575 13354998 14056156306
+//   112674 116504 238608 245714 255117 4294921298 4294923275 4294935315 4294939266 4294949596 214657873537904
+import xxhash
+import lz4
+import chacha20
+import aho_corasick
+import radix_sort
+
+let WORDS = ["the", "quick", "brown", "fox", "jumps", "over", "lazy", "dog", "lateralus", "bench", "hash", "sort", "stream", "codec", "crypto", "search", "pattern", "text", "data", "node", "leaf", "tree", "graph", "queue", "stack", "buffer", "cache", "index", "token", "parse", "lexer", "parser", "codegen", "python", "node", "rust", "go", "fast", "slow", "small", "large", "green", "blue", "red", "river", "stone", "cloud", "storm", "flame", "ember", "frost", "iron", "gold", "sand", "wave", "spiral", "light", "dark", "zero", "prime", "delta"]
+
+// glibc LCG bytes (seed 777 / 999).
+fn lcg_bytes(n: int, seed: int) -> list {
+    let out = [0] * n
+    let st = seed
+    let i = 0
+    while i < n {
+        st = (1103515245 * st + 12345) % 2147483648
+        out[i] = (st >> 16) & 0xff
+        i = i + 1
+    }
+    return out
+}
+
+// First n bytes of the infinite word stream "w1 w2 w3 ..." (seed 12345).
+fn text_chunk(n: int, seed: int) -> list {
+    let out = [0] * n
+    let st = seed
+    let wp = 0
+    while wp < n {
+        st = (1103515245 * st + 12345) % 2147483648
+        let w = WORDS[(st >> 16) % len(WORDS)]
+        let wb = bytes_of(w)
+        let k = 0
+        while k < len(wb) && wp < n {
+            out[wp] = wb[k]
+            wp = wp + 1
+            k = k + 1
+        }
+        if wp < n {
+            out[wp] = 32
+            wp = wp + 1
+        }
+    }
+    return out
+}
+
+// Same word stream as a string (for aho_corasick, which takes text).
+fn text_str(n: int, seed: int) -> str {
+    let words = [""] * 400000
+    let st = seed
+    let count = 0
+    let total = 0
+    while total < n {
+        st = (1103515245 * st + 12345) % 2147483648
+        let w = WORDS[(st >> 16) % len(WORDS)]
+        words[count] = w
+        count = count + 1
+        total = total + len(w) + 1
+    }
+    let s = join(slice(words, 0, count), " ")
+    return slice(s, 0, n)
+}
+
+// 1,000 patterns of 2-3 words (seed 31337).
+fn gen_patterns() -> list {
+    let pats = [""] * 1000
+    let st = 31337
+    let i = 0
+    while i < 1000 {
+        st = (1103515245 * st + 12345) % 2147483648
+        let nw = 2 + ((st >> 16) % 2)
+        let p = ""
+        let w = 0
+        while w < nw {
+            st = (1103515245 * st + 12345) % 2147483648
+            let word = WORDS[(st >> 16) % len(WORDS)]
+            if w == 0 {
+                p = word
+            } else {
+                p = p + " " + word
+            }
+            w = w + 1
+        }
+        pats[i] = p
+        i = i + 1
+    }
+    return pats
+}
+
+fn main() {
+    // (1) xxhash64 over 2 MB
+    let data64 = lcg_bytes(2097152, 777)
+    println(xxhash.hash64(data64, 0))
+
+    // (2) lz4 compress + decompress round-trip of 4 MB
+    let text = text_chunk(4194304, 12345)
+    let comp = lz4.compress(text)
+    let dec = lz4.decompress(comp)
+    println(str(len(comp)) + " " + str(xxhash.hash64(comp, 0)) + " " + str(xxhash.hash64(dec, 0)))
+
+    // (3) chacha20 encrypt 1 MB
+    let data_cc = lcg_bytes(1048576, 999)
+    let key = [0] * 32
+    let k = 0
+    while k < 32 {
+        key[k] = k
+        k = k + 1
+    }
+    let nonce = [0] * 12
+    let ct = chacha20.xor(key, nonce, 1, data_cc)
+    println(xxhash.hash64(ct, 0))
+
+    // (4) aho_corasick: 1,000 patterns in 1 MB of text
+    let text_s = text_str(1048576, 12345)
+    let pats = gen_patterns()
+    let auto = aho_corasick.build(pats)
+    let hits = aho_corasick.find_all(auto, text_s)
+    let sum_pid = 0
+    let sum_end = 0
+    let h = 0
+    while h < len(hits) {
+        sum_pid = sum_pid + hits[h][0]
+        sum_end = sum_end + hits[h][1]
+        h = h + 1
+    }
+    let first = hits[0]
+    let last = hits[len(hits) - 1]
+    println(str(len(hits)) + " " + str(first[0]) + " " + str(first[1]) + " " + str(last[0]) + " " + str(last[1]) + " " + str(sum_pid) + " " + str(sum_end))
+
+    // (5) radix_sort_u32 on 100,000 keys
+    let n = 100000
+    let keys = [0] * n
+    let st = 2024
+    let i = 0
+    while i < n {
+        st = (1664525 * st + 1013904223) % 4294967296
+        keys[i] = st
+        i = i + 1
+    }
+    let srt = radix_sort.radix_sort_u32(keys)
+    let total = 0
+    let j = 0
+    while j < n {
+        total = total + srt[j]
+        j = j + 1
+    }
+    println(str(srt[0]) + " " + str(srt[1]) + " " + str(srt[2]) + " " + str(srt[3]) + " " + str(srt[4]) + " " + str(srt[n - 5]) + " " + str(srt[n - 4]) + " " + str(srt[n - 3]) + " " + str(srt[n - 2]) + " " + str(srt[n - 1]) + " " + str(total))
+}
+
+main()
