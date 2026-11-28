@@ -9,6 +9,7 @@ from lateralus_lang.math_engine import (
     Dual,
     Interval,
     LTLNumber,
+    MATH_BUILTINS,
     Matrix,
     Vector,
     bisection,
@@ -24,6 +25,15 @@ from lateralus_lang.math_engine import (
     trapezoidal_integrate,
     variance,
 )
+
+
+def test_cbrt_returns_real_cube_roots():
+    cbrt = MATH_BUILTINS["cbrt"]
+
+    assert cbrt(-8.0) == -2.0
+    assert cbrt(0.0) == 0.0
+    assert cbrt(8.0) == 2.0
+    assert sorted(cbrt(value) for value in (-8.0, 0.0, 8.0)) == [-2.0, 0.0, 2.0]
 
 # -------------------------------------------------------------------------
 # LTLNumber
