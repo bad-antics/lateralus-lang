@@ -805,6 +805,11 @@ def simpson_integrate(
     return s * h / 3
 
 
+def cbrt(x: float) -> float:
+    """Return the real cube root of *x*, including for negative inputs."""
+    return math.copysign(abs(x) ** (1 / 3), x)
+
+
 # -----------------------------------------------------------------------------
 # Convenience registry — maps names to functions for the transpiler preamble
 # -----------------------------------------------------------------------------
@@ -826,7 +831,7 @@ MATH_BUILTINS: Dict[str, Any] = {
     "NAN": float("nan"),
     # Functions
     "sqrt": math.sqrt,
-    "cbrt": lambda x: x ** (1/3),
+    "cbrt": cbrt,
     "abs": abs,
     "floor": math.floor,
     "ceil": math.ceil,
