@@ -401,6 +401,13 @@ class TestExampleCompilation:
         r = Compiler().compile_source(src, target=Target.PYTHON, filename=f"{example}.ltl")
         assert r.ok, f"examples/{example}.ltl failed: {r.errors[0].message if r.errors else '?'}"
 
+    def test_template_tutorial_example_compiles(self):
+        path = ROOT / "examples" / "template_demo.ltl"
+        assert path.exists(), "examples/template_demo.ltl not found"
+        r = Compiler().compile_source(path.read_text(), target=Target.PYTHON,
+                                      filename="template_demo.ltl")
+        assert r.ok, f"template tutorial example failed: {r.errors}"
+
 
 # =======================================================================
 # Integration: End-to-End Pipeline Tests
