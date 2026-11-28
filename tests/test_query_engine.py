@@ -225,6 +225,16 @@ class TestJoins:
         first = result[0]
         assert "name" in first or "user_name" in first or "amount" in first
 
+    def test_left_join_preserves_unmatched_left_fields(self):
+        users = [{"id": 7, "name": "Ada"}, {"id": 8, "name": "Lin"}]
+        orders = [{"id": 8, "amount": 10}]
+        result = Query().from_(users).left_join(orders, "id", "id").execute()
+
+        assert result == [
+            {"id": 7, "name": "Ada", "amount": None},
+            {"id": 8, "name": "Lin", "amount": 10},
+        ]
+
     def test_join_with_filter(self):
         result = (Query()
                   .from_(USERS)
