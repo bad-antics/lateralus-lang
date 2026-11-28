@@ -16,6 +16,8 @@ Implements optimization passes on the IR/AST to improve generated code:
 from __future__ import annotations
 
 import math
+
+from .math_engine import _round_half_away_zero
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -66,7 +68,7 @@ PURE_BUILTINS = {
     "int": int,
     "float": float,
     "bool": bool,
-    "round": round,
+    "round": _round_half_away_zero,
 }
 
 PURE_MATH = {
