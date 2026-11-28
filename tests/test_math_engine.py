@@ -258,6 +258,25 @@ class TestStatistics:
     def test_median_even(self):
         assert median([1, 2, 3, 4]) == pytest.approx(2.5)
 
+    @pytest.mark.parametrize("value", [1e308, -1e308, float.fromhex("0x1.fffffffffffffp+1023")])
+    def test_median_even_does_not_overflow_finite_middle_values(self, value):
+        assert median([value, value]) == value
+
+    def test_median_even_preserves_smallest_subnormal(self):
+        smallest = math.nextafter(0.0, 1.0)
+        assert median([smallest, smallest]) == smallest
+
+    def test_median_even_preserves_numeric_types(self):
+        from decimal import Decimal
+        from fractions import Fraction
+
+        assert median([Decimal("1.5"), Decimal("2.5")]) == Decimal("2")
+        assert median([Fraction(1, 3), Fraction(2, 3)]) == Fraction(1, 2)
+
+    def test_median_even_preserves_infinity_behavior(self):
+        assert math.isinf(median([float("inf"), float("inf")]))
+        assert math.isnan(median([float("inf"), float("-inf")]))
+
     def test_variance(self):
         assert variance([2, 4, 4, 4, 5, 5, 7, 9]) == pytest.approx(4.571, abs=0.01)
 
