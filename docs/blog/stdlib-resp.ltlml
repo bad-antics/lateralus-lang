@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Standard Library Tour: Redis Serialization Protocol (RESP2 & RESP3)</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "Standard Library Tour: Redis Serialization Protocol (RESP2 & RESP3)"
+author: "Nguyễn Duy Khang"
+date: 2026-11-28
+abstract: "A comprehensive guide to Lateralus's pure-Ltl Redis Serialization Protocol codec (stdlib/resp.ltl), covering wire framing, RESP2 and RESP3 type hierarchies, client command serialization, and canonical test vectors."
+---
+
+# Introduction
+
+Redis owes much of its legendary throughput to **RESP** (REdis Serialization Protocol)—a wire protocol engineered for rapid serialization, human readability during debugging, and binary safety for arbitrary payloads.
+
+Lateralus includes a pure, zero-dependency implementation of both RESP2 and RESP3 in its standard library (`stdlib/resp.ltl`). Designed as a unified codec where RESP2 is a strict subset of RESP3, `stdlib/resp.ltl` allows Lateralus applications to seamlessly speak Redis wire format, whether communicating with Redis clusters, KeyDB, Dragonfly, or building custom in-memory caching layers.
+
+## The RESP Wire Framing Model
+
+Every RESP frame begins with a single-byte type tag identifying the data type, followed by the payload, and is terminated by a standard carriage return line feed sequence (`\r\n` or CRLF).
+
+```
+<type-tag><payload>\r\n
+```
+
+### Type Tag Hierarchy
+
+`stdlib/resp.ltl` defines explicit tag helper functions for both protocol generations:
+
+| Type Tag | Symbol | Generation | Lateralus Constant | Example Wire Frame |
+| :--- | :---: | :---: | :--- | :--- |
+| **Simple String** | `+` | RESP2 | `tag_simple_string()` | `+OK\r\n` |
+| **Simple Error** | `-` | RESP2 | `tag_error()` | `-ERR unknown command\r\n` |
+| **Integer** | `:` | RESP2 | `tag_integer()` | `:1000\r\n` |
+| **Bulk String** | `$` | RESP2 | `tag_bulk_string()` | `$6\r\nfoobar\r\n` |
+| **Array** | `*` | RESP2 | `tag_array()` | `*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n` |
+| **Null** | `_` | RESP3 | `tag_null()` | `_\r\n` |
+| **Boolean** | `#` | RESP3 | `tag_boolean()` | `#t\r\n` |
+| **Double** | `,` | RESP3 | `tag_double()` | `,3.14159\r\n` |
+| **Big Number** | `(` | RESP3 | `tag_big_number()` | `(3492890328409238509324850943850943825024385\r\n` |
+| **Map** | `%` | RESP3 | `tag_map()` | `%1\r\n+name\r\n+redis\r\n` |
+| **Set** | `~` | RESP3 | `tag_set()` | `~2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n` |
+
+---
+
+# Encoding Workflows
+
+The encoder in `stdlib/resp.ltl` emits canonical RESP2 wire frames by default to maintain universal compatibility with all Redis versions, while exposing dedicated encoders for RESP3 data structures.
+
+## 1. Encoding Primitive Values
+
+Encoding simple strings, errors, and integers:
+
+```lateralus
+import resp
+
+// Simple string (status reply)
+let ok_msg = resp.enc_simple_string("PONG")
+// Output: "+PONG\r\n"
+
+// Error response
+let err_msg = resp.enc_error("ERR syntax error")
+// Output: "-ERR syntax error\r\n"
+
+// Signed 64-bit integer
+let count = resp.enc_integer(42)
+// Output: ":42\r\n"
+```
+
+## 2. Binary-Safe Bulk Strings
+
+Bulk strings specify their byte length upfront, making them binary-safe and resistant to payload truncation:
+
+```lateralus
+let data = resp.enc_bulk_string("Hello, World!")
+// Output: "$13\r\nHello, World!\r\n"
+
+// Null bulk string (RESP2 key not found)
+let null_val = resp.enc_null_bulk()
+// Output: "$-1\r\n"
+```
+
+## 3. Client Command Serialization
+
+Client requests in Redis are formatted as an array of bulk strings. `stdlib/resp.ltl` provides `enc_command(argv: list)` to serialize commands directly:
+
+```lateralus
+let cmd = resp.enc_command(["SET", "session:user:101", "active"])
+// Output: "*3\r\n$3\r\nSET\r\n$16\r\nsession:user:101\r\n$6\r\nactive\r\n"
+```
+
+---
+
+# Decoding Workflows
+
+The decoder in `stdlib/resp.ltl` is built as an offset-based recursive parser. Calling `decode(buf: str, i: int) -> list` parses the frame starting at index `i` and returns a 2-element list: `[parsed_value, next_offset]`.
+
+If the buffer contains an incomplete frame, `decode` safely returns `[nil, i]`, allowing streaming servers to wait for additional network packets without buffer reallocations.
+
+```lateralus
+import resp
+
+let wire = "+OK\r\n:100\r\n"
+
+// Parse first element
+let r1 = resp.decode(wire, 0)
+let val1 = r1[0] // {"kind": "simple", "value": "OK"}
+let next_pos = r1[1] // 5
+
+// Parse second element from next_pos
+let r2 = resp.decode(wire, next_pos)
+let val2 = r2[0] // 100
+```
+
+---
+
+# Canonical Protocol Test Vectors
+
+Below is the verification matrix comparing wire inputs with decoded outputs according to the official Redis Protocol specification:
+
+| Protocol Feature | Input Wire Frame | Parsed Output / Structure |
+| :--- | :--- | :--- |
+| **Simple String** | `+PONG\r\n` | `{"kind": "simple", "value": "PONG"}` |
+| **Error Reply** | `-WRONGTYPE Operation against a key holding the wrong kind of value\r\n` | `{"kind": "error", "value": "WRONGTYPE ..."}` |
+| **Positive Integer** | `:1000\r\n` | `1000` |
+| **Negative Integer** | `:-250\r\n` | `-250` |
+| **Bulk String** | `$6\r\nfoobar\r\n` | `"foobar"` |
+| **Empty Bulk String** | `$0\r\n\r\n` | `""` |
+| **Null Bulk (RESP2)** | `$-1\r\n` | `nil` |
+| **Null Array (RESP2)**| `*-1\r\n` | `nil` |
+| **Array of Bulks** | `*2\r\n$4\r\necho\r\n$5\r\nhello\r\n` | `["echo", "hello"]` |
+| **Boolean True (RESP3)** | `#t\r\n` | `true` |
+| **Boolean False (RESP3)**| `#f\r\n` | `false` |
+| **Null (RESP3)** | `_\r\n` | `nil` |
+| **Map (RESP3)** | `%1\r\n+field\r\n:99\r\n` | `{"field": 99}` |
+
+---
+
+# Complete Runnable Example
+
+Here is a self-contained program demonstrating command dispatch simulation, response parsing, and round-trip assertions:
+
+```lateralus
+// runnable_resp_demo.ltl
+import resp
+
+fn main() {
+    println("=== Redis Serialization Protocol (RESP) Demo ===")
+
+    // 1. Client prepares a command
+    let cmd = resp.enc_command(["MGET", "key1", "key2", "key3"])
+    println("Serialized Client Command:")
+    print(cmd)
+
+    // 2. Decode the client command
+    let decoded_cmd = resp.decode(cmd, 0)
+    let argv = decoded_cmd[0]
+    println("Decoded Arguments: " + str(argv))
+
+    // 3. Mock Server Replies
+    let status_reply = resp.enc_simple_string("OK")
+    let count_reply = resp.enc_integer(128)
+    let bulk_reply = resp.enc_bulk_string("cached_payload_data")
+    let null_reply = resp.enc_null_bulk()
+
+    // 4. Decode Server Replies
+    let r_status = resp.decode(status_reply, 0)[0]
+    let r_count = resp.decode(count_reply, 0)[0]
+    let r_bulk = resp.decode(bulk_reply, 0)[0]
+    let r_null = resp.decode(null_reply, 0)[0]
+
+    println("Status Value: " + r_status["value"])
+    println("Count Value: " + str(r_count))
+    println("Bulk Value: " + r_bulk)
+    println("Null Value: " + str(r_null))
+
+    // 5. RESP3 Map Decoding
+    let wire_map = "%2\r\n+name\r\n$5\r\nRedis\r\n+port\r\n:6379\r\n"
+    let map_res = resp.decode(wire_map, 0)[0]
+    println("Parsed RESP3 Map: " + str(map_res))
+}
+```
+
+# Conclusion
+
+`stdlib/resp.ltl` provides a high-performance, specification-compliant implementation of the Redis Serialization Protocol. Its offset-based parsing avoids unnecessary buffer copies, making it ideal for high-throughput networking services in Lateralus.
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>
