@@ -1,0 +1,82 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// Moving-average transients: start of clip vs. middle of clip
+// Companion runnable example for:
+//   docs/blog/signals-moving-average-transients.ltlml
+//
+// This example is self-contained: the moving-average logic from
+// stdlib/signals.ltl is reimplemented here in plain Lateralus so it runs on
+// the Python backend without relying on stdlib import inlining (which the
+// v3.2.0 run mode does not perform). The algorithm is identical:
+// a cumulative sum with a shrinking left edge and a growing denominator.
+// ═══════════════════════════════════════════════════════════════════════════
+
+
+// -- inlined from stdlib/signals.ltl : moving_average --------------------
+// Running average over a sliding window. The denominator is min(i + 1, w):
+// it grows from 1 up to w at the start of the clip, then stays at w. That
+// growing denominator is exactly why a transient near sample 0 is smeared
+// differently than one in the middle.
+
+fn moving_average(samples: list, window: int) -> list {
+    let mut out = []
+    let mut cumsum = 0.0
+    for i in range(len(samples)) {
+        cumsum = cumsum + samples[i]
+        if i >= window {
+            cumsum = cumsum - samples[i - window]
+        }
+        let count = min(i + 1, window)
+        out = out + [cumsum / count]
+    }
+    return out
+}
+
+// The denominator used at each sample — exposed so the tutorial can show the
+// ramp 1, 2, 3, 3, 3, 3 rather than only the resulting averages.
+fn denominators(n: int, window: int) -> list {
+    let mut counts = []
+    for i in range(n) {
+        counts = counts + [min(i + 1, window)]
+    }
+    return counts
+}
+
+// -- the runnable example -------------------------------------------------
+
+fn main() {
+    // Impulse in the middle: [0, 0, 6, 0, 0, 0]
+    let middle = moving_average([0.0, 0.0, 6.0, 0.0, 0.0, 0.0], 3)
+    // Impulse at the very first sample: [6, 0, 0, 0]
+    let leading = moving_average([6.0, 0.0, 0.0, 0.0], 3)
+    print(middle)
+    print(leading)
+    print(denominators(6, 3))
+}
+
+// -- pinned test vectors --------------------------------------------------
+
+@test
+fn test_middle_transient() {
+    // With denominator already at 3 when the impulse arrives, the 6 is split
+    // evenly across three samples: 6/3 = 2, held for the window's length.
+    assert_eq(moving_average([0.0, 0.0, 6.0, 0.0, 0.0, 0.0], 3),
+              [0.0, 0.0, 2.0, 2.0, 2.0, 0.0],
+              "middle transient: 6/3 held for three samples")
+}
+
+@test
+fn test_leading_transient() {
+    // Denominator ramps 1 -> 2 -> 3, so the leading 6 reads as 6, then 3,
+    // then 2, then 0 as it slides out of the window.
+    assert_eq(moving_average([6.0, 0.0, 0.0, 0.0], 3),
+              [6.0, 3.0, 2.0, 0.0],
+              "leading transient: shrinking denominator 6, 3, 2, 0")
+}
+
+@test
+fn test_denominator_ramp() {
+    assert_eq(denominators(6, 3), [1, 2, 3, 3, 3, 3],
+              "denominator grows to the window size, then holds")
+}
+
+main()
