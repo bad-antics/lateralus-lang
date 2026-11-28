@@ -1734,8 +1734,8 @@ class CTranspiler(ASTVisitor):
         w.line()
         w.comment("═══ Entry Point ═══")
         w.block_open("int main(int argc, char *argv[])")
-        if "main" in self._functions or "ltl_main" in [
-                self._mangle("main")]:
+        # Functions are stored with mangled names; "main" becomes "ltl_main"
+        if "ltl_main" in self._functions:
             w.line("ltl_main();")
         else:
             w.comment("No main() found — nothing to run")
