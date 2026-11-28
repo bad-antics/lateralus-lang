@@ -33,7 +33,20 @@ pub fn parse(text: str) -> map {
         }
         let key = trim(slice(t, 0, eq))
         let val = trim(slice(t, eq + 1, len(t)))
-        current[unquote_key(key)] = parse_value(val)
+        let parts = split_path(key)
+        if len(parts) > 0 {
+            let target = current
+            let i = 0
+            while i < len(parts) - 1 {
+                let p = parts[i]
+                if not contains(keys(target), p) {
+                    target[p] = {}
+                }
+                target = target[p]
+                i = i + 1
+            }
+            target[parts[len(parts) - 1]] = parse_value(val)
+        }
     }
     return root
 }
@@ -41,12 +54,18 @@ pub fn parse(text: str) -> map {
 pub fn strip_comment(l: str) -> str {
     let in_str = false
     let q = " "
+    let escaped = false
     let i = 0
     while i < len(l) {
         let c = char_at(l, i)
         if in_str {
-            if c == q {
+            if q == "\"" && c == "\\" && not escaped {
+                escaped = true
+            } else if c == q && not escaped {
                 in_str = false
+                escaped = false
+            } else {
+                escaped = false
             }
         } else {
             if c == "\"" { in_str = true; q = "\"" }
@@ -61,12 +80,18 @@ pub fn strip_comment(l: str) -> str {
 pub fn find_unquoted(s: str, needle: str) -> int {
     let in_str = false
     let q = " "
+    let escaped = false
     let i = 0
     while i < len(s) {
         let c = char_at(s, i)
         if in_str {
-            if c == q {
+            if q == "\"" && c == "\\" && not escaped {
+                escaped = true
+            } else if c == q && not escaped {
                 in_str = false
+                escaped = false
+            } else {
+                escaped = false
             }
         } else {
             if c == "\"" { in_str = true; q = "\"" }
@@ -140,6 +165,9 @@ pub fn open_table(root: map, path: str) -> map {
 
 pub fn open_array_table(root: map, path: str) -> map {
     let parts = split_path(path)
+    if len(parts) == 0 {
+        return root
+    }
     let cur = root
     let i = 0
     while i < len(parts) - 1 {
@@ -185,7 +213,46 @@ pub fn parse_value(v: str) -> any {
 pub fn parse_array(v: str) -> list {
     let inner = slice(v, 1, len(v) - 1)
     let out = []
-    let items = split(inner, ",")
+    let items = []
+    let buf = ""
+    let depth = 0
+    let in_str = false
+    let q = " "
+    let escaped = false
+    let i = 0
+    while i < len(inner) {
+        let c = char_at(inner, i)
+        if in_str {
+            buf = buf + c
+            if q == "\"" && c == "\\" && not escaped {
+                escaped = true
+            } else if c == q && not escaped {
+                in_str = false
+                escaped = false
+            } else {
+                escaped = false
+            }
+        } else if c == "\"" || c == "'" {
+            in_str = true
+            q = c
+            buf = buf + c
+        } else if c == "[" {
+            depth = depth + 1
+            buf = buf + c
+        } else if c == "]" {
+            depth = depth - 1
+            buf = buf + c
+        } else if c == "," && depth == 0 {
+            items = items + [buf]
+            buf = ""
+        } else {
+            buf = buf + c
+        }
+        i = i + 1
+    }
+    if len(buf) > 0 {
+        items = items + [buf]
+    }
     for p in items {
         let t = trim(p)
         if len(t) > 0 {
