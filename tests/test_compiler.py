@@ -142,6 +142,11 @@ class TestCheckTarget:
         r = check("let = ", Target.CHECK)
         assert not r.ok
 
+    def test_undefined_identifier_fails_check(self):
+        r = check('fn main() { print(lower("ABC")) }', Target.CHECK)
+        assert not r.ok
+        assert any("lower" in e.message for e in r.errors)
+
 
 # --- Assembly target ----------------------------------------------------------
 
