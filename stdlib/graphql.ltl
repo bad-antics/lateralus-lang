@@ -148,7 +148,7 @@ pub fn lex(text: str) -> list {
             }
             continue
         }
-        if c == chr(123) || c == chr(125) || c == "(" || c == ")" || c == ":" || c == "$" {
+        if c == chr(123) || c == chr(125) || c == chr(91) || c == chr(93) || c == "(" || c == ")" || c == ":" || c == "$" {
             tokens = tokens + [c]
             i = i + 1
             continue
@@ -156,21 +156,28 @@ pub fn lex(text: str) -> list {
         if c == "\"" {
             let start = i + 1
             i = start
+            let closed = false
             while i < n {
+                if char_at(text, i) == "\\" && i + 1 < n {
+                    i = i + 2
+                    continue
+                }
                 if char_at(text, i) == "\"" {
+                    closed = true
                     break
                 }
                 i = i + 1
             }
             tokens = tokens + ["\"" + slice(text, start, i) + "\""]
-            i = i + 1
+            if closed { i = i + 1 }
             continue
         }
         let start = i
         while i < n {
             let ch = char_at(text, i)
             if ch == " " || ch == "\t" || ch == "\n" || ch == "\r" || ch == ","
-                || ch == chr(123) || ch == chr(125) || ch == "(" || ch == ")" || ch == ":" {
+                || ch == chr(123) || ch == chr(125) || ch == chr(91) || ch == chr(93)
+                || ch == "(" || ch == ")" || ch == ":" {
                 break
             }
             i = i + 1
@@ -189,7 +196,7 @@ pub fn parse(text: str) -> map {
     state["i"] = 0
     let kind = "query"
     let name = ""
-    if toks[0] == "query" || toks[0] == "mutation" || toks[0] == "subscription" {
+    if len(toks) > 0 && (toks[0] == "query" || toks[0] == "mutation" || toks[0] == "subscription") {
         kind = toks[0]
         state["i"] = 1
         if state["i"] < len(toks) && toks[state["i"]] != chr(123) {
@@ -204,7 +211,7 @@ pub fn parse(text: str) -> map {
 
 pub fn parse_selection_set(state: map) -> list {
     let out = []
-    if state["toks"][state["i"]] != chr(123) {
+    if state["i"] >= len(state["toks"]) || state["toks"][state["i"]] != chr(123) {
         return out
     }
     state["i"] = state["i"] + 1
@@ -221,12 +228,18 @@ pub fn parse_selection_set(state: map) -> list {
 }
 
 pub fn parse_field(state: map) -> map {
+    if state["i"] >= len(state["toks"]) {
+        return field_as("", "")
+    }
     let name = state["toks"][state["i"]]
     state["i"] = state["i"] + 1
     let alias = ""
     if state["i"] < len(state["toks"]) && state["toks"][state["i"]] == ":" {
         alias = name
         state["i"] = state["i"] + 1
+        if state["i"] >= len(state["toks"]) {
+            return field_as("", alias)
+        }
         name = state["toks"][state["i"]]
         state["i"] = state["i"] + 1
     }
@@ -236,14 +249,35 @@ pub fn parse_field(state: map) -> map {
         while state["i"] < len(state["toks"]) && state["toks"][state["i"]] != ")" {
             let aname = state["toks"][state["i"]]
             state["i"] = state["i"] + 1
+            if state["i"] >= len(state["toks"]) {
+                break
+            }
             if state["toks"][state["i"]] == ":" {
                 state["i"] = state["i"] + 1
             }
+            if state["i"] >= len(state["toks"]) || state["toks"][state["i"]] == ")" {
+                break
+            }
             let aval = state["toks"][state["i"]]
             state["i"] = state["i"] + 1
+            if aval == chr(91) || aval == chr(123) {
+                let open = aval
+                let close = chr(93)
+                if open == chr(123) { close = chr(125) }
+                let depth = 1
+                while state["i"] < len(state["toks"]) && depth > 0 {
+                    let part = state["toks"][state["i"]]
+                    state["i"] = state["i"] + 1
+                    if part == open { depth = depth + 1 }
+                    if part == close { depth = depth - 1 }
+                    aval = aval + part
+                }
+            }
             f["args"][aname] = aval
         }
-        state["i"] = state["i"] + 1
+        if state["i"] < len(state["toks"]) && state["toks"][state["i"]] == ")" {
+            state["i"] = state["i"] + 1
+        }
     }
     if state["i"] < len(state["toks"]) && state["toks"][state["i"]] == chr(123) {
         f["selections"] = parse_selection_set(state)
