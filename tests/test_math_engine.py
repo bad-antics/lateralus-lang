@@ -16,6 +16,7 @@ from lateralus_lang.math_engine import (
     derivative,
     dual_exp,
     dual_sin,
+    gradient,
     linear_regression,
     mean,
     median,
@@ -228,6 +229,31 @@ class TestDual:
         def f(x):
             return x * x * x
         assert derivative(f, 2.0) == pytest.approx(12.0)
+
+    def test_pow_constant_exponent(self):
+        # d/dx(x**n) = n*x**(n-1)
+        assert derivative(lambda x: x ** 2, 3.0) == pytest.approx(6.0)
+        assert derivative(lambda x: x ** 3, 3.0) == pytest.approx(27.0)
+        assert derivative(lambda x: x ** 0.5, 3.0) == pytest.approx(1 / (2 * math.sqrt(3)))
+        assert derivative(lambda x: x ** 0, 3.0) == pytest.approx(0.0)
+        assert derivative(lambda x: x ** 1, 3.0) == pytest.approx(1.0)
+
+    def test_pow_polynomial(self):
+        # f(x) = x**2 + 2x + 1, f'(3) = 8 (docstring example)
+        x = Dual(3.0, 1.0)
+        result = x ** 2 + 2 * x + 1
+        assert result.val == pytest.approx(16.0)
+        assert result.dot == pytest.approx(8.0)
+
+    def test_pow_variable_exponent(self):
+        # d/dx(x**x) = x**x * (ln x + 1); at x=3 → 27*(ln 3 + 1)
+        assert derivative(lambda x: x ** x, 3.0) == pytest.approx(27 * (math.log(3) + 1))
+
+    def test_pow_gradient(self):
+        # ∇(a**2 + b**2) at (3, 4) = [2a, 2b] = [6, 8]
+        grad = gradient(lambda a, b: a ** 2 + b ** 2, [3.0, 4.0])
+        assert grad[0] == pytest.approx(6.0)
+        assert grad[1] == pytest.approx(8.0)
 
     def test_dual_sin(self):
         # d/dx(sin(x)) = cos(x)
