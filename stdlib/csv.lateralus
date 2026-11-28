@@ -1,0 +1,132 @@
+// CSV Standard Library Module for Lateralus v3
+// Handles robust parsing and serialization of comma-separated values.
+
+module std.csv
+
+import std.io
+import std.string
+
+pub struct CsvReader {
+    data: String,
+    pos: Int,
+    delimiter: Char,
+}
+
+pub fn new_reader(data: String) -> CsvReader {
+    CsvReader {
+        data: data,
+        pos: 0,
+        delimiter: ',',
+    }
+}
+
+pub fn new_reader_with_delimiter(data: String, delimiter: Char) -> CsvReader {
+    CsvReader {
+        data: data,
+        pos: 0,
+        delimiter: delimiter,
+    }
+}
+
+pub fn read_record(reader: CsvReader) -> Result<List<String>, String> {
+    if reader.pos >= string.length(reader.data) {
+        return Error("EOF")
+    }
+
+    let fields = []
+    let current_field = ""
+    let in_quotes = false
+    let chars = string.chars(reader.data)
+    let len = list.length(chars)
+    let i = reader.pos
+
+    while i < len {
+        let c = chars[i]
+
+        if in_quotes {
+            if c == '"' {
+                // Check for escaped quote ("")
+                if i + 1 < len && chars[i + 1] == '"' {
+                    current_field = current_field + "\""
+                    i = i + 2
+                    continue
+                } else {
+                    in_quotes = false
+                    i = i + 1
+                    continue
+                }
+            } else {
+                current_field = current_field + string.from_char(c)
+                i = i + 1
+                continue
+            }
+        } else {
+            if c == '"' {
+                in_quotes = true
+                i = i + 1
+                continue
+            } else if c == reader.delimiter {
+                // End of field (unquoted fields retain their leading/trailing spaces)
+                list.push(fields, current_field)
+                current_field = ""
+                i = i + 1
+                reader.pos = i
+                return Ok(fields)
+            } else if c == '\n' || c == '\r' {
+                // End of record
+                if c == '\r' && i + 1 < len && chars[i + 1] == '\n' {
+                    i = i + 2
+                } else {
+                    i = i + 1
+                }
+                list.push(fields, current_field)
+                reader.pos = i
+                return Ok(fields)
+            } else {
+                current_field = current_field + string.from_char(c)
+                i = i + 1
+            }
+        }
+    }
+
+    // Last field in file without trailing newline
+    list.push(fields, current_field)
+    reader.pos = i
+    Ok(fields)
+}
+
+pub fn read_all(reader: CsvReader) -> Result<List<List<String>>, String> {
+    let records = []
+    while true {
+        match read_record(reader) {
+            Ok(rec) => {
+                if list.length(rec) == 1 && list.get(rec, 0) == "" && reader.pos >= string.length(reader.data) {
+                    break
+                }
+                list.push(records, rec)
+            },
+            Error(_) => break,
+        }
+    }
+    Ok(records)
+}
+
+pub fn write_record(fields: List<String>) -> String {
+    let result = ""
+    let first = true
+    for field in fields {
+        if !first {
+            result = result + ","
+        }
+        first = false
+
+        // Quote field if it contains delimiter, quote, or newline
+        if string.contains(field, ",") || string.contains(field, "\"") || string.contains(field, "\n") || string.contains(field, "\r") {
+            let escaped = string.replace(field, "\"", "\"\"")
+            result = result + "\"" + escaped + "\""
+        } else {
+            result = result + field
+        }
+    }
+    result + "\n"
+}
