@@ -1,0 +1,188 @@
+---
+title: "stdlib.resp: Speaking Redis with Lateralus Pipelines"
+date: 2026-04-20
+author: bad-antics
+tags: [stdlib, resp, redis, networking, protocol, tutorial]
+summary: "A hands-on tour of stdlib/resp.ltl: encoding and decoding RESP2/RESP3 frames, pinned protocol vectors from the Redis spec, and a runnable client/server example built from |> pipelines."
+---
+
+# stdlib.resp: Speaking Redis with Lateralus Pipelines
+
+The Redis Serialization Protocol (RESP) is the wire format used by Redis
+clients and servers. It is simple, human-readable, binary-safe, and fast to
+parse -- which also makes it a perfect showcase for Lateralus pipelines.
+
+This tutorial walks through `stdlib/resp.ltl`:
+
+1. The RESP data model (RESP2 and RESP3)
+2. Encoding values into frames
+3. Decoding frames incrementally from a byte stream
+4. Pinned protocol test vectors from the official specification
+5. A runnable client/server round-trip example
+6. Error handling and pitfalls
+
+## 1. The Data Model
+
+Every RESP frame starts with a single type byte, followed by payload data,
+and every line is terminated with CRLF (`\r\n`, bytes `0x0D 0x0A`).
+
+### RESP2 types
+
+| Prefix | Type            | Example (wire)               | Meaning                      |
+|--------|-----------------|------------------------------|------------------------------|
+| `+`    | Simple String   | `+OK\r\n`                    | Short, non-binary-safe text  |
+| `-`    | Error           | `-ERR unknown command\r\n`   | Error message                |
+| `:`    | Integer         | `:1000\r\n`                  | Signed 64-bit integer        |
+| `$`    | Bulk String     | `$5\r\nhello\r\n`            | Binary-safe string           |
+| `*`    | Array           | `*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n` | Ordered collection     |
+
+A Null Bulk String is `$-1\r\n` and a Null Array is `*-1\r\n`.
+
+### RESP3 additions
+
+RESP3 (negotiated with the `HELLO 3` command) adds richer types:
+
+| Prefix | Type             | Example (wire)                       |
+|--------|------------------|--------------------------------------|
+| `_`    | Null             | `_\r\n`                              |
+| `#`    | Boolean          | `#t\r\n` / `#f\r\n`                  |
+| `,`    | Double           | `,3.14159\r\n`                       |
+| `(`    | Big Number       | `(3492890328409238509324850943850943825024385\r\n` |
+| `!`    | Bulk Error       | `!21\r\nSYNTAX invalid syntax\r\n`   |
+| `=`    | Verbatim String  | `=15\r\ntxt:Some string\r\n`         |
+| `%`    | Map              | `%2\r\n+first\r\n:1\r\n+second\r\n:2\r\n` |
+| `~`    | Set              | `~3\r\n+a\r\n+b\r\n+c\r\n`           |
+| `>`    | Push             | `>2\r\n+message\r\n+hi\r\n`          |
+
+## 2. Encoding Values
+
+`stdlib/resp.ltl` models frames as a tagged union. Constructors are plain
+functions, so encoding composes naturally with `|>`.
+
+```lateralus
+import stdlib.resp as resp
+
+// Build a frame, then pipe it into the encoder.
+let frame = resp.array([
+    resp.bulk("SET"),
+    resp.bulk("greeting"),
+    resp.bulk("hello"),
+])
+
+let wire = frame |> resp.encode
+// wire == b"*3\r\n$3\r\nSET\r\n$8\r\ngreeting\r\n$5\r\nhello\r\n"
+```
+
+A convenience helper builds a command array directly from strings, which is
+what most clients want:
+
+```lateralus
+let wire = ["GET", "greeting"] |> resp.command |> resp.encode
+// b"*2\r\n$3\r\nGET\r\n$8\r\ngreeting\r\n"
+```
+
+### Encoding rules worth remembering
+
+- Bulk strings are length-prefixed by **byte** length, not character count.
+  `"héllo"` is 6 bytes in UTF-8, so it is encoded as `$6\r\nh\xc3\xa9llo\r\n`.
+- Simple strings and errors **must not** contain `\r` or `\n`.
+  `resp.simple` and `resp.error` return an `Err` if they do.
+- Integers are encoded in base 10 with an optional leading `-`.
+- Empty collections are valid: `*0\r\n`.
+
+## 3. Decoding Frames
+
+Network data arrives in arbitrary chunks, so the decoder is incremental. It
+returns either a complete frame plus the unconsumed remainder, or a signal
+that more bytes are needed.
+
+```lateralus
+import stdlib.resp as resp
+
+let buf = b"+OK\r\n:42\r\n"
+
+match resp.decode(buf) {
+    Ok((frame, rest)) => {
+        println(frame)   // Simple("OK")
+        println(rest)    // b":42\r\n"
+    }
+    Incomplete => println("need more data")
+    Err(e)     => println("protocol error: " ++ e.message)
+}
+```
+
+To drain every complete frame from a buffer, use `decode_all`:
+
+```lateralus
+let (frames, leftover) = buf |> resp.decode_all
+// frames   == [Simple("OK"), Integer(42)]
+// leftover == b""
+```
+
+### Streaming from a socket
+
+```lateralus
+fn read_frames(sock, acc) {
+    let chunk = sock |> net.recv(4096)
+    let (frames, leftover) = (acc ++ chunk) |> resp.decode_all
+    frames |> each(handle_frame)
+    read_frames(sock, leftover)
+}
+```
+
+The leftover bytes are carried into the next call, which guarantees that a
+frame split across two TCP segments is still decoded correctly.
+
+## 4. Canonical Protocol Test Vectors
+
+The following vectors are taken from the official Redis protocol
+specification. Each row lists the logical value and its exact wire bytes
+(`\r\n` shown explicitly). They are **pinned**: `resp.encode` must produce
+exactly these bytes and `resp.decode` must round-trip them.
+
+### 4.1 RESP2 vectors
+
+| # | Logical value                    | Wire bytes                                         |
+|---|----------------------------------|----------------------------------------------------|
+| 1 | Simple("OK")                     | `+OK\r\n`                                          |
+| 2 | Error("Error message")           | `-Error message\r\n`                               |
+| 3 | Error("ERR unknown command 'asdf'") | `-ERR unknown command 'asdf'\r\n`               |
+| 4 | Error("WRONGTYPE Operation against a key holding the wrong kind of value") | `-WRONGTYPE Operation against a key holding the wrong kind of value\r\n` |
+| 5 | Integer(0)                       | `:0\r\n`                                           |
+| 6 | Integer(1000)                    | `:1000\r\n`                                        |
+| 7 | Integer(-1)                      | `:-1\r\n`                                          |
+| 8 | Bulk("hello")                    | `$5\r\nhello\r\n`                                  |
+| 9 | Bulk("")                         | `$0\r\n\r\n`                                       |
+| 10| NullBulk                         | `$-1\r\n`                                          |
+| 11| Array([])                        | `*0\r\n`                                           |
+| 12| Array([Bulk("hello"), Bulk("world")]) | `*2\r\n$5\r\nhello\r\n$5\r\nworld\r\n`        |
+| 13| Array([Integer(1), Integer(2), Integer(3)]) | `*3\r\n:1\r\n:2\r\n:3\r\n`              |
+| 14| Array([Integer(1), Integer(2), Integer(3), Integer(4), Bulk("hello")]) | `*5\r\n:1\r\n:2\r\n:3\r\n:4\r\n$5\r\nhello\r\n` |
+| 15| NullArray                        | `*-1\r\n`                                          |
+| 16| Array([Bulk("hello"), NullBulk, Bulk("world")]) | `*3\r\n$5\r\nhello\r\n$-1\r\n$5\r\nworld\r\n` |
+| 17| Nested array `[[1,2,3],["Hello","World"]]` with Simple/Error leaves | `*2\r\n*3\r\n:1\r\n:2\r\n:3\r\n*2\r\n+Hello\r\n-World\r\n` |
+
+Command vectors (what a client actually sends):
+
+| Command             | Wire bytes                                              |
+|---------------------|---------------------------------------------------------|
+| `PING`              | `*1\r\n$4\r\nPING\r\n`                                  |
+| `ECHO hey`          | `*2\r\n$4\r\nECHO\r\n$3\r\nhey\r\n`                     |
+| `SET mykey myvalue` | `*3\r\n$3\r\nSET\r\n$5\r\nmykey\r\n$7\r\nmyvalue\r\n`   |
+| `GET mykey`         | `*2\r\n$3\r\nGET\r\n$5\r\nmykey\r\n`                    |
+| `LLEN mylist`       | `*2\r\n$4\r\nLLEN\r\n$6\r\nmylist\r\n`                  |
+
+### 4.2 RESP3 vectors
+
+| # | Logical value                     | Wire bytes                                         |
+|---|-----------------------------------|----------------------------------------------------|
+| 1 | Null                              | `_\r\n`                                            |
+| 2 | Boolean(true)                     | `#t\r\n`                                           |
+| 3 | Boolean(false)                    | `#f\r\n`                                           |
+| 4 | Double(1.23)                      | `,1.23\r\n`                                        |
+| 5 | Double(10)                        | `,10\r\n`                                          |
+| 6 | Double(+inf)                      | `,inf\r\n`                                         |
+| 7 | Double(-inf)                      | `,-inf\r\n`                                        |
+| 8 | Double(nan)                       | `,nan\r\n`                                         |
+| 9 | BigNumber("3492890328409238509324850943850943825024385") | `(3492890328409238509324850943850943825024385\r\n` |
+| 10| BulkError("SYNTAX invalid syntax")| `!21\r\nSYNTAX invalid syntax\r\n
