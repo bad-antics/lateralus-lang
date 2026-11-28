@@ -18,6 +18,8 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from .lexer import TK, LexError, lex
+
 # --- Compiler integration (real diagnostics) --------------------------
 try:
     from .compiler import Compiler, Target
@@ -1032,30 +1034,39 @@ class LateralusLSP:
         if line_num >= len(doc.lines):
             return {"jsonrpc": "2.0", "id": msg_id, "result": None}
 
-        line_text = doc.lines[line_num]
-        import re as _re
+        # Use lexer tokens so identifier text inside strings/comments is ignored.
+        try:
+            tokens = lex(doc.text, doc.uri)
+        except LexError:
+            return {"jsonrpc": "2.0", "id": msg_id, "result": None}
 
-        # Find word boundaries around cursor
         old_name = None
-        for m in _re.finditer(r"\b([a-zA-Z_]\w*)\b", line_text):
-            if m.start() <= col <= m.end():
-                old_name = m.group(1)
+        for token in tokens:
+            if token.kind != TK.IDENT or token.line != line_num + 1:
+                continue
+            start = token.col - 1
+            end = start + len(token.value)
+            if start <= col <= end:
+                old_name = token.value
                 break
 
         if not old_name:
             return {"jsonrpc": "2.0", "id": msg_id, "result": None}
 
-        # Find all occurrences in the document
+        # Find all identifier tokens with the selected name.
         edits = []
-        for i, ln in enumerate(doc.lines):
-            for m in _re.finditer(r"\b" + _re.escape(old_name) + r"\b", ln):
-                edits.append({
-                    "range": {
-                        "start": {"line": i, "character": m.start()},
-                        "end": {"line": i, "character": m.end()},
-                    },
-                    "newText": new_name,
-                })
+        for token in tokens:
+            if token.kind != TK.IDENT or token.value != old_name:
+                continue
+            start = token.col - 1
+            edits.append({
+                "range": {
+                    "start": {"line": token.line - 1, "character": start},
+                    "end": {"line": token.line - 1,
+                            "character": start + len(token.value)},
+                },
+                "newText": new_name,
+            })
 
         return {
             "jsonrpc": "2.0",
@@ -1079,20 +1090,26 @@ class LateralusLSP:
         if line_num >= len(doc.lines):
             return {"jsonrpc": "2.0", "id": msg_id, "result": None}
 
-        line_text = doc.lines[line_num]
-        import re as _re
+        try:
+            tokens = lex(doc.text, doc.uri)
+        except LexError:
+            return {"jsonrpc": "2.0", "id": msg_id, "result": None}
 
-        for m in _re.finditer(r"\b([a-zA-Z_]\w*)\b", line_text):
-            if m.start() <= col <= m.end():
+        for token in tokens:
+            if token.kind != TK.IDENT or token.line != line_num + 1:
+                continue
+            start = token.col - 1
+            end = start + len(token.value)
+            if start <= col <= end:
                 return {
                     "jsonrpc": "2.0",
                     "id": msg_id,
                     "result": {
                         "range": {
-                            "start": {"line": line_num, "character": m.start()},
-                            "end": {"line": line_num, "character": m.end()},
+                            "start": {"line": line_num, "character": start},
+                            "end": {"line": line_num, "character": end},
                         },
-                        "placeholder": m.group(1),
+                        "placeholder": token.value,
                     },
                 }
 

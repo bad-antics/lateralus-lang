@@ -365,6 +365,22 @@ class TestLSPRename:
         assert result["result"] is not None
         assert result["result"]["placeholder"] == "counter"
 
+    def test_rename_does_not_change_string_literals(self):
+        """Rename edits should only target identifier tokens."""
+        server = self._make_server()
+        server.documents.open("test://t.ltl", "lateralus", 1,
+                              'let amount = 42\nprintln("amount")\nprintln(amount)')
+
+        result = server.handle_rename(1, {
+            "textDocument": {"uri": "test://t.ltl"},
+            "position": {"line": 0, "character": 5},
+            "newName": "total",
+        })
+
+        edits = result["result"]["changes"]["test://t.ltl"]
+        assert len(edits) == 2
+        assert all(edit["range"]["start"]["line"] != 1 for edit in edits)
+
 
 # =======================================================================
 # STDLIB: New Modules Compile
