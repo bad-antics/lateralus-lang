@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Region Allocation with stdlib.arena</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "Region Allocation with stdlib.arena"
+author: Lateralus contributors
+date: 2026-11-28
+abstract: Use an arena for fast batch allocation with stable integer slot IDs.
+---
+
+# Region allocation with `stdlib.arena`
+
+An arena groups short-lived allocations into blocks. Values are addressed by
+small integer IDs, so callers can keep those IDs while the arena grows. Reset
+the arena once the whole batch is finished instead of releasing each value
+individually.
+
+## Constructing an arena
+
+`arena.new(capacity)` starts with one empty block. `arena.default()` uses a
+capacity of 1024. The capacity is the number of values per block, not a byte
+size.
+
+```ltl
+import stdlib.arena
+
+let a = arena.new(3)
+let defaults = arena.default()
+```
+
+## Allocating and rolling over blocks
+
+Allocation returns `[updated_arena, slot_id]`. Keep the updated arena from the
+first item in the pair. The ID is `block_index * capacity + slot_index`.
+
+```ltl
+let result = arena.alloc(a, "first")
+let a = result[0]
+let first_id = result[1]
+
+let batch = arena.alloc_many(a, ["second", "third", "fourth"])
+let a = batch[0]
+let ids = batch[1]
+```
+
+With capacity three, the fourth value starts block two. `total(a)` reports four,
+`block_count(a)` reports two, and `remaining(a)` reports two because the new
+block contains one value.
+
+## Reading and updating values
+
+Use `get` and `set` with the returned IDs. `get` returns `nil` for an ID that is
+past the live values or negative; it never turns an invalid read into an
+accidental last-element lookup.
+
+```ltl
+let value = arena.get(a, first_id)
+let a = arena.set(a, first_id, "updated")
+assert(arena.get(a, first_id) == "updated")
+assert(arena.get(a, 999) == nil)
+assert(arena.get(a, -1) == nil)
+```
+
+## Pinned test vector
+
+The complete executable vector is
+`examples/arena_pinned_vector.ltl`. It pins construction, single and batch
+allocation, rollover, IDs, reads, writes, totals, block counts, remaining
+capacity, defaults, and both forms of out-of-range read. Run it from the
+repository root:
+
+```text
+lateralus run examples/arena_pinned_vector.ltl
+```
+
+It ends with `pinned vector: PASS` after all assertions succeed.
+
+## Resetting a region
+
+When a batch is complete, `arena.reset(a)` returns the arena to one empty block
+and zero total allocations. This makes the lifetime boundary explicit and
+keeps cleanup proportional to the number of blocks, rather than the number of
+individual values.
+
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>
