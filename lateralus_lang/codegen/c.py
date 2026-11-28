@@ -197,6 +197,13 @@ _TYPE_MAP: Dict[str, str] = {
     "i64":    "int64_t",
     "usize":  "size_t",
     "isize":  "int64_t",
+    # Container types. These used to fall through `_c_type`'s default branch,
+    # which returns the type name verbatim — so `fn f(xs: list)` emitted the C
+    # prototype `static int64_t f(list xs);` and gcc stopped at "unknown type
+    # name 'list'".
+    "list":   "ltl_list_t*",
+    "List":   "ltl_list_t*",
+    "str[]":  "ltl_list_t*",
     # Function type → function pointer (generic)
     "fn":     "void*",
     "Fn":     "void*",
@@ -569,6 +576,9 @@ class CTranspiler(ASTVisitor):
         self._local_types: Dict[str, str] = {}    # name → C type for current fn
         self._fn_return_types: Dict[str, str] = {}  # fn name → C return type
         self._list_elem_types: Dict[str, str] = {}  # name → elem C type (typed C arrays)
+        # name → primitive C type of a *boxed* list's elements, used to unbox
+        # `xs[i]` back to a scalar. Populated for `[x] * n` and friends.
+        self._box_elem_types: Dict[str, str] = {}
 
     # ── helpers ───────────────────────────────────────────────────────────
 
@@ -667,11 +677,15 @@ class CTranspiler(ASTVisitor):
         if isinstance(node, ListExpr):
             return "ltl_list_t*"
         if isinstance(node, IndexExpr):
-            # Typed C array? Return its element type.
+            # Typed C array or a boxed list whose element type we recorded:
+            # either way the read produces a scalar, and callers must know that
+            # or they will declare `ltl_value_t dx = <double>`.
             if isinstance(node.obj, Ident):
                 nm = self._mangle(node.obj.name)
                 if nm in self._list_elem_types:
                     return self._list_elem_types[nm]
+                if nm in self._box_elem_types:
+                    return self._box_elem_types[nm]
             return "ltl_value_t"
         if isinstance(node, Ident):
             # Look up known local variable types
@@ -700,8 +714,18 @@ class CTranspiler(ASTVisitor):
             if tname == "float": return "double"
             if tname == "bool":  return "bool"
             return _c_type(node.target, "ltl_value_t")
+        if isinstance(node, UnaryOp):
+            # -1.5 is still a double; without this the boxing dispatch in
+            # _visit_AssignStmt sees ltl_value_t and leaves a raw double in an
+            # ltl_value_t slot.
+            return self._infer_ctype_from_expr(node.operand)
         if isinstance(node, CallExpr):
             if isinstance(node.callee, Ident):
+                # str(x) lowers to one of the ltl_*_to_str helpers, all of which
+                # return ltl_string_t* — say so, or `println(str(x))` picks the
+                # const char* overload and prints nothing.
+                if node.callee.name == "str" and len(node.args) == 1:
+                    return "ltl_string_t*"
                 nm = self._mangle(node.callee.name)
                 if nm in ("ltl_int_to_str", "ltl_float_to_str",
                           "ltl_bool_to_str", "ltl_str_new", "ltl_str_concat"):
@@ -840,6 +864,7 @@ class CTranspiler(ASTVisitor):
         self._local_vars = set()
         self._local_types = {}
         self._list_elem_types = {}
+        self._box_elem_types = {}
 
         # Register parameter types so inference can see them inside the body
         for p in node.params:
@@ -894,9 +919,29 @@ class CTranspiler(ASTVisitor):
                 return
 
         val  = self._visit_expr(node.value) if node.value else "/* uninitialized */ {0}"
+        # `[x] * n` stays a boxed ltl_list_t, but we still know what is inside,
+        # so reads can be unboxed (see _expr_IndexExpr).
+        boxed_elem = self._boxed_repeat_elem_type(node.value)
+        if boxed_elem is not None:
+            self._box_elem_types[name] = boxed_elem
         self._w.line(f"{ctype} {name} = {val};")
         self._local_types[name] = ctype
         self._local_vars.add(name)
+
+    def _boxed_repeat_elem_type(self, node) -> "Optional[str]":
+        """Type of the elements of a boxed list built as `[x] * n`.
+
+        The value stays an `ltl_list_t`, so elements are `ltl_value_t` and must
+        be unboxed on read. Mixed int/float promotes to double.
+        """
+        if not isinstance(node, BinOp) or getattr(node, "op", None) != "*":
+            return None
+        for lit, other in ((node.left, node.right), (node.right, node.left)):
+            if isinstance(lit, ListExpr) and len(lit.elements) == 1:
+                et = self._infer_ctype_from_expr(lit.elements[0])
+                if et in ("int64_t", "double", "bool"):
+                    return et
+        return None
 
     def _homogeneous_list_elem_type(self, node: "ListExpr") -> "Optional[str]":
         """Return a primitive C type if every element infers to the same
@@ -921,7 +966,12 @@ class CTranspiler(ASTVisitor):
         return None
 
     def _visit_AssignStmt(self, node: AssignStmt):
-        target = self._visit_expr(node.target)
+        # An assignment target must stay an lvalue: `xs[i] = v`, never
+        # `ltl_unbox_int(xs->items[i]) = v`.
+        if isinstance(node.target, IndexExpr):
+            target = self._expr_IndexExpr(node.target, unbox=False)
+        else:
+            target = self._visit_expr(node.target)
         value  = self._visit_expr(node.value)
         op     = getattr(node, "op", "=") or "="
         # If target is a list index (list->items[i]), box the RHS into ltl_value_t
@@ -1283,12 +1333,16 @@ class CTranspiler(ASTVisitor):
                 if ctype == "ltl_string_t*":
                     helper = "ltl_io_println" if name == "println" else "ltl_io_print"
                     return f"{helper}({arg})"
+            # len(x): both ltl_list_t and ltl_string_t carry a `len` field.
+            if name == "len" and len(node.args) == 1:
+                arg = self._visit_expr(node.args[0])
+                return f"(({arg})->len)"
             # Builtin type-coercion calls: int(x), float(x), bool(x), str(x).
-            if name in ("int", "float", "bool", "str") and len(node.args) == 1:
+            if name in ("int", "to_int", "float", "bool", "str") and len(node.args) == 1:
                 arg_node = node.args[0]
                 arg = self._visit_expr(arg_node)
                 src = self._infer_ctype_from_expr(arg_node)
-                if name == "int":   return f"((int64_t)({arg}))"
+                if name in ("int", "to_int"): return f"((int64_t)({arg}))"
                 if name == "float": return f"((double)({arg}))"
                 if name == "bool":  return f"((bool)({arg}))"
                 # str(x): dispatch on source type
@@ -1301,7 +1355,7 @@ class CTranspiler(ASTVisitor):
         args = ", ".join(self._visit_expr(a) for a in node.args)
         return f"{func}({args})"
 
-    def _expr_IndexExpr(self, node: IndexExpr) -> str:
+    def _expr_IndexExpr(self, node: IndexExpr, unbox: bool = True) -> str:
         idx = self._visit_expr(node.index)
         # Typed C array? Emit native indexing.
         if isinstance(node.obj, Ident):
@@ -1309,7 +1363,18 @@ class CTranspiler(ASTVisitor):
             if nm in self._list_elem_types:
                 return f"{nm}[{idx}]"
         obj = self._visit_expr(node.obj)
-        return f"{obj}->items[{idx}]"
+        access = f"{obj}->items[{idx}]"
+        # Boxed list whose element type we know → hand back a scalar, otherwise
+        # the caller gets an ltl_value_t where it expects an int and gcc stops.
+        if unbox and isinstance(node.obj, Ident):
+            et = self._box_elem_types.get(self._mangle(node.obj.name))
+            if et == "int64_t":
+                return f"ltl_unbox_int({access})"
+            if et == "double":
+                return f"ltl_unbox_float({access})"
+            if et == "bool":
+                return f"ltl_unbox_bool({access})"
+        return access
 
     def _expr_FieldExpr(self, node: FieldExpr) -> str:
         # Handle module constant access: math.PI, sys.STDOUT, etc.
