@@ -2,8 +2,8 @@
 // tests/simhash_vectors.ltl -- pinned test vectors for the
 // stdlib.simhash tutorial. Style follows tests/stdlib_spiral_wave_*.
 //
-// Every expected value below verifies the implementation of 64-bit
-// SimHash in stdlib/simhash.ltl across identical docs, case/punctuation
+// Every expected value below is pinned directly from execution of
+// stdlib/simhash.ltl across identical docs, case/punctuation
 // variations, minor revisions, and unrelated text blocks.
 // ===================================================================
 
@@ -20,6 +20,7 @@ fn check(name: str, cond: bool) {
     }
 }
 
+@test
 fn test_case_and_punctuation_invariance() {
     print("-- case and punctuation invariance --")
     let doc_lower = "the quick brown fox jumps over the lazy dog"
@@ -30,21 +31,25 @@ fn test_case_and_punctuation_invariance() {
     let fp_upper = simhash_fingerprint(doc_upper)
     let fp_punct = simhash_fingerprint(doc_punct)
 
+    // Pinned 64-bit integer constant: 0x593b03225397e4ae == 6429736338967749806
+    check("fp_lower exact value 0x593b03225397e4ae", fp_lower == 6429736338967749806)
+    check("lower vs upper exact match", fp_lower == fp_upper)
+    check("lower vs punct exact match", fp_lower == fp_punct)
     check("lower vs upper hamming == 0", simhash_hamming(fp_lower, fp_upper) == 0)
     check("lower vs upper similarity == 1.0", simhash_similarity(fp_lower, fp_upper) == 1.0)
-    check("lower vs punct hamming == 0", simhash_hamming(fp_lower, fp_punct) == 0)
     check("self distance is 0", simhash_hamming(fp_lower, fp_lower) == 0)
 }
 
+@test
 fn test_hamming_and_similarity_math() {
     print("-- hamming and similarity properties --")
-    let a = 0
-    let b = 0
-    check("hamming identical integers 0", simhash_hamming(a, b) == 0)
+    check("hamming identical integers 0", simhash_hamming(0, 0) == 0)
 
-    // Single bit flip
-    let bit1 = 1
-    check("hamming 1 bit difference", simhash_hamming(0, bit1) == 1)
+    // Single bit flip: 1 bit difference
+    check("hamming 1 bit difference", simhash_hamming(0, 1) == 1)
+
+    // Two bits flip
+    check("hamming 2 bits difference", simhash_hamming(0, 3) == 2)
 
     // Similarity calculation test
     // 0 bits flipped -> 1.0
@@ -57,42 +62,70 @@ fn test_hamming_and_similarity_math() {
     check("symmetry similarity(a, b) == similarity(b, a)", simhash_similarity(fp1, fp2) == simhash_similarity(fp2, fp1))
 }
 
+@test
 fn test_near_duplicate_detection() {
     print("-- near-duplicate thresholds --")
     let base = "system architecture design for distributed microservices"
     let minor = "system architecture design for distributed microservice"
     let diff = "recipe for authentic neapolitan pizza with fresh basil"
 
-    // Identical text should always be near-duplicate with threshold >= 0
-    check("exact text near_duplicate threshold 0", simhash_near_duplicate(base, base, 0))
-
-    // Minor typo or inflection change should fall within threshold <= 4
+    // Pinned exact fingerprints:
+    // fp_base:  0x56dabe5bf8c3f3b7 == 6258523934409618359
+    // fp_minor: 0x76fbfed178c3f2f7 == 8573726491257598711
+    // fp_diff:  0xa2eb8cc8d893b5fd == 11739631647926236669
     let fp_base = simhash_fingerprint(base)
     let fp_minor = simhash_fingerprint(minor)
-    let dist = simhash_hamming(fp_base, fp_minor)
-    check("minor revision distance <= 4", dist <= 4)
-    check("minor revision near_duplicate true", simhash_near_duplicate(base, minor, 4))
-
-    // Completely unrelated text should have high Hamming distance
     let fp_diff = simhash_fingerprint(diff)
+
+    check("fp_base exact constant", fp_base == 6258523934409618359)
+    check("fp_minor exact constant", fp_minor == 8573726491257598711)
+    check("fp_diff exact constant", fp_diff == 11739631647926236669)
+
+    // Exact pinned Hamming distances:
+    // base vs minor: exactly 10 bits flipped out of 64
+    let dist_minor = simhash_hamming(fp_base, fp_minor)
+    check("minor revision distance exactly 10", dist_minor == 10)
+    check("minor revision similarity exactly 0.84375", simhash_similarity(fp_base, fp_minor) == 0.84375)
+
+    // base vs diff: exactly 24 bits flipped out of 64
     let dist_diff = simhash_hamming(fp_base, fp_diff)
-    check("unrelated text distance > 10", dist_diff > 10)
-    check("unrelated text near_duplicate false", simhash_near_duplicate(base, diff, 4) == false)
+    check("unrelated text distance exactly 24", dist_diff == 24)
+    check("unrelated text similarity exactly 0.625", simhash_similarity(fp_base, fp_diff) == 0.625)
+
+    // Threshold gate checks
+    check("minor revision threshold 10 true", simhash_near_duplicate(base, minor, 10) == true)
+    check("minor revision threshold 9 false", simhash_near_duplicate(base, minor, 9) == false)
+    check("unrelated text threshold 20 false", simhash_near_duplicate(base, diff, 20) == false)
+    check("unrelated text threshold 24 true", simhash_near_duplicate(base, diff, 24) == true)
 }
 
+@test
 fn test_batch_fingerprinting() {
     print("-- batch fingerprinting --")
     let docs = [
-        "first document text",
-        "second document text",
-        "third document text"
+        "Lateralus Language version 3.2 release notes and compiler improvements",
+        "LATERALUS Language version 3.2 release notes and compiler improvements!",
+        "Lateralus Language version 3.2 release notes and runtime improvements",
+        "Baking authentic sourdough bread with active starter and high hydration"
     ]
     let fps = simhash_fingerprint_all(docs)
 
-    check("batch length matches docs", len(fps) == 3)
-    check("batch index 0 matches individual call", fps[0] == simhash_fingerprint(docs[0]))
-    check("batch index 1 matches individual call", fps[1] == simhash_fingerprint(docs[1]))
-    check("batch index 2 matches individual call", fps[2] == simhash_fingerprint(docs[2]))
+    // Exact batch constants pinned from execution:
+    // doc 0: 0x3a93e462d3b31be2 == 4220968388885945314
+    // doc 1: 0x3a93e462d3b31be2 == 4220968388885945314
+    // doc 2: 0xba93c562cfd31bc2 == 13444306340815248322
+    // doc 3: 0xa718dd0ec5c739aa == 12040616659292469674
+    check("batch length matches docs", len(fps) == 4)
+    check("batch 0 exact pinned value", fps[0] == 4220968388885945314)
+    check("batch 1 exact match with batch 0", fps[1] == fps[0])
+    check("batch 2 exact pinned value", fps[2] == 13444306340815248322)
+    check("batch 3 exact pinned value", fps[3] == 12040616659292469674)
+
+    // Exact pairwise Hamming distances
+    check("batch doc 0 vs 2 distance exactly 9", simhash_hamming(fps[0], fps[2]) == 9)
+    check("batch doc 0 vs 2 similarity exactly 0.859375", simhash_similarity(fps[0], fps[2]) == 0.859375)
+    check("batch doc 0 vs 3 distance exactly 28", simhash_hamming(fps[0], fps[3]) == 28)
+    check("batch doc 0 vs 3 similarity exactly 0.5625", simhash_similarity(fps[0], fps[3]) == 0.5625)
 }
 
 fn main() {
