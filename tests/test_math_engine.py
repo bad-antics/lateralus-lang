@@ -69,6 +69,20 @@ class TestMatrix:
         assert m[0][0] == 1
         assert m[1][1] == 4
 
+    def test_from_flat_validation(self):
+        # Valid matching dimensions
+        m = Matrix.from_flat([10, 20], rows=1, cols=2)
+        assert m.shape == (1, 2)
+        assert m.to_list() == [[10, 20]]
+
+        # Excess values must raise ValueError
+        with pytest.raises(ValueError, match="expected 2 values for shape"):
+            Matrix.from_flat([10, 20, 30], rows=1, cols=2)
+
+        # Insufficient values must raise ValueError
+        with pytest.raises(ValueError, match="expected 2 values for shape"):
+            Matrix.from_flat([10], rows=1, cols=2)
+
     def test_identity(self):
         I = Matrix.identity(3)
         assert I[0][0] == 1
