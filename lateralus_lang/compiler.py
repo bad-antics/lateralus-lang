@@ -103,6 +103,28 @@ class CompileResult:
                 f"({self.elapsed_ms:.1f}ms  "
                 f"{len(self.errors)} error(s)  {len(self.warnings)} warning(s))")
 
+    @property
+    def code(self) -> Optional[str]:
+        """Return the generated source code for the selected target, if any.
+
+        For Python, C, JavaScript, WASM, LLVM, and x86_64 targets this returns the
+        corresponding source string. For other targets (e.g., BYTECODE) it
+        returns ``None``.
+        """
+        if self.target == Target.PYTHON:
+            return self.python_src
+        if self.target == Target.C:
+            return self.c_src
+        if self.target == Target.JAVASCRIPT:
+            return self.js_src
+        if self.target == Target.WASM:
+            return self.wasm_src
+        if self.target == Target.LLVM:
+            return self.llvm_src
+        if self.target == Target.X86_64:
+            return self.x86_src
+        return None
+
 
 # -----------------------------------------------------------------------------
 # Compiler
