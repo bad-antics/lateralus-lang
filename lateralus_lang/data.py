@@ -104,14 +104,16 @@ def set_intersection(a: dict, b: dict) -> dict:
 # --- Priority Queue (min-heap) ---------------------------------------
 
 def pq_new() -> dict:
-    return {"items": [], "size": 0}
+    return {"items": [], "size": 0, "next_order": 0}
 
 
 def pq_push(pq: dict, value, priority: float) -> dict:
     import heapq
     items = list(pq["items"])
-    heapq.heappush(items, (priority, value))
+    order = pq.get("next_order", 0)
+    heapq.heappush(items, (priority, order, value))
     pq["items"] = items
+    pq["next_order"] = order + 1
     pq["size"] += 1
     return pq
 
@@ -121,7 +123,7 @@ def pq_pop(pq: dict) -> dict:
     if pq["size"] == 0:
         raise RuntimeError("Priority queue is empty")
     items = list(pq["items"])
-    priority, value = heapq.heappop(items)
+    priority, _, value = heapq.heappop(items)
     pq["items"] = items
     pq["size"] -= 1
     return {"pq": pq, "value": value, "priority": priority}
@@ -130,7 +132,7 @@ def pq_pop(pq: dict) -> dict:
 def pq_peek(pq: dict):
     if pq["size"] == 0:
         raise RuntimeError("Priority queue is empty")
-    return pq["items"][0][1]
+    return pq["items"][0][2]
 
 
 def pq_is_empty(pq: dict) -> bool:
