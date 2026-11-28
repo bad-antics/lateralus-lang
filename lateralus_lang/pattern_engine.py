@@ -179,12 +179,12 @@ def match_pattern(value: Any, pattern: Pattern) -> MatchResult:
     # --- Literal ----------------------------------------------------------
     if kind == PatternKind.LITERAL:
         if value == pattern.value and type(value) is type(pattern.value):
-            return MATCH_SUCCESS
+            return MatchResult(True)
         return MATCH_FAILURE
 
     # --- Wildcard ---------------------------------------------------------
     if kind == PatternKind.WILDCARD:
-        return MATCH_SUCCESS
+        return MatchResult(True)
 
     # --- Binding ----------------------------------------------------------
     if kind == PatternKind.BINDING:
@@ -223,7 +223,7 @@ def match_pattern(value: Any, pattern: Pattern) -> MatchResult:
             return MATCH_FAILURE
         if not inclusive and value >= end:
             return MATCH_FAILURE
-        return MATCH_SUCCESS
+        return MatchResult(True)
 
     # --- Struct pattern ---------------------------------------------------
     if kind == PatternKind.STRUCT:
