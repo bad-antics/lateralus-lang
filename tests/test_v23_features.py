@@ -383,6 +383,20 @@ class TestStdlibCompilation:
         r = Compiler().compile_source(src, target=Target.PYTHON, filename=f"{module}.ltl")
         assert r.ok, f"stdlib/{module}.ltl failed: {r.errors[0].message if r.errors else '?'}"
 
+    def test_semver_requires_exactly_three_core_components(self):
+        src = (ROOT / "stdlib" / "semver.ltl").read_text()
+        r = Compiler().compile_source(src, target=Target.PYTHON, filename="semver.ltl")
+        assert r.ok, f"semver.ltl failed: {r.errors}"
+
+        namespace = {
+            "index_of": lambda text, sub: text.find(sub),
+            "split": lambda text, separator: text.split(separator),
+        }
+        exec(r.python_src, namespace)
+        assert namespace["is_valid"]("1.2.3") is True
+        assert namespace["is_valid"]("1.2.3.4") is False
+        assert namespace["is_valid"]("1.2.3+build.4") is True
+
 
 # =======================================================================
 # EXAMPLES: New v2.3 Examples Compile
