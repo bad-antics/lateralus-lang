@@ -245,6 +245,15 @@ class TestDistributions:
         # P(X=0) when λ=1 should be e^(-1)
         assert abs(poisson_pmf(0, 1) - math.exp(-1)) < 1e-10
 
+    def test_poisson_pmf_large_mean(self):
+        # Regression for #226: prevent float overflow for large mean / k
+        assert abs(poisson_pmf(200, 200.0) - 0.02819772768592082) < 1e-12
+        assert abs(poisson_pmf(150, 150.0) - 0.03255540945683655) < 1e-12
+        assert abs(poisson_pmf(10, 10.0) - 0.1251100357211333) < 1e-12
+        assert poisson_pmf(-1, 5.0) == 0.0
+        assert poisson_pmf(0, 0.0) == 1.0
+        assert poisson_pmf(5, 0.0) == 0.0
+
     def test_exponential_pdf(self):
         assert exponential_pdf(0, 1) == 1.0
         assert exponential_pdf(-1, 1) == 0.0
