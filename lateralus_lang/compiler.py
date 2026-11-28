@@ -353,10 +353,22 @@ class Compiler:
                                          delete=False, encoding="utf-8") as f:
             f.write(src)
             tmp_path = f.name
+        # Ensure the transpiled program can import the lateralus_lang runtime
+        # even when this package is not installed site-wide (e.g. running from
+        # a source checkout). The temp file lives outside the repo, so we
+        # propagate the package root via PYTHONPATH to the child interpreter.
+        import os as _os
+        pkg_root = str(pathlib.Path(__file__).resolve().parent.parent)
+        child_env = dict(_os.environ)
+        existing = child_env.get("PYTHONPATH", "")
+        child_env["PYTHONPATH"] = (
+            pkg_root + (_os.pathsep + existing if existing else "")
+        )
         try:
             proc = _sp.run(
                 [_sys.executable, tmp_path],
                 timeout=60,
+                env=child_env,
             )
             result.exit_code = proc.returncode
             if proc.returncode != 0:
