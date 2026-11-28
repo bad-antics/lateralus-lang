@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Radix Sort Without Comparisons — Lateralus</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "Radix Sort Without Comparisons: Counting Bytes, Not Pairs"
+author: celaltokmak61
+date: 2026-11-27
+abstract: A guide to stdlib/radix_sort.ltl — counting sort, LSD u32/u64 radix passes, the signed sign-bit flip, MSD string sorting, and pinned vectors including empty input and integer limits.
+---
+
+## The pitch
+
+Comparison sorts cannot do better than O(n log n). If the keys are integers with a bounded width, you can sort by **inspecting bytes** instead of comparing pairs. `stdlib/radix_sort.ltl` ships four non-comparison sorts: `counting_sort`, `radix_sort_u32`, `radix_sort_u64`, and `radix_sort_i32`, plus an MSD string sorter.
+
+```lateralus
+import stdlib.radix_sort
+
+let xs = [170, 45, 75, 90, 2, 24, 2]
+stdlib.radix_sort.radix_sort_u32(xs)
+```
+
+## Counting sort: the small-range case
+
+`counting_sort(xs, k)` allocates `k+1` counters, tallies each value, then walks the counters in order. It is O(n+k), so it wins when `k` is small and loses badly when `k` is huge.
+
+Pinned vector:
+
+```lateralus
+@test
+fn counting_sort_handles_duplicates() -> bool {
+    return stdlib.radix_sort.counting_sort([4, 2, 1, 2, 4, 0], 4) == [0, 1, 2, 2, 4, 4]
+}
+```
+
+## LSD radix: four or eight stable passes
+
+`radix_pass(xs, shift)` buckets values by `(v >> shift) & 0xff` into 256 buckets and concatenates the buckets in order. Running it at shifts 0, 8, 16, and 24 sorts u32 keys; adding shifts up to 56 sorts u64 keys.
+
+The passes must be stable. Because a bucket append preserves input order, earlier (less significant) passes remain sorted inside each later bucket.
+
+Pinned vector:
+
+```lateralus
+@test
+fn radix_sort_u32_orders_full_range() -> bool {
+    let xs = [4294967295, 0, 256, 255, 1, 16777216, 65536]
+    let expected = [0, 1, 255, 256, 65536, 16777216, 4294967295]
+    return stdlib.radix_sort.radix_sort_u32(xs) == expected
+}
+```
+
+## Signed integers: flip the sign bit
+
+u32 radix puts `0x80000000..0xffffffff` after `0..0x7fffffff`. Signed order needs the opposite. `radix_sort_i32` XORs every value with `0x80000000`, sorts as unsigned, then XORs back and sign-extends negatives.
+
+Pinned vectors:
+
+```lateralus
+@test
+fn radix_sort_i32_orders_negatives() -> bool {
+    let xs = [5, -1, 0, -2147483648, 2147483647, 7]
+    let expected = [-2147483648, -1, 0, 5, 7, 2147483647]
+    return stdlib.radix_sort.radix_sort_i32(xs) == expected
+}
+
+@test
+fn radix_sort_u32_accepts_empty_input() -> bool {
+    return stdlib.radix_sort.radix_sort_u32([]) == []
+}
+```
+
+## MSD strings
+
+`radix_sort_str` buckets by character byte at increasing depth. Strings that end at the current depth go into bucket 0, so shorter prefixes come first naturally.
+
+Pinned vector:
+
+```lateralus
+@test
+fn radix_sort_str_orders_prefixes() -> bool {
+    let xs = ["banana", "app", "apple", "cat", ""]
+    let expected = ["", "app", "apple", "banana", "cat"]
+    return stdlib.radix_sort.radix_sort_str(xs) == expected
+}
+```
+
+## Runnable example
+
+Save as `examples/radix_sort_tutorial.ltl` and run `lateralus test examples/radix_sort_tutorial.ltl`.
+
+```lateralus
+import stdlib.radix_sort
+
+@test
+fn counting_sort_handles_duplicates() -> bool {
+    return stdlib.radix_sort.counting_sort([4, 2, 1, 2, 4, 0], 4) == [0, 1, 2, 2, 4, 4]
+}
+
+@test
+fn radix_sort_u32_orders_full_range() -> bool {
+    let xs = [4294967295, 0, 256, 255, 1, 16777216, 65536]
+    return stdlib.radix_sort.radix_sort_u32(xs) == [0, 1, 255, 256, 65536, 16777216, 4294967295]
+}
+
+@test
+fn radix_sort_i32_orders_negatives() -> bool {
+    let xs = [5, -1, 0, -2147483648, 2147483647, 7]
+    return stdlib.radix_sort.radix_sort_i32(xs) == [-2147483648, -1, 0, 5, 7, 2147483647]
+}
+
+@test
+fn radix_sort_u32_accepts_empty_input() -> bool {
+    return stdlib.radix_sort.radix_sort_u32([]) == []
+}
+
+@test
+fn radix_sort_str_orders_prefixes() -> bool {
+    let xs = ["banana", "app", "apple", "cat", ""]
+    return stdlib.radix_sort.radix_sort_str(xs) == ["", "app", "apple", "banana", "cat"]
+}
+```
+
+Expected output:
+
+```
+5/5 tests passed
+```
+
+## Choosing a sort
+
+- Small known range: `counting_sort`.
+- u32 or u64 bulk data: `radix_sort_u32` / `radix_sort_u64`.
+- Signed i32 bulk data: `radix_sort_i32`.
+- Strings with shared prefixes: `radix_sort_str`.
+- Mixed or record data: use `stdlib/sort` instead.
+
+Radix sorts trade memory for speed. They allocate 256 buckets per pass, so they are at their best when the key width is fixed and the input is large.
+  </script>
+</body>
+</html>
