@@ -130,6 +130,16 @@ class TestMatrix:
         with pytest.raises(ValueError, match="shape"):
             a + b
 
+    def test_from_flat_validates_dimensions_and_data_length(self):
+        assert Matrix.from_flat([1, 2, 3, 4], 2, 2).data == [[1, 2], [3, 4]]
+
+        with pytest.raises(ValueError, match="Data length"):
+            Matrix.from_flat([1, 2, 3, 4, 99], 2, 2)
+        with pytest.raises(ValueError, match="Data length"):
+            Matrix.from_flat([1, 2], 1, 3)
+        with pytest.raises(ValueError, match="dimensions"):
+            Matrix.from_flat([1, 2, 3], 1, -1)
+
 
 # -------------------------------------------------------------------------
 # Vector
