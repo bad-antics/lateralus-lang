@@ -1,0 +1,75 @@
+// ===================================================================
+// examples/influx_line_tutorial.ltl
+// Lateralus companion tutorial: InfluxDB Line Protocol Serialization
+// ===================================================================
+
+import influx_line
+
+fn main() {
+    print("=== Lateralus stdlib/influx_line Tutorial ===")
+
+    // 1. Telemetry setup
+    let measurement = "cpu_metrics"
+    let tags = [
+        ["cluster", "eu-central-1"],
+        ["host", "worker-042"],
+        ["role", "compute"]
+    ]
+
+    // 2. Field formatting with proper InfluxDB line protocol types
+    let fields = [
+        ["usage_user", influx_line.field_float("42.85")],
+        ["usage_system", influx_line.field_float("14.12")],
+        ["processes", influx_line.field_int(128)],
+        ["active", influx_line.field_bool(true)],
+        ["description", influx_line.field_string("Primary load cluster [alpha]")]
+    ]
+
+    // 3. Serializing with nanosecond timestamp (e.g., 2026-11-22T16:00:00Z)
+    let timestamp_ns = 1795363200000000000
+    let serialized_line = influx_line.line(measurement, tags, fields, timestamp_ns)
+
+    print("Emitted Line Protocol record:")
+    print(serialized_line)
+
+    // 4. Parsing the line protocol record back into structured data
+    let parsed = influx_line.parse_line(serialized_line)
+    if parsed == nil {
+        print("ERROR: Failed to parse line protocol record!")
+        return
+    }
+
+    print("\nParsed Measurement: " + parsed["measurement"])
+    print("Parsed Tags Count: " + str(len(parsed["tags"])))
+    let i = 0
+    while i < len(parsed["tags"]) {
+        let tag = parsed["tags"][i]
+        print("  - " + tag[0] + " = " + tag[1])
+        i = i + 1
+    }
+
+    print("Parsed Fields Count: " + str(len(parsed["fields"])))
+    let j = 0
+    while j < len(parsed["fields"]) {
+        let field = parsed["fields"][j]
+        print("  - " + field[0] + " = " + field[1])
+        j = j + 1
+    }
+
+    print("Parsed Timestamp (ns): " + str(parsed["timestamp"]))
+
+    // 5. Handling Escaping edge cases (spaces in measurement, commas in tags, quotes in strings)
+    let complex_meas = "sensor data, raw"
+    let complex_tags = [["zone", "room A=1, floor 2"]]
+    let complex_fields = [["note", influx_line.field_string("Temperature \"normal\" \\ optimal")]]
+    let escaped_record = influx_line.line(complex_meas, complex_tags, complex_fields, 0)
+
+    print("\nEscaped Line (no timestamp):")
+    print(escaped_record)
+
+    let parsed_complex = influx_line.parse_line(escaped_record)
+    print("Parsed escaped measurement: " + parsed_complex["measurement"])
+    print("Parsed escaped zone tag: " + parsed_complex["tags"][0][1])
+
+    print("\n[SUCCESS] stdlib/influx_line tutorial demo finished cleanly.")
+}
