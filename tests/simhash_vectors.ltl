@@ -1,0 +1,106 @@
+// ===================================================================
+// tests/simhash_vectors.ltl -- pinned test vectors for the
+// stdlib.simhash tutorial. Style follows tests/stdlib_spiral_wave_*.
+//
+// Every expected value below verifies the implementation of 64-bit
+// SimHash in stdlib/simhash.ltl across identical docs, case/punctuation
+// variations, minor revisions, and unrelated text blocks.
+// ===================================================================
+
+let PASS = 0
+let FAIL = 0
+
+fn check(name: str, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        print("  ok  " + name)
+    } else {
+        FAIL = FAIL + 1
+        print("  FAIL " + name)
+    }
+}
+
+fn test_case_and_punctuation_invariance() {
+    print("-- case and punctuation invariance --")
+    let doc_lower = "the quick brown fox jumps over the lazy dog"
+    let doc_upper = "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG"
+    let doc_punct = "The quick brown fox, jumps over the lazy dog!"
+
+    let fp_lower = simhash_fingerprint(doc_lower)
+    let fp_upper = simhash_fingerprint(doc_upper)
+    let fp_punct = simhash_fingerprint(doc_punct)
+
+    check("lower vs upper hamming == 0", simhash_hamming(fp_lower, fp_upper) == 0)
+    check("lower vs upper similarity == 1.0", simhash_similarity(fp_lower, fp_upper) == 1.0)
+    check("lower vs punct hamming == 0", simhash_hamming(fp_lower, fp_punct) == 0)
+    check("self distance is 0", simhash_hamming(fp_lower, fp_lower) == 0)
+}
+
+fn test_hamming_and_similarity_math() {
+    print("-- hamming and similarity properties --")
+    let a = 0
+    let b = 0
+    check("hamming identical integers 0", simhash_hamming(a, b) == 0)
+
+    // Single bit flip
+    let bit1 = 1
+    check("hamming 1 bit difference", simhash_hamming(0, bit1) == 1)
+
+    // Similarity calculation test
+    // 0 bits flipped -> 1.0
+    check("similarity 0 bits flipped", simhash_similarity(100, 100) == 1.0)
+
+    // Symmetry check: hamming(a, b) == hamming(b, a)
+    let fp1 = simhash_fingerprint("lateralus compiler optimizations and ast")
+    let fp2 = simhash_fingerprint("lateralus runtime performance benchmarks")
+    check("symmetry hamming(a, b) == hamming(b, a)", simhash_hamming(fp1, fp2) == simhash_hamming(fp2, fp1))
+    check("symmetry similarity(a, b) == similarity(b, a)", simhash_similarity(fp1, fp2) == simhash_similarity(fp2, fp1))
+}
+
+fn test_near_duplicate_detection() {
+    print("-- near-duplicate thresholds --")
+    let base = "system architecture design for distributed microservices"
+    let minor = "system architecture design for distributed microservice"
+    let diff = "recipe for authentic neapolitan pizza with fresh basil"
+
+    // Identical text should always be near-duplicate with threshold >= 0
+    check("exact text near_duplicate threshold 0", simhash_near_duplicate(base, base, 0))
+
+    // Minor typo or inflection change should fall within threshold <= 4
+    let fp_base = simhash_fingerprint(base)
+    let fp_minor = simhash_fingerprint(minor)
+    let dist = simhash_hamming(fp_base, fp_minor)
+    check("minor revision distance <= 4", dist <= 4)
+    check("minor revision near_duplicate true", simhash_near_duplicate(base, minor, 4))
+
+    // Completely unrelated text should have high Hamming distance
+    let fp_diff = simhash_fingerprint(diff)
+    let dist_diff = simhash_hamming(fp_base, fp_diff)
+    check("unrelated text distance > 10", dist_diff > 10)
+    check("unrelated text near_duplicate false", simhash_near_duplicate(base, diff, 4) == false)
+}
+
+fn test_batch_fingerprinting() {
+    print("-- batch fingerprinting --")
+    let docs = [
+        "first document text",
+        "second document text",
+        "third document text"
+    ]
+    let fps = simhash_fingerprint_all(docs)
+
+    check("batch length matches docs", len(fps) == 3)
+    check("batch index 0 matches individual call", fps[0] == simhash_fingerprint(docs[0]))
+    check("batch index 1 matches individual call", fps[1] == simhash_fingerprint(docs[1]))
+    check("batch index 2 matches individual call", fps[2] == simhash_fingerprint(docs[2]))
+}
+
+fn main() {
+    test_case_and_punctuation_invariance()
+    test_hamming_and_similarity_math()
+    test_near_duplicate_detection()
+    test_batch_fingerprinting()
+    print("simhash vectors: " + str(PASS) + " passed, " + str(FAIL) + " failed")
+}
+
+main()

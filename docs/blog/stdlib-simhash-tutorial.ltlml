@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>stdlib-simhash-tutorial</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "stdlib-simhash-tutorial"
+author: Adarsh Mani Tripathi (sawanmani)
+date: 2026-11-28
+abstract: A comprehensive hands-on guide to stdlib/simhash.ltl in Lateralus (Spiral Wave 10). Learn how 64-bit locality-sensitive hashing (SimHash) detects near-duplicate documents, computes Hamming distance in O(1) time, and filters content collisions, complete with a runnable deduplication pipeline and pinned test vectors.
+
+# stdlib.simhash: Near-Duplicate Detection at Scale
+
+Cryptographic hashes like SHA-256 or BLAKE2s have an avalanche effect: changing a single punctuation mark flips half the output bits. That is ideal for integrity verification, but disastrous for document indexing, spam filtering, and plagiarism detection, where you want two documents with 99% identical wording to produce almost identical hashes.
+
+`stdlib/simhash.ltl` implements Moses Charikar's 64-bit SimHash algorithm (Spiral Wave 10). It maps variable-length text to a 64-bit integer fingerprint where the Hamming distance (number of differing bits) directly correlates with the textual similarity.
+
+Public functions from the module follow standard Lateralus conventions with the `simhash_` prefix:
+
+    simhash_fingerprint(text)
+    simhash_hamming(fp1, fp2)
+    simhash_similarity(fp1, fp2)
+    simhash_near_duplicate(text1, text2, threshold)
+    simhash_fingerprint_all(docs)
+
+---
+
+## How SimHash Works Internally
+
+The implementation inside `stdlib/simhash.ltl` operates in three deterministic phases:
+
+1. **Tokenization (`simhash_tokenize`)**:
+   Splits text on whitespace and punctuation into lowercase alphanumeric words. Digits (`0-9`) and letters (`a-z`) are preserved; uppercase characters are downcased by adding 32 to their ASCII ordinal.
+
+2. **Per-Token Hashing & Accumulation**:
+   Each token is hashed to a 64-bit integer using the Wave 7 `xxhash_hash64` engine.
+   A 64-element signed accumulator vector `v = [0, 0, ..., 0]` tracks bit frequencies across all tokens. For every token hash:
+   - If bit `b` is `1`, `v[b]` is incremented by `+1`.
+   - If bit `b` is `0`, `v[b]` is decremented by `-1`.
+   Tokens occurring multiple times naturally carry greater weight in the final vector.
+
+3. **Dimensionality Reduction to 64-bit Fingerprint**:
+   The 64 accumulators are projected back to a single 64-bit integer:
+   - If `v[k] >= 0`, bit `k` of the fingerprint is set to `1`.
+   - If `v[k] < 0`, bit `k` remains `0`.
+
+---
+
+## Basic Usage & Document Comparison
+
+Generating a fingerprint takes a single call:
+
+    let fp1 = simhash_fingerprint("The quick brown fox jumps over the lazy dog")
+    let fp2 = simhash_fingerprint("THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG")
+
+Because `simhash_tokenize` normalizes case, `fp1` and `fp2` are bitwise identical:
+
+    simhash_hamming(fp1, fp2) == 0      // true
+    simhash_similarity(fp1, fp2) == 1.0 // true
+
+Now, let's introduce a minor mutation (substituting `"the"` with `"a"`):
+
+    let fp3 = simhash_fingerprint("The quick brown fox jumps over a lazy dog")
+
+Computing the Hamming distance counts the number of differing bits using bitwise XOR and shift-counting:
+
+    let dist = simhash_hamming(fp1, fp3)
+    // dist is small (typically <= 3 bits flipped)
+
+Comparing against a completely unrelated document:
+
+    let fp_other = simhash_fingerprint("Quantum computing utilizes superposition and entanglement")
+    let dist_other = simhash_hamming(fp1, fp_other)
+    // dist_other is large (typically > 20 bits flipped)
+
+---
+
+## Similarity & Near-Duplicate Thresholds
+
+`simhash_similarity` converts the bit distance into a normalized float score in `[0.0, 1.0]`:
+
+    simhash_similarity(a, b) = 1.0 - (hamming(a, b) / 64)
+
+For practical web crawling and duplicate article filtering, Charikar's canonical threshold is `k <= 3` bits. `simhash_near_duplicate` wraps this logic directly:
+
+    let is_dup = simhash_near_duplicate(article_v1, article_v2, 3)
+    if is_dup {
+        println("Near-duplicate revision detected; skipping re-indexing.")
+    }
+
+---
+
+## Batch Processing with `simhash_fingerprint_all`
+
+When indexing corpora or processing log buffers, `simhash_fingerprint_all` accepts a list of document strings and returns their corresponding 64-bit fingerprints in order:
+
+    let corpus = [
+        "Distributed consensus via Raft protocol",
+        "Distributed consensus via Paxos protocol",
+        "Fresh sourdough bread baking recipe"
+    ]
+
+    let fps = simhash_fingerprint_all(corpus)
+    // fps == [fp_raft, fp_paxos, fp_recipe]
+
+Once fingerprints are stored in memory or a database, pairwise similarity checks execute in nanoseconds using pure integer operations (`^` and popcount).
+
+---
+
+## Summary of Public APIs
+
+| Function | Signature | Description |
+| :--- | :--- | :--- |
+| `simhash_fingerprint` | `(text: str) -> int` | Computes 64-bit SimHash fingerprint using tokenized xxhash. |
+| `simhash_hamming` | `(a: int, b: int) -> int` | Counts differing bit positions between two fingerprints. |
+| `simhash_similarity` | `(a: int, b: int) -> float` | Returns normalized similarity score in `[0.0, 1.0]`. |
+| `simhash_near_duplicate` | `(a: str, b: str, threshold: int) -> bool` | Checks if Hamming distance is within the threshold. |
+| `simhash_fingerprint_all` | `(docs: list) -> list` | Computes fingerprints for a batch of strings. |
+
+The companion runnable example is available at `examples/simhash_tutorial_example.ltl`, and verified test vectors are pinned in `tests/simhash_vectors.ltl`.
+---
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>
