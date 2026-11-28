@@ -172,3 +172,26 @@ class TestCompileResult:
     def test_result_error_list_empty_on_success(self):
         r = check("fn f() { }")
         assert r.errors == [] or all(e.severity.value == "warning" for e in r.errors)
+
+
+class TestBuiltinCorrelation:
+    def test_correlation_small_scale_and_zero_variance(self):
+        src = """
+fn test_corr_small() -> float {
+    return correlation([0.0, 0.00000000000001], [0.0, 0.00000000000001])
+}
+fn test_corr_normal() -> float {
+    return correlation([0.0, 1.0], [0.0, 1.0])
+}
+fn test_corr_zero_var() -> float {
+    return correlation([2.0, 2.0], [5.0, 5.0])
+}
+"""
+        r = check(src, target=Target.PYTHON)
+        assert r.ok
+        ns = {}
+        exec(r.python_src, ns)
+        assert ns["test_corr_small"]() == pytest.approx(1.0)
+        assert ns["test_corr_normal"]() == pytest.approx(1.0)
+        assert ns["test_corr_zero_var"]() == pytest.approx(0.0)
+
