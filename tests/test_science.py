@@ -16,6 +16,7 @@ from lateralus_lang.science import (
     Quantity,
     binomial_pmf,
     convolve,
+    cubic_spline,
     euler_step,
     exponential_pdf,
     fft,
@@ -259,6 +260,33 @@ class TestDistributions:
 
 
 class TestInterpolation:
+    def test_natural_cubic_spline(self):
+        points = [(0, 0), (1, 1), (2, 0)]
+        # Natural endpoints and symmetry give S(x) = (3*x - x**3) / 2 on [0, 1].
+        assert cubic_spline(points, 0.5) == pytest.approx(0.6875)
+        assert cubic_spline(points, 1.5) == pytest.approx(0.6875)
+
+    def test_natural_cubic_spline_uneven_intervals(self):
+        points = [(0, 0), (1, 1), (3, 2), (4, 0)]
+        # The interior second derivatives are 3/8 and -21/8.
+        for x, expected in [(0.5, 61 / 128), (2, 33 / 16), (3.5, 149 / 128)]:
+            assert cubic_spline(points, x) == pytest.approx(expected)
+        for x, y in points:
+            assert cubic_spline(points, x) == y
+
+    def test_cubic_spline_short_input_and_clamping(self):
+        assert cubic_spline([], 13) == 0
+        assert cubic_spline([(2, 4)], -1) == 4
+        points = [(2, 4), (4, 8)]
+        assert cubic_spline(points, 3) == 6
+        assert cubic_spline(points, 1) == 4
+        assert cubic_spline(points, 5) == 8
+
+    @pytest.mark.parametrize("points", [[(0, 1), (0, 2)], [(2, 0), (1, 1)]])
+    def test_cubic_spline_requires_increasing_knots(self, points):
+        with pytest.raises(ValueError, match="strictly increasing"):
+            cubic_spline(points, 0)
+
     def test_lagrange_exact(self):
         # Interpolate through known points of y = x^2
         points = [(0, 0), (1, 1), (2, 4)]
