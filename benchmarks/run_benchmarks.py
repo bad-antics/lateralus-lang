@@ -21,7 +21,7 @@ REF = ROOT / "reference"
 RESULTS = ROOT / "results"
 BUILD = ROOT / "build"
 
-BENCHMARKS = ["fib", "sieve", "mandelbrot", "binary_trees", "nbody"]
+BENCHMARKS = ["fib", "sieve", "mandelbrot", "binary_trees", "nbody", "terrain_grid"]
 
 
 def time_cmd(cmd: list[str], *, timeout: float = 120.0) -> tuple[float, str]:

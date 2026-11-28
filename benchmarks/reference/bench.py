@@ -90,12 +90,33 @@ def check_tree(node):
     return 1 + check_tree(node.left) + check_tree(node.right)
 
 
+def terrain_grid():
+    grids = (
+        ((1, 2, 4, 3), (2, 3, 5, 4), (0, 1, 2, 2), (1, 2, 3, 1)),
+        ((7, 6, 4), (6, 5, 3), (4, 3, 2), (2, 1, 0), (1, 2, 1)),
+    )
+    return "\n".join(
+        f"{height}\n{roughness}" for height, roughness in (survey(g) for g in grids)
+    )
+
+
+def survey(grid):
+    height = sum(map(sum, grid))
+    roughness = sum(
+        abs(grid[y][x] - grid[y][x + 1]) for y in range(len(grid)) for x in range(len(grid[0]) - 1)
+    ) + sum(
+        abs(grid[y][x] - grid[y + 1][x]) for y in range(len(grid) - 1) for x in range(len(grid[0]))
+    )
+    return height, roughness
+
+
 BENCHMARKS = {
     "fib": lambda: fib(32),
     "sieve": lambda: sieve(50000),
     "mandelbrot": lambda: mandelbrot(150, 100, 255),
     "nbody": lambda: nbody(5, 5000),
     "binary_trees": lambda: check_tree(make_tree(12)),
+    "terrain_grid": terrain_grid,
 }
 
 
