@@ -665,7 +665,11 @@ def median(data: List[float]) -> float:
     n = len(s)
     if n % 2 == 1:
         return s[n // 2]
-    return (s[n // 2 - 1] + s[n // 2]) / 2
+    left, right = s[n // 2 - 1], s[n // 2]
+    total = left + right
+    if math.isinf(total) and math.isfinite(left) and math.isfinite(right):
+        return left / 2 + right / 2
+    return total / 2
 
 
 def variance(data: List[float], population: bool = False) -> float:
