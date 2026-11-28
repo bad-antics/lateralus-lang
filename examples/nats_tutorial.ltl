@@ -1,0 +1,187 @@
+// ===================================================================
+// examples/nats_tutorial.ltl — Tutorial for stdlib/nats.ltl
+// -------------------------------------------------------------------
+// Self-contained, executable tutorial demonstrating:
+//   1. NATS text protocol framing and CRLF delimiter rules.
+//   2. Assembling PUB frames with and without reply subjects.
+//   3. Byte count calculation for multiline payloads containing CRLF.
+//   4. Parsing incoming server MSG frames.
+//
+// Inlines stdlib/nats core for standalone runtime portability.
+// ===================================================================
+
+fn char_at(s: str, i: int) -> str { return slice(s, i, i + 1) }
+fn index_of(s: str, sub: str) -> int { return s.find(sub) }
+fn try_int(s: str, d: int) -> int { return to_int(s) }
+
+fn starts_with(s: str, prefix: str) -> bool {
+    if len(s) < len(prefix) { return false }
+    return slice(s, 0, len(prefix)) == prefix
+}
+
+fn connect(opts_json: str) -> str {
+    return "CONNECT " + opts_json + "\r\n"
+}
+
+fn pub_msg(subject: str, reply: str, payload: str) -> str {
+    let hdr = "PUB " + subject
+    if reply != "" { hdr = hdr + " " + reply }
+    hdr = hdr + " " + str(len(payload)) + "\r\n"
+    return hdr + payload + "\r\n"
+}
+
+fn sub(subject: str, queue: str, sid: str) -> str {
+    let out = "SUB " + subject
+    if queue != "" { out = out + " " + queue }
+    out = out + " " + sid + "\r\n"
+    return out
+}
+
+fn unsub(sid: str, max: int) -> str {
+    let out = "UNSUB " + sid
+    if max > 0 { out = out + " " + str(max) }
+    return out + "\r\n"
+}
+
+fn ping() -> str { return "PING\r\n" }
+fn pong() -> str { return "PONG\r\n" }
+
+fn split_ws(s: str) -> list {
+    let out = []
+    let cur = ""
+    let i = 0
+    while i < len(s) {
+        let c = char_at(s, i)
+        if c == " " || c == "\t" {
+            if len(cur) > 0 { out = out + [cur]; cur = "" }
+        } else {
+            cur = cur + c
+        }
+        i = i + 1
+    }
+    if len(cur) > 0 { out = out + [cur] }
+    return out
+}
+
+fn parse_message(buf: str) -> map {
+    let n = len(buf)
+    let line_end = index_of(buf, "\r\n")
+    if line_end < 0 { return nil }
+    let line = slice(buf, 0, line_end)
+    let rest_start = line_end + 2
+    let m = {}
+    if starts_with(line, "PING") {
+        m["op"] = "PING"
+        m["consumed"] = rest_start
+        return m
+    }
+    if starts_with(line, "PONG") {
+        m["op"] = "PONG"
+        m["consumed"] = rest_start
+        return m
+    }
+    if starts_with(line, "+OK") {
+        m["op"] = "OK"
+        m["consumed"] = rest_start
+        return m
+    }
+    if starts_with(line, "-ERR") {
+        m["op"] = "ERR"
+        m["reason"] = slice(line, 5, len(line))
+        m["consumed"] = rest_start
+        return m
+    }
+    if starts_with(line, "INFO ") {
+        m["op"] = "INFO"
+        m["info"] = slice(line, 5, len(line))
+        m["consumed"] = rest_start
+        return m
+    }
+    if starts_with(line, "MSG ") {
+        let parts = split_ws(slice(line, 4, len(line)))
+        let np = len(parts)
+        if np < 3 { return nil }
+        let subject = parts[0]
+        let sid = parts[1]
+        let reply = ""
+        let nbytes = 0
+        if np == 3 {
+            nbytes = try_int(parts[2], 0)
+        } else {
+            reply = parts[2]
+            nbytes = try_int(parts[3], 0)
+        }
+        if n < rest_start + nbytes + 2 { return nil }
+        let payload = slice(buf, rest_start, rest_start + nbytes)
+        m["op"] = "MSG"
+        m["subject"] = subject
+        m["sid"] = sid
+        m["reply"] = reply
+        m["payload"] = payload
+        m["consumed"] = rest_start + nbytes + 2
+        return m
+    }
+    m["op"] = "UNKNOWN"
+    m["raw"] = line
+    m["consumed"] = rest_start
+    return m
+}
+
+fn main() {
+    print("=== LATERALUS STDLIB NATS TUTORIAL ===")
+
+    // 1. Frame a multiline publish with a reply subject (request-reply pattern)
+    // "ok\r\n42" has 2 chars ('ok') + 2 chars ('\r\n') + 2 chars ('42') = 6 bytes payload
+    let f1 = pub_msg("press.status", "_INBOX.press", "ok\r\n42")
+    print("STEP 1: Multiline PUB with reply inbox (6 payload bytes):")
+    print(f1)
+
+    // 2. Frame a multiline publish without a reply subject (broadcast telemetry)
+    // "temp=21.5\r\nhum=45" has 9 chars + 2 chars + 6 chars = 17 bytes payload
+    let f2 = pub_msg("telemetry.sensor", "", "temp=21.5\r\nhum=45")
+    print("STEP 2: Multiline PUB without reply (17 payload bytes):")
+    print(f2)
+
+    // 3. Frame an empty payload (heartbeat pulse)
+    // "" has 0 bytes payload
+    let f3 = pub_msg("heartbeat", "", "")
+    print("STEP 3: Empty PUB heartbeat (0 payload bytes):")
+    print(f3)
+
+    // 4. Frame a payload terminating in CRLF
+    // "log line\r\n" has 8 chars + 2 chars = 10 bytes payload
+    let f4 = pub_msg("logs.app", "", "log line\r\n")
+    print("STEP 4: PUB with trailing CRLF in payload (10 payload bytes):")
+    print(f4)
+
+    // 5. Parse a received MSG frame from the server
+    let incoming = "MSG press.status 1 _INBOX.press 6\r\nok\r\n42\r\n"
+    let parsed = parse_message(incoming)
+    print("STEP 5: Parsed incoming server message:")
+    print("  op=" + parsed["op"])
+    print("  subject=" + parsed["subject"])
+    print("  sid=" + parsed["sid"])
+    print("  reply=" + parsed["reply"])
+    print("  payload=" + parsed["payload"])
+    print("  consumed=" + str(parsed["consumed"]))
+
+    // 6. Request-Reply with UNSUB 7 1 (single-delivery subscription)
+    // The three-command transcript for a "send one reading, accept one reply" exchange:
+    //   SUB _INBOX.lesson 7     — subscribe with sid=7
+    //   UNSUB 7 1               — cancel after exactly 1 delivery
+    //   PUB lesson.press _INBOX.lesson 6\r\nok\r\n42\r\n — publish the reading
+    // With UNSUB 7 1 in place, only the FIRST reply reaches the requester.
+    let subscribe      = sub("_INBOX.lesson", "", "7")
+    let stop_after_one = unsub("7", 1)
+    let request        = pub_msg("lesson.press", "_INBOX.lesson", "ok\r\n42")
+    let transcript     = subscribe + stop_after_one + request
+    let expected_transcript = "SUB _INBOX.lesson 7\r\nUNSUB 7 1\r\nPUB lesson.press _INBOX.lesson 6\r\nok\r\n42\r\n"
+    assert_eq(transcript, expected_transcript, "one-reply request transcript")
+    print("STEP 6: Request-Reply with UNSUB 7 1 (single-delivery):")
+    print(transcript)
+
+    let transcript_ok = transcript == expected_transcript
+    print("PINNED_VECTORS: len1=" + str(len(f1)) + " len2=" + str(len(f2)) + " len3=" + str(len(f3)) + " len4=" + str(len(f4)) + " op=" + parsed["op"] + " transcript_ok=" + str(transcript_ok))
+}
+
+main()
