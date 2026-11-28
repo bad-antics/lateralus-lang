@@ -82,6 +82,12 @@ class TestPythonTranspiler:
         # pipeline should expand to a call
         assert "double" in r.python_src
 
+    def test_substr_builtin(self):
+        r = check('let s = substr("hello world", 0, 5)')
+        assert r.ok
+        assert "substr" in r.python_src
+        compile(r.python_src, "<test>", "exec")
+
     def test_try_recover_becomes_try_except(self):
         r = check("try { } recover IOError(e) { }")
         assert r.ok
