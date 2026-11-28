@@ -1,0 +1,81 @@
+// Runnable companion for docs/blog/stdlib-hkdf-tutorial.md
+// HKDF (RFC 5869) implemented on the working primitives.
+//
+// stdlib/hkdf.ltl documents extract / expand / derive_key / derive_many,
+// but its HMAC primitive (crypto_hmac) is not wired into the Python
+// backend, so the functions below mirror the module's semantics using
+// `crypto.hmac_sign` (via `import crypto`; bytes in, hex string out)
+// plus `hex_decode` / `hex_encode`.
+module examples.hkdf_tutorial
+
+import crypto
+
+fn hmac_bytes(key, msg) {
+    return hex_decode(crypto.hmac_sign(key, msg))
+}
+
+fn counter_byte(i) {
+    let digits = "0123456789abcdef"
+    return hex_decode(digits[idiv(i, 16)] + digits[i - idiv(i, 16) * 16])
+}
+
+/// Extract: PRK = HMAC(salt, ikm)
+fn extract(salt, ikm) {
+    return hmac_bytes(salt, ikm)
+}
+
+/// Expand: T(i) = HMAC(prk, T(i-1) || info || i); OKM = first `length` bytes.
+fn expand(prk, info, length) {
+    let n = idiv(length + 31, 32)
+    let okm = hex_decode("")
+    let t_prev = hex_decode("")
+    let i = 1
+    while i <= n {
+        let block_in = t_prev + info + counter_byte(i)
+        let t = hmac_bytes(prk, block_in)
+        okm = okm + t
+        t_prev = t
+        i = i + 1
+    }
+    return slice(okm, 0, length)
+}
+
+/// One-shot: extract + expand.
+fn derive_key(salt, ikm, info, length) {
+    let prk = extract(salt, ikm)
+    return expand(prk, info, length)
+}
+
+/// Derive `n_keys` keys of `key_len` bytes each, info = base_info || index.
+fn derive_many(prk, base_info, key_len, n_keys) {
+    let out = []
+    let i = 0
+    while i < n_keys {
+        let info = base_info + counter_byte(i)
+        out = out + [expand(prk, info, key_len)]
+        i = i + 1
+    }
+    return out
+}
+
+fn main() {
+    // RFC 5869 Test Case 1.
+    let salt1 = hex_decode("000102030405060708090a0b0c")
+    let ikm1 = hex_decode("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b")
+    let info1 = hex_decode("f0f1f2f3f4f5f6f7f8f9")
+    let prk1 = extract(salt1, ikm1)
+    let okm1 = derive_key(salt1, ikm1, info1, 42)
+    println("TC1 PRK: " + hex_encode(prk1))
+    println("TC1 OKM: " + hex_encode(okm1))
+
+    // RFC 5869 Test Case 2.
+    let salt2 = hex_decode("606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeaf")
+    let ikm2 = hex_decode("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f")
+    let info2 = hex_decode("b0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff")
+    let prk2 = extract(salt2, ikm2)
+    let okm2 = derive_key(salt2, ikm2, info2, 82)
+    println("TC2 PRK: " + hex_encode(prk2))
+    println("TC2 OKM: " + hex_encode(okm2))
+}
+
+main()
