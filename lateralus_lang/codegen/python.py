@@ -246,6 +246,12 @@ class PythonTranspiler(ASTVisitor):
         self._w += "def map_del(d, k): d.pop(k, None); return d"
         self._w += "def contains(collection, item): return (item in collection) if not isinstance(collection, dict) else (item in collection)"
         self._w += "def not_contains(collection, item): return item not in collection"
+        # Response classifiers operate on an existing response map and never
+        # perform network I/O, which keeps stdlib.http examples deterministic.
+        self._w += "def is_ok(resp): return 200 <= resp['status'] < 300"
+        self._w += "def is_redirect(resp): return 300 <= resp['status'] < 400"
+        self._w += "def is_client_error(resp): return 400 <= resp['status'] < 500"
+        self._w += "def is_server_error(resp): return 500 <= resp['status'] < 600"
         self._w += ""
         # Pipeline-friendly value-first builtins
         self._w += "# ── Pipeline-friendly & core builtins ───────────────────"
