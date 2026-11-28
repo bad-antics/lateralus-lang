@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sort Algorithms — Lateralus</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "Sort Algorithms: Choosing a Strategy from stdlib/sort"
+author: celaltokmak61
+date: 2026-11-27
+abstract: A practical tour of stdlib/sort.ltl — quicksort, mergesort, insertion sort, selection sort, heapsort, and the keyed helper — with pinned vectors you can run with lateralus test.
+---
+
+## The pitch
+
+Sorting looks solved until you need a stable order, a keyed order, or a nearly-sorted list. `stdlib/sort.ltl` puts five strategies behind one small API so you can change the strategy without rewriting the call site.
+
+```lateralus
+import sort
+
+let values = [3, 1, 2, 1]
+println(sort.sorted(values))
+println(sort.sorted_desc(values))
+```
+
+```
+[1, 1, 2, 3]
+[3, 2, 1]
+```
+
+## The API surface
+
+| Function | Use it when | Notes |
+|---|---|---|
+| `sorted(items)` | Default ascending order | Delegates to three-way quicksort |
+| `sorted_desc(items)` | Reverse order | Quicksort then `reverse` |
+| `sort_by_key(items, key_fn)` | Records, pairs, objects | Decorate-sort-undecorate |
+| `mergesort(items)` | Equal keys must keep input order | Stable |
+| `insertion_sort(items)` | Small or nearly-sorted lists | O(n^2) worst case |
+| `selection_sort(items)` | Minimal writes matter | O(n^2), few swaps |
+| `is_sorted(items)` | Cheap precondition check | O(n) |
+
+## Quicksort is the default for a reason
+
+`quicksort` picks the middle element as a pivot, partitions into `<`, `==`, and `>` buckets, and recurses. The three-way split is what makes duplicate-heavy input cheap: every `1` in `[3, 1, 2, 1]` lands in `mid` once instead of being recursively compared.
+
+Pinned vector:
+
+```lateralus
+@test
+fn sorted_handles_duplicates() -> bool {
+    return sort.sorted([3, 1, 2, 1]) == [1, 1, 2, 3]
+}
+```
+
+## Stability is a separate promise
+
+Quicksort may reorder equal keys. Mergesort does not. If you sort rows by a priority field and need same-priority rows to keep their original order, reach for `mergesort`.
+
+Pinned vector:
+
+```lateralus
+@test
+fn mergesort_is_stable() -> bool {
+    let rows = [[2, "b"], [1, "a"], [2, "c"]]
+    let expected = [[1, "a"], [2, "b"], [2, "c"]]
+    return sort.mergesort(rows) == expected
+}
+```
+
+## Sorting by a key
+
+`sort_by_key` decorates each item with its key, quicksorts the pairs, then strips the decoration. It is the right tool when the sort criterion is not the value itself.
+
+Pinned vector:
+
+```lateralus
+@test
+fn sort_by_key_orders_pairs() -> bool {
+    let rows = [[3, "c"], [1, "a"], [2, "b"]]
+    let got = sort.sort_by_key(rows, fn(row) { return row[0] })
+    return got == [[1, "a"], [2, "b"], [3, "c"]]
+}
+```
+
+## Nearly-sorted input
+
+`insertion_sort` walks the list once and inserts each element into the already-sorted prefix. On a list that is already sorted, each inner loop exits immediately.
+
+Pinned vector:
+
+```lateralus
+@test
+fn insertion_sort_keeps_nearly_sorted_input() -> bool {
+    return sort.insertion_sort([1, 2, 3, 5, 4]) == [1, 2, 3, 4, 5]
+}
+```
+
+## Checking before sorting
+
+`is_sorted` is useful as a guard: if the input is already ordered, skip the sort entirely.
+
+Pinned vectors:
+
+```lateralus
+@test
+fn is_sorted_accepts_duplicates() -> bool {
+    return sort.is_sorted([1, 2, 2, 3])
+}
+
+@test
+fn is_sorted_rejects_inversion() -> bool {
+    return sort.is_sorted([2, 1]) == false
+}
+```
+
+## Runnable example
+
+Save this as `examples/sort_tutorial.ltl` and run `lateralus test examples/sort_tutorial.ltl`.
+
+```lateralus
+import sort
+
+@test
+fn sorted_handles_duplicates() -> bool {
+    return sort.sorted([3, 1, 2, 1]) == [1, 1, 2, 3]
+}
+
+@test
+fn sorted_desc_reverses() -> bool {
+    return sort.sorted_desc([3, 1, 2]) == [3, 2, 1]
+}
+
+@test
+fn mergesort_is_stable() -> bool {
+    let rows = [[2, "b"], [1, "a"], [2, "c"]]
+    return sort.mergesort(rows) == [[1, "a"], [2, "b"], [2, "c"]]
+}
+
+@test
+fn sort_by_key_orders_pairs() -> bool {
+    let rows = [[3, "c"], [1, "a"], [2, "b"]]
+    let got = sort.sort_by_key(rows, fn(row) { return row[0] })
+    return got == [[1, "a"], [2, "b"], [3, "c"]]
+}
+
+@test
+fn insertion_sort_keeps_nearly_sorted_input() -> bool {
+    return sort.insertion_sort([1, 2, 3, 5, 4]) == [1, 2, 3, 4, 5]
+}
+
+@test
+fn is_sorted_checks_guards() -> bool {
+    return sort.is_sorted([1, 2, 2, 3]) && !sort.is_sorted([2, 1])
+}
+```
+
+Expected output:
+
+```
+6/6 tests passed
+```
+
+## Choosing quickly
+
+- Unknown shape: `sorted`.
+- Equal keys with meaningful input order: `mergesort`.
+- Key is a field: `sort_by_key`.
+- Already almost ordered: `insertion_sort`.
+- Want to short-circuit: check `is_sorted` first.
+
+Sorting is not one algorithm. It is one API with the right strategy behind it.
+  </script>
+</body>
+</html>
