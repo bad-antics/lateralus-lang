@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Type-Safe Named Bit Flags in Lateralus: Inside stdlib/bitflags.ltl</title>
+  <link rel="stylesheet" href="../ltlml.css">
+</head>
+<body>
+  <nav class="ltlml-nav">
+    <span class="nav-brand">LATERALUS</span>
+    <a href="../index.ltlml">Home</a>
+    <a href="../tutorial.ltlml">Tutorial</a>
+    <a href="../cookbook.ltlml">Cookbook</a>
+    <a href="../language-spec.ltlml">Spec</a>
+    <a href="../quick-reference.ltlml">Quick Ref</a>
+    <a href="../architecture.ltlml">Architecture</a>
+  </nav>
+  <div id="ltlml-render" class="ltlml-document"></div>
+  <script id="ltlml-source" type="text/ltlml">
+---
+title: "Type-Safe Named Bit Flags in Lateralus: Inside stdlib/bitflags.ltl"
+author: quangnguyen2512
+date: 2026-11-25
+abstract: A practical walkthrough of stdlib/bitflags.ltl -- packing protocol control octets and POSIX permission masks into single integers with pipeline-friendly operations, width-agnostic bit clearing, Result validation, and bounded-exhaustive @law proofs.
+---
+
+# Why Bit Flags Still Matter
+
+Systems protocols pack boolean state into single integers because nothing beats bitwise operations for cache density and wire framing. A TCP header packs eight control bits (`CWR`, `ECE`, `URG`, `ACK`, `PSH`, `RST`, `SYN`, `FIN`) into one octet (RFC 9293 Section 3.1). Operating systems pack `READ`, `WRITE`, `EXEC`, and `CLOEXEC` into file-descriptor mode words.
+
+Raw integer masks (`flags | 18`, `flags & 5`) are fast, but three hazards show up repeatedly in real codebases:
+
+1. *Bit-index vs mask confusion:* Passing bit position `4` (`ACK`) where `1 << 4` (`16`) was expected silently sets `RST` instead.
+2. *Opaque wire traces:* Logging `raw=194` in a packet capture forces every reader to mentally decode `SYN | ECE | CWR`.
+3. *Backend width & float-division traps:* In Lateralus, `/` produces a floating-point number (`9 / 4 == 2.25`), while unary `~mask` depends on signed integer width across C99, WASM, JS, and Python targets.
+
+`stdlib/bitflags.ltl` pairs an integer bitmask with an ordered `[name, mask]` schema so code stays fast on the wire, readable in logs, and explicit on invalid flag names.
+
+# Representation: Value + Ordered Flag Table
+
+A `BitFlags` instance is a Lateralus map with two keys:
+
+- `"value"`: the raw non-negative integer bitmask (`0` when empty).
+- `"names"`: an ordered list of `[flag_name, 1 << bit]` pairs in declaration order.
+
+```lateralus
+pub fn bitflags_new() -> map {
+    let bf = {}
+    bf["value"] = 0
+    bf["names"] = []
+    return bf
+}
+
+pub fn bitflags_define(bf: map, name: str, bit: int) -> map {
+    let mask = 1 << bit
+    let out = {}
+    out["value"] = bf["value"]
+    out["names"] = bf["names"] + [[name, mask]]
+    return out
+}
+```
+
+Keeping `"names"` as an ordered list guarantees canonical formatting: even if `"ACK"` (bit 4) is set before `"SYN"` (bit 1), `bitflags_to_string(bf)` always renders `"SYN | ACK"` in protocol order.
+
+# Width-Agnostic Clearing and Result Validation
+
+Every named mutation resolves `name` against the schema first. Unknown names return `Err("Unknown flag: " + name)` rather than silently corrupting bit `0`:
+
+```lateralus
+pub fn bitflags_set(bf: map, name: str) {
+    let mask = _bitflags_mask(bf, name)
+    if mask < 0 {
+        return Err("Unknown flag: " + name)
+    }
+    return Ok(_bitflags_with_value(bf, bf["value"] | mask))
+}
+
+pub fn bitflags_clear(bf: map, name: str) {
+    let mask = _bitflags_mask(bf, name)
+    if mask < 0 {
+        return Err("Unknown flag: " + name)
+    }
+    let v = bf["value"]
+    if (v & mask) != 0 {
+        v = v ^ mask
+    }
+    return Ok(_bitflags_with_value(bf, v))
+}
+```
+
+Notice how `bitflags_clear` clears an active bit via `if (v & mask) != 0 { v = v ^ mask }`. Unlike `v & (~mask)`, conditional XOR never introduces negative sign-extension bits in Python or 32-bit truncation in JavaScript.
+
+# Composing Protocol Headers with `|>` Pipelines
+
+Every `bitflags_*` function takes the flag set first, so schema construction and state transitions chain directly with `|>`:
+
+```lateralus
+let tcp = bitflags_new()
+    |> bitflags_define("FIN", 0)
+    |> bitflags_define("SYN", 1)
+    |> bitflags_define("RST", 2)
+    |> bitflags_define("PSH", 3)
+    |> bitflags_define("ACK", 4)
+    |> bitflags_define("URG", 5)
+    |> bitflags_define("ECE", 6)
+    |> bitflags_define("CWR", 7)
+
+let syn_ack = tcp
+    |> bitflags_set("SYN")
+    |> bitflags_unwrap
+    |> bitflags_set("ACK")
+    |> bitflags_unwrap
+
+println(bitflags_raw(syn_ack))        // 18 (0x12)
+println(bitflags_to_string(syn_ack))  // SYN | ACK
+```
+
+# Pinned Test Vectors (RFC 9293 TCP & POSIX Modes)
+
+| Vector | Operation | Raw (`int`) | `bitflags_to_string` / Result |
+|---|---|---|---|
+| Empty | `bitflags_new()` | `0` | `"(none)"` |
+| TCP SYN | `set("SYN")` (bit 1) | `2` (`0x02`) | `"SYN"` |
+| TCP SYN+ACK | `set("ACK") -> set("SYN")` | `18` (`0x12`) | `"SYN \| ACK"` |
+| TCP Wire 0x18 | `with_raw(tcp, 24)` | `24` (`0x18`) | `"PSH \| ACK"` |
+| TCP FIN+ACK | `set("FIN") -> set("ACK")` | `17` (`0x11`) | `"FIN \| ACK"` |
+| TCP ECN SYN | `set("SYN") -> set("ECE") -> set("CWR")` | `194` (`0xC2`) | `"SYN \| ECE \| CWR"` |
+| Toggle SYN off | `toggle(syn_ack, "SYN")` | `16` (`0x10`) | `"ACK"` |
+| Unknown flag | `set(tcp, "BOGUS")` | `Err` | `Err("Unknown flag: BOGUS")` |
+| POSIX `rw-` | `union(READ=4, WRITE=2)` | `6` (`0o6`) | `"READ \| WRITE"` |
+| POSIX `rwx` | `union(rw=6, EXEC=1)` | `7` (`0o7`) | `"READ \| WRITE \| EXEC"` |
+| POSIX mask | `intersect(rwx=7, r_x=5)` | `5` (`0o5`) | `"READ \| EXEC"` |
+| Symmetric diff | `symmetric_diff(rw=6, r_x=5)` | `3` (`0o3`) | `"WRITE \| EXEC"` |
+
+# Running the Example and Exhaustive `@law` Proofs
+
+Run the standalone 24-vector example:
+
+```bash
+python -m lateralus_lang run examples/bitflags_tutorial.ltl
+# pass=24 fail=0
+```
+
+Verify the algebraic Boolean-lattice invariants exhaustively with `lateralus verify`:
+
+```bash
+python -m lateralus_lang verify tests/stdlib_bitflags_tutorial.ltl --seed 42
+# 6 passed  0 failed  0 skipped  [6 proved]
+```
+  </script>
+  <script src="../ltlml.js"></script>
+</body>
+</html>

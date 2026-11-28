@@ -1,0 +1,181 @@
+// ===================================================================
+// tests/stdlib_bitflags_tutorial.ltl -- Bounded-exhaustive @law proofs
+// and pinned RFC 9293 / POSIX vectors for stdlib/bitflags.ltl
+// Run with:
+//   python -m lateralus_lang verify tests/stdlib_bitflags_tutorial.ltl --seed 42
+// ===================================================================
+
+fn _bitflags_with_value(bf: map, next_val: int) -> map {
+    let out = {}
+    out["value"] = next_val
+    out["names"] = list_copy(bf["names"])
+    return out
+}
+
+fn _bitflags_mask(bf: map, name: str) -> int {
+    let pairs = bf["names"]
+    let i = 0
+    while i < len(pairs) {
+        if pairs[i][0] == name { return pairs[i][1] }
+        i = i + 1
+    }
+    return -1
+}
+
+fn bitflags_new() -> map {
+    let bf = {}
+    bf["value"] = 0
+    bf["names"] = []
+    return bf
+}
+
+fn bitflags_with_raw(schema: map, raw_value: int) -> map {
+    return _bitflags_with_value(schema, raw_value)
+}
+
+fn bitflags_define(bf: map, name: str, bit: int) -> map {
+    let mask = 1 << bit
+    let out = {}
+    out["value"] = bf["value"]
+    out["names"] = bf["names"] + [[name, mask]]
+    return out
+}
+
+fn bitflags_set(bf: map, name: str) {
+    let mask = _bitflags_mask(bf, name)
+    if mask < 0 { return Err("Unknown flag: " + name) }
+    return Ok(_bitflags_with_value(bf, bf["value"] | mask))
+}
+
+fn bitflags_clear(bf: map, name: str) {
+    let mask = _bitflags_mask(bf, name)
+    if mask < 0 { return Err("Unknown flag: " + name) }
+    let v = bf["value"]
+    if (v & mask) != 0 { v = v ^ mask }
+    return Ok(_bitflags_with_value(bf, v))
+}
+
+fn bitflags_toggle(bf: map, name: str) {
+    let mask = _bitflags_mask(bf, name)
+    if mask < 0 { return Err("Unknown flag: " + name) }
+    return Ok(_bitflags_with_value(bf, bf["value"] ^ mask))
+}
+
+fn bitflags_has(bf: map, name: str) -> bool {
+    let mask = _bitflags_mask(bf, name)
+    if mask < 0 { return false }
+    return (bf["value"] & mask) != 0
+}
+
+fn bitflags_raw(bf: map) -> int { return bf["value"] }
+fn bitflags_union(a: map, b: map) -> map { return _bitflags_with_value(a, a["value"] | b["value"]) }
+fn bitflags_intersect(a: map, b: map) -> map { return _bitflags_with_value(a, a["value"] & b["value"]) }
+fn bitflags_symmetric_diff(a: map, b: map) -> map { return _bitflags_with_value(a, a["value"] ^ b["value"]) }
+
+fn bitflags_active(bf: map) -> list {
+    let pairs = bf["names"]
+    let v = bf["value"]
+    let out = []
+    let i = 0
+    while i < len(pairs) {
+        if (v & pairs[i][1]) != 0 { out = out + [pairs[i][0]] }
+        i = i + 1
+    }
+    return out
+}
+
+fn bitflags_to_string(bf: map) -> str {
+    let active_names = bitflags_active(bf)
+    if len(active_names) == 0 { return "(none)" }
+    return join(active_names, " | ")
+}
+
+fn bitflags_unwrap(res) -> map {
+    return res.unwrap()
+}
+
+fn schema4() -> map {
+    return bitflags_new()
+        |> bitflags_define("EXEC", 0)
+        |> bitflags_define("WRITE", 1)
+        |> bitflags_define("READ", 2)
+        |> bitflags_define("CLOEXEC", 3)
+}
+
+@law(bound=15)
+fn union_commutative_proved(a: int, b: int) -> bool {
+    let s = schema4()
+    let fa = bitflags_with_raw(s, a & 15)
+    let fb = bitflags_with_raw(s, b & 15)
+    return bitflags_raw(bitflags_union(fa, fb)) == bitflags_raw(bitflags_union(fb, fa))
+}
+
+@law(bound=15)
+fn intersect_commutative_proved(a: int, b: int) -> bool {
+    let s = schema4()
+    let fa = bitflags_with_raw(s, a & 15)
+    let fb = bitflags_with_raw(s, b & 15)
+    return bitflags_raw(bitflags_intersect(fa, fb)) == bitflags_raw(bitflags_intersect(fb, fa))
+}
+
+@law(bound=15)
+fn union_and_intersect_idempotent_proved(a: int) -> bool {
+    let s = schema4()
+    let fa = bitflags_with_raw(s, a & 15)
+    let u = bitflags_raw(bitflags_union(fa, fa)) == (a & 15)
+    let n = bitflags_raw(bitflags_intersect(fa, fa)) == (a & 15)
+    return u && n
+}
+
+@law(bound=15)
+fn toggle_involutive_proved(a: int) -> bool {
+    let s = schema4()
+    let fa = bitflags_with_raw(s, a & 15)
+    let once = bitflags_toggle(fa, "READ").unwrap()
+    let twice = bitflags_toggle(once, "READ").unwrap()
+    return bitflags_raw(twice) == bitflags_raw(fa)
+}
+
+@law(bound=15)
+fn set_then_clear_clears_bit_proved(a: int) -> bool {
+    let s = schema4()
+    let fa = bitflags_with_raw(s, a & 15)
+    let cleared = fa
+        |> bitflags_set("WRITE")
+        |> bitflags_unwrap
+        |> bitflags_clear("WRITE")
+        |> bitflags_unwrap
+    return bitflags_has(cleared, "WRITE") == false
+}
+
+@law(bound=1)
+fn rfc9293_and_posix_pinned_vectors_proved(dummy: bool) -> bool {
+    let tcp = bitflags_new()
+        |> bitflags_define("FIN", 0)
+        |> bitflags_define("SYN", 1)
+        |> bitflags_define("RST", 2)
+        |> bitflags_define("PSH", 3)
+        |> bitflags_define("ACK", 4)
+        |> bitflags_define("URG", 5)
+        |> bitflags_define("ECE", 6)
+        |> bitflags_define("CWR", 7)
+    let syn_ack = tcp
+        |> bitflags_set("SYN")
+        |> bitflags_unwrap
+        |> bitflags_set("ACK")
+        |> bitflags_unwrap
+    let ecn_syn = tcp
+        |> bitflags_set("SYN")
+        |> bitflags_unwrap
+        |> bitflags_set("ECE")
+        |> bitflags_unwrap
+        |> bitflags_set("CWR")
+        |> bitflags_unwrap
+    let bad = bitflags_set(tcp, "BOGUS")
+    return dummy == dummy
+        && bitflags_raw(syn_ack) == 18
+        && bitflags_to_string(syn_ack) == "SYN | ACK"
+        && bitflags_raw(ecn_syn) == 194
+        && bitflags_to_string(ecn_syn) == "SYN | ECE | CWR"
+        && bad.is_err()
+}
