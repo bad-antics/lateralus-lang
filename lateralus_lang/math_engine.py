@@ -809,6 +809,17 @@ def simpson_integrate(
 # Convenience registry — maps names to functions for the transpiler preamble
 # -----------------------------------------------------------------------------
 
+def _cube_root(value):
+    """Use the real cube root for signed real inputs and keep complex power semantics."""
+    raw = _unwrap(value)
+    if isinstance(raw, Decimal):
+        result = (raw.copy_abs() ** (Decimal(1) / 3)).copy_sign(raw)
+        return LTLNumber(result) if isinstance(value, LTLNumber) else result
+    if isinstance(raw, (int, float, Fraction)) and math.copysign(1.0, raw) < 0:
+        return -((-value) ** (1 / 3))
+    return value ** (1 / 3)
+
+
 MATH_BUILTINS: Dict[str, Any] = {
     # Types
     "Matrix": Matrix,
@@ -826,7 +837,7 @@ MATH_BUILTINS: Dict[str, Any] = {
     "NAN": float("nan"),
     # Functions
     "sqrt": math.sqrt,
-    "cbrt": lambda x: x ** (1/3),
+    "cbrt": _cube_root,
     "abs": abs,
     "floor": math.floor,
     "ceil": math.ceil,
