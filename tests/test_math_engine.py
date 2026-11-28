@@ -19,6 +19,7 @@ from lateralus_lang.math_engine import (
     linear_regression,
     mean,
     median,
+    newton_raphson,
     simpson_integrate,
     std_dev,
     trapezoidal_integrate,
@@ -296,3 +297,20 @@ class TestNumericalMethods:
         # ∫₀^π sin(x) dx = 2
         result = simpson_integrate(math.sin, 0, math.pi, 1000)
         assert result == pytest.approx(2.0, abs=1e-8)
+
+    def test_newton_raphson_root_on_final_update(self):
+        # A root reached by the last allowed update must be returned rather
+        # than reported as non-convergence (issue #941).
+        result = newton_raphson(lambda x: x - 3.0, 0.0, max_iter=1, df=lambda x: 1.0)
+        assert result == pytest.approx(3.0)
+
+    def test_newton_raphson_nonconvergent_one_update_still_raises(self):
+        # Same one-iteration budget, but the single update does not land on a
+        # root: the control case must still raise.
+        with pytest.raises(ValueError):
+            newton_raphson(lambda x: x * x - 2.0, 1.0, max_iter=1, df=lambda x: 2.0 * x)
+
+    def test_newton_raphson_zero_iterations_at_root(self):
+        # A zero-iteration budget is acceptable when x0 already satisfies tol.
+        assert newton_raphson(lambda x: x - 2.0, 2.0, max_iter=0,
+                              df=lambda x: 1.0) == pytest.approx(2.0)
