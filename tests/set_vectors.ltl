@@ -1,0 +1,90 @@
+// ===================================================================
+// tests/set_tutorial_vectors.ltl -- pinned test vectors for the
+// stdlib.set tutorial. Style follows tests/stdlib_spiral_wave_*.
+//
+// Sets are sorted, deduplicated lists, so every expected value
+// below is the exact list the implementation in stdlib/set.ltl
+// produces; each one was recomputed from the source line by line,
+// including the places where the source deliberately does not sort.
+// ===================================================================
+
+let PASS = 0
+let FAIL = 0
+
+fn check(name: str, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        print("  ok  " + name)
+    } else {
+        FAIL = FAIL + 1
+        print("  FAIL " + name)
+    }
+}
+
+fn test_construction() {
+    print("-- construction --")
+    check("new is empty", set_is_empty(set_new()))
+    check("from_list dedupes and sorts", set_from_list([3, 1, 2, 1, 3]) == [1, 2, 3])
+    check("from_list strings", set_from_list(["banana", "apple", "banana"]) == ["apple", "banana"])
+    check("add new element", set_add([1, 2, 3], 4) == [1, 2, 3, 4])
+    check("add existing is a no-op", set_add([1, 2, 3], 2) == [1, 2, 3])
+    check("remove", set_remove([1, 2, 3], 2) == [1, 3])
+    check("has member", set_has([1, 2, 3], 2))
+    check("has non-member", set_has([1, 2, 3], 9) == false)
+    check("size", set_size([1, 2, 3]) == 3)
+    check("to_list sorts", set_to_list([3, 1, 2]) == [1, 2, 3])
+}
+
+fn test_algebra() {
+    print("-- algebra --")
+    check("union", set_union([1, 2, 3], [3, 4]) == [1, 2, 3, 4])
+    check("intersection", set_intersection([1, 2, 3, 4], [2, 4, 6]) == [2, 4])
+    check("difference", set_difference([1, 2, 3, 4], [2, 4]) == [1, 3])
+    check("symmetric difference", set_symmetric_difference([1, 2, 3], [3, 4]) == [1, 2, 4])
+    check("union with empty", set_union([1, 2], set_new()) == [1, 2])
+    check("difference with self", set_difference([1, 2, 3], [1, 2, 3]) == [])
+
+    // PINNED QUIRK: intersection filters the left operand and keeps
+    // its order; it does not sort the result. With proper sets as
+    // input (sorted, as set_from_list returns) this never shows.
+    check("intersection keeps left order", set_intersection([3, 1, 2], [1, 2, 3]) == [3, 1, 2])
+}
+
+fn test_predicates() {
+    print("-- predicates --")
+    check("subset", set_is_subset([1, 2], [1, 2, 3]))
+    check("not subset", set_is_subset([1, 4], [1, 2, 3]) == false)
+    check("superset", set_is_superset([1, 2, 3], [1, 2]))
+    check("disjoint", set_is_disjoint([1, 3], [2, 4]))
+    check("not disjoint", set_is_disjoint([1, 2], [2, 3]) == false)
+    check("equals same order", set_equals([1, 2], [1, 2]))
+
+    // Equality is subset-based, so it ignores element order.
+    check("equals ignores order", set_equals([1, 2], [2, 1]))
+    check("equals different size", set_equals([1, 2], [1, 2, 3]) == false)
+}
+
+fn test_higher_order() {
+    print("-- map, filter, fold, power set --")
+    check("map_set doubles", set_map_set([1, 2, 3], fn(x) { x * 2 }) == [2, 4, 6])
+
+    // Collisions after mapping collapse back into a set.
+    check("map_set collapses", set_map_set([1, 2, 3, 4], fn(x) { x % 2 }) == [0, 1])
+    check("filter_set odds", set_filter_set([1, 2, 3, 4, 5], fn(x) { x % 2 == 1 }) == [1, 3, 5])
+    check("fold sum", set_fold([1, 2, 3], 0, fn(a, b) { a + b }) == 6)
+    check("fold product", set_fold([1, 2, 3, 4], 1, fn(a, b) { a * b }) == 24)
+
+    // Power set: the recursion emits the subsets of the tail first,
+    // then the same subsets with the head element added.
+    check("power_set empty", set_power_set([]) == [[]])
+    check("power_set single", set_power_set([5]) == [[], [5]])
+    check("power_set pair", set_power_set([1, 2]) == [[], [2], [1], [1, 2]])
+    check("power_set triple count", set_size(set_power_set([1, 2, 3])) == 8)
+    check("power_set triple", set_power_set([1, 2, 3]) == [[], [3], [2], [2, 3], [1], [1, 3], [1, 2], [1, 2, 3]])
+}
+
+test_construction()
+test_algebra()
+test_predicates()
+test_higher_order()
+print("set vectors: {PASS} passed, {FAIL} failed")
