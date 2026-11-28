@@ -1,0 +1,46 @@
+// Pinned vector example for stdlib.arena.
+// Run from the repository root with: lateralus run examples/arena_pinned_vector.ltl
+
+import stdlib.arena
+
+fn main() {
+    // A small capacity makes rollover visible in the output.
+    let mut region = arena.new(3)
+    println("new: total={0}, blocks={1}, remaining={2}".format(
+        arena.total(region), arena.block_count(region), arena.remaining(region)))
+
+    let first = arena.alloc(region, "red")
+    region = first[0]
+    let red = first[1]
+    let second = arena.alloc(region, "green")
+    region = second[0]
+    let green = second[1]
+
+    // alloc_many continues the same pinned IDs and rolls into a new block.
+    let batch = arena.alloc_many(region, ["blue", "gold"])
+    region = batch[0]
+    let ids = batch[1]
+
+    assert(red == 0)
+    assert(green == 1)
+    assert(ids == [2, 3])
+    assert(arena.total(region) == 4)
+    assert(arena.block_count(region) == 2)
+    assert(arena.remaining(region) == 2)
+
+    assert(arena.get(region, red) == "red")
+    region = arena.set(region, green, "emerald")
+    assert(arena.get(region, green) == "emerald")
+
+    // Both a past-the-end ID and a negative ID are out of range.
+    assert(arena.get(region, 99) == nil)
+    assert(arena.get(region, -1) == nil)
+
+    // default() is the same API with a 1024-item block.
+    let defaults = arena.default()
+    assert(arena.total(defaults) == 0)
+    assert(arena.block_count(defaults) == 1)
+    assert(arena.remaining(defaults) == 1024)
+
+    println("pinned vector: PASS")
+}
