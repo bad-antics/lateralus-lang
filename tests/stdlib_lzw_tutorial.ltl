@@ -1,0 +1,108 @@
+// Standard Library LZW (Lempel-Ziv-Welch) Tutorial Verification Suite
+// Validates dynamic dictionary construction, greedy prefix tokenization, KwKwK edge case, and roundtrip decompression.
+
+fn lzw_compress(uncompressed: string) -> list {
+    let mut dict_size = 256;
+    let mut dictionary = {};
+    let mut i = 0;
+    while i < 256 {
+        dictionary[chr(i)] = i;
+        i = i + 1;
+    }
+
+    let mut w = "";
+    let mut result = [];
+    let mut idx = 0;
+    let n = len(uncompressed);
+
+    while idx < n {
+        let c = slice(uncompressed, idx, idx + 1);
+        let wc = w + c;
+        if contains(dictionary, wc) {
+            w = wc;
+        } else {
+            result = result + [dictionary[w]];
+            dictionary[wc] = dict_size;
+            dict_size = dict_size + 1;
+            w = c;
+        }
+        idx = idx + 1;
+    }
+
+    if len(w) > 0 {
+        result = result + [dictionary[w]];
+    }
+
+    return result;
+}
+
+fn lzw_decompress(compressed: list) -> string {
+    if len(compressed) == 0 {
+        return "";
+    }
+
+    let mut dict_size = 256;
+    let mut dictionary = {};
+    let mut i = 0;
+    while i < 256 {
+        dictionary[i] = chr(i);
+        i = i + 1;
+    }
+
+    let mut w = dictionary[compressed[0]];
+    let mut result = w;
+    let mut idx = 1;
+
+    while idx < len(compressed) {
+        let k = compressed[idx];
+        let mut entry = "";
+        if contains(dictionary, k) {
+            entry = dictionary[k];
+        } else if k == dict_size {
+            // Classical LZW "KwKwK" edge case
+            entry = w + slice(w, 0, 1);
+        }
+        result = result + entry;
+
+        dictionary[dict_size] = w + slice(entry, 0, 1);
+        dict_size = dict_size + 1;
+        w = entry;
+        idx = idx + 1;
+    }
+
+    return result;
+}
+
+fn main() -> int {
+    // 1. Classical Textbook Payload: "TOBEORNOTTOBEORTOBEORNOT" (24 chars)
+    let payload1 = "TOBEORNOTTOBEORTOBEORNOT";
+    let compressed1 = lzw_compress(payload1);
+
+    // Compressed token count should be significantly smaller than 24
+    assert(len(compressed1) < len(payload1));
+    assert(len(compressed1) == 16); // 16 codes vs 24 raw chars
+
+    let restored1 = lzw_decompress(compressed1);
+    assert(restored1 == payload1);
+
+    // 2. Classical KwKwK Edge Case: Uniform Repeated Characters "AAAAAAA"
+    let payload2 = "AAAAAAA";
+    let compressed2 = lzw_compress(payload2);
+    let restored2 = lzw_decompress(compressed2);
+    assert(restored2 == payload2);
+
+    // 3. Mixed Payload with Punctuation: "BABAABAAA"
+    let payload3 = "BABAABAAA";
+    let compressed3 = lzw_compress(payload3);
+    let restored3 = lzw_decompress(compressed3);
+    assert(restored3 == payload3);
+
+    // 4. Single-character edge case: "Z"
+    let payload4 = "Z";
+    let compressed4 = lzw_compress(payload4);
+    assert(len(compressed4) == 1);
+    assert(compressed4[0] == 90); // ASCII 'Z' = 90
+    assert(lzw_decompress(compressed4) == "Z");
+
+    return 0;
+}

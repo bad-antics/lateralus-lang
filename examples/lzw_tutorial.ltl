@@ -1,0 +1,94 @@
+// Lateralus Standard Library Example: LZW (Lempel-Ziv-Welch) Compression Engine
+// Demonstrates dictionary construction, token stream compression, and lossless decompression.
+
+fn lzw_compress(uncompressed: string) -> list {
+    let mut dict_size = 256;
+    let mut dictionary = {};
+    let mut i = 0;
+    while i < 256 {
+        dictionary[chr(i)] = i;
+        i = i + 1;
+    }
+
+    let mut w = "";
+    let mut result = [];
+    let mut idx = 0;
+    let n = len(uncompressed);
+
+    while idx < n {
+        let c = slice(uncompressed, idx, idx + 1);
+        let wc = w + c;
+        if contains(dictionary, wc) {
+            w = wc;
+        } else {
+            result = result + [dictionary[w]];
+            dictionary[wc] = dict_size;
+            dict_size = dict_size + 1;
+            w = c;
+        }
+        idx = idx + 1;
+    }
+
+    if len(w) > 0 {
+        result = result + [dictionary[w]];
+    }
+
+    return result;
+}
+
+fn lzw_decompress(compressed: list) -> string {
+    if len(compressed) == 0 {
+        return "";
+    }
+
+    let mut dict_size = 256;
+    let mut dictionary = {};
+    let mut i = 0;
+    while i < 256 {
+        dictionary[i] = chr(i);
+        i = i + 1;
+    }
+
+    let mut w = dictionary[compressed[0]];
+    let mut result = w;
+    let mut idx = 1;
+
+    while idx < len(compressed) {
+        let k = compressed[idx];
+        let mut entry = "";
+        if contains(dictionary, k) {
+            entry = dictionary[k];
+        } else if k == dict_size {
+            entry = w + slice(w, 0, 1);
+        }
+        result = result + entry;
+
+        dictionary[dict_size] = w + slice(entry, 0, 1);
+        dict_size = dict_size + 1;
+        w = entry;
+        idx = idx + 1;
+    }
+
+    return result;
+}
+
+fn main() -> int {
+    println("=== Lateralus LZW Adaptive Dictionary Compression Demo ===");
+
+    let raw = "TOBEORNOTTOBEORTOBEORNOT";
+    println("Original Raw Payload: \"" + raw + "\" (" + str(len(raw)) + " characters)");
+
+    let compressed = lzw_compress(raw);
+    println("Compressed Integer Token Stream: " + str(compressed));
+    println("  -> Original Character Count: " + str(len(raw)));
+    println("  -> LZW Token Count: " + str(len(compressed)));
+    println("  -> Token Compression Savings: 33.3%!");
+    assert(len(compressed) == 16);
+
+    let restored = lzw_decompress(compressed);
+    println("Decompressed Stream: \"" + restored + "\"");
+    assert(restored == raw);
+
+    println("\nLZW dictionary compression and decompression verified 100% faithful!");
+    return 0;
+}
