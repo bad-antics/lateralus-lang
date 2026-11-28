@@ -16,6 +16,7 @@ import logging
 import re
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Optional
 
 # --- Compiler integration (real diagnostics) --------------------------
@@ -195,6 +196,64 @@ LATERALUS_BUILTINS = {
     "base64_encode": {"detail": "fn base64_encode(data: str) -> str", "doc": "Base64 encode"},
     "base64_decode": {"detail": "fn base64_decode(data: str) -> str", "doc": "Base64 decode"},
 }
+
+STDLIB_DIR = Path(__file__).resolve().parent.parent / "stdlib"
+_RE_STDLIB_FN = re.compile(r"^\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)\s*\(")
+
+
+def load_stdlib_signatures(stdlib_dir: Path = STDLIB_DIR) -> dict[str, dict]:
+    """Parse stdlib function signatures and first docstring lines."""
+    signatures: dict[str, dict] = {}
+    best: dict[str, tuple[bool, bool]] = {}
+    root = Path(stdlib_dir)
+    if not root.exists():
+        return signatures
+
+    for path in sorted(root.glob("*.ltl")):
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+
+        i = 0
+        while i < len(lines):
+            m = _RE_STDLIB_FN.match(lines[i])
+            if not m:
+                i += 1
+                continue
+
+            name = m.group(1)
+            parts = [lines[i].strip()]
+            depth = parts[0].count("(") - parts[0].count(")")
+            j = i
+            while depth > 0 and j + 1 < len(lines):
+                j += 1
+                nxt = lines[j].strip()
+                parts.append(nxt)
+                depth += nxt.count("(") - nxt.count(")")
+            detail = " ".join(parts).split("{", 1)[0].strip()
+            if detail.startswith("pub "):
+                detail = detail[4:]
+
+            docs = []
+            k = i - 1
+            while k >= 0 and lines[k].strip().startswith("///"):
+                docs.append(lines[k].strip()[3:].strip())
+                k -= 1
+            docs.reverse()
+            doc = next((d for d in docs if d), "")
+
+            score = (lines[i].lstrip().startswith("pub "), bool(doc))
+            if name not in signatures or score >= best[name]:
+                signatures[name] = {"detail": detail, "doc": doc}
+                best[name] = score
+
+            i = j + 1
+
+    return signatures
+
+
+STDLIB_SIGNATURES = load_stdlib_signatures()
 
 # Type annotations
 LATERALUS_TYPES = [
@@ -411,6 +470,18 @@ def get_hover(doc: TextDocument, line: int, character: int) -> Optional[dict]:
             "contents": {
                 "kind": "markdown",
                 "value": f"```lateralus\n{info['detail']}\n```\n\n{info['doc']}",
+            },
+        }
+
+    if word in STDLIB_SIGNATURES:
+        info = STDLIB_SIGNATURES[word]
+        value = f"```lateralus\n{info['detail']}\n```"
+        if info["doc"]:
+            value += f"\n\n{info['doc']}"
+        return {
+            "contents": {
+                "kind": "markdown",
+                "value": value,
             },
         }
 
