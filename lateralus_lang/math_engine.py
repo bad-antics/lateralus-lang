@@ -92,6 +92,12 @@ class LTLNumber:
     def __add__(self, other):
         return LTLNumber(_coerce_op(self._val, _unwrap(other), operator.add))
 
+    def __radd__(self, other):
+        # Reflected addition so sum()/builtin reductions that start from int 0
+        # (e.g. Matrix.trace) work on LTLNumber entries. Addition is commutative
+        # and __add__ already promotes int/float/Fraction/Decimal/complex.
+        return self.__add__(other)
+
     def __sub__(self, other):
         return LTLNumber(_coerce_op(self._val, _unwrap(other), operator.sub))
 
