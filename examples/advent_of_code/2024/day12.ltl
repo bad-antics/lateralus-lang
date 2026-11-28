@@ -1,0 +1,176 @@
+// Advent of Code 2024 · Day 12 · Garden Groups
+// Flood-fill each region (same letter, 4-connected). Price = area * perimeter.
+// Part 2 (bulk discount): price = area * number of sides, where a side is a
+// maximal straight run of fence. A fence edge counts as a new side unless the
+// neighbouring cell along the fence line is in the same region and also has a
+// fence edge in the same direction (i.e. the edge continues the run).
+// Small sample -> 140 / 80; larger sample -> 1930 / 1206 (official answers).
+
+let SAMPLE = "AAAA
+BBCD
+BBCC
+EEEC"
+
+let SAMPLE_LARGE = "RRRRIICCFF
+RRRRIICCCF
+VVRRRCCFFF
+VVRCCCJFFF
+VVVVCJJCFE
+VVIVCCJJEE
+VVIIICJJEE
+MIIIIIJJEE
+MIIISIJEEE
+MMMISSJEEE"
+
+let DIRS = [[-1, 0], [1, 0], [0, -1], [0, 1]]
+
+fn rows_of(text: str) -> list {
+    let rows = []
+    let lines = str_split(text, "\n")
+    let i = 0
+    while i < len(lines) {
+        if len(str_trim(lines[i])) > 0 {
+            rows = rows + [lines[i]]
+        }
+        i = i + 1
+    }
+    return rows
+}
+
+fn ch(rows: list, r: int, c: int) -> str {
+    return slice(rows[r], c, c + 1)
+}
+
+fn in_bounds(rows: list, r: int, c: int) -> bool {
+    if r < 0 { return false }
+    if c < 0 { return false }
+    if r >= len(rows) { return false }
+    if c >= len(rows[0]) { return false }
+    return true
+}
+
+fn key(r: int, c: int) -> str {
+    return str(r) + "," + str(c)
+}
+
+// Flood-fill the region containing (sr, sc). `visited` is the global
+// visited set (mutated). Returns [area, perimeter, sides].
+fn flood(rows: list, sr: int, sc: int, visited: dict) -> list {
+    let plant = ch(rows, sr, sc)
+    let cells = []
+    let region = {}
+    let queue = [[sr, sc]]
+    let head = 0
+    visited[key(sr, sc)] = true
+    while head < len(queue) {
+        let cell = queue[head]
+        head = head + 1
+        cells = cells + [cell]
+        region[key(cell[0], cell[1])] = true
+        let d = 0
+        while d < len(DIRS) {
+            let nr = cell[0] + DIRS[d][0]
+            let nc = cell[1] + DIRS[d][1]
+            if in_bounds(rows, nr, nc) {
+                if ch(rows, nr, nc) == plant && contains(visited, key(nr, nc)) == false {
+                    visited[key(nr, nc)] = true
+                    queue = queue + [[nr, nc]]
+                }
+            }
+            d = d + 1
+        }
+    }
+    let area = len(cells)
+    let perimeter = 0
+    let sides = 0
+    let i = 0
+    while i < len(cells) {
+        let r = cells[i][0]
+        let c = cells[i][1]
+        let d = 0
+        while d < len(DIRS) {
+            let dr = DIRS[d][0]
+            let dc = DIRS[d][1]
+            let nr = r + dr
+            let nc = c + dc
+            // Fence edge in direction (dr, dc) if the neighbour is not in
+            // this region (out of bounds counts as not in the region).
+            if contains(region, key(nr, nc)) == false {
+                perimeter = perimeter + 1
+                // Previous cell along the fence line: step in tangent
+                // direction (-dc, dr). If it is in the region and also has
+                // a fence edge in this direction, this edge continues a
+                // side already counted; otherwise it starts a new side.
+                let pr = r - dc
+                let pc = c + dr
+                if contains(region, key(pr, pc)) == false {
+                    sides = sides + 1
+                } else {
+                    if contains(region, key(pr + dr, pc + dc)) {
+                        sides = sides + 1
+                    }
+                }
+            }
+            d = d + 1
+        }
+        i = i + 1
+    }
+    return [area, perimeter, sides]
+}
+
+// Returns [part1_total, part2_total] for the map.
+fn totals(text: str) -> list {
+    let rows = rows_of(text)
+    let visited = {}
+    let total1 = 0
+    let total2 = 0
+    let r = 0
+    while r < len(rows) {
+        let c = 0
+        while c < len(rows[r]) {
+            if contains(visited, key(r, c)) == false {
+                let f = flood(rows, r, c, visited)
+                total1 = total1 + f[0] * f[1]
+                total2 = total2 + f[0] * f[2]
+            }
+            c = c + 1
+        }
+        r = r + 1
+    }
+    return [total1, total2]
+}
+
+fn part1(text: str) -> int {
+    return totals(text)[0]
+}
+
+fn part2(text: str) -> int {
+    return totals(text)[1]
+}
+
+@test
+fn test_sample_part1() {
+    assert_eq(part1(SAMPLE), 140)
+}
+
+@test
+fn test_sample_part2() {
+    assert_eq(part2(SAMPLE), 80)
+}
+
+@test
+fn test_large_part1() {
+    assert_eq(part1(SAMPLE_LARGE), 1930)
+}
+
+@test
+fn test_large_part2() {
+    assert_eq(part2(SAMPLE_LARGE), 1206)
+}
+
+fn main() {
+    print("Day 12 Part 1: " + str(part1(SAMPLE)))
+    print("Day 12 Part 2: " + str(part2(SAMPLE)))
+}
+
+main()

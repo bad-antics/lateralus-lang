@@ -1,0 +1,148 @@
+// Advent of Code 2024 · Day 6 · Guard Gallivant
+// Part 1: distinct positions the guard visits before leaving the map.
+// Part 2: positions where one extra obstacle makes the guard loop forever.
+// Sample answers: part 1 = 41, part 2 = 6.
+
+let SAMPLE = "....#.....
+.........#
+..........
+..#.......
+.......#..
+..........
+.#..^.....
+........#.
+#.........
+......#..."
+
+fn rows_of(text: str) -> list {
+    let rows = []
+    let lines = str_split(text, "\n")
+    let i = 0
+    while i < len(lines) {
+        if len(str_trim(lines[i])) > 0 {
+            rows = rows + [lines[i]]
+        }
+        i = i + 1
+    }
+    return rows
+}
+
+fn ch(rows: list, r: int, c: int) -> str {
+    return slice(rows[r], c, c + 1)
+}
+
+fn in_bounds(rows: list, r: int, c: int) -> bool {
+    if r < 0 { return false }
+    if c < 0 { return false }
+    if r >= len(rows) { return false }
+    if c >= len(rows[0]) { return false }
+    return true
+}
+
+fn find_start(rows: list) -> list {
+    let r = 0
+    while r < len(rows) {
+        let c = 0
+        while c < len(rows[r]) {
+            if ch(rows, r, c) == "^" { return [r, c] }
+            c = c + 1
+        }
+        r = r + 1
+    }
+    return [-1, -1]
+}
+
+// True if the cell is blocked: a "#" in the map, or the extra obstacle.
+fn blocked(rows: list, r: int, c: int, er: int, ec: int) -> bool {
+    if r == er && c == ec { return true }
+    return ch(rows, r, c) == "#"
+}
+
+// Walk the guard. Returns [looped, positions] where positions is the list of
+// unique [r, c] cells visited, in first-visit order. Extra obstacle at
+// (er, ec); use (-1, -1) for "no extra obstacle".
+fn walk(rows: list, sr: int, sc: int, er: int, ec: int) -> list {
+    let r = sr
+    let c = sc
+    let dr = -1
+    let dc = 0
+    let seen_pos = {}
+    let seen_state = {}
+    let positions = []
+    let looped = false
+    let steps = 0
+    while steps < 20000 {
+        let pkey = str(r) + "," + str(c)
+        if contains(seen_pos, pkey) == false {
+            seen_pos[pkey] = true
+            positions = positions + [[r, c]]
+        }
+        let skey = str(r) + "," + str(c) + "," + str(dr) + "," + str(dc)
+        if contains(seen_state, skey) {
+            looped = true
+            break
+        }
+        seen_state[skey] = true
+        let nr = r + dr
+        let nc = c + dc
+        if in_bounds(rows, nr, nc) == false {
+            break
+        }
+        if blocked(rows, nr, nc, er, ec) {
+            // turn right: (dr, dc) -> (dc, -dr)
+            let ndr = dc
+            let ndc = -dr
+            dr = ndr
+            dc = ndc
+        } else {
+            r = nr
+            c = nc
+        }
+        steps = steps + 1
+    }
+    if steps >= 20000 { looped = true }
+    return [looped, positions]
+}
+
+fn part1(text: str) -> int {
+    let rows = rows_of(text)
+    let s = find_start(rows)
+    let w = walk(rows, s[0], s[1], -1, -1)
+    return len(w[1])
+}
+
+fn part2(text: str) -> int {
+    let rows = rows_of(text)
+    let s = find_start(rows)
+    let base = walk(rows, s[0], s[1], -1, -1)
+    let positions = base[1]
+    let total = 0
+    let i = 0
+    while i < len(positions) {
+        let p = positions[i]
+        // never place an obstacle on the start cell
+        if p[0] != s[0] || p[1] != s[1] {
+            let w = walk(rows, s[0], s[1], p[0], p[1])
+            if w[0] { total = total + 1 }
+        }
+        i = i + 1
+    }
+    return total
+}
+
+@test
+fn test_sample_part1() {
+    assert_eq(part1(SAMPLE), 41)
+}
+
+@test
+fn test_sample_part2() {
+    assert_eq(part2(SAMPLE), 6)
+}
+
+fn main() {
+    print("Day 6 Part 1: " + str(part1(SAMPLE)))
+    print("Day 6 Part 2: " + str(part2(SAMPLE)))
+}
+
+main()

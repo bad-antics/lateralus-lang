@@ -1,0 +1,174 @@
+// Advent of Code 2024 · Day 20 · Race Condition
+// BFS distances from S along the single racetrack path, then count cheats:
+// a cheat jumps from one track cell to another within Manhattan distance
+// `max_cheat`; it saves dist[end] - dist[start] - manhattan steps.
+// Threshold note (sample only): the puzzle asks for cheats saving at least
+// 100 picoseconds, but on the 15x15 sample no cheat saves that much, so the
+// sample answers use lower thresholds — part 1 counts every saving cheat
+// (threshold 1; the official per-saving list 14+14+2+4+2+3+1+1+1+1+1 sums
+// to 44), part 2 counts cheats saving at least 50 picoseconds with cheats
+// of up to 20 picoseconds (285).
+// Sample answers: part 1 = 44, part 2 = 285.
+
+let SAMPLE = "###############
+#...#...#.....#
+#.#.#.#.#.###.#
+#S#...#.#.#...#
+#######.#.#.###
+#######.#.#...#
+#######.#.###.#
+###..E#...#...#
+###.#######.###
+#...###...#...#
+#.#####.#.###.#
+#.#...#.#.#...#
+#.#.#.#.#.#.###
+#...#...#...###
+###############"
+
+fn rows_of(text: str) -> list {
+    let rows = []
+    let lines = str_split(text, "\n")
+    let i = 0
+    while i < len(lines) {
+        if len(str_trim(lines[i])) > 0 {
+            rows = rows + [lines[i]]
+        }
+        i = i + 1
+    }
+    return rows
+}
+
+fn ch(rows: list, r: int, c: int) -> str {
+    return slice(rows[r], c, c + 1)
+}
+
+fn find(rows: list, target: str) -> list {
+    let r = 0
+    while r < len(rows) {
+        let c = 0
+        while c < len(rows[r]) {
+            if ch(rows, r, c) == target { return [r, c] }
+            c = c + 1
+        }
+        r = r + 1
+    }
+    return [-1, -1]
+}
+
+fn key(r: int, c: int) -> str {
+    return str(r) + "," + str(c)
+}
+
+fn abs_i(n: int) -> int {
+    if n < 0 { return -n }
+    return n
+}
+
+// BFS distances from (sr, sc) over track cells (anything but "#").
+// Returns [dist dict, track cells list of [r, c]].
+fn bfs(rows: list, sr: int, sc: int) -> list {
+    let dist = {}
+    dist[key(sr, sc)] = 0
+    let queue = [[sr, sc]]
+    let cells = [[sr, sc]]
+    let head = 0
+    let dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+    while head < len(queue) {
+        let cur = queue[head]
+        head = head + 1
+        let r = cur[0]
+        let c = cur[1]
+        let d = dist[key(r, c)]
+        let j = 0
+        while j < len(dirs) {
+            let nr = r + dirs[j][0]
+            let nc = c + dirs[j][1]
+            if nr >= 0 && nr < len(rows) && nc >= 0 && nc < len(rows[0]) {
+                if ch(rows, nr, nc) != "#" {
+                    let k = key(nr, nc)
+                    if contains(dist, k) == false {
+                        dist[k] = d + 1
+                        queue = queue + [[nr, nc]]
+                        cells = cells + [[nr, nc]]
+                    }
+                }
+            }
+            j = j + 1
+        }
+    }
+    return [dist, cells]
+}
+
+fn count_cheats(text: str, max_cheat: int, min_saving: int) -> int {
+    let rows = rows_of(text)
+    let s = find(rows, "S")
+    let b = bfs(rows, s[0], s[1])
+    let dist = b[0]
+    let cells = b[1]
+    let total = 0
+    let i = 0
+    while i < len(cells) {
+        let r = cells[i][0]
+        let c = cells[i][1]
+        let d0 = dist[key(r, c)]
+        let dr = -max_cheat
+        while dr <= max_cheat {
+            let rem = max_cheat - abs_i(dr)
+            let dc = -rem
+            while dc <= rem {
+                if dr != 0 || dc != 0 {
+                    let nr = r + dr
+                    let nc = c + dc
+                    if nr >= 0 && nr < len(rows) && nc >= 0 && nc < len(rows[0]) {
+                        let k = key(nr, nc)
+                        if contains(dist, k) {
+                            let saving = dist[k] - d0 - (abs_i(dr) + abs_i(dc))
+                            if saving >= min_saving { total = total + 1 }
+                        }
+                    }
+                }
+                dc = dc + 1
+            }
+            dr = dr + 1
+        }
+        i = i + 1
+    }
+    return total
+}
+
+fn part1(text: str) -> int {
+    return count_cheats(text, 2, 1)
+}
+
+fn part2(text: str) -> int {
+    return count_cheats(text, 20, 50)
+}
+
+@test
+fn test_sample_part1() {
+    assert_eq(part1(SAMPLE), 44)
+}
+
+@test
+fn test_sample_part2() {
+    assert_eq(part2(SAMPLE), 285)
+}
+
+// The puzzle's own threshold is 100 picoseconds for both parts, but on
+// the 15x15 sample no cheat saves that much — the count at threshold 100
+// is 0. The 44/285 answers above use lower thresholds (1 and 50) precisely
+// so the sample exercises the counting logic; this test pins the
+// puzzle-text behaviour (0 at 100) alongside them.
+@test
+fn test_sample_threshold_100() {
+    assert_eq(count_cheats(SAMPLE, 2, 100), 0)
+    assert_eq(count_cheats(SAMPLE, 20, 100), 0)
+}
+
+fn main() {
+    print("Day 20 Part 1: " + str(part1(SAMPLE)))
+    print("Day 20 Part 2: " + str(part2(SAMPLE)))
+}
+
+main()

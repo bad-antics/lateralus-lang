@@ -1,0 +1,297 @@
+// Advent of Code 2024 · Day 15 · Warehouse Woes
+// A robot pushes boxes around a warehouse. Part 1: single-width boxes (O).
+// Part 2: the warehouse is twice as wide; boxes are two cells wide ([])
+// and move as a unit (either half can push). GPS score of a box is
+// 100 * row + column (left half for wide boxes).
+// Large sample -> 10092 / 9021 (official sample answers). The small sample
+// (8x8) is included with a part-1-only test: 2028.
+// State is kept as sets, not a mutable grid: walls and boxes are dicts keyed
+// "r,c", the robot is [r, c]. Each move rebuilds the box set when boxes move.
+
+let SAMPLE = "##########
+#..O..O.O#
+#......O.#
+#.OO..O.O#
+#..O@..O.#
+#O#..O...#
+#O..O..O.#
+#.OO.O.OO#
+#....O...#
+##########
+
+<vv>^<v^>v>^vv^v>v<>v^v<v<^vv<<<^><<><>>v<vvv<>^v^>^<<<><<v<<<v^vv^v>^
+vvv<<^>^v^^><<>>><>^<<><^vv^^<>vvv<>><^^v>^>vv<>v<<<<v<^v>^<^^>>>^<v<v
+><>vv>v^v^<>><>>>><^^>vv>v<^^^>>v^v^<^^>v^^>v^<^v>v<>>v^v^<v>v^^<^^vv<
+<<v<^>>^^^^>>>v^<>vvv^><v<<<>^^^vv^<vvv>^>v<^^^^v<>^>vvvv><>>v^<<^^^^^
+^><^><>>><>^^<<^^v>>><^<v>^<vv>>v>>>^v><>^v><<<<v>>v<v<v>vvv>^<><<>^><
+^>><>^v<><^vvv<^^<><v<<<<<><^v<<<><<<^^<v<^^^><^>>^<v^><<<^>>^v<v^v<v^
+>^>>^v>vv>^<<^v<>><<><<v<<v><>v<^vv<<<>^^v^>^^>>><<^v>>v^v><^^>>^<>vv^
+<><^^>^^^<><vvvvv^v<v<<>^v<v>v<<^><<><<><<<^^<<<^<<>><<><^^^>^^<>^>v<>
+^^>vv<^v^v<vv>^<><v<^v>^^^>>>^^vvv^>vvv<>>>^<^>>>>>^<<^v>^vvv<>^<><<v>
+v^^>>><<^^<>>^v^<v^vv<>v^<<>^<^v^v><^<<<><<^<v><v<>vv>>v><v^<vv<>v^<<^"
+
+let SAMPLE_SMALL = "########
+#..O.O.#
+##@.O..#
+#...O..#
+#.#.O..#
+#...O..#
+#......#
+########
+
+<^^>>>vv<v>>v<<"
+
+fn key(r: int, c: int) -> str {
+    return str(r) + "," + str(c)
+}
+
+fn parse_key(k: str) -> list {
+    let parts = str_split(k, ",")
+    return [int(parts[0]), int(parts[1])]
+}
+
+// Parse into [walls, boxes, robot, moves]. If wide, the grid is doubled:
+// "#" -> two walls, "O" -> one wide box keyed by its left half, "@" moves
+// to the doubled column.
+fn parse(text: str, wide: bool) -> list {
+    let walls = {}
+    let boxes = {}
+    let robot = [0, 0]
+    let moves = ""
+    let lines = str_split(text, "\n")
+    let in_moves = false
+    let r = 0
+    let i = 0
+    while i < len(lines) {
+        let line = lines[i]
+        if len(str_trim(line)) == 0 {
+            in_moves = true
+        } else {
+            if in_moves {
+                moves = moves + str_trim(line)
+            } else {
+                let c = 0
+                while c < len(line) {
+                    let cell = slice(line, c, c + 1)
+                    if wide {
+                        if cell == "#" {
+                            walls[key(r, 2 * c)] = true
+                            walls[key(r, 2 * c + 1)] = true
+                        }
+                        if cell == "O" {
+                            boxes[key(r, 2 * c)] = true
+                        }
+                        if cell == "@" {
+                            robot = [r, 2 * c]
+                        }
+                    } else {
+                        if cell == "#" {
+                            walls[key(r, c)] = true
+                        }
+                        if cell == "O" {
+                            boxes[key(r, c)] = true
+                        }
+                        if cell == "@" {
+                            robot = [r, c]
+                        }
+                    }
+                    c = c + 1
+                }
+                r = r + 1
+            }
+        }
+        i = i + 1
+    }
+    return [walls, boxes, robot, moves]
+}
+
+fn dir_of(mv: str) -> list {
+    if mv == "^" { return [-1, 0] }
+    if mv == "v" { return [1, 0] }
+    if mv == "<" { return [0, -1] }
+    return [0, 1]
+}
+
+// Part 1 step: push a chain of single boxes. Returns [boxes, robot].
+fn step1(walls: dict, boxes: dict, robot: list, dr: int, dc: int) -> list {
+    let r = robot[0]
+    let c = robot[1]
+    let nr = r + dr
+    let nc = c + dc
+    if contains(walls, key(nr, nc)) {
+        return [boxes, robot]
+    }
+    if contains(boxes, key(nr, nc)) == false {
+        return [boxes, [nr, nc]]
+    }
+    // Walk the chain of boxes; stop at a wall (blocked) or an empty cell.
+    let chain = {}
+    let k = 1
+    let blocked = false
+    let done = false
+    while done == false {
+        let cr = r + k * dr
+        let cc = c + k * dc
+        if contains(walls, key(cr, cc)) {
+            blocked = true
+            done = true
+        } else {
+            if contains(boxes, key(cr, cc)) == false {
+                done = true
+            } else {
+                chain[key(cr, cc)] = true
+                k = k + 1
+            }
+        }
+    }
+    if blocked {
+        return [boxes, robot]
+    }
+    let newboxes = {}
+    let ks = keys(boxes)
+    let i = 0
+    while i < len(ks) {
+        if contains(chain, ks[i]) {
+            let p = parse_key(ks[i])
+            newboxes[key(p[0] + dr, p[1] + dc)] = true
+        } else {
+            newboxes[ks[i]] = true
+        }
+        i = i + 1
+    }
+    return [newboxes, [nr, nc]]
+}
+
+// For wide boxes: the box (as [row, left_col]) occupying cell (r, c),
+// or [-1, -1] if the cell holds no box half.
+fn box_at(boxes: dict, r: int, c: int) -> list {
+    if contains(boxes, key(r, c)) {
+        return [r, c]
+    }
+    if contains(boxes, key(r, c - 1)) {
+        return [r, c - 1]
+    }
+    return [-1, -1]
+}
+
+// Part 2 step: push wide boxes as units (BFS over the boxes that must move).
+// Returns [boxes, robot].
+fn step2(walls: dict, boxes: dict, robot: list, dr: int, dc: int) -> list {
+    let r = robot[0]
+    let c = robot[1]
+    let nr = r + dr
+    let nc = c + dc
+    if contains(walls, key(nr, nc)) {
+        return [boxes, robot]
+    }
+    let first = box_at(boxes, nr, nc)
+    if first[0] == -1 {
+        return [boxes, [nr, nc]]
+    }
+    let tomove = {}
+    tomove[key(first[0], first[1])] = true
+    let queue = [first]
+    let head = 0
+    let blocked = false
+    while head < len(queue) && blocked == false {
+        let box = queue[head]
+        head = head + 1
+        let h = 0
+        while h < 2 && blocked == false {
+            let hr = box[0]
+            let hc = box[1] + h
+            let tr = hr + dr
+            let tc = hc + dc
+            if contains(walls, key(tr, tc)) {
+                blocked = true
+            } else {
+                let nb = box_at(boxes, tr, tc)
+                if nb[0] >= 0 && contains(tomove, key(nb[0], nb[1])) == false {
+                    tomove[key(nb[0], nb[1])] = true
+                    queue = queue + [nb]
+                }
+            }
+            h = h + 1
+        }
+    }
+    if blocked {
+        return [boxes, robot]
+    }
+    let newboxes = {}
+    let ks = keys(boxes)
+    let i = 0
+    while i < len(ks) {
+        if contains(tomove, ks[i]) {
+            let p = parse_key(ks[i])
+            newboxes[key(p[0] + dr, p[1] + dc)] = true
+        } else {
+            newboxes[ks[i]] = true
+        }
+        i = i + 1
+    }
+    return [newboxes, [nr, nc]]
+}
+
+fn gps(boxes: dict) -> int {
+    let total = 0
+    let ks = keys(boxes)
+    let i = 0
+    while i < len(ks) {
+        let p = parse_key(ks[i])
+        total = total + 100 * p[0] + p[1]
+        i = i + 1
+    }
+    return total
+}
+
+fn simulate(text: str, wide: bool) -> int {
+    let parsed = parse(text, wide)
+    let walls = parsed[0]
+    let boxes = parsed[1]
+    let robot = parsed[2]
+    let moves = parsed[3]
+    let i = 0
+    while i < len(moves) {
+        let d = dir_of(slice(moves, i, i + 1))
+        let res = []
+        if wide {
+            res = step2(walls, boxes, robot, d[0], d[1])
+        } else {
+            res = step1(walls, boxes, robot, d[0], d[1])
+        }
+        boxes = res[0]
+        robot = res[1]
+        i = i + 1
+    }
+    return gps(boxes)
+}
+
+fn part1(text: str) -> int {
+    return simulate(text, false)
+}
+
+fn part2(text: str) -> int {
+    return simulate(text, true)
+}
+
+@test
+fn test_sample_part1() {
+    assert_eq(part1(SAMPLE), 10092)
+}
+
+@test
+fn test_sample_part2() {
+    assert_eq(part2(SAMPLE), 9021)
+}
+
+@test
+fn test_small_part1() {
+    assert_eq(part1(SAMPLE_SMALL), 2028)
+}
+
+fn main() {
+    print("Day 15 Part 1: " + str(part1(SAMPLE)))
+    print("Day 15 Part 2: " + str(part2(SAMPLE)))
+}
+
+main()

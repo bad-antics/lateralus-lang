@@ -1,0 +1,190 @@
+// Advent of Code 2024 · Day 21 · Keypad Conundrum
+// A numeric keypad is driven by a chain of robots, each typing on a
+// directional keypad, with you typing on the outermost one. All robots
+// start aimed at "A"; an arm may never pass over the gap.
+// Part 1: 2 directional robots. Sample answer: 126384.
+// Part 2: 25 directional robots. Sample answer: 154115708116294
+// (computed by the same memoized expansion; verified against an
+// independent Python reference implementation before asserting here).
+// Shortest-path expansion is memoized in MEMO, keyed by
+// "sequence|depth|keypad" strings; without memoization the counts
+// explode (part 2 lengths are ~8e10).
+
+let SAMPLE = "029A
+980A
+179A
+456A
+379A"
+
+let MEMO = {}
+
+fn pos_num(ch: str) -> list {
+    if ch == "7" { return [0, 0] }
+    if ch == "8" { return [0, 1] }
+    if ch == "9" { return [0, 2] }
+    if ch == "4" { return [1, 0] }
+    if ch == "5" { return [1, 1] }
+    if ch == "6" { return [1, 2] }
+    if ch == "1" { return [2, 0] }
+    if ch == "2" { return [2, 1] }
+    if ch == "3" { return [2, 2] }
+    if ch == "0" { return [3, 1] }
+    return [3, 2]
+}
+
+fn pos_dir(ch: str) -> list {
+    if ch == "^" { return [0, 1] }
+    if ch == "A" { return [0, 2] }
+    if ch == "<" { return [1, 0] }
+    if ch == "v" { return [1, 1] }
+    return [1, 2]
+}
+
+fn repeat_str(ch: str, n: int) -> str {
+    let s = ""
+    let i = 0
+    while i < n {
+        s = s + ch
+        i = i + 1
+    }
+    return s
+}
+
+// True if walking `first` then `second` from (fr, fc) never lands on
+// the gap at (gr, gc).
+fn path_ok(fr: int, fc: int, first: str, second: str, gr: int, gc: int) -> bool {
+    let r = fr
+    let c = fc
+    let s = first + second
+    let i = 0
+    while i < len(s) {
+        let ch = s[i]
+        if ch == "^" { r = r - 1 }
+        if ch == "v" { r = r + 1 }
+        if ch == "<" { c = c - 1 }
+        if ch == ">" { c = c + 1 }
+        if r == gr {
+            if c == gc { return false }
+        }
+        i = i + 1
+    }
+    return true
+}
+
+// All shortest move strings from (fr, fc) to (tr, tc) avoiding the gap,
+// each ending with "A". At most two: vertical-first and horizontal-first.
+fn move_options(fr: int, fc: int, tr: int, tc: int, gr: int, gc: int) -> list {
+    let dr = tr - fr
+    let dc = tc - fc
+    let vert = ""
+    if dr > 0 { vert = repeat_str("v", dr) }
+    if dr < 0 { vert = repeat_str("^", -dr) }
+    let horiz = ""
+    if dc > 0 { horiz = repeat_str(">", dc) }
+    if dc < 0 { horiz = repeat_str("<", -dc) }
+    let opts = []
+    if path_ok(fr, fc, vert, horiz, gr, gc) {
+        opts = opts + [vert + horiz + "A"]
+    }
+    if path_ok(fr, fc, horiz, vert, gr, gc) {
+        let s2 = horiz + vert + "A"
+        let dup = false
+        if len(opts) > 0 {
+            if opts[0] == s2 { dup = true }
+        }
+        if dup == false { opts = opts + [s2] }
+    }
+    return opts
+}
+
+// Shortest length of the sequence the layer above must type to make this
+// keypad produce `seq`, with `depth` directional keypads above this one.
+// is_num selects the numeric keypad (gap at 3,0) vs directional (gap 0,0).
+fn expand_len(seq: str, depth: int, is_num: bool) -> int {
+    let kkey = "N"
+    if is_num == false { kkey = "D" }
+    let mkey = seq + "|" + str(depth) + "|" + kkey
+    if contains(MEMO, mkey) { return MEMO[mkey] }
+    let total = 0
+    let cur = "A"
+    let i = 0
+    while i < len(seq) {
+        let ch = seq[i]
+        let cp = pos_num(cur)
+        let tp = pos_num(ch)
+        let gr = 3
+        let gc = 0
+        if is_num == false {
+            cp = pos_dir(cur)
+            tp = pos_dir(ch)
+            gr = 0
+            gc = 0
+        }
+        let opts = move_options(cp[0], cp[1], tp[0], tp[1], gr, gc)
+        let best = -1
+        let j = 0
+        while j < len(opts) {
+            let cost = 0
+            if depth == 0 {
+                cost = len(opts[j])
+            } else {
+                cost = expand_len(opts[j], depth - 1, false)
+            }
+            if best == -1 {
+                best = cost
+            } else {
+                if cost < best { best = cost }
+            }
+            j = j + 1
+        }
+        total = total + best
+        cur = ch
+        i = i + 1
+    }
+    MEMO[mkey] = total
+    return total
+}
+
+fn complexity(code: str, robots: int) -> int {
+    let num = int(slice(code, 0, len(code) - 1))
+    return expand_len(code, robots, true) * num
+}
+
+fn solve(text: str, robots: int) -> int {
+    let total = 0
+    let lines = str_split(text, "\n")
+    let i = 0
+    while i < len(lines) {
+        let code = str_trim(lines[i])
+        if len(code) > 0 {
+            total = total + complexity(code, robots)
+        }
+        i = i + 1
+    }
+    return total
+}
+
+fn part1(text: str) -> int {
+    return solve(text, 2)
+}
+
+fn part2(text: str) -> int {
+    return solve(text, 25)
+}
+
+@test
+fn test_sample_part1() {
+    assert_eq(part1(SAMPLE), 126384)
+}
+
+@test
+fn test_sample_part2() {
+    assert_eq(part2(SAMPLE), 154115708116294)
+}
+
+fn main() {
+    print("Day 21 Part 1: " + str(part1(SAMPLE)))
+    print("Day 21 Part 2: " + str(part2(SAMPLE)))
+}
+
+main()
