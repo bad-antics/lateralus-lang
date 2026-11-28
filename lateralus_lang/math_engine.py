@@ -412,13 +412,13 @@ class Vector:
         return sum(a * b for a, b in zip(self._data, other._data))
 
     def norm(self) -> float:
-        return math.sqrt(self.dot(self))
+        return math.hypot(*self._data)
 
     def normalize(self) -> "Vector":
         n = self.norm()
         if n == 0:
             raise ValueError("cannot normalize zero vector")
-        return self * (1 / n)
+        return Vector([component / n for component in self._data])
 
     def cross(self, other: "Vector") -> "Vector":
         if len(self) != 3 or len(other) != 3:

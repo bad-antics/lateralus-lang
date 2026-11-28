@@ -158,6 +158,13 @@ class TestVector:
         n = v.normalize()
         assert n.norm() == pytest.approx(1.0)
 
+    @pytest.mark.parametrize("scale", [1e200, 1e-200])
+    def test_norm_and_normalize_extreme_scales(self, scale):
+        v = Vector([3 * scale, 4 * scale])
+
+        assert v.norm() == pytest.approx(5 * scale)
+        assert list(v.normalize()) == pytest.approx([0.6, 0.8])
+
 
 # -------------------------------------------------------------------------
 # Interval arithmetic
