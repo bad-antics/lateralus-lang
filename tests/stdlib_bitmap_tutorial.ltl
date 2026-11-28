@@ -1,0 +1,168 @@
+// Standard Library Bitmap / BitSet Tutorial Verification Suite
+// Validates dense contiguous bit allocation, single-bit mutations, popcount, and set operations.
+
+fn bitmap_create(capacity: int) -> list {
+    let mut words = [];
+    let mut num_words = capacity / 32;
+    if capacity % 32 != 0 {
+        num_words = num_words + 1;
+    }
+    let mut i = 0;
+    while i < num_words {
+        words = words + [0];
+        i = i + 1;
+    }
+    return words;
+}
+
+fn bitmap_set(words: list, bit_idx: int) -> list {
+    let mut res = words;
+    let w_idx = bit_idx / 32;
+    let b_pos = bit_idx % 32;
+    let mask = 1 << b_pos;
+    res[w_idx] = res[w_idx] | mask;
+    return res;
+}
+
+fn bitmap_test(words: list, bit_idx: int) -> bool {
+    let w_idx = bit_idx / 32;
+    let b_pos = bit_idx % 32;
+    let mask = 1 << b_pos;
+    return (words[w_idx] & mask) != 0;
+}
+
+fn bitmap_clear(words: list, bit_idx: int) -> list {
+    let mut res = words;
+    let w_idx = bit_idx / 32;
+    let b_pos = bit_idx % 32;
+    let mask = 1 << b_pos;
+    if (res[w_idx] & mask) != 0 {
+        res[w_idx] = res[w_idx] ^ mask;
+    }
+    return res;
+}
+
+fn bitmap_toggle(words: list, bit_idx: int) -> list {
+    let mut res = words;
+    let w_idx = bit_idx / 32;
+    let b_pos = bit_idx % 32;
+    let mask = 1 << b_pos;
+    res[w_idx] = res[w_idx] ^ mask;
+    return res;
+}
+
+fn word_popcount(w: int) -> int {
+    let mut count = 0;
+    let mut val = w;
+    while val > 0 {
+        count = count + (val & 1);
+        val = val >> 1;
+    }
+    return count;
+}
+
+fn bitmap_popcount(words: list) -> int {
+    let mut total = 0;
+    let mut i = 0;
+    while i < len(words) {
+        total = total + word_popcount(words[i]);
+        i = i + 1;
+    }
+    return total;
+}
+
+fn bitmap_union(a: list, b: list) -> list {
+    let mut res = [];
+    let mut i = 0;
+    while i < len(a) {
+        res = res + [a[i] | b[i]];
+        i = i + 1;
+    }
+    return res;
+}
+
+fn bitmap_intersect(a: list, b: list) -> list {
+    let mut res = [];
+    let mut i = 0;
+    while i < len(a) {
+        res = res + [a[i] & b[i]];
+        i = i + 1;
+    }
+    return res;
+}
+
+fn main() -> int {
+    // 1. Allocate a 128-bit bitmap (4 x 32-bit words)
+    let mut bm = bitmap_create(128);
+    assert(len(bm) == 4);
+    assert(bitmap_popcount(bm) == 0);
+
+    // 2. Set individual bits across word boundaries
+    bm = bitmap_set(bm, 0);   // Word 0, bit 0
+    bm = bitmap_set(bm, 31);  // Word 0, bit 31
+    bm = bitmap_set(bm, 32);  // Word 1, bit 0
+    bm = bitmap_set(bm, 65);  // Word 2, bit 1
+    bm = bitmap_set(bm, 127); // Word 3, bit 31
+
+    assert(bitmap_popcount(bm) == 5);
+    assert(bitmap_test(bm, 0));
+    assert(bitmap_test(bm, 31));
+    assert(bitmap_test(bm, 32));
+    assert(bitmap_test(bm, 65));
+    assert(bitmap_test(bm, 127));
+
+    // Unset bits must test false
+    assert(bitmap_test(bm, 1) == false);
+    assert(bitmap_test(bm, 30) == false);
+    assert(bitmap_test(bm, 33) == false);
+    assert(bitmap_test(bm, 64) == false);
+    assert(bitmap_test(bm, 126) == false);
+
+    // 3. Clear bit test
+    bm = bitmap_clear(bm, 32);
+    assert(bitmap_test(bm, 32) == false);
+    assert(bitmap_popcount(bm) == 4);
+
+    // Clearing an already clear bit is idempotent
+    bm = bitmap_clear(bm, 32);
+    assert(bitmap_popcount(bm) == 4);
+
+    // 4. Toggle bit test
+    bm = bitmap_toggle(bm, 10); // 0 -> 1
+    assert(bitmap_test(bm, 10));
+    assert(bitmap_popcount(bm) == 5);
+
+    bm = bitmap_toggle(bm, 10); // 1 -> 0
+    assert(bitmap_test(bm, 10) == false);
+    assert(bitmap_popcount(bm) == 4);
+
+    // 5. Set Arithmetic (Union & Intersection)
+    let mut set_a = bitmap_create(64);
+    let mut set_b = bitmap_create(64);
+
+    // set_a = { 1, 2, 5 }
+    set_a = bitmap_set(set_a, 1);
+    set_a = bitmap_set(set_a, 2);
+    set_a = bitmap_set(set_a, 5);
+
+    // set_b = { 2, 5, 9 }
+    set_b = bitmap_set(set_b, 2);
+    set_b = bitmap_set(set_b, 5);
+    set_b = bitmap_set(set_b, 9);
+
+    let union_set = bitmap_union(set_a, set_b);
+    assert(bitmap_popcount(union_set) == 4); // {1, 2, 5, 9}
+    assert(bitmap_test(union_set, 1));
+    assert(bitmap_test(union_set, 2));
+    assert(bitmap_test(union_set, 5));
+    assert(bitmap_test(union_set, 9));
+
+    let inter_set = bitmap_intersect(set_a, set_b);
+    assert(bitmap_popcount(inter_set) == 2); // {2, 5}
+    assert(bitmap_test(inter_set, 1) == false);
+    assert(bitmap_test(inter_set, 2));
+    assert(bitmap_test(inter_set, 5));
+    assert(bitmap_test(inter_set, 9) == false);
+
+    return 0;
+}
