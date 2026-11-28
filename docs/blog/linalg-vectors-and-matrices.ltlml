@@ -1,0 +1,227 @@
+// examples/linalg_vectors_and_matrices.ltl
+//
+// Runnable, pinned-vector tour of stdlib.linalg.
+// Every input is a fixed literal so the output is fully deterministic.
+//
+// Run:  lateralus run examples/linalg_vectors_and_matrices.ltl
+
+use stdlib.linalg
+
+let EPS = 0.000001
+
+fn approx(a, b) {
+    return abs(a - b) < EPS
+}
+
+fn vec_approx(u, v) {
+    if len(u) != len(v) { return false }
+    let ok = true
+    for i in range(0, len(u)) {
+        if !approx(u[i], v[i]) { ok = false }
+    }
+    return ok
+}
+
+fn check(label, cond) {
+    if cond {
+        println("  [ok]   {label}")
+    } else {
+        println("  [FAIL] {label}")
+        panic("assertion failed: {label}")
+    }
+}
+
+fn section(title) {
+    println("")
+    println("== {title} ==")
+}
+
+// ---------------------------------------------------------------
+// Pinned inputs
+// ---------------------------------------------------------------
+let a = [1.0, 2.0, 3.0]
+let b = [4.0, 5.0, 6.0]
+let x_axis = [1.0, 0.0, 0.0]
+let y_axis = [0.0, 1.0, 0.0]
+let zero = [0.0, 0.0, 0.0]
+
+// ---------------------------------------------------------------
+// 1. Vector addition
+// ---------------------------------------------------------------
+section("vec_add")
+let s = linalg.vec_add(a, b)
+println("a + b = {s}")
+check("vec_add([1,2,3],[4,5,6]) == [5,7,9]", vec_approx(s, [5.0, 7.0, 9.0]))
+
+// ---------------------------------------------------------------
+// 2. Dot product
+// ---------------------------------------------------------------
+section("dot")
+let d = linalg.dot(a, b)
+println("a . b = {d}")
+check("dot == 32", approx(d, 32.0))
+check("orthogonal axes have dot 0", approx(linalg.dot(x_axis, y_axis), 0.0))
+
+// ---------------------------------------------------------------
+// 3. Cross product
+// ---------------------------------------------------------------
+section("cross")
+let c = linalg.cross(x_axis, y_axis)
+println("x_axis x y_axis = {c}")
+check("x cross y == z", vec_approx(c, [0.0, 0.0, 1.0]))
+let c2 = linalg.cross(a, b)
+check("cross(a,b) == [-3,6,-3]", vec_approx(c2, [-3.0, 6.0, -3.0]))
+check("cross is orthogonal to a", approx(linalg.dot(c2, a), 0.0))
+check("cross is orthogonal to b", approx(linalg.dot(c2, b), 0.0))
+
+// ---------------------------------------------------------------
+// 4. Normalize
+// ---------------------------------------------------------------
+section("normalize")
+let n = linalg.normalize([3.0, 4.0, 0.0])
+println("normalize([3,4,0]) = {n}")
+check("normalize([3,4,0]) == [0.6,0.8,0]", vec_approx(n, [0.6, 0.8, 0.0]))
+check("normalized vector has unit length", approx(linalg.norm(n), 1.0))
+
+// ---------------------------------------------------------------
+// 5. Angle between
+// ---------------------------------------------------------------
+section("angle_between")
+let right = linalg.angle_between(x_axis, y_axis)
+println("angle(x, y) = {right} rad")
+check("angle(x,y) == pi/2", approx(right, 1.5707963267948966))
+let same = linalg.angle_between(a, a)
+check("angle(a,a) == 0", approx(same, 0.0))
+
+// ---------------------------------------------------------------
+// 6. Projection
+// ---------------------------------------------------------------
+section("projection")
+let p = linalg.projection([2.0, 3.0, 0.0], x_axis)
+println("proj([2,3,0] onto x) = {p}")
+check("projection onto x_axis == [2,0,0]", vec_approx(p, [2.0, 0.0, 0.0]))
+
+// ---------------------------------------------------------------
+// 7. Matrices: mat_mul, transpose, determinant
+// ---------------------------------------------------------------
+section("matrices")
+let m1 = [[1.0, 2.0], [3.0, 4.0]]
+let m2 = [[5.0, 6.0], [7.0, 8.0]]
+
+let prod = linalg.mat_mul(m1, m2)
+println("m1 * m2 = {prod}")
+check("mat_mul row0", vec_approx(prod[0], [19.0, 22.0]))
+check("mat_mul row1", vec_approx(prod[1], [43.0, 50.0]))
+
+let t = linalg.transpose(m1)
+println("transpose(m1) = {t}")
+check("transpose row0", vec_approx(t[0], [1.0, 3.0]))
+check("transpose row1", vec_approx(t[1], [2.0, 4.0]))
+
+let det = linalg.determinant(m1)
+println("det(m1) = {det}")
+check("det([[1,2],[3,4]]) == -2", approx(det, -2.0))
+
+let ident = [[1.0, 0.0], [0.0, 1.0]]
+check("det(identity) == 1", approx(linalg.determinant(ident), 1.0))
+let singular = [[1.0, 2.0], [2.0, 4.0]]
+check("det(singular) == 0", approx(linalg.determinant(singular), 0.0))
+
+// ---------------------------------------------------------------
+// 8. Zero-vector errors
+// ---------------------------------------------------------------
+section("zero-vector errors")
+
+let norm_failed = try {
+    linalg.normalize(zero)
+    false
+} recover err {
+    println("  normalize(zero) -> error: {err}")
+    true
+}
+check("normalize(zero) raises an error", norm_failed)
+
+let angle_failed = try {
+    linalg.angle_between(a, zero)
+    false
+} recover err {
+    println("  angle_between(a, zero) -> error: {err}")
+    true
+}
+check("angle_between(a, zero) raises an error", angle_failed)
+
+let proj_failed = try {
+    linalg.projection(a, zero)
+    false
+} recover err {
+    println("  projection(a, zero) -> error: {err}")
+    true
+}
+check("projection onto zero vector raises an error", proj_failed)
+
+println("")
+println("All linalg checks passed.")
+<article>
+  <h1>Vectors and Matrices with stdlib.linalg</h1>
+  <p class="meta">Lateralus stdlib tutorial &middot; companion example:
+    <code>examples/linalg_vectors_and_matrices.ltl</code></p>
+
+  <p>
+    <code>stdlib.linalg</code> gives Lateralus a small, dependable toolkit for
+    vector and matrix arithmetic. This tutorial walks through each function
+    using fixed inputs, so every result below is reproducible. Run the full
+    example with:
+  </p>
+
+  <pre><code>lateralus run examples/linalg_vectors_and_matrices.ltl</code></pre>
+
+  <h2>Setup</h2>
+  <pre><code>use stdlib.linalg
+
+let a = [1.0, 2.0, 3.0]
+let b = [4.0, 5.0, 6.0]
+let x_axis = [1.0, 0.0, 0.0]
+let y_axis = [0.0, 1.0, 0.0]
+let zero = [0.0, 0.0, 0.0]</code></pre>
+
+  <h2>vec_add</h2>
+  <p>Element-wise addition of two equal-length vectors.</p>
+  <pre><code>linalg.vec_add(a, b)   -- [5.0, 7.0, 9.0]</code></pre>
+
+  <h2>dot</h2>
+  <p>The scalar product. Orthogonal vectors have a dot product of zero.</p>
+  <pre><code>linalg.dot(a, b)            -- 32.0
+linalg.dot(x_axis, y_axis)  -- 0.0</code></pre>
+
+  <h2>cross</h2>
+  <p>
+    The 3D cross product returns a vector orthogonal to both inputs. The
+    right-hand rule gives <code>x &times; y = z</code>.
+  </p>
+  <pre><code>linalg.cross(x_axis, y_axis)  -- [0.0, 0.0, 1.0]
+linalg.cross(a, b)            -- [-3.0, 6.0, -3.0]</code></pre>
+
+  <h2>normalize</h2>
+  <p>Scales a vector to unit length.</p>
+  <pre><code>linalg.normalize([3.0, 4.0, 0.0])  -- [0.6, 0.8, 0.0]</code></pre>
+
+  <h2>angle_between</h2>
+  <p>Returns the angle in radians between two vectors.</p>
+  <pre><code>linalg.angle_between(x_axis, y_axis)  -- 1.5707963... (pi/2)
+linalg.angle_between(a, a)            -- 0.0</code></pre>
+
+  <h2>projection</h2>
+  <p>Projects the first vector onto the second.</p>
+  <pre><code>linalg.projection([2.0, 3.0, 0.0], x_axis)  -- [2.0, 0.0, 0.0]</code></pre>
+
+  <h2>Matrices</h2>
+  <p>Matrices are lists of rows.</p>
+  <pre><code>let m1 = [[1.0, 2.0], [3.0, 4.0]]
+let m2 = [[5.0, 6.0], [7.0, 8.0]]
+
+linalg.mat_mul(m1, m2)    -- [[19.0, 22.0], [43.0, 50.0]]
+linalg.transpose(m1)      -- [[1.0, 3.0], [2.0, 4.0]]
+linalg.determinant(m1)    -- -2.0</code></pre>
+  <p>
+    A singular matrix such as <code>[[1,2],[2,4]]</code> has determinant
+    <code>0.0</code>;
